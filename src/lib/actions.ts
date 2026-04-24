@@ -372,8 +372,8 @@ export async function adminDeleteMerchantAction(merchantId: string) {
 // ── Team Member Management ────────────────────────────────────────────────────
 
 export async function deactivateTeamMemberAction(teamMemberId: string, merchantId: string) {
-  const supabase = await createClient();
-  const { error } = await supabase
+  const adminClient = getServiceClient();
+  const { error } = await adminClient
     .from("merchant_team")
     .update({ is_active: false })
     .eq("id", teamMemberId)
@@ -384,8 +384,8 @@ export async function deactivateTeamMemberAction(teamMemberId: string, merchantI
 }
 
 export async function reactivateTeamMemberAction(teamMemberId: string, merchantId: string) {
-  const supabase = await createClient();
-  const { error } = await supabase
+  const adminClient = getServiceClient();
+  const { error } = await adminClient
     .from("merchant_team")
     .update({ is_active: true })
     .eq("id", teamMemberId)
@@ -396,8 +396,8 @@ export async function reactivateTeamMemberAction(teamMemberId: string, merchantI
 }
 
 export async function removeTeamMemberAction(teamMemberId: string, merchantId: string) {
-  const supabase = await createClient();
-  const { error } = await supabase
+  const adminClient = getServiceClient();
+  const { error } = await adminClient
     .from("merchant_team")
     .delete()
     .eq("id", teamMemberId)

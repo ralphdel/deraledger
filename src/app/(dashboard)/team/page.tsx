@@ -53,7 +53,7 @@ import {
   DropdownMenuTrigger,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
-import { MoreHorizontal, Ban, UserMinus, UserCheck } from "lucide-react";
+import { MoreHorizontal, Ban, UserMinus, UserCheck, AlertTriangle } from "lucide-react";
 
 interface TeamMember {
   id: string;
@@ -77,6 +77,9 @@ export default function TeamPage() {
   const [sendingInvite, setSendingInvite] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [inviteSuccess, setInviteSuccess] = useState<string | null>(null);
+  
+  const [memberToRemove, setMemberToRemove] = useState<{id: string, email: string} | null>(null);
+  const [isRemoving, setIsRemoving] = useState(false);
 
   const [team, setTeam] = useState<TeamMember[]>([]);
 
@@ -202,12 +205,18 @@ export default function TeamPage() {
     }
   };
 
-  const handleRemoveMember = async (id: string, email: string) => {
-    if (confirm(`Are you sure you want to permanently remove ${email} from this team?`)) {
-      await removeTeamMemberAction(id, merchantId);
-      const m = await getMerchant();
-      if (m) await loadTeam(merchantId, m.email, m.created_at || "2025-01-01");
-    }
+  const handleRemoveMemberClick = (id: string, email: string) => {
+    setMemberToRemove({ id, email });
+  };
+
+  const confirmRemoveMember = async () => {
+    if (!memberToRemove) return;
+    setIsRemoving(true);
+    await removeTeamMemberAction(memberToRemove.id, merchantId);
+    const m = await getMerchant();
+    if (m) await loadTeam(merchantId, m.email, m.created_at || "2025-01-01");
+    setIsRemoving(false);
+    setMemberToRemove(null);
   };
 
   const handleCreateCustomRole = async () => {
@@ -437,7 +446,7 @@ export default function TeamPage() {
                             </DropdownMenuItem>
                           )}
                           <DropdownMenuSeparator />
-                          <DropdownMenuItem className="cursor-pointer text-red-600" onClick={() => handleRemoveMember(member.id, member.email)}>
+                          <DropdownMenuItem className="cursor-pointer text-red-600" onClick={() => handleRemoveMemberClick(member.id, member.email)}>
                             <UserMinus className="mr-2 h-4 w-4" /> Remove from Team
                           </DropdownMenuItem>
                         </DropdownMenuContent>
@@ -494,6 +503,40 @@ export default function TeamPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Remove Member Confirmation Dialog */}
+      <Dialog open={!!memberToRemove} onOpenChange={(open) => !open && setMemberToRemove(null)}>
+        <DialogContent className="border-2 border-red-200">
+          <DialogHeader>
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-full bg-red-100 flex items-center justify-center">
+                <AlertTriangle className="h-5 w-5 text-red-600" />
+              </div>
+              <DialogTitle className="text-red-600">Remove Team Member</DialogTitle>
+            </div>
+            <DialogDescription className="pt-3">
+              Are you sure you want to permanently remove <strong>{memberToRemove?.email}</strong> from this workspace? They will lose all access immediately. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="mt-4">
+            <Button
+              variant="outline"
+              onClick={() => setMemberToRemove(null)}
+              disabled={isRemoving}
+              className="border-2 border-neutral-200"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={confirmRemoveMember}
+              disabled={isRemoving}
+              className="bg-red-600 hover:bg-red-700 text-white font-semibold border-2 border-red-600"
+            >
+              {isRemoving ? "Removing..." : "Remove Member"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
