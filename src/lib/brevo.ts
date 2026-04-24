@@ -186,3 +186,55 @@ export async function sendInvoiceReminderEmail(
     htmlContent,
   });
 }
+
+export async function sendInvoiceEmail(
+  toEmail: string,
+  clientName: string,
+  businessName: string,
+  invoiceNumber: string,
+  grandTotal: string,
+  amountPaid: string,
+  outstandingBalance: string,
+  payByDate: string,
+  paymentUrl: string
+) {
+  const subject = `Invoice ${invoiceNumber} from ${businessName}`;
+  const htmlContent = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; background-color: #f9fafb; padding: 20px; border-radius: 8px;">
+      <div style="background-color: white; padding: 30px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); text-align: center;">
+        <h2 style="color: #4C1D95; margin-top: 0;">New Invoice Available</h2>
+        <p style="color: #4B5563; font-size: 16px; margin-bottom: 24px;">
+          Hi ${clientName},
+        </p>
+        <p style="color: #4B5563; font-size: 16px; margin-bottom: 24px;">
+          You have a new invoice from <strong>${businessName}</strong>.
+        </p>
+        
+        <div style="background-color: #F3F4F6; padding: 16px; border-radius: 6px; margin-bottom: 24px; text-align: left;">
+          <p style="margin: 4px 0; color: #374151;"><strong>Invoice Number:</strong> ${invoiceNumber}</p>
+          <p style="margin: 4px 0; color: #374151;"><strong>Grand Total:</strong> ${grandTotal}</p>
+          <p style="margin: 4px 0; color: #374151;"><strong>Amount Paid:</strong> ${amountPaid}</p>
+          <p style="margin: 4px 0; color: #374151;"><strong>Outstanding Balance:</strong> <span style="color: #D97706; font-weight: bold;">${outstandingBalance}</span></p>
+          ${payByDate ? `<p style="margin: 4px 0; color: #374151;"><strong>Pay-By Date:</strong> ${payByDate}</p>` : ''}
+        </div>
+
+        <a href="${paymentUrl}" style="display: inline-block; background-color: #4C1D95; color: white; text-decoration: none; padding: 12px 24px; border-radius: 6px; font-weight: bold; margin-bottom: 24px;">
+          Pay Invoice Now
+        </a>
+
+        <p style="font-size: 14px; color: #6B7280; margin-top: 24px;">
+          If the button above doesn't work, copy and paste this URL into your browser:<br>
+          <a href="${paymentUrl}" style="color: #4C1D95; word-break: break-all;">${paymentUrl}</a>
+        </p>
+      </div>
+    </div>
+  `;
+
+  return sendEmail({
+    sender: { name: businessName, email: ADMIN_EMAIL },
+    to: [{ email: toEmail }],
+    subject,
+    htmlContent,
+  });
+}
+

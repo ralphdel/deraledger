@@ -28,6 +28,7 @@ interface FormLineItem {
   itemName: string;
   quantity: string;
   unitRate: string;
+  discountPct: string;
 }
 
 export default function CreateInvoicePage() {
@@ -43,7 +44,7 @@ export default function CreateInvoicePage() {
   const [payByDate, setPayByDate] = useState("");
   const [notes, setNotes] = useState("");
   const [lineItems, setLineItems] = useState<FormLineItem[]>([
-    { id: "1", itemName: "", quantity: "1", unitRate: "" },
+    { id: "1", itemName: "", quantity: "1", unitRate: "", discountPct: "" },
   ]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -69,7 +70,7 @@ export default function CreateInvoicePage() {
   const addLineItem = () => {
     setLineItems([
       ...lineItems,
-      { id: Date.now().toString(), itemName: "", quantity: "1", unitRate: "" },
+      { id: Date.now().toString(), itemName: "", quantity: "1", unitRate: "", discountPct: "" },
     ]);
   };
 
@@ -85,10 +86,16 @@ export default function CreateInvoicePage() {
     );
   };
 
-  const parsedItems = lineItems.map((li) => ({
-    quantity: parseFloat(li.quantity) || 0,
-    unitRate: parseFloat(li.unitRate) || 0,
-  }));
+  const parsedItems = lineItems.map((li) => {
+    const qty = parseFloat(li.quantity) || 0;
+    const rate = parseFloat(li.unitRate) || 0;
+    const disc = parseFloat(li.discountPct) || 0;
+    // Calculate discounted rate so calculations.ts works seamlessly
+    return {
+      quantity: qty,
+      unitRate: rate * (1 - disc / 100),
+    };
+  });
 
   const totals = calculateInvoiceTotals(
     parsedItems,
@@ -129,11 +136,14 @@ export default function CreateInvoicePage() {
       notes: notes || undefined,
       line_items: lineItems
         .filter((li) => li.itemName.trim())
-        .map((li) => ({
-          item_name: li.itemName.trim(),
-          quantity: parseFloat(li.quantity) || 1,
-          unit_rate: parseFloat(li.unitRate) || 0,
-        })),
+        .map((li) => {
+          const disc = parseFloat(li.discountPct) || 0;
+          return {
+            item_name: disc > 0 ? \`\${li.itemName.trim()} (\${disc}% off)\` : li.itemName.trim(),
+            quantity: parseFloat(li.quantity) || 1,
+            unit_rate: (parseFloat(li.unitRate) || 0) * (1 - disc / 100),
+          };
+        }),
     });
 
     setSaving(false);
@@ -273,24 +283,26 @@ export default function CreateInvoicePage() {
             <div className="space-y-3">
               {/* Header Row */}
               <div className="hidden sm:grid sm:grid-cols-12 gap-3 text-xs font-bold text-purp-900 uppercase tracking-wider px-1">
-                <div className="col-span-5">Item Description</div>
+                <div className="col-span-4">Item Description</div>
                 <div className="col-span-2">Quantity</div>
-                <div className="col-span-3">Unit Rate (₦)</div>
+                <div className="col-span-2">Rate (₦)</div>
+                <div className="col-span-2">Disc (%)</div>
                 <div className="col-span-2 text-right">Line Total</div>
               </div>
 
               {lineItems.map((item) => {
                 const lineTotal =
                   (parseFloat(item.quantity) || 0) *
-                  (parseFloat(item.unitRate) || 0);
+                  (parseFloat(item.unitRate) || 0) *
+                  (1 - (parseFloat(item.discountPct) || 0) / 100);
                 return (
                   <div
                     key={item.id}
                     className="grid sm:grid-cols-12 gap-3 items-center bg-purp-50 border border-purp-200 rounded-lg p-3"
                   >
-                    <div className="sm:col-span-5">
+                    <div className="sm:col-span-4">
                       <Input
-                        placeholder="e.g. Business Strategy Consultation"
+                        placeholder="e.g. Consultation"
                         value={item.itemName}
                         onChange={(e) =>
                           updateLineItem(item.id, "itemName", e.target.value)
@@ -311,7 +323,7 @@ export default function CreateInvoicePage() {
                         className="border-2 border-purp-200 bg-white h-10"
                       />
                     </div>
-                    <div className="sm:col-span-3">
+                    <div className="sm:col-span-2">
                       <Input
                         type="number"
                         step="0.01"
@@ -320,6 +332,20 @@ export default function CreateInvoicePage() {
                         value={item.unitRate}
                         onChange={(e) =>
                           updateLineItem(item.id, "unitRate", e.target.value)
+                        }
+                        className="border-2 border-purp-200 bg-white h-10"
+                      />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <Input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="100"
+                        placeholder="0"
+                        value={item.discountPct}
+                        onChange={(e) =>
+                          updateLineItem(item.id, "discountPct", e.target.value)
                         }
                         className="border-2 border-purp-200 bg-white h-10"
                       />

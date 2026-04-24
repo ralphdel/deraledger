@@ -17,7 +17,10 @@ export async function POST(request: Request) {
     return new NextResponse("Demo payments are disabled in production", { status: 403 });
   }
 
-  const { invoiceId, paymentAmount } = await request.json();
+  const body = await request.json().catch(() => null);
+  if (!body) return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+
+  const { invoiceId, paymentAmount } = body;
 
   if (!invoiceId || !paymentAmount || paymentAmount <= 0) {
     return NextResponse.json({ error: "Missing invoiceId or paymentAmount" }, { status: 400 });
@@ -31,7 +34,7 @@ export async function POST(request: Request) {
     .single();
 
   if (invoiceError || !invoice) {
-    return NextResponse.json({ error: "Invoice not found" }, { status: 404 });
+    return NextResponse.json({ error: "Invoice not found: " + invoiceError?.message }, { status: 404 });
   }
 
   if (["closed", "manually_closed", "void"].includes(invoice.status)) {
@@ -40,15 +43,27 @@ export async function POST(request: Request) {
 
   const currentOutstanding = Number(invoice.outstanding_balance);
   const currentAmountPaid = Number(invoice.amount_paid);
+  const grandTotal = Number(invoice.grand_total);
 
-  if (paymentAmount > currentOutstanding) {
+  if (paymentAmount > currentOutstanding + 0.01) {
     return NextResponse.json({ error: "Payment exceeds outstanding balance" }, { status: 400 });
   }
 
+  const cappedPayment = Math.min(paymentAmount, currentOutstanding);
+
+  // k-factor = proportion of the full invoice this payment represents
+  const kFactor = grandTotal > 0 ? cappedPayment / grandTotal : 0;
+  const taxCollected = kFactor * Number(invoice.tax_value);
+  const discountApplied = kFactor * Number(invoice.discount_value);
+
+  // Paystack fee simulation (1.5% + ₦100, capped at ₦2000)
+  const rawFee = cappedPayment * 0.015 + 100;
+  const paystackFee = invoice.fee_absorption === "customer" ? Math.min(rawFee, 2000) : 0;
+
   // Calculate new balances
-  const newAmountPaid = currentAmountPaid + paymentAmount;
-  const newOutstanding = Math.max(0, currentOutstanding - paymentAmount);
-  const newStatus = newOutstanding <= 0 ? "closed" : "partially_paid";
+  const newAmountPaid = currentAmountPaid + cappedPayment;
+  const newOutstanding = Math.max(0, currentOutstanding - cappedPayment);
+  const newStatus = newOutstanding <= 0.01 ? "closed" : "partially_paid";
 
   // 1. Update invoice
   const { error: updateError } = await supabase
@@ -61,18 +76,29 @@ export async function POST(request: Request) {
     .eq("id", invoiceId);
 
   if (updateError) {
-    return NextResponse.json({ error: updateError.message }, { status: 500 });
+    return NextResponse.json({ error: "Failed to update invoice: " + updateError.message }, { status: 500 });
   }
 
-  // 2. Record a demo transaction
+  // 2. Record the transaction with ALL required fields
   const demoRef = `demo_${invoiceId.slice(0, 8)}_${Date.now()}`;
-  await supabase.from("transactions").insert({
+  const { error: txnError } = await supabase.from("transactions").insert({
     invoice_id: invoiceId,
-    amount_paid: paymentAmount,
+    merchant_id: invoice.merchant_id,
+    amount_paid: cappedPayment,
+    k_factor: kFactor,
+    tax_collected: taxCollected,
+    discount_applied: discountApplied,
+    paystack_fee: paystackFee,
+    fee_absorbed_by: invoice.fee_absorption || "business",
     payment_method: "bank_transfer",
     paystack_reference: demoRef,
     status: "success",
   });
+
+  if (txnError) {
+    // Invoice updated but transaction log failed — non-fatal, log it
+    console.error("Transaction log failed (non-fatal):", txnError.message);
+  }
 
   return NextResponse.json({
     success: true,

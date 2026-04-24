@@ -37,7 +37,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { getInvoiceById, getTransactions, getMerchant } from "@/lib/data";
-import { closeInvoiceManually, reopenInvoice, getInvoiceHistory } from "@/lib/actions";
+import { closeInvoiceManually, reopenInvoice, getInvoiceHistory, sendInvoiceEmailAction } from "@/lib/actions";
 import { MANUAL_CLOSE_REASONS } from "@/lib/types";
 import type { InvoiceWithLineItems, Transaction, Merchant, AuditLog } from "@/lib/types";
 import { formatNaira, getStatusColor, getStatusLabel } from "@/lib/calculations";
@@ -152,27 +152,32 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
   const sendEmail = () => {
     if (!emailTo) return;
-    setEmailSending(true);
-    const clientName = invoice.clients?.full_name || "Client";
-    const businessName = merchant?.business_name || "PurpLedger";
-    const subject = encodeURIComponent(`Invoice ${invoice.invoice_number} from ${businessName}`);
-    const body = encodeURIComponent(
-      `Dear ${clientName},\n\n` +
-      `Please find your invoice details below:\n\n` +
-      `Invoice Number: ${invoice.invoice_number}\n` +
-      `Grand Total: ${formatNaira(Number(invoice.grand_total))}\n` +
-      `Amount Paid: ${formatNaira(Number(invoice.amount_paid))}\n` +
-      `Outstanding Balance: ${formatNaira(Number(invoice.outstanding_balance))}\n` +
-      `${invoice.pay_by_date ? `Pay-By Date: ${new Date(invoice.pay_by_date).toLocaleDateString("en-NG", { day: "numeric", month: "long", year: "numeric" })}\n` : ""}` +
-      `\nPay now: ${paymentUrl}\n\n` +
-      `Thank you,\n${businessName}`
-    );
-    window.open(`mailto:${emailTo}?subject=${subject}&body=${body}`, "_self");
-    setTimeout(() => {
+    
+    startTransition(async () => {
+      setEmailSending(true);
+      const clientName = invoice.clients?.full_name || "Client";
+      const businessName = merchant?.business_name || "PurpLedger";
+      
+      const result = await sendInvoiceEmailAction({
+        toEmail: emailTo,
+        clientName,
+        businessName,
+        invoiceNumber: invoice.invoice_number,
+        grandTotal: formatNaira(Number(invoice.grand_total)),
+        amountPaid: formatNaira(Number(invoice.amount_paid)),
+        outstandingBalance: formatNaira(Number(invoice.outstanding_balance)),
+        payByDate: invoice.pay_by_date ? new Date(invoice.pay_by_date).toLocaleDateString("en-NG", { day: "numeric", month: "long", year: "numeric" }) : "",
+        paymentUrl,
+      });
+
       setEmailSending(false);
-      setEmailSent(true);
-      setTimeout(() => setEmailSent(false), 3000);
-    }, 500);
+      if (result.success) {
+        setEmailSent(true);
+        setTimeout(() => setEmailSent(false), 3000);
+      } else {
+        alert("Failed to send email: " + result.error);
+      }
+    });
   };
 
   const handleManualClose = () => {

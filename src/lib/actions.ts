@@ -3,7 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { revalidatePath } from "next/cache";
-import { sendTeamInviteEmail, sendPasswordResetEmail } from "./brevo";
+import { sendTeamInviteEmail, sendPasswordResetEmail, sendInvoiceEmail } from "./brevo";
 
 // Service role client for admin-level operations
 function getServiceClient() {
@@ -545,4 +545,28 @@ export async function createInvoiceAction(data: {
 
   revalidatePath("/invoices");
   return { success: true, invoiceId: invoice.id };
+}
+
+export async function sendInvoiceEmailAction(data: {
+  toEmail: string;
+  clientName: string;
+  businessName: string;
+  invoiceNumber: string;
+  grandTotal: string;
+  amountPaid: string;
+  outstandingBalance: string;
+  payByDate: string;
+  paymentUrl: string;
+}) {
+  return await sendInvoiceEmail(
+    data.toEmail,
+    data.clientName,
+    data.businessName,
+    data.invoiceNumber,
+    data.grandTotal,
+    data.amountPaid,
+    data.outstandingBalance,
+    data.payByDate,
+    data.paymentUrl
+  );
 }
