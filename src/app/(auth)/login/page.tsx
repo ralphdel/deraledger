@@ -23,7 +23,11 @@ export default function LoginPage() {
     startTransition(async () => {
       const result = await loginUser(formData);
       if (result.success) {
-        router.push("/dashboard");
+        if (result.mustChangePassword) {
+          router.push("/set-password");
+        } else {
+          router.push("/dashboard");
+        }
       } else {
         setError(result.error || "Failed to log in.");
       }
@@ -83,9 +87,9 @@ export default function LoginPage() {
             <Label htmlFor="password" className="text-sm font-medium text-neutral-900">
               Password
             </Label>
-            <a href="#" className="text-xs text-purp-700 hover:underline font-medium">
+            <Link href="/forgot-password" className="text-xs text-purp-700 hover:underline font-medium">
               Forgot password?
-            </a>
+            </Link>
           </div>
           <div className="relative">
             <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-500" />

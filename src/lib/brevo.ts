@@ -37,43 +37,80 @@ export async function sendTeamInviteEmail(
   toEmail: string,
   role: string,
   workspaceCode: string,
-  businessName: string
+  businessName: string,
+  tempPassword: string
 ) {
-  // Use absolute URL for the login link
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://purpledger.vercel.app";
   const loginLink = `${appUrl}/login`;
 
   const htmlContent = `
-    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #111827;">
-      <h2 style="color: #4C1D95;">You've been invited to PurpLedger!</h2>
-      <p>Hello,</p>
-      <p>You have been invited to join <strong>${businessName}</strong> as a <strong>${role.toUpperCase()}</strong> on PurpLedger.</p>
-      
-      <div style="background-color: #F3F4F6; padding: 15px; border-radius: 8px; margin: 20px 0;">
-        <p style="margin: 0; font-size: 14px; color: #4B5563;">Your Workspace Code:</p>
-        <p style="margin: 5px 0 0 0; font-size: 24px; font-weight: bold; letter-spacing: 2px; color: #111827;">
-          ${workspaceCode}
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #111827; border: 1px solid #E5E7EB; border-radius: 8px; overflow: hidden;">
+      <div style="background-color: #4C1D95; padding: 24px; text-align: center;">
+        <h2 style="color: white; margin: 0; font-size: 22px;">You've been invited to PurpLedger!</h2>
+      </div>
+      <div style="padding: 30px;">
+        <p>Hello,</p>
+        <p>You have been invited to join <strong>${businessName}</strong> as a <strong>${role.toUpperCase()}</strong>.</p>
+
+        <div style="background-color: #F3F4F6; padding: 16px; border-radius: 8px; margin: 20px 0;">
+          <p style="margin: 0 0 8px 0; font-size: 13px; color: #6B7280; text-transform: uppercase; letter-spacing: 1px;">Your Business ID</p>
+          <p style="margin: 0; font-size: 22px; font-weight: bold; letter-spacing: 3px; color: #111827; font-family: monospace;">${workspaceCode}</p>
+        </div>
+
+        <div style="background-color: #FFF7ED; border: 1px solid #FED7AA; padding: 16px; border-radius: 8px; margin: 20px 0;">
+          <p style="margin: 0 0 8px 0; font-size: 13px; color: #9A3412; text-transform: uppercase; letter-spacing: 1px;">Temporary Password (One-Time Use)</p>
+          <p style="margin: 0; font-size: 20px; font-weight: bold; color: #7C2D12; font-family: monospace; letter-spacing: 2px;">${tempPassword}</p>
+          <p style="margin: 8px 0 0 0; font-size: 12px; color: #9A3412;">You will be asked to create a new password after your first login.</p>
+        </div>
+
+        <p><strong>To accept this invitation:</strong></p>
+        <ol style="line-height: 2;">
+          <li>Go to the <a href="${loginLink}" style="color: #4C1D95; font-weight: bold;">PurpLedger Login Page</a></li>
+          <li>Enter your email: <strong>${toEmail}</strong></li>
+          <li>Enter the temporary password above</li>
+          <li>Enter the Business ID: <strong>${workspaceCode}</strong></li>
+          <li>You will be redirected to set a permanent password</li>
+        </ol>
+
+        <p style="margin-top: 30px; font-size: 12px; color: #6B7280;">
+          If you did not expect this invitation, you can safely ignore this email.
         </p>
       </div>
-
-      <p><strong>To accept this invitation:</strong></p>
-      <ol>
-        <li>Go to the <a href="${loginLink}" style="color: #4C1D95; font-weight: bold;">PurpLedger Login Page</a></li>
-        <li>Enter your email: <strong>${toEmail}</strong></li>
-        <li>Enter the Workspace Code above</li>
-        <li>Create your password (if logging in for the first time) or use your existing password.</li>
-      </ol>
-      
-      <p style="margin-top: 30px; font-size: 12px; color: #6B7280;">
-        If you did not expect this invitation, you can safely ignore this email.
-      </p>
     </div>
   `;
 
   return sendEmail({
-    sender: { name: "PurpLedger Admin", email: ADMIN_EMAIL },
+    sender: { name: "PurpLedger", email: ADMIN_EMAIL },
     to: [{ email: toEmail }],
-    subject: `Invitation to join ${businessName} on PurpLedger`,
+    subject: `You've been invited to join ${businessName} on PurpLedger`,
+    htmlContent,
+  });
+}
+
+export async function sendPasswordResetEmail(toEmail: string, resetLink: string) {
+  const htmlContent = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #111827; border: 1px solid #E5E7EB; border-radius: 8px; overflow: hidden;">
+      <div style="background-color: #4C1D95; padding: 24px; text-align: center;">
+        <h2 style="color: white; margin: 0;">Reset Your Password</h2>
+      </div>
+      <div style="padding: 30px;">
+        <p>We received a request to reset your PurpLedger password.</p>
+        <p>Click the button below to create a new password. This link expires in 1 hour.</p>
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${resetLink}" style="background-color: #4C1D95; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 16px; display: inline-block;">
+            Reset My Password
+          </a>
+        </div>
+        <p style="font-size: 13px; color: #6B7280;">If you did not request a password reset, you can safely ignore this email. Your password will not be changed.</p>
+        <p style="font-size: 12px; color: #9CA3AF; margin-top: 20px; word-break: break-all;">Or copy this link: ${resetLink}</p>
+      </div>
+    </div>
+  `;
+
+  return sendEmail({
+    sender: { name: "PurpLedger", email: ADMIN_EMAIL },
+    to: [{ email: toEmail }],
+    subject: "Reset your PurpLedger password",
     htmlContent,
   });
 }

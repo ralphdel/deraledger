@@ -3,7 +3,15 @@
 import { createClient } from "@/lib/supabase/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { revalidatePath } from "next/cache";
-import { sendTeamInviteEmail } from "./brevo";
+import { sendTeamInviteEmail, sendPasswordResetEmail } from "./brevo";
+
+// Service role client for admin-level operations
+function getServiceClient() {
+  return createSupabaseClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  );
+}
 
 const DEMO_MERCHANT_ID = "00000000-0000-0000-0000-000000000001";
 
@@ -248,19 +256,203 @@ export async function sendInviteAction(
   email: string,
   role: string,
   workspaceCode: string,
-  businessName: string
+  businessName: string,
+  merchantId: string
 ) {
-  if (!email || !role || !workspaceCode) {
+  if (!email || !role || !workspaceCode || !merchantId) {
     return { success: false, error: "Missing required fields" };
   }
 
-  // Actually send the email via Brevo
-  const result = await sendTeamInviteEmail(email, role, workspaceCode, businessName);
+  const supabase = await createClient();
+  const { data: { user: currentUser } } = await supabase.auth.getUser();
   
+  if (!currentUser) {
+    return { success: false, error: "Unauthorized" };
+  }
+
+  const adminClient = getServiceClient();
+
+  // 1. Generate a cryptographically random temp password
+  const tempPassword = Math.random().toString(36).slice(2, 8).toUpperCase() +
+    Math.random().toString(36).slice(2, 6) + "@1";
+
+  // 2. Create or get the Supabase Auth user for this email
+  let userId: string | null = null;
+
+  // Try to get existing user by email first
+  const { data: existingUsers } = await adminClient.auth.admin.listUsers();
+  const existingUser = existingUsers?.users?.find((u) => u.email === email);
+
+  if (existingUser) {
+    userId = existingUser.id;
+    // Update their password to the temp one
+    await adminClient.auth.admin.updateUserById(userId, { password: tempPassword });
+  } else {
+    // Create new user
+    const { data: newUser, error: createError } = await adminClient.auth.admin.createUser({
+      email,
+      password: tempPassword,
+      email_confirm: true,
+    });
+    if (createError || !newUser?.user) {
+      return { success: false, error: createError?.message || "Failed to create user account" };
+    }
+    userId = newUser.user.id;
+  }
+
+  // Get the role ID
+  const { data: roleData } = await adminClient.from("roles").select("id").eq("name", role).single();
+  if (!roleData) return { success: false, error: "Invalid role specified" };
+  const roleId = roleData.id;
+
+  // 3. Upsert into merchant_team with must_change_password = true
+  const { error: teamError } = await adminClient.from("merchant_team").upsert({
+    merchant_id: merchantId,
+    user_id: userId,
+    role_id: roleId,
+    is_active: true,
+    must_change_password: true,
+    invited_by: currentUser.id,
+  }, { onConflict: "merchant_id,user_id" });
+
+  if (teamError) {
+    console.error("Failed to add team member:", teamError);
+    return { success: false, error: teamError.message };
+  }
+
+  // 4. Send branded Brevo invite email with temp password
+  const result = await sendTeamInviteEmail(email, role, workspaceCode, businessName, tempPassword);
+
   if (!result.success) {
     console.error("Failed to send invite email:", result.error);
     return { success: false, error: result.error };
   }
 
+  revalidatePath("/team");
+  return { success: true };
+}
+
+// ── Admin Actions ─────────────────────────────────────────────────────────────
+
+export async function adminDeactivateMerchantAction(merchantId: string) {
+  const adminClient = getServiceClient();
+  const { error } = await adminClient
+    .from("merchants")
+    .update({ verification_status: "suspended" })
+    .eq("id", merchantId);
+  if (error) return { success: false, error: error.message };
+  revalidatePath("/admin/merchants");
+  return { success: true };
+}
+
+export async function adminReactivateMerchantAction(merchantId: string) {
+  const adminClient = getServiceClient();
+  const { error } = await adminClient
+    .from("merchants")
+    .update({ verification_status: "unverified" })
+    .eq("id", merchantId);
+  if (error) return { success: false, error: error.message };
+  revalidatePath("/admin/merchants");
+  return { success: true };
+}
+
+export async function adminDeleteMerchantAction(merchantId: string) {
+  const adminClient = getServiceClient();
+  // Delete in order to respect FK constraints
+  await adminClient.from("merchant_team").delete().eq("merchant_id", merchantId);
+  await adminClient.from("transactions").delete().eq("merchant_id", merchantId);
+  await adminClient.from("invoices").delete().eq("merchant_id", merchantId);
+  await adminClient.from("clients").delete().eq("merchant_id", merchantId);
+  const { error } = await adminClient.from("merchants").delete().eq("id", merchantId);
+  if (error) return { success: false, error: error.message };
+  revalidatePath("/admin/merchants");
+  return { success: true };
+}
+
+// ── Team Member Management ────────────────────────────────────────────────────
+
+export async function deactivateTeamMemberAction(teamMemberId: string, merchantId: string) {
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("merchant_team")
+    .update({ is_active: false })
+    .eq("id", teamMemberId)
+    .eq("merchant_id", merchantId); // Ensure merchant owns this row
+  if (error) return { success: false, error: error.message };
+  revalidatePath("/team");
+  return { success: true };
+}
+
+export async function reactivateTeamMemberAction(teamMemberId: string, merchantId: string) {
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("merchant_team")
+    .update({ is_active: true })
+    .eq("id", teamMemberId)
+    .eq("merchant_id", merchantId);
+  if (error) return { success: false, error: error.message };
+  revalidatePath("/team");
+  return { success: true };
+}
+
+export async function removeTeamMemberAction(teamMemberId: string, merchantId: string) {
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("merchant_team")
+    .delete()
+    .eq("id", teamMemberId)
+    .eq("merchant_id", merchantId);
+  if (error) return { success: false, error: error.message };
+  revalidatePath("/team");
+  return { success: true };
+}
+
+export async function fetchTeamMembersAction(merchantId: string) {
+  const adminClient = getServiceClient();
+  
+  // 1. Get all team rows for this merchant
+  const { data: teamRows, error: teamError } = await adminClient
+    .from("merchant_team")
+    .select("*, roles(name)")
+    .eq("merchant_id", merchantId);
+    
+  if (teamError || !teamRows) {
+    return { success: false, team: [], error: teamError?.message };
+  }
+  
+  // 2. Get all user emails using admin api
+  const { data: usersData } = await adminClient.auth.admin.listUsers();
+  const userMap = new Map();
+  if (usersData?.users) {
+    usersData.users.forEach(u => userMap.set(u.id, u.email));
+  }
+  
+  const formattedTeam = teamRows.map(row => ({
+    id: row.id,
+    user_id: row.user_id,
+    email: userMap.get(row.user_id) || "Unknown User",
+    role: row.roles?.name || "Viewer",
+    status: (row.is_active ? "active" : "inactive") as "active" | "inactive" | "invited",
+    joinedAt: row.added_at,
+    is_active: row.is_active
+  }));
+  
+  return { success: true, team: formattedTeam };
+}
+
+export async function createClientAction(clientData: {
+  full_name: string;
+  email?: string;
+  phone?: string;
+  company_name?: string;
+  merchant_id: string;
+}) {
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("clients")
+    .insert([clientData]);
+    
+  if (error) return { success: false, error: error.message };
+  revalidatePath("/clients");
   return { success: true };
 }

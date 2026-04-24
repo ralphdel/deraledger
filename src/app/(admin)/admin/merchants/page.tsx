@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Users, Search, ShieldCheck, DollarSign, FileText } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -11,13 +12,23 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import { formatNaira } from "@/lib/calculations";
 import type { Merchant } from "@/lib/types";
+import { adminDeactivateMerchantAction, adminDeleteMerchantAction, adminReactivateMerchantAction } from "@/lib/actions";
+import { MoreHorizontal, Ban, Trash2, CheckCircle2 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
 
 export default function AdminMerchantsPage() {
   const [merchants, setMerchants] = useState<Merchant[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
 
-  useEffect(() => {
+  const fetchMerchants = () => {
+    setLoading(true);
     const sb = createClient();
     sb.from("merchants")
       .select("*")
@@ -26,7 +37,35 @@ export default function AdminMerchantsPage() {
         setMerchants((data || []) as Merchant[]);
         setLoading(false);
       });
+  };
+
+  useEffect(() => {
+    fetchMerchants();
   }, []);
+
+  const handleDeactivate = async (id: string, name: string) => {
+    if (confirm(`Are you sure you want to deactivate ${name}? They will lose dashboard access immediately.`)) {
+      await adminDeactivateMerchantAction(id);
+      fetchMerchants();
+    }
+  };
+
+  const handleReactivate = async (id: string, name: string) => {
+    if (confirm(`Are you sure you want to reactivate ${name}? They will regain access.`)) {
+      await adminReactivateMerchantAction(id);
+      fetchMerchants();
+    }
+  };
+
+  const handleDelete = async (id: string, name: string) => {
+    const promptName = prompt(`DANGER: To permanently delete ${name} and ALL their data, type the business name:`);
+    if (promptName === name) {
+      await adminDeleteMerchantAction(id);
+      fetchMerchants();
+    } else if (promptName !== null) {
+      alert("Business name did not match. Deletion cancelled.");
+    }
+  };
 
   const filtered = merchants.filter(
     (m) =>
@@ -91,6 +130,7 @@ export default function AdminMerchantsPage() {
                 <TableHead className="font-bold text-neutral-900 text-xs uppercase">Verification</TableHead>
                 <TableHead className="font-bold text-neutral-900 text-xs uppercase">Collection Limit</TableHead>
                 <TableHead className="font-bold text-neutral-900 text-xs uppercase">Joined</TableHead>
+                <TableHead className="w-[50px]"></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -123,6 +163,28 @@ export default function AdminMerchantsPage() {
                     {new Date(m.created_at).toLocaleDateString("en-NG", {
                       day: "numeric", month: "short", year: "numeric",
                     })}
+                  </TableCell>
+                  <TableCell>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger className="h-8 w-8 text-neutral-500 hover:text-purp-900 hover:bg-neutral-100 rounded-md inline-flex items-center justify-center transition-colors focus:outline-none">
+                        <MoreHorizontal className="h-4 w-4" />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        {m.verification_status === "suspended" ? (
+                          <DropdownMenuItem className="cursor-pointer text-emerald-600" onClick={() => handleReactivate(m.id, m.business_name)}>
+                            <CheckCircle2 className="mr-2 h-4 w-4" /> Reactivate Access
+                          </DropdownMenuItem>
+                        ) : (
+                          <DropdownMenuItem className="cursor-pointer text-amber-600" onClick={() => handleDeactivate(m.id, m.business_name)}>
+                            <Ban className="mr-2 h-4 w-4" /> Deactivate / Suspend
+                          </DropdownMenuItem>
+                        )}
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem className="cursor-pointer text-red-600" onClick={() => handleDelete(m.id, m.business_name)}>
+                          <Trash2 className="mr-2 h-4 w-4" /> Delete Permanently
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </TableCell>
                 </TableRow>
               ))}

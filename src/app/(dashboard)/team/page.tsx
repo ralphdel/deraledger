@@ -37,15 +37,32 @@ import {
 } from "@/components/ui/select";
 import { createClient } from "@/lib/supabase/client";
 import { getMerchant } from "@/lib/data";
-import { createCustomRoleAction, sendInviteAction } from "@/lib/actions";
+import { 
+  createCustomRoleAction, 
+  sendInviteAction, 
+  fetchTeamMembersAction,
+  deactivateTeamMemberAction,
+  reactivateTeamMemberAction,
+  removeTeamMemberAction
+} from "@/lib/actions";
 import type { Role, Merchant } from "@/lib/types";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
+import { MoreHorizontal, Ban, UserMinus, UserCheck } from "lucide-react";
 
 interface TeamMember {
   id: string;
+  user_id?: string;
   email: string;
   role: string;
-  status: "active" | "invited";
+  status: "active" | "inactive" | "invited";
   joinedAt: string;
+  is_active?: boolean;
 }
 
 export default function TeamPage() {
@@ -58,6 +75,8 @@ export default function TeamPage() {
   const [workspaceCode, setWorkspaceCode] = useState("");
   const [businessName, setBusinessName] = useState("");
   const [sendingInvite, setSendingInvite] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [inviteSuccess, setInviteSuccess] = useState<string | null>(null);
 
   const [team, setTeam] = useState<TeamMember[]>([]);
 
@@ -88,16 +107,40 @@ export default function TeamPage() {
     if (data) setRoles(data as Role[]);
   };
 
+  const loadTeam = async (mId: string, ownerEmail: string, ownerCreatedAt: string) => {
+    const { success, team: fetchedTeam } = await fetchTeamMembersAction(mId);
+    if (success && fetchedTeam) {
+      // Find if owner is in the team rows, if not, add manually
+      const ownerExists = fetchedTeam.some((t: any) => t.email === ownerEmail);
+      let allMembers = [...fetchedTeam];
+      
+      if (!ownerExists) {
+        allMembers.unshift({ 
+          id: mId, 
+          user_id: mId,
+          email: ownerEmail, 
+          role: "owner", 
+          status: "active", 
+          joinedAt: ownerCreatedAt,
+          is_active: true
+        });
+      }
+      
+      setTeam(allMembers);
+    }
+  };
+
   useEffect(() => {
     getMerchant().then((merchant) => {
       if (merchant) {
         setMerchantId(merchant.id);
         setBusinessName(merchant.business_name);
         if (merchant.workspace_code) setWorkspaceCode(merchant.workspace_code);
-        setTeam([
-          { id: merchant.id, email: merchant.email, role: "owner", status: "active", joinedAt: merchant.created_at || "2025-01-01" },
-        ]);
-        fetchRoles(merchant.id).then(() => setLoading(false));
+        
+        Promise.all([
+          fetchRoles(merchant.id),
+          loadTeam(merchant.id, merchant.email, merchant.created_at || "2025-01-01")
+        ]).then(() => setLoading(false));
       } else {
         setLoading(false);
       }
@@ -117,23 +160,54 @@ export default function TeamPage() {
   };
 
   const handleInvite = async () => {
+    setInviteError(null);
+    setInviteSuccess(null);
     if (!inviteEmail || !inviteRole || !workspaceCode) {
-      alert("Missing required fields or Workspace Code not configured.");
+      setInviteError("Missing required fields or Workspace Code not configured.");
       return;
     }
     setSendingInvite(true);
     
-    const { success, error } = await sendInviteAction(inviteEmail, inviteRole, workspaceCode, businessName);
+    const { success, error } = await sendInviteAction(inviteEmail, inviteRole, workspaceCode, businessName, merchantId);
     
     if (success) {
-      alert(`Success! Invite email sent to ${inviteEmail} with Workspace Code: ${workspaceCode}.`);
+      setInviteSuccess(`Success! Invite email sent to ${inviteEmail}`);
       setInviteEmail("");
       setInviteRole("");
+      // Refresh team list
+      const m = await getMerchant();
+      if (m) {
+        await loadTeam(merchantId, m.email, m.created_at || "2025-01-01");
+      }
     } else {
-      alert("Failed to send invite: " + error);
+      setInviteError("Failed to send invite: " + error);
     }
     
     setSendingInvite(false);
+  };
+
+  const handleDeactivateMember = async (id: string, email: string) => {
+    if (confirm(`Are you sure you want to deactivate ${email}? They won't be able to access this workspace.`)) {
+      await deactivateTeamMemberAction(id, merchantId);
+      const m = await getMerchant();
+      if (m) await loadTeam(merchantId, m.email, m.created_at || "2025-01-01");
+    }
+  };
+
+  const handleReactivateMember = async (id: string, email: string) => {
+    if (confirm(`Are you sure you want to reactivate ${email}?`)) {
+      await reactivateTeamMemberAction(id, merchantId);
+      const m = await getMerchant();
+      if (m) await loadTeam(merchantId, m.email, m.created_at || "2025-01-01");
+    }
+  };
+
+  const handleRemoveMember = async (id: string, email: string) => {
+    if (confirm(`Are you sure you want to permanently remove ${email} from this team?`)) {
+      await removeTeamMemberAction(id, merchantId);
+      const m = await getMerchant();
+      if (m) await loadTeam(merchantId, m.email, m.created_at || "2025-01-01");
+    }
   };
 
   const handleCreateCustomRole = async () => {
@@ -285,6 +359,20 @@ export default function TeamPage() {
                   </Select>
                 </div>
               </div>
+              
+              {inviteError && (
+                <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm font-medium border border-red-100 flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-red-600 shrink-0" />
+                  {inviteError}
+                </div>
+              )}
+              {inviteSuccess && (
+                <div className="bg-emerald-50 text-emerald-600 p-3 rounded-lg text-sm font-medium border border-emerald-100 flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 shrink-0" />
+                  {inviteSuccess}
+                </div>
+              )}
+
               <DialogFooter>
                 <Button
                   onClick={handleInvite}
@@ -322,10 +410,40 @@ export default function TeamPage() {
                       </p>
                     </div>
                   </div>
-                  <Badge variant="outline" className={`border-2 text-xs font-semibold capitalize ${roleColors[member.role] || ""}`}>
-                    <RoleIcon className="mr-1 h-3 w-3" />
-                    {member.role}
-                  </Badge>
+                  <div className="flex items-center gap-2">
+                    {member.status === "inactive" && (
+                      <Badge variant="outline" className="bg-red-50 text-red-600 border-red-200 text-xs">
+                        Suspended
+                      </Badge>
+                    )}
+                    <Badge variant="outline" className={`border-2 text-xs font-semibold capitalize ${roleColors[member.role] || ""}`}>
+                      <RoleIcon className="mr-1 h-3 w-3" />
+                      {member.role}
+                    </Badge>
+                    
+                    {member.role !== "owner" && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger className="h-8 w-8 text-neutral-500 hover:text-purp-900 hover:bg-neutral-100 rounded-md inline-flex items-center justify-center ml-2 transition-colors focus:outline-none">
+                          <MoreHorizontal className="h-4 w-4" />
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          {member.status === "active" ? (
+                            <DropdownMenuItem className="cursor-pointer text-amber-600" onClick={() => handleDeactivateMember(member.id, member.email)}>
+                              <Ban className="mr-2 h-4 w-4" /> Deactivate Access
+                            </DropdownMenuItem>
+                          ) : (
+                            <DropdownMenuItem className="cursor-pointer text-emerald-600" onClick={() => handleReactivateMember(member.id, member.email)}>
+                              <UserCheck className="mr-2 h-4 w-4" /> Reactivate Access
+                            </DropdownMenuItem>
+                          )}
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem className="cursor-pointer text-red-600" onClick={() => handleRemoveMember(member.id, member.email)}>
+                            <UserMinus className="mr-2 h-4 w-4" /> Remove from Team
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
+                  </div>
                 </div>
               );
             })}

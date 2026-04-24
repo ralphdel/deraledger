@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
+import { sendPasswordResetEmail } from "@/lib/brevo";
 
 export async function loginUser(formData: FormData) {
   const email = formData.get("email") as string;
@@ -44,7 +45,7 @@ export async function loginUser(formData: FormData) {
     // 2. Verify team access using the resolved UUID
     const { data: teamData, error: teamError } = await supabase
       .from("merchant_team")
-      .select("id")
+      .select("id, must_change_password")
       .eq("user_id", data.user.id)
       .eq("merchant_id", merchantId)
       .single();
@@ -52,6 +53,12 @@ export async function loginUser(formData: FormData) {
     if (teamError || !teamData) {
       await supabase.auth.signOut();
       return { success: false, error: "You do not have access to this business workspace." };
+    }
+    
+    // Check if the user needs to change their password
+    if (teamData.must_change_password) {
+      // Don't set the workspace cookie yet, force them to set a password first
+      return { success: true, mustChangePassword: true };
     }
     
     // 3. Set the cookie using the raw UUID so the rest of the app doesn't break
@@ -107,4 +114,25 @@ export async function logoutUser() {
   await supabase.auth.signOut();
   (await cookies()).delete("purpledger_workspace_id");
   revalidatePath("/", "layout");
+}
+
+export async function forgotPasswordAction(email: string) {
+  if (!email) return { success: false, error: "Email is required" };
+
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://purpledger.vercel.app";
+  const supabase = await createClient();
+
+  // Generate Supabase reset link (secure token based)
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: `${appUrl}/reset-password`,
+  });
+
+  if (error) {
+    return { success: false, error: error.message };
+  }
+
+  // Supabase will send its default email if enabled, but we also send our branded one
+  await sendPasswordResetEmail(email, `${appUrl}/reset-password`);
+
+  return { success: true };
 }

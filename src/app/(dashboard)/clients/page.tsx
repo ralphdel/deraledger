@@ -14,8 +14,9 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { getClients, getInvoices } from "@/lib/data";
+import { getClients, getInvoices, getMerchant } from "@/lib/data";
 import { formatNaira } from "@/lib/calculations";
+import { createClientAction } from "@/lib/actions";
 import type { Client, InvoiceWithClient } from "@/lib/types";
 
 export default function ClientsPage() {
@@ -23,13 +24,28 @@ export default function ClientsPage() {
   const [clients, setClients] = useState<Client[]>([]);
   const [invoices, setInvoices] = useState<InvoiceWithClient[]>([]);
   const [loading, setLoading] = useState(true);
+  
+  // New client form state
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [savingClient, setSavingClient] = useState(false);
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [companyName, setCompanyName] = useState("");
+  const [merchantId, setMerchantId] = useState("");
 
-  useEffect(() => {
-    Promise.all([getClients(), getInvoices()]).then(([c, i]) => {
+  const fetchData = () => {
+    setLoading(true);
+    Promise.all([getClients(), getInvoices(), getMerchant()]).then(([c, i, m]) => {
       setClients(c);
       setInvoices(i);
+      if (m) setMerchantId(m.id);
       setLoading(false);
     });
+  };
+
+  useEffect(() => {
+    fetchData();
   }, []);
 
   const filteredClients = clients.filter(
@@ -44,6 +60,34 @@ export default function ClientsPage() {
     const totalCollected = clientInvoices.reduce((s, i) => s + Number(i.amount_paid), 0);
     const outstanding = clientInvoices.reduce((s, i) => s + Number(i.outstanding_balance), 0);
     return { totalInvoiced, totalCollected, outstanding, count: clientInvoices.length };
+  };
+
+  const handleSaveClient = async () => {
+    if (!fullName.trim() || !merchantId) {
+      alert("Full Name is required.");
+      return;
+    }
+    
+    setSavingClient(true);
+    const { success, error } = await createClientAction({
+      full_name: fullName,
+      email: email || undefined,
+      phone: phone || undefined,
+      company_name: companyName || undefined,
+      merchant_id: merchantId,
+    });
+    
+    if (success) {
+      setDialogOpen(false);
+      setFullName("");
+      setEmail("");
+      setPhone("");
+      setCompanyName("");
+      fetchData(); // Refresh the list
+    } else {
+      alert("Failed to save client: " + error);
+    }
+    setSavingClient(false);
   };
 
   if (loading) {
@@ -70,7 +114,7 @@ export default function ClientsPage() {
             Manage your client list and view their invoice history
           </p>
         </div>
-        <Dialog>
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger
             render={<Button className="bg-purp-900 hover:bg-purp-700 text-white font-semibold" />}
           >
@@ -84,24 +128,50 @@ export default function ClientsPage() {
             <div className="space-y-4 py-2">
               <div className="space-y-2">
                 <Label>Full Name *</Label>
-                <Input className="border-2 border-purp-200 bg-purp-50 h-11" placeholder="Client full name" />
+                <Input 
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  className="border-2 border-purp-200 bg-purp-50 h-11" 
+                  placeholder="Client full name" 
+                />
               </div>
               <div className="space-y-2">
                 <Label>Email</Label>
-                <Input type="email" className="border-2 border-purp-200 bg-purp-50 h-11" placeholder="client@company.ng" />
+                <Input 
+                  type="email" 
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="border-2 border-purp-200 bg-purp-50 h-11" 
+                  placeholder="client@company.ng" 
+                />
               </div>
               <div className="space-y-2">
                 <Label>Phone</Label>
-                <Input type="tel" className="border-2 border-purp-200 bg-purp-50 h-11" placeholder="+234..." />
+                <Input 
+                  type="tel" 
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  className="border-2 border-purp-200 bg-purp-50 h-11" 
+                  placeholder="+234..." 
+                />
               </div>
               <div className="space-y-2">
                 <Label>Company Name</Label>
-                <Input className="border-2 border-purp-200 bg-purp-50 h-11" placeholder="Optional" />
+                <Input 
+                  value={companyName}
+                  onChange={(e) => setCompanyName(e.target.value)}
+                  className="border-2 border-purp-200 bg-purp-50 h-11" 
+                  placeholder="Optional" 
+                />
               </div>
             </div>
             <DialogFooter>
-              <Button className="bg-purp-900 hover:bg-purp-700 text-white font-semibold">
-                Save Client
+              <Button 
+                onClick={handleSaveClient}
+                disabled={!fullName.trim() || savingClient}
+                className="bg-purp-900 hover:bg-purp-700 text-white font-semibold"
+              >
+                {savingClient ? "Saving..." : "Save Client"}
               </Button>
             </DialogFooter>
           </DialogContent>

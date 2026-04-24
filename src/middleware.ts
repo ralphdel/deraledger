@@ -56,8 +56,10 @@ export async function middleware(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const isAuthRoute = request.nextUrl.pathname.startsWith('/login') || request.nextUrl.pathname.startsWith('/register');
-  const isDashboardRoute = request.nextUrl.pathname.startsWith('/dashboard') || request.nextUrl.pathname.startsWith('/invoices') || request.nextUrl.pathname.startsWith('/customers') || request.nextUrl.pathname.startsWith('/settings');
+  const isDashboardRoute = request.nextUrl.pathname.startsWith('/dashboard') || request.nextUrl.pathname.startsWith('/invoices') || request.nextUrl.pathname.startsWith('/team') || request.nextUrl.pathname.startsWith('/clients') || request.nextUrl.pathname.startsWith('/settings');
   const isAdminRoute = request.nextUrl.pathname.startsWith('/admin');
+  const isSuspendedRoute = request.nextUrl.pathname.startsWith('/suspended');
+  const isSetPasswordRoute = request.nextUrl.pathname.startsWith('/set-password');
 
   // Protect private routes
   if (!user && (isDashboardRoute || isAdminRoute)) {
@@ -79,6 +81,44 @@ export async function middleware(request: NextRequest) {
 
     // Allow SuperAdmins to access both Admin and Dashboard for testing/dummy data purposes.
     
+    if (!isSuperAdmin && (isDashboardRoute || isAuthRoute)) {
+      // Look up current merchant status to check for suspension
+      const merchantId = request.cookies.get("purpledger_workspace_id")?.value;
+      
+      if (merchantId) {
+        // 1. Check if merchant is suspended
+        const { data: merchantData } = await supabase
+          .from("merchants")
+          .select("verification_status")
+          .eq("id", merchantId)
+          .single();
+          
+        if (merchantData?.verification_status === "suspended") {
+          if (!isSuspendedRoute) {
+            const url = request.nextUrl.clone();
+            url.pathname = '/suspended';
+            return NextResponse.redirect(url);
+          }
+        }
+        
+        // 2. Check if team member needs password reset
+        const { data: teamData } = await supabase
+          .from("merchant_team")
+          .select("must_change_password")
+          .eq("user_id", user.id)
+          .eq("merchant_id", merchantId)
+          .single();
+          
+        if (teamData?.must_change_password) {
+          if (!isSetPasswordRoute) {
+            const url = request.nextUrl.clone();
+            url.pathname = '/set-password';
+            return NextResponse.redirect(url);
+          }
+        }
+      }
+    }
+
     // Redirect authenticated users away from login/register screens
     if (isAuthRoute) {
       const url = request.nextUrl.clone();
