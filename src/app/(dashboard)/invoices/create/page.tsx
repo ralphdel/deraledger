@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Plus, Trash2, Save } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, Save, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,8 +18,10 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { getClients } from "@/lib/data";
-import type { Client } from "@/lib/types";
+import type { Client, Merchant } from "@/lib/types";
 import { calculateInvoiceTotals, formatNaira } from "@/lib/calculations";
+import { createInvoiceAction } from "@/lib/actions";
+import { createClient } from "@/lib/supabase/client";
 
 interface FormLineItem {
   id: string;
@@ -31,6 +33,7 @@ interface FormLineItem {
 export default function CreateInvoicePage() {
   const router = useRouter();
   const [clients, setClients] = useState<Client[]>([]);
+  const [merchant, setMerchant] = useState<Merchant | null>(null);
   const [invoiceNumber, setInvoiceNumber] = useState("");
   const [useCustomNumber, setUseCustomNumber] = useState(false);
   const [clientId, setClientId] = useState("");
@@ -43,9 +46,24 @@ export default function CreateInvoicePage() {
     { id: "1", itemName: "", quantity: "1", unitRate: "" },
   ]);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
 
   useEffect(() => {
     getClients().then(setClients);
+
+    // Load merchant context
+    const sb = createClient();
+    sb.auth.getUser().then(async ({ data: { user } }) => {
+      if (user) {
+        const { data } = await sb
+          .from("merchants")
+          .select("*")
+          .eq("user_id", user.id)
+          .single();
+        if (data) setMerchant(data as Merchant);
+      }
+    });
   }, []);
 
   const addLineItem = () => {
@@ -78,12 +96,56 @@ export default function CreateInvoicePage() {
     parseFloat(taxPct) || 0
   );
 
-  const handleSubmit = (e: React.FormEvent) => {
+  // Resolve displayed client name for the selected client
+  const selectedClient = clients.find((c) => c.id === clientId);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError(null);
+
+    if (!clientId) {
+      setError("Please select a client before saving.");
+      return;
+    }
+    if (!merchant) {
+      setError("Session error: could not load your merchant account. Please refresh.");
+      return;
+    }
+    if (lineItems.every((li) => !li.itemName.trim())) {
+      setError("Please add at least one line item with a description.");
+      return;
+    }
+
     setSaving(true);
-    setTimeout(() => {
-      router.push("/invoices");
-    }, 800);
+
+    const result = await createInvoiceAction({
+      merchant_id: merchant.id,
+      client_id: clientId,
+      invoice_number: useCustomNumber ? invoiceNumber : undefined,
+      discount_pct: parseFloat(discountPct) || 0,
+      tax_pct: parseFloat(taxPct) || 0,
+      fee_absorption: feeAbsorption as "business" | "customer",
+      pay_by_date: payByDate || undefined,
+      notes: notes || undefined,
+      line_items: lineItems
+        .filter((li) => li.itemName.trim())
+        .map((li) => ({
+          item_name: li.itemName.trim(),
+          quantity: parseFloat(li.quantity) || 1,
+          unit_rate: parseFloat(li.unitRate) || 0,
+        })),
+    });
+
+    setSaving(false);
+
+    if (result.success) {
+      setSuccess(true);
+      setTimeout(() => {
+        router.push("/invoices");
+      }, 1200);
+    } else {
+      setError("Failed to create invoice: " + result.error);
+    }
   };
 
   return (
@@ -115,19 +177,30 @@ export default function CreateInvoicePage() {
             <div className="grid sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label className="text-sm font-medium">Client</Label>
-                <Select value={clientId} onValueChange={(v) => setClientId(v ?? "")}>
-                  <SelectTrigger className="border-2 border-purp-200 bg-purp-50 h-11">
-                    <SelectValue placeholder="Select a client" />
-                  </SelectTrigger>
-                  <SelectContent className="border-2 border-purp-200">
-                    {clients.map((client) => (
-                      <SelectItem key={client.id} value={client.id}>
-                        {client.full_name}{" "}
-                        {client.company_name && `— ${client.company_name}`}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                {/* Custom combobox-style select to avoid UUID display bug */}
+                <div className="relative">
+                  <Select value={clientId} onValueChange={(v) => setClientId(v ?? "")}>
+                    <SelectTrigger className="border-2 border-purp-200 bg-purp-50 h-11">
+                      {/* Manually render the selected client name instead of relying on SelectValue */}
+                      <span className={selectedClient ? "text-neutral-900" : "text-neutral-400"}>
+                        {selectedClient
+                          ? `${selectedClient.full_name}${selectedClient.company_name ? ` — ${selectedClient.company_name}` : ""}`
+                          : "Select a client"}
+                      </span>
+                    </SelectTrigger>
+                    <SelectContent className="border-2 border-purp-200">
+                      {clients.length === 0 && (
+                        <div className="px-3 py-2 text-sm text-neutral-400">No clients yet</div>
+                      )}
+                      {clients.map((client) => (
+                        <SelectItem key={client.id} value={client.id}>
+                          {client.full_name}
+                          {client.company_name && ` — ${client.company_name}`}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
 
               <div className="space-y-2">
@@ -142,11 +215,11 @@ export default function CreateInvoicePage() {
                   </button>
                 </div>
                 <Input
-                  value={useCustomNumber ? invoiceNumber : "INV-2025-007 (auto)"}
+                  value={useCustomNumber ? invoiceNumber : ""}
                   onChange={(e) => setInvoiceNumber(e.target.value)}
                   disabled={!useCustomNumber}
                   className="border-2 border-purp-200 bg-purp-50 h-11"
-                  placeholder="e.g. INV-2025-007"
+                  placeholder={useCustomNumber ? "e.g. INV-2025-007" : "Auto-generated on save"}
                 />
               </div>
             </div>
@@ -275,7 +348,7 @@ export default function CreateInvoicePage() {
           <Card className="border-2 border-purp-200 shadow-none">
             <CardHeader className="pb-4">
               <CardTitle className="text-base font-bold text-purp-900">
-                Tax, Discount & Notes
+                Tax, Discount &amp; Notes
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -356,9 +429,21 @@ export default function CreateInvoicePage() {
               </div>
 
               <div className="mt-6 space-y-3">
+                {error && (
+                  <div className="bg-red-50 border border-red-200 rounded-lg p-3 flex items-start gap-2 text-sm text-red-600">
+                    <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5 text-red-500" />
+                    {error}
+                  </div>
+                )}
+                {success && (
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 flex items-center gap-2 text-sm text-emerald-700 font-medium">
+                    <CheckCircle2 className="h-4 w-4 shrink-0" />
+                    Invoice created! Redirecting...
+                  </div>
+                )}
                 <Button
                   type="submit"
-                  disabled={saving}
+                  disabled={saving || success}
                   className="w-full h-11 bg-purp-900 hover:bg-purp-700 text-white font-semibold"
                 >
                   {saving ? (
@@ -372,7 +457,7 @@ export default function CreateInvoicePage() {
                   ) : (
                     <span className="flex items-center gap-2">
                       <Save className="h-4 w-4" />
-                      Create Invoice & Generate Link
+                      Create Invoice &amp; Generate Link
                     </span>
                   )}
                 </Button>

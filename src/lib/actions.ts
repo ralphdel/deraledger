@@ -358,6 +358,14 @@ export async function adminReactivateMerchantAction(merchantId: string) {
 
 export async function adminDeleteMerchantAction(merchantId: string) {
   const adminClient = getServiceClient();
+
+  // First fetch the user_id before deleting so we can remove the auth user too
+  const { data: merchant } = await adminClient
+    .from("merchants")
+    .select("user_id")
+    .eq("id", merchantId)
+    .single();
+
   // Delete in order to respect FK constraints
   await adminClient.from("merchant_team").delete().eq("merchant_id", merchantId);
   await adminClient.from("transactions").delete().eq("merchant_id", merchantId);
@@ -365,6 +373,15 @@ export async function adminDeleteMerchantAction(merchantId: string) {
   await adminClient.from("clients").delete().eq("merchant_id", merchantId);
   const { error } = await adminClient.from("merchants").delete().eq("id", merchantId);
   if (error) return { success: false, error: error.message };
+
+  // Also delete the Supabase Auth user so the email can be re-used for registration
+  if (merchant?.user_id) {
+    const { error: authError } = await adminClient.auth.admin.deleteUser(merchant.user_id);
+    if (authError) {
+      console.error("Warning: merchant DB deleted but auth user removal failed:", authError.message);
+    }
+  }
+
   revalidatePath("/admin/merchants");
   return { success: true };
 }
@@ -455,4 +472,77 @@ export async function createClientAction(clientData: {
   if (error) return { success: false, error: error.message };
   revalidatePath("/clients");
   return { success: true };
+}
+
+export async function createInvoiceAction(data: {
+  merchant_id: string;
+  client_id: string;
+  invoice_number?: string;
+  discount_pct: number;
+  tax_pct: number;
+  fee_absorption: "business" | "customer";
+  pay_by_date?: string;
+  notes?: string;
+  line_items: { item_name: string; quantity: number; unit_rate: number }[];
+}) {
+  const adminClient = getServiceClient();
+
+  // Calculate totals server-side
+  const subtotal = data.line_items.reduce((sum, li) => sum + li.quantity * li.unit_rate, 0);
+  const discountValue = subtotal * (data.discount_pct / 100);
+  const taxValue = (subtotal - discountValue) * (data.tax_pct / 100);
+  const grandTotal = subtotal - discountValue + taxValue;
+
+  // Auto-generate invoice number if not provided
+  const invoiceNumber = data.invoice_number?.trim() ||
+    `INV-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
+
+  // Generate a short link token
+  const shortToken = Math.random().toString(36).slice(2, 10).toUpperCase();
+
+  const { data: invoice, error } = await adminClient
+    .from("invoices")
+    .insert([{
+      merchant_id: data.merchant_id,
+      client_id: data.client_id,
+      invoice_number: invoiceNumber,
+      status: "open",
+      subtotal,
+      discount_pct: data.discount_pct,
+      discount_value: discountValue,
+      tax_pct: data.tax_pct,
+      tax_value: taxValue,
+      grand_total: grandTotal,
+      amount_paid: 0,
+      outstanding_balance: grandTotal,
+      fee_absorption: data.fee_absorption,
+      pay_by_date: data.pay_by_date || null,
+      notes: data.notes || null,
+      short_link: shortToken,
+      qr_code_url: null,
+    }])
+    .select("id")
+    .single();
+
+  if (error) return { success: false, error: error.message };
+
+  // Insert line items
+  const lineItems = data.line_items.map((li, idx) => ({
+    invoice_id: invoice.id,
+    item_name: li.item_name,
+    quantity: li.quantity,
+    unit_rate: li.unit_rate,
+    line_total: li.quantity * li.unit_rate,
+    sort_order: idx + 1,
+  }));
+
+  const { error: liError } = await adminClient.from("line_items").insert(lineItems);
+  if (liError) {
+    // Rollback: delete the invoice if line items failed
+    await adminClient.from("invoices").delete().eq("id", invoice.id);
+    return { success: false, error: liError.message };
+  }
+
+  revalidatePath("/invoices");
+  return { success: true, invoiceId: invoice.id };
 }
