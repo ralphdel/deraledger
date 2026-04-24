@@ -83,15 +83,32 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Update failed" }, { status: 500 });
   }
 
+  // Calculate proportional fields
+  const kFactor = Number(metadata?.k_factor) || (currentOutstanding > 0 ? paymentAmount / currentOutstanding : 0);
+  const taxCollected = Math.round((kFactor * Number(invoice.tax_value)) * 100) / 100;
+  const discountApplied = Math.round((kFactor * Number(invoice.discount_value)) * 100) / 100;
+  const rawFee = paymentAmount * 0.015 + 100;
+  const paystackFee = invoice.fee_absorption === "customer" ? Math.min(rawFee, 2000) : 0;
+
   // 2. Record the transaction
   const paymentMethod = channel === "card" ? "card" : channel === "bank" ? "bank_transfer" : "ussd";
-  await supabase.from("transactions").insert({
+  const { error: txnError } = await supabase.from("transactions").insert({
     invoice_id: invoiceId,
+    merchant_id: invoice.merchant_id,
     amount_paid: paymentAmount,
+    k_factor: kFactor,
+    tax_collected: taxCollected,
+    discount_applied: discountApplied,
+    paystack_fee: paystackFee,
+    fee_absorbed_by: invoice.fee_absorption || "business",
     payment_method: paymentMethod,
     paystack_reference: reference,
     status: "success",
   });
+  
+  if (txnError) {
+    console.error("Failed to insert transaction:", txnError);
+  }
 
   console.log(`✅ Payment recorded: ${reference} — ₦${paymentAmount} on invoice ${invoiceId}`);
 
