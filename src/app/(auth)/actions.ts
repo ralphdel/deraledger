@@ -55,14 +55,14 @@ export async function loginUser(formData: FormData) {
     }
     
     // 3. Set the cookie using the raw UUID so the rest of the app doesn't break
-    cookies().set("purpledger_workspace_id", merchantId, {
+    (await cookies()).set("purpledger_workspace_id", merchantId, {
       httpOnly: false,
       secure: process.env.NODE_ENV === "production",
       maxAge: 60 * 60 * 24 * 7,
       path: "/",
     });
   } else {
-    cookies().delete("purpledger_workspace_id");
+    (await cookies()).delete("purpledger_workspace_id");
   }
   
   revalidatePath("/", "layout");
@@ -105,6 +105,6 @@ export async function registerUser(formData: FormData) {
 export async function logoutUser() {
   const supabase = await createClient();
   await supabase.auth.signOut();
-  cookies().delete("purpledger_workspace_id");
+  (await cookies()).delete("purpledger_workspace_id");
   revalidatePath("/", "layout");
 }

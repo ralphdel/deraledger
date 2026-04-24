@@ -2,6 +2,30 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 export async function middleware(request: NextRequest) {
+  const url = request.nextUrl.clone();
+  if (url.pathname.startsWith('/admin')) {
+    const basicAuth = request.headers.get('authorization');
+    const adminUser = process.env.ADMIN_PORTAL_USER;
+    const adminPass = process.env.ADMIN_PORTAL_PASS;
+    if (adminUser && adminPass) {
+      if (basicAuth) {
+        const authValue = basicAuth.split(' ')[1];
+        const [user, pwd] = atob(authValue).split(':');
+        if (user !== adminUser || pwd !== adminPass) {
+          return new NextResponse('Auth Required', {
+            status: 401,
+            headers: { 'WWW-Authenticate': 'Basic realm="Secure Admin Portal"' },
+          });
+        }
+      } else {
+        return new NextResponse('Auth Required', {
+          status: 401,
+          headers: { 'WWW-Authenticate': 'Basic realm="Secure Admin Portal"' },
+        });
+      }
+    }
+  }
+
   let supabaseResponse = NextResponse.next({
     request,
   });

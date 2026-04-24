@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { revalidatePath } from "next/cache";
+import { sendTeamInviteEmail } from "./brevo";
 
 const DEMO_MERCHANT_ID = "00000000-0000-0000-0000-000000000001";
 
@@ -240,5 +241,26 @@ export async function createCustomRoleAction(merchantId: string, roleName: strin
   await logAudit("role_create", roleName, "role", { merchantId, permissions });
 
   revalidatePath("/team");
+  return { success: true };
+}
+
+export async function sendInviteAction(
+  email: string,
+  role: string,
+  workspaceCode: string,
+  businessName: string
+) {
+  if (!email || !role || !workspaceCode) {
+    return { success: false, error: "Missing required fields" };
+  }
+
+  // Actually send the email via Brevo
+  const result = await sendTeamInviteEmail(email, role, workspaceCode, businessName);
+  
+  if (!result.success) {
+    console.error("Failed to send invite email:", result.error);
+    return { success: false, error: result.error };
+  }
+
   return { success: true };
 }

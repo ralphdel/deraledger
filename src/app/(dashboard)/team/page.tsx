@@ -37,7 +37,7 @@ import {
 } from "@/components/ui/select";
 import { createClient } from "@/lib/supabase/client";
 import { getMerchant } from "@/lib/data";
-import { createCustomRoleAction } from "@/lib/actions";
+import { createCustomRoleAction, sendInviteAction } from "@/lib/actions";
 import type { Role, Merchant } from "@/lib/types";
 
 interface TeamMember {
@@ -56,6 +56,8 @@ export default function TeamPage() {
   const [copied, setCopied] = useState(false);
   const [merchantId, setMerchantId] = useState("");
   const [workspaceCode, setWorkspaceCode] = useState("");
+  const [businessName, setBusinessName] = useState("");
+  const [sendingInvite, setSendingInvite] = useState(false);
 
   const [team, setTeam] = useState<TeamMember[]>([]);
 
@@ -90,6 +92,7 @@ export default function TeamPage() {
     getMerchant().then((merchant) => {
       if (merchant) {
         setMerchantId(merchant.id);
+        setBusinessName(merchant.business_name);
         if (merchant.workspace_code) setWorkspaceCode(merchant.workspace_code);
         setTeam([
           { id: merchant.id, email: merchant.email, role: "owner", status: "active", joinedAt: merchant.created_at || "2025-01-01" },
@@ -113,11 +116,24 @@ export default function TeamPage() {
     viewer: "bg-neutral-100 text-neutral-600 border-neutral-200",
   };
 
-  const handleInvite = () => {
-    if (!inviteEmail || !inviteRole) return;
-    alert(`Invite sent to ${inviteEmail} as ${inviteRole}. (Auth integration required for full functionality)`);
-    setInviteEmail("");
-    setInviteRole("");
+  const handleInvite = async () => {
+    if (!inviteEmail || !inviteRole || !workspaceCode) {
+      alert("Missing required fields or Workspace Code not configured.");
+      return;
+    }
+    setSendingInvite(true);
+    
+    const { success, error } = await sendInviteAction(inviteEmail, inviteRole, workspaceCode, businessName);
+    
+    if (success) {
+      alert(`Success! Invite email sent to ${inviteEmail} with Workspace Code: ${workspaceCode}.`);
+      setInviteEmail("");
+      setInviteRole("");
+    } else {
+      alert("Failed to send invite: " + error);
+    }
+    
+    setSendingInvite(false);
   };
 
   const handleCreateCustomRole = async () => {
@@ -272,11 +288,11 @@ export default function TeamPage() {
               <DialogFooter>
                 <Button
                   onClick={handleInvite}
-                  disabled={!inviteEmail || !inviteRole}
+                  disabled={!inviteEmail || !inviteRole || sendingInvite}
                   className="bg-purp-900 hover:bg-purp-700 text-white font-semibold"
                 >
                   <Mail className="mr-2 h-4 w-4" />
-                  Send Invitation
+                  {sendingInvite ? "Sending..." : "Send Invitation"}
                 </Button>
               </DialogFooter>
             </DialogContent>
