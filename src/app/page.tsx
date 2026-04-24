@@ -239,7 +239,7 @@ export default function LandingPage() {
               <ul className="space-y-3 mb-8 flex-1">
                 <li className="flex items-start gap-2"><CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" /><span className="text-neutral-600">Draft Invoicing Enabled</span></li>
                 <li className="flex items-start gap-2"><CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" /><span className="text-neutral-600">PurpBot AI Enabled</span></li>
-                <li className="flex items-start gap-2"><XCircle className="h-5 w-5 text-red-500 shrink-0" /><span className="text-neutral-600">₦0 Collection Limit</span></li>
+                <li className="flex items-start gap-2"><XCircle className="h-5 w-5 text-red-500 shrink-0" /><span className="text-neutral-600">₦0 Monthly Collection Limit</span></li>
                 <li className="flex items-start gap-2"><XCircle className="h-5 w-5 text-red-500 shrink-0" /><span className="text-neutral-600">Payment Links Locked</span></li>
               </ul>
               <Badge variant="outline" className="border-purp-200 bg-purp-50 text-purp-900 w-full justify-center py-2 text-sm">Instant Approval</Badge>
@@ -255,7 +255,7 @@ export default function LandingPage() {
               <ul className="space-y-3 mb-8 flex-1">
                 <li className="flex items-start gap-2"><CheckCircle2 className="h-5 w-5 text-emerald-400 shrink-0" /><span className="text-white">Draft Invoicing Enabled</span></li>
                 <li className="flex items-start gap-2"><CheckCircle2 className="h-5 w-5 text-emerald-400 shrink-0" /><span className="text-white">Payment Links Enabled</span></li>
-                <li className="flex items-start gap-2"><CheckCircle2 className="h-5 w-5 text-emerald-400 shrink-0" /><span className="text-white">₦500,000 / mo Limit</span></li>
+                <li className="flex items-start gap-2"><CheckCircle2 className="h-5 w-5 text-emerald-400 shrink-0" /><span className="text-white">₦5,000,000 / mo Limit</span></li>
                 <li className="flex items-start gap-2"><CheckCircle2 className="h-5 w-5 text-emerald-400 shrink-0" /><span className="text-white">PurpBot AI Enabled</span></li>
               </ul>
               <Badge variant="outline" className="border-purp-700 bg-purp-800 text-white w-full justify-center py-2 text-sm border-2">Auto-validation (BVN/NIN)</Badge>
@@ -268,7 +268,7 @@ export default function LandingPage() {
               <ul className="space-y-3 mb-8 flex-1">
                 <li className="flex items-start gap-2"><CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" /><span className="text-neutral-600">Draft Invoicing Enabled</span></li>
                 <li className="flex items-start gap-2"><CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" /><span className="text-neutral-600">Payment Links Enabled</span></li>
-                <li className="flex items-start gap-2"><CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" /><span className="text-neutral-600">Unlimited Monthly Limit</span></li>
+                <li className="flex items-start gap-2"><CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" /><span className="text-neutral-600">Unlimited Collection</span></li>
                 <li className="flex items-start gap-2"><CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" /><span className="text-neutral-600">PurpBot AI Enabled</span></li>
               </ul>
               <Badge variant="outline" className="border-purp-200 bg-purp-50 text-purp-900 w-full justify-center py-2 text-sm">Manual Review (CAC Docs)</Badge>

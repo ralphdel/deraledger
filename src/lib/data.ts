@@ -191,15 +191,29 @@ export async function getDashboardStats(merchantId?: string) {
     else agingData[3].amount += balance;
   });
 
-  // Monthly data (last 6 months simplified)
-  const monthlyData = [
-    { month: "Jan", invoiced: 1200000, collected: 800000 },
-    { month: "Feb", invoiced: 1800000, collected: 1500000 },
-    { month: "Mar", invoiced: 2200000, collected: 1700000 },
-    { month: "Apr", invoiced: 1600000, collected: 1400000 },
-    { month: "May", invoiced: 3500000, collected: 2800000 },
-    { month: "Jun", invoiced: 2900000, collected: 2100000 },
-  ];
+  // Monthly data (last 6 months)
+  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const monthlyData = [];
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    monthlyData.push({ month: monthNames[d.getMonth()], invoiced: 0, collected: 0, _year: d.getFullYear(), _month: d.getMonth() });
+  }
+
+  invoices.forEach(inv => {
+    const created = new Date(inv.created_at);
+    const y = created.getFullYear();
+    const m = created.getMonth();
+    const bucket = monthlyData.find(b => b._year === y && b._month === m);
+    if (bucket) bucket.invoiced += Number(inv.grand_total);
+  });
+
+  successTxns.forEach(txn => {
+    const created = new Date(txn.created_at);
+    const y = created.getFullYear();
+    const m = created.getMonth();
+    const bucket = monthlyData.find(b => b._year === y && b._month === m);
+    if (bucket) bucket.collected += Number(txn.amount_paid);
+  });
 
   // Recent activity from audit logs or recent transactions
   const recentActivity = successTxns.slice(0, 5).map((txn, i) => ({

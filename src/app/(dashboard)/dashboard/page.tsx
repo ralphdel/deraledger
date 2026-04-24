@@ -29,7 +29,7 @@ import {
   Cell,
   Legend,
 } from "recharts";
-import { getDashboardStats, getMerchant } from "@/lib/data";
+import { getDashboardStats, getMerchant, getMonthlyCollectionTotal } from "@/lib/data";
 import { formatNaira } from "@/lib/calculations";
 import type { Merchant } from "@/lib/types";
 import Link from "next/link";
@@ -48,12 +48,14 @@ interface DashboardData {
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardData | null>(null);
   const [merchant, setMerchant] = useState<Merchant | null>(null);
+  const [monthlyCollected, setMonthlyCollected] = useState(0);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    Promise.all([getDashboardStats(), getMerchant()]).then(([dashData, merchantData]) => {
+    Promise.all([getDashboardStats(), getMerchant(), getMonthlyCollectionTotal()]).then(([dashData, merchantData, collected]) => {
       setStats(dashData);
       setMerchant(merchantData);
+      setMonthlyCollected(collected);
       setLoading(false);
     });
   }, []);
@@ -122,8 +124,18 @@ export default function DashboardPage() {
     clock: Clock,
   };
 
+  const limitExceeded = merchant?.monthly_collection_limit ? monthlyCollected >= merchant.monthly_collection_limit : false;
+
   return (
     <div className="space-y-6">
+      {limitExceeded && (
+        <div className="bg-red-600 text-white py-2 overflow-hidden relative">
+          <div className="whitespace-nowrap inline-block animate-marquee font-bold text-sm">
+            🚨 ATTENTION: You have reached your monthly collection limit. Your payment links are currently inactive. Please upgrade your tier to continue receiving payments. 🚨
+          </div>
+        </div>
+      )}
+
       {/* Page Header */}
       <div>
         <h1 className="text-2xl font-bold text-purp-900">Dashboard</h1>
