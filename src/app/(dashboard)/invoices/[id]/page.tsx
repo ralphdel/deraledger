@@ -504,12 +504,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               </CardTitle>
             </CardHeader>
             <CardContent>
-              {history.length > 0 ? (
+              {history.filter(h => h.event_type !== "payment_received").length > 0 ? (
                 <div className="relative">
                   {/* Timeline line */}
                   <div className="absolute left-[15px] top-2 bottom-2 w-0.5 bg-purp-200" />
                   <div className="space-y-4">
-                    {history.map((event) => {
+                    {history.filter(h => h.event_type !== "payment_received").map((event) => {
                       const meta = event.metadata as Record<string, unknown>;
                       return (
                         <div key={event.id} className="flex items-start gap-3 relative">
