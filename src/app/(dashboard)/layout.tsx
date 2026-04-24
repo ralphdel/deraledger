@@ -108,12 +108,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <div className="fixed inset-0 bg-black/50" onClick={() => setSidebarOpen(false)} />
           <aside className="fixed inset-y-0 left-0 w-64 bg-purp-900 flex flex-col z-50">
             <div className="p-6 flex items-center justify-between">
-              <div className="flex items-center gap-2">
+              <Link href="/" className="flex items-center gap-2" onClick={() => setSidebarOpen(false)}>
                 <div className="w-9 h-9 bg-white rounded-lg flex items-center justify-center">
                   <span className="text-purp-900 font-bold text-lg">P</span>
                 </div>
                 <span className="text-xl font-bold text-white">PurpLedger</span>
-              </div>
+              </Link>
               <button onClick={() => setSidebarOpen(false)} className="text-white">
                 <X className="h-5 w-5" />
               </button>

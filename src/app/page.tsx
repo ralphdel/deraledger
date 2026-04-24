@@ -104,8 +104,9 @@ export default function LandingPage() {
                 </Button>
               </Link>
               <Link href="/register">
-                <Button className="bg-purp-900 hover:bg-purp-700 text-white font-medium">
-                  Get Started Free
+                <Button className="bg-purp-900 hover:bg-purp-700 text-white font-medium px-3 sm:px-4">
+                  <span className="hidden sm:inline">Get Started Free</span>
+                  <span className="sm:hidden">Start</span>
                   <ArrowRight className="ml-1 h-4 w-4" />
                 </Button>
               </Link>
@@ -143,17 +144,17 @@ export default function LandingPage() {
                 </Button>
               </Link>
             </div>
-            <div className="mt-10 flex items-center justify-center gap-6 text-sm text-neutral-500">
+            <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4 sm:gap-6 text-sm text-neutral-500">
               <div className="flex items-center gap-1.5">
-                <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
                 <span>No credit card required</span>
               </div>
               <div className="flex items-center gap-1.5">
-                <Shield className="h-4 w-4 text-emerald-600" />
+                <Shield className="h-4 w-4 text-emerald-600 shrink-0" />
                 <span>Bank-grade security</span>
               </div>
               <div className="flex items-center gap-1.5">
-                <Zap className="h-4 w-4 text-emerald-600" />
+                <Zap className="h-4 w-4 text-emerald-600 shrink-0" />
                 <span>Setup in 2 minutes</span>
               </div>
             </div>
@@ -307,7 +308,7 @@ export default function LandingPage() {
               </div>
               <span className="text-lg font-bold text-purp-900">PurpLedger</span>
             </div>
-            <div className="flex items-center gap-6 text-sm text-neutral-500">
+            <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-6 text-sm text-neutral-500">
               <a href="#" className="hover:text-purp-700">Privacy</a>
               <a href="#" className="hover:text-purp-700">Terms</a>
               <a href="#" className="hover:text-purp-700">Support</a>
