@@ -152,16 +152,16 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
     setInputAmount(finalAmount.toString());
   };
 
-  const handlePayment = (e: React.FormEvent) => {
+  const handlePayment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!isValidAmount) return;
+    if (!isValidAmount || !invoice) return;
 
     setIsProcessing(true);
 
     // Check if Paystack public key is configured
     const paystackKey = process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY;
-    if (paystackKey && paystackKey !== "pk_test_your_public_key_here") {
-      // Paystack Inline integration
+    if (paystackKey && paystackKey !== "pk_test_your_public_key_here" && paystackKey.startsWith("pk_")) {
+      // Live Paystack Inline integration
       const handler = (window as unknown as Record<string, unknown>).PaystackPop as {
         setup: (config: Record<string, unknown>) => { openIframe: () => void };
       } | undefined;
@@ -184,7 +184,9 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
             payment_amount: parsedAmount,
             k_factor: allocation.kFactor,
           },
-          callback: () => {
+          callback: async (response: { reference: string }) => {
+            // After Paystack confirms, the webhook handles DB update server-side
+            // We just show success to the user
             setIsProcessing(false);
             setSuccess(true);
           },
@@ -197,11 +199,28 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
       }
     }
 
-    // Fallback: demo mode (no Paystack key configured)
-    setTimeout(() => {
+    // DEMO MODE: Actually writes to the database via the demo endpoint
+    try {
+      const res = await fetch("/api/demo-payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          invoiceId: invoice.id,
+          paymentAmount: parsedAmount,
+        }),
+      });
+      const result = await res.json();
+      if (result.success) {
+        setSuccess(true);
+      } else {
+        alert("Demo payment failed: " + result.error);
+      }
+    } catch (err) {
+      alert("Demo payment error. Check console.");
+      console.error(err);
+    } finally {
       setIsProcessing(false);
-      setSuccess(true);
-    }, 2000);
+    }
   };
 
   if (success) {
