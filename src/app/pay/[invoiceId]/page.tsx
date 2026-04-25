@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { ShieldCheck, Receipt, Clock, CheckCircle2, Lock, AlertTriangle, Info } from "lucide-react";
+import Script from "next/script";
 
 export default function PublicPaymentPortal({ params }: { params: Promise<{ invoiceId: string }> }) {
   const { invoiceId } = use(params);
@@ -286,6 +287,7 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
 
   return (
     <div className="flex-1 w-full bg-[#F8F7FF] flex flex-col md:flex-row">
+      <Script src="https://js.paystack.co/v1/inline.js" strategy="lazyOnload" />
       {/* Left Panel: Invoice Details */}
       <div className="w-full md:w-5/12 lg:w-1/3 bg-purp-900 text-white p-6 md:p-8 flex flex-col md:h-screen md:sticky md:top-0 md:overflow-y-auto">
         <div className="flex items-center gap-3 mb-10">

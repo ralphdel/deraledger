@@ -26,7 +26,6 @@ export default function RootLayout({
     <html lang="en" className={`${inter.variable} h-full antialiased`}>
       <body className="min-h-full flex flex-col">
         <TooltipProvider>{children}</TooltipProvider>
-        <Script src="https://js.paystack.co/v1/inline.js" strategy="lazyOnload" />
       </body>
     </html>
   );
