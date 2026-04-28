@@ -90,7 +90,7 @@ export class PaystackAdapter implements IPaymentProcessor {
       settlement_bank: string;
     }>("POST", "/subaccount", {
       business_name: p.businessName,
-      bank_code: p.bankCode,
+      settlement_bank: p.bankCode,
       account_number: p.accountNumber,
       percentage_charge: p.percentageCharge,
       settlement_schedule: p.settlementSchedule ?? "auto",
@@ -112,7 +112,7 @@ export class PaystackAdapter implements IPaymentProcessor {
   ): Promise<SubaccountResult> {
     const payload: Record<string, unknown> = {};
     if (p.businessName) payload.business_name = p.businessName;
-    if (p.bankCode) payload.bank_code = p.bankCode;
+    if (p.bankCode) payload.settlement_bank = p.bankCode;
     if (p.accountNumber) payload.account_number = p.accountNumber;
     if (p.percentageCharge !== undefined) payload.percentage_charge = p.percentageCharge;
     if (p.settlementSchedule) payload.settlement_schedule = p.settlementSchedule;
