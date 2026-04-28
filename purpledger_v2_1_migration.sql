@@ -30,15 +30,8 @@ BEGIN
 END $$;
 
 -- Delete transactional data (FK order: children first)
-DELETE FROM payment_events
-  WHERE merchant_id NOT IN (
-    SELECT id FROM merchants WHERE email = 'ralphdel14@yahoo.com'
-  );
-
-DELETE FROM manual_payments
-  WHERE merchant_id NOT IN (
-    SELECT id FROM merchants WHERE email = 'ralphdel14@yahoo.com'
-  );
+-- NOTE: payment_events and manual_payments are NEW tables created in Step 3.
+-- They do not exist yet — nothing to purge from them.
 
 DELETE FROM transactions
   WHERE merchant_id NOT IN (
@@ -62,15 +55,8 @@ DELETE FROM clients
     SELECT id FROM merchants WHERE email = 'ralphdel14@yahoo.com'
   );
 
-DELETE FROM item_catalog
-  WHERE merchant_id NOT IN (
-    SELECT id FROM merchants WHERE email = 'ralphdel14@yahoo.com'
-  );
-
-DELETE FROM discount_templates
-  WHERE merchant_id NOT IN (
-    SELECT id FROM merchants WHERE email = 'ralphdel14@yahoo.com'
-  );
+-- item_catalog, discount_templates, onboarding_sessions are NEW tables (created in Step 3).
+-- They do not exist yet — nothing to purge from them.
 
 DELETE FROM pending_invites
   WHERE merchant_id NOT IN (
@@ -87,9 +73,6 @@ DELETE FROM audit_logs
     SELECT user_id FROM merchants WHERE email = 'ralphdel14@yahoo.com'
   )
   AND actor_id IS NOT NULL;
-
-DELETE FROM onboarding_sessions
-  WHERE email != 'ralphdel14@yahoo.com';
 
 -- Delete merchant records (except protected)
 DELETE FROM merchants
