@@ -12,7 +12,7 @@ export async function GET(request: Request) {
     // so the user can easily bypass the live resolution limit.
     if (!banks.find(b => b.code === "test" || b.code === "001")) {
       banks = [
-        { name: "Paystack Test Bank", code: "test" },
+        { name: "Paystack Test Bank", code: "001" },
         ...banks
       ];
     }
