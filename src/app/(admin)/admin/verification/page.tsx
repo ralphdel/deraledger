@@ -91,50 +91,38 @@ export default function VerificationQueuePage() {
   const updateItemStatus = async (merchant: Merchant, field: "cac_status" | "bvn_status" | "utility_status", status: "verified" | "rejected") => {
     const sb = createClient();
     
-    // Optimistic update
-    const newMerchantState = { ...merchant, [field]: status };
+    // Build new state to compute overall verification_status
+    const newState = { ...merchant, [field]: status };
     
-    // Evaluate tier based on new state
-    let newTier = newMerchantState.merchant_tier;
-    let newOverallStatus = newMerchantState.verification_status;
-    let limit = newMerchantState.monthly_collection_limit;
-    
-    const isCorporate = newMerchantState.cac_status === "verified" && 
-                        newMerchantState.utility_status === "verified" &&
-                        newMerchantState.bvn_status === "verified";
-    
-    if (isCorporate) {
-      newTier = "corporate";
-      newOverallStatus = "verified";
-      limit = 50000000; // Unlimited / high limit
-    } else if (newMerchantState.bvn_status === "verified") {
-      newTier = "individual";
-      limit = 500000;
-      if (newMerchantState.cac_status === "rejected" || newMerchantState.utility_status === "rejected") {
-        newOverallStatus = "rejected";
-      } else if (newMerchantState.cac_status === "pending" || newMerchantState.utility_status === "pending") {
-        newOverallStatus = "pending";
-      } else {
-        newOverallStatus = "verified";
-      }
+    // Determine overall verification status from document statuses
+    // This NEVER touches subscription_plan or merchant_tier (Two-Axis Gate, Section 2.1)
+    const plan = newState.subscription_plan || newState.merchant_tier || "starter";
+    let newOverallStatus: string;
+
+    if (plan === "corporate") {
+      // Corporate requires all three docs verified
+      const allVerified = newState.cac_status === "verified" && newState.utility_status === "verified" && newState.bvn_status === "verified";
+      const anyRejected = newState.cac_status === "rejected" || newState.utility_status === "rejected" || newState.bvn_status === "rejected";
+      const anyPending = newState.cac_status === "pending" || newState.utility_status === "pending" || newState.bvn_status === "pending";
+      
+      if (allVerified) newOverallStatus = "verified";
+      else if (anyRejected) newOverallStatus = "rejected";
+      else if (anyPending) newOverallStatus = "pending";
+      else newOverallStatus = "unverified";
+    } else if (plan === "individual") {
+      // Individual requires only BVN
+      if (newState.bvn_status === "verified") newOverallStatus = "verified";
+      else if (newState.bvn_status === "rejected") newOverallStatus = "rejected";
+      else if (newState.bvn_status === "pending") newOverallStatus = "pending";
+      else newOverallStatus = "unverified";
     } else {
-      newTier = "starter";
-      limit = 0;
-      if (newMerchantState.bvn_status === "rejected" || newMerchantState.cac_status === "rejected" || newMerchantState.utility_status === "rejected") {
-        newOverallStatus = "rejected";
-      } else if (newMerchantState.bvn_status === "pending" || newMerchantState.cac_status === "pending" || newMerchantState.utility_status === "pending") {
-        newOverallStatus = "pending";
-      } else {
-        newOverallStatus = "unverified";
-      }
+      // Starter — no verification needed
+      newOverallStatus = "unverified";
     }
 
-    const updates: any = { 
+    const updates: Record<string, unknown> = { 
       [field]: status,
-      merchant_tier: newTier,
-      subscription_plan: newTier,
       verification_status: newOverallStatus,
-      monthly_collection_limit: limit,
       kyc_notes: reviewNotes || `Admin marked ${field.replace('_', ' ')} as ${status}`
     };
 
@@ -142,11 +130,10 @@ export default function VerificationQueuePage() {
     
     if (success) {
       setMerchants(merchants.map((m) =>
-        m.id === merchant.id ? { ...m, ...updates } : m
+        m.id === merchant.id ? { ...m, ...updates } as Merchant : m
       ));
-      setSelectedMerchant({ ...merchant, ...updates });
+      setSelectedMerchant({ ...merchant, ...updates } as Merchant);
     } else {
-      // Show inline error in the panel instead of alert()
       setReviewError("Failed to update status: " + error);
     }
     setReviewNotes("");

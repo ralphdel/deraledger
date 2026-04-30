@@ -437,6 +437,89 @@ export async function adminDeleteMerchantAction(merchantId: string) {
   return { success: true };
 }
 
+export async function adminChangePlanAction(
+  merchantId: string,
+  newPlan: "starter" | "individual" | "corporate"
+) {
+  const adminClient = getServiceClient();
+
+  const limits: Record<string, number> = {
+    starter: 0,
+    individual: 5000000,
+    corporate: 0, // 0 = unlimited
+  };
+
+  const { error } = await adminClient
+    .from("merchants")
+    .update({
+      subscription_plan: newPlan,
+      merchant_tier: newPlan,
+      monthly_collection_limit: limits[newPlan],
+    })
+    .eq("id", merchantId);
+
+  if (error) return { success: false, error: error.message };
+
+  await adminClient.from("audit_logs").insert({
+    event_type: "admin_plan_changed",
+    actor_id: null,
+    actor_role: "admin",
+    target_id: merchantId,
+    target_type: "merchant",
+    metadata: { actor_name: "SuperAdmin", new_plan: newPlan },
+  });
+
+  revalidatePath("/admin/merchants");
+  revalidatePath(`/admin/merchants/${merchantId}`);
+  return { success: true };
+}
+
+export async function adminResetPasswordAction(merchantId: string) {
+  const adminClient = getServiceClient();
+
+  const { data: merchant } = await adminClient
+    .from("merchants")
+    .select("email")
+    .eq("id", merchantId)
+    .single();
+
+  if (!merchant?.email) return { success: false, error: "Merchant not found" };
+
+  const { data, error } = await adminClient.auth.admin.generateLink({
+    type: "magiclink",
+    email: merchant.email,
+  });
+
+  if (error) return { success: false, error: error.message };
+
+  const configuredUrl = process.env.NEXT_PUBLIC_APP_URL || "";
+  const appUrl = configuredUrl || (process.env.NODE_ENV === "production" ? "https://purpledger.vercel.app" : "http://localhost:3000");
+
+  let resetLink = `${appUrl}/onboarding/resend`;
+  const actionLink = data?.properties?.action_link;
+  if (actionLink) {
+    try {
+      const url = new URL(actionLink);
+      url.searchParams.set("redirect_to", `${appUrl}/reset-password`);
+      resetLink = url.toString();
+    } catch {
+      resetLink = actionLink;
+    }
+  }
+
+  await adminClient.from("audit_logs").insert({
+    event_type: "admin_password_reset",
+    actor_id: null,
+    actor_role: "admin",
+    target_id: merchantId,
+    target_type: "merchant",
+    metadata: { actor_name: "SuperAdmin", email: merchant.email },
+  });
+
+  revalidatePath(`/admin/merchants/${merchantId}`);
+  return { success: true, resetLink };
+}
+
 // ── Team Member Management ────────────────────────────────────────────────────
 
 export async function deactivateTeamMemberAction(teamMemberId: string, merchantId: string) {
