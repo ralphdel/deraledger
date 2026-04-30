@@ -14,6 +14,7 @@ import {
   Bell,
   ChevronDown,
   UsersRound,
+  Banknote,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
@@ -33,6 +34,7 @@ const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/invoices", label: "Invoices", icon: FileText },
   { href: "/clients", label: "Clients", icon: Users },
+  { href: "/settlements", label: "Settlements", icon: Banknote },
   { href: "/team", label: "Team", icon: UsersRound },
   { href: "/purpbot", label: "PurpBot AI", icon: Bot },
   { href: "/settings", label: "Settings", icon: Settings },

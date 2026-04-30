@@ -12,6 +12,7 @@ import {
   LogOut,
   Menu,
   X,
+  Banknote,
 } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -29,6 +30,7 @@ const adminNavItems = [
   { href: "/admin", label: "Overview", icon: LayoutDashboard },
   { href: "/admin/verification", label: "Verification Queue", icon: ShieldCheck },
   { href: "/admin/merchants", label: "Merchants", icon: Users },
+  { href: "/admin/accounting", label: "Accounting", icon: Banknote },
   { href: "/admin/audit", label: "Audit Trail", icon: ScrollText },
   { href: "/admin/health", label: "Platform Health", icon: Activity },
 ];
