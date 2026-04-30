@@ -42,9 +42,28 @@ export default function AdminAccountingPage() {
   const [transactions, setTransactions] = useState<AdminTx[]>([]);
   const [merchants, setMerchants] = useState<MerchantOption[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().split("T")[0]);
+  const todayStr = new Date().toISOString().split("T")[0];
+  const [fromDate, setFromDate] = useState(todayStr);
+  const [toDate, setToDate] = useState(todayStr);
   const [merchantFilter, setMerchantFilter] = useState("all");
   const [merchantSearch, setMerchantSearch] = useState("");
+
+  const applyPreset = (preset: string) => {
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const fmt = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    if (preset === "today") { setFromDate(todayStr); setToDate(todayStr); }
+    else if (preset === "week") {
+      const start = new Date(now); start.setDate(now.getDate() - now.getDay());
+      setFromDate(fmt(start)); setToDate(todayStr);
+    } else if (preset === "month") {
+      setFromDate(`${now.getFullYear()}-${pad(now.getMonth() + 1)}-01`); setToDate(todayStr);
+    } else if (preset === "last_month") {
+      const lm = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const lme = new Date(now.getFullYear(), now.getMonth(), 0);
+      setFromDate(fmt(lm)); setToDate(fmt(lme));
+    }
+  };
 
   // Load merchant list once
   useEffect(() => {
@@ -60,8 +79,8 @@ export default function AdminAccountingPage() {
     const fetchTx = async () => {
       setLoading(true);
       const sb = createClient();
-      const dayStart = `${selectedDate}T00:00:00.000Z`;
-      const dayEnd = `${selectedDate}T23:59:59.999Z`;
+      const dayStart = `${fromDate}T00:00:00.000Z`;
+      const dayEnd = `${toDate}T23:59:59.999Z`;
 
       let query = sb
         .from("transactions")
@@ -99,7 +118,7 @@ export default function AdminAccountingPage() {
       setLoading(false);
     };
     fetchTx();
-  }, [selectedDate, merchantFilter, merchants]);
+  }, [fromDate, toDate, merchantFilter, merchants]);
 
   const totalGMV = transactions.reduce((s, t) => s + Number(t.amount_paid), 0);
   const totalFees = transactions.reduce((s, t) => s + Number(t.paystack_fee), 0);
@@ -112,7 +131,7 @@ export default function AdminAccountingPage() {
   };
 
   const handleDownload = () => {
-    const dateStr = new Date(selectedDate).toLocaleDateString("en-NG", { day: "2-digit", month: "short", year: "numeric" }).replace(/ /g, "-");
+    const label = fromDate === toDate ? fromDate : `${fromDate}_to_${toDate}`;
     const suffix = merchantFilter !== "all" ? `_${merchants.find((m) => m.id === merchantFilter)?.business_name?.replace(/\s+/g, "_") || merchantFilter.slice(0, 8)}` : "_Global";
     const csvData = transactions.map((t) => ({
       Date: new Date(t.created_at).toLocaleString("en-NG"),
@@ -125,10 +144,10 @@ export default function AdminAccountingPage() {
       "Net Settlement (₦)": getNetAmount(t).toFixed(2),
       Reference: t.paystack_reference || "",
     }));
-    downloadCSV(csvData, `PurpLedger_Accounting${suffix}_${dateStr}`);
+    downloadCSV(csvData, `PurpLedger_Accounting${suffix}_${label}`);
   };
 
-  const isToday = selectedDate === new Date().toISOString().split("T")[0];
+  const isToday = fromDate === todayStr && toDate === todayStr;
   const filteredMerchantList = merchants.filter((m) =>
     m.business_name.toLowerCase().includes(merchantSearch.toLowerCase())
   );
@@ -151,18 +170,29 @@ export default function AdminAccountingPage() {
       </div>
 
       {/* Filters */}
-      <div className="flex flex-col sm:flex-row gap-3">
-        <div className="flex items-center gap-2">
-          <CalendarDays className="h-4 w-4 text-neutral-500" />
-          <Input
-            type="date"
-            value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
-            className="w-[180px] border-2 bg-white"
-          />
-          {isToday && (
-            <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 border-2 text-xs">Live</Badge>
-          )}
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-2">
+            <CalendarDays className="h-4 w-4 text-neutral-500" />
+            <span className="text-sm text-neutral-600 font-medium">From</span>
+            <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="w-[160px] border-2 bg-white" />
+            <span className="text-sm text-neutral-600 font-medium">To</span>
+            <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="w-[160px] border-2 bg-white" />
+          </div>
+          <div className="flex items-center gap-2">
+            {(["today", "week", "month", "last_month"] as const).map((p) => (
+              <button
+                key={p}
+                onClick={() => applyPreset(p)}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-full border-2 transition-colors ${
+                  p === "today" && isToday ? "bg-neutral-900 text-white border-neutral-900" : "border-neutral-200 text-neutral-700 hover:bg-neutral-50"
+                }`}
+              >
+                {p === "today" ? "Today" : p === "week" ? "This Week" : p === "month" ? "This Month" : "Last Month"}
+              </button>
+            ))}
+            {isToday && <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 border-2 text-xs">Live</Badge>}
+          </div>
         </div>
         <Select value={merchantFilter} onValueChange={(v) => v && setMerchantFilter(v)}>
           <SelectTrigger className="w-[260px] border-2 bg-white text-sm">

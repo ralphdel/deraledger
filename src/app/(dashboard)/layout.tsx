@@ -166,10 +166,26 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <div className="flex-1" />
 
           <div className="flex items-center gap-3">
-            <button className="relative p-2 text-neutral-500 hover:text-purp-700 transition-colors">
-              <Bell className="h-5 w-5" />
-              <span className="absolute top-1 right-1 w-2 h-2 bg-purp-700 rounded-full" />
-            </button>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={<button className="relative p-2 text-neutral-500 hover:text-purp-700 hover:bg-purp-50 rounded-lg transition-colors outline-none" />}
+              >
+                <Bell className="h-5 w-5" />
+                <span className="absolute top-1.5 right-1.5 w-2 h-2 border-2 border-white bg-purp-700 rounded-full" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-80 border-2 border-purp-200 p-0 overflow-hidden">
+                <div className="p-4 border-b-2 border-purp-100 bg-purp-50">
+                  <h3 className="font-bold text-purp-900">Notifications</h3>
+                </div>
+                <div className="p-8 flex flex-col items-center justify-center text-center bg-white">
+                  <div className="w-12 h-12 rounded-full bg-purp-50 border-2 border-purp-100 flex items-center justify-center mb-3">
+                    <Bell className="h-5 w-5 text-purp-400" />
+                  </div>
+                  <p className="text-purp-900 font-bold text-sm">You're all caught up!</p>
+                  <p className="text-neutral-500 text-xs mt-1 max-w-[200px]">We'll notify you when new payments arrive or when actions are needed.</p>
+                </div>
+              </DropdownMenuContent>
+            </DropdownMenu>
 
             <DropdownMenu>
               <DropdownMenuTrigger

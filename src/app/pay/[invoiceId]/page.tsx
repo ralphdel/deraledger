@@ -3,7 +3,6 @@
 import { use, useState, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 import { formatNaira, calculateProportionalPayment, getMinimumPayment } from "@/lib/calculations";
-import { getPublicInvoice } from "@/lib/data";
 import type { InvoiceWithLineItems, Merchant } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -29,15 +28,20 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
   }, [searchParams]);
 
   useEffect(() => {
-    getPublicInvoice(invoiceId).then((result) => {
-      if (result) {
-        setInvoice(result.invoice);
-        setMerchant(result.merchant);
-        setMonthlyCollected(result.monthlyCollected);
-        setInputAmount(Number(result.invoice.outstanding_balance).toString());
-      }
-      setLoading(false);
-    });
+    // Fetch via our secure server-side API route — uses service role key to
+    // always return real merchant verification_status, regardless of RLS.
+    fetch(`/api/invoice/${invoiceId}`)
+      .then((res) => res.json())
+      .then((result) => {
+        if (result?.invoice) {
+          setInvoice(result.invoice);
+          setMerchant(result.merchant);
+          setMonthlyCollected(result.monthlyCollected ?? 0);
+          setInputAmount(Number(result.invoice.outstanding_balance).toString());
+        }
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
   }, [invoiceId]);
 
   if (loading) {
@@ -148,6 +152,7 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
   const isAcceptingPayments = isMerchantVerified && hasSettlementAccount;
 
   if (!isAcceptingPayments) {
+    const isUnverified = !isMerchantVerified;
     return (
       <div className="flex-1 w-full bg-purp-50 flex items-center justify-center p-4">
         <Card className="max-w-md w-full border-2 border-purp-200">
@@ -155,9 +160,13 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
             <div className="w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-4">
               <AlertCircle className="w-8 h-8 text-amber-600" />
             </div>
-            <h1 className="text-xl font-bold text-purp-900">Payments Unavailable</h1>
+            <h1 className="text-xl font-bold text-purp-900">
+              {isUnverified ? "Account Not Yet Verified" : "Payments Unavailable"}
+            </h1>
             <p className="text-neutral-500">
-              This merchant is currently undergoing verification or has not set up their settlement account. Online payments cannot be accepted at this time.
+              {isUnverified
+                ? "This merchant has not completed their account verification (KYC). Online payments cannot be accepted until verification is approved. Please contact the merchant directly."
+                : "This merchant has not yet set up their settlement account. Online payments cannot be accepted at this time. Please contact the merchant directly."}
             </p>
             <div className="pt-4 border-t border-purp-100 mt-4">
               <p className="text-sm font-medium text-purp-900">{businessName}</p>

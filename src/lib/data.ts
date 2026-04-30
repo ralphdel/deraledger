@@ -101,7 +101,7 @@ export async function getInvoices(merchantId?: string): Promise<InvoiceWithClien
   const mId = merchantId || await getActiveMerchantId();
   const { data, error } = await supabase()
     .from("invoices")
-    .select("*, clients(full_name, email, company_name)")
+    .select("*, clients(full_name, email, phone, company_name, address)")
     .eq("merchant_id", mId)
     .order("created_at", { ascending: false });
   if (error) { console.error("getInvoices:", error); return []; }
@@ -111,7 +111,7 @@ export async function getInvoices(merchantId?: string): Promise<InvoiceWithClien
 export async function getInvoiceById(invoiceId: string): Promise<InvoiceWithLineItems | null> {
   const { data, error } = await supabase()
     .from("invoices")
-    .select("*, line_items(*), clients(full_name, email, company_name)")
+    .select("*, line_items(*), clients(full_name, email, phone, company_name, address)")
     .eq("id", invoiceId)
     .single();
   if (error) { console.error("getInvoiceById:", error); return null; }
@@ -267,10 +267,11 @@ export async function getDashboardStats(merchantId?: string) {
 }
 
 // ── Public Payment Portal ───────────────────────────────────────────────────
+// NOTE: The public payment portal now calls /api/invoice/[invoiceId] directly
+// using the service role key. This function is kept for reference only.
 export async function getPublicInvoice(invoiceId: string) {
   const invoice = await getInvoiceById(invoiceId);
   if (!invoice) return null;
-
   const merchant = await getMerchant(invoice.merchant_id);
   const monthlyCollected = await getMonthlyCollectionTotal(invoice.merchant_id);
   return { invoice, merchant, monthlyCollected };

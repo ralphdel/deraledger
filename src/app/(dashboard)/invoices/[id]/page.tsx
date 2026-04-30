@@ -20,6 +20,8 @@ import {
   User,
   Wallet,
   Printer,
+  BookOpen,
+  CreditCard,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { Button } from "@/components/ui/button";
@@ -32,6 +34,9 @@ import {
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+  Tabs, TabsContent, TabsList, TabsTrigger,
+} from "@/components/ui/tabs";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -287,7 +292,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             <Button
               variant="outline"
               className="border-2 border-purp-200 text-purp-700 hover:bg-purp-100 print:hidden"
-              onClick={() => window.print()}
+              onClick={() => window.open(`/invoices/${invoice.id}/print`, "_blank")}
             >
               <Printer className="mr-2 h-4 w-4" /> Download PDF
             </Button>
@@ -407,8 +412,22 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
       <div className="grid lg:grid-cols-3 gap-6">
         {/* Main Info */}
-        <div className="lg:col-span-2 space-y-6">
-          {/* Payment Progress */}
+        <div className="lg:col-span-2">
+          <Tabs defaultValue="details" className="w-full">
+            <TabsList variant="line" className="w-full justify-start border-b-2 border-purp-200 mb-6 gap-6">
+              <TabsTrigger value="details" className="text-sm py-2">
+                Invoice Details
+              </TabsTrigger>
+              <TabsTrigger value="history" className="text-sm py-2">
+                Payment History
+              </TabsTrigger>
+              <TabsTrigger value="activity" className="text-sm py-2">
+                Activity Log
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="details" className="space-y-6 mt-0">
+              {/* Payment Progress */}
           <Card className="border-2 border-purp-200 shadow-none">
             <CardContent className="p-5">
               <div className="flex items-center justify-between mb-3">
@@ -483,9 +502,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               </div>
             </CardContent>
           </Card>
+            </TabsContent>
 
-          {/* Payment History */}
-          <Card className="border-2 border-purp-200 shadow-none">
+            <TabsContent value="history" className="mt-0">
+              {/* Payment History */}
+              <Card className="border-2 border-purp-200 shadow-none">
             <CardHeader className="pb-2">
               <CardTitle className="text-base font-bold text-purp-900">Payment History</CardTitle>
             </CardHeader>
@@ -524,11 +545,13 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               ) : (
                 <p className="text-center text-neutral-500 py-8 text-sm">No payments recorded yet.</p>
               )}
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+          </TabsContent>
 
-          {/* Invoice Activity History */}
-          <Card className="border-2 border-purp-200 shadow-none">
+          <TabsContent value="activity" className="mt-0">
+            {/* Invoice Activity History */}
+            <Card className="border-2 border-purp-200 shadow-none">
             <CardHeader className="pb-2">
               <CardTitle className="text-base font-bold text-purp-900 flex items-center gap-2">
                 <History className="h-4 w-4" /> Invoice History
@@ -589,21 +612,42 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               ) : (
                 <p className="text-center text-neutral-500 py-8 text-sm">No activity recorded yet.</p>
               )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
+      </div>
+
+      {/* Sidebar */}
+        <div className="space-y-6">
+          {/* Invoice Type Indicator */}
+          <Card className={`border-2 shadow-none ${isRecordInvoice ? "border-amber-200 bg-amber-50" : "border-blue-200 bg-blue-50"}`}>
+            <CardContent className="p-4 flex items-start gap-3">
+              <div className={`mt-0.5 p-2 rounded-lg ${isRecordInvoice ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-700"}`}>
+                {isRecordInvoice ? <BookOpen className="h-5 w-5" /> : <CreditCard className="h-5 w-5" />}
+              </div>
+              <div>
+                <h3 className={`font-bold ${isRecordInvoice ? "text-amber-900" : "text-blue-900"}`}>
+                  {isRecordInvoice ? "Record Invoice" : "Collection Invoice"}
+                </h3>
+                <p className={`text-xs mt-1 ${isRecordInvoice ? "text-amber-700" : "text-blue-700"}`}>
+                  {isRecordInvoice 
+                    ? "Offline bookkeeping. No payment link." 
+                    : "Live invoice. Includes payment portal link."}
+                </p>
+              </div>
             </CardContent>
           </Card>
-        </div>
 
-        {/* Sidebar */}
-        <div className="space-y-6">
           {/* Record Payment (For Record Invoices) */}
           {isRecordInvoice && (
             <Card className="border-2 border-purp-200 shadow-none bg-purp-50">
               <CardHeader className="pb-2">
                 <CardTitle className="text-base font-bold text-purp-900">Offline Payment</CardTitle>
               </CardHeader>
-              <CardContent>
-                <p className="text-sm text-neutral-600 mb-4">
-                  This is a record invoice. Payments must be recorded manually to update the balance.
+              <CardContent className="space-y-3">
+                <p className="text-sm text-neutral-600">
+                  This is a record invoice. Payments must be recorded manually.
                 </p>
                 <Button 
                   onClick={() => setPaymentDrawerOpen(true)}
@@ -612,6 +656,32 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 >
                   <Wallet className="mr-2 h-4 w-4" />
                   Record Payment
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => window.open(`/invoices/${invoice.id}/print`, "_blank")}
+                  className="w-full border-2 border-purp-200 text-purp-700 hover:bg-purp-100"
+                >
+                  <Printer className="mr-2 h-4 w-4" />
+                  View / Download Invoice
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    const msg = encodeURIComponent(
+                      `Hi ${clientName},\n\nPlease find your invoice from *${merchant?.business_name || "PurpLedger"}*:\n\n` +
+                      `📄 Invoice: ${invoice.invoice_number}\n` +
+                      `💰 Amount Due: ${formatNaira(Number(invoice.outstanding_balance))}\n\n` +
+                      `View your invoice here:\n${window.location.origin}/invoices/${invoice.id}/print\n\n` +
+                      `Thank you! 🙏`
+                    );
+                    const phone = invoice.clients?.phone?.replace(/\D/g, "") || "";
+                    window.open(`https://wa.me/${phone}?text=${msg}`, "_blank");
+                  }}
+                  className="w-full border-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                >
+                  <MessageCircle className="mr-2 h-4 w-4" />
+                  Share via WhatsApp
                 </Button>
               </CardContent>
             </Card>

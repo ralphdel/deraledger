@@ -138,11 +138,12 @@ export default function LandingPage() {
                   <ArrowRight className="ml-2 h-5 w-5" />
                 </Button>
               </Link>
-              <Link href="/pay/inv-001">
+              <a href="#how-it-works">
                 <Button size="lg" variant="outline" className="border-2 border-purp-200 text-purp-900 hover:bg-purp-100 font-semibold px-8 h-12 text-base">
-                  See Payment Portal Demo
+                  See How It Works
+                  <ChevronRight className="ml-1 h-5 w-5" />
                 </Button>
-              </Link>
+              </a>
             </div>
             <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4 sm:gap-6 text-sm text-neutral-500">
               <div className="flex items-center gap-1.5">
@@ -242,7 +243,7 @@ export default function LandingPage() {
                 <li className="flex items-start gap-2"><XCircle className="h-5 w-5 text-red-500 shrink-0" /><span className="text-neutral-600">₦0 Monthly Collection Limit</span></li>
                 <li className="flex items-start gap-2"><XCircle className="h-5 w-5 text-red-500 shrink-0" /><span className="text-neutral-600">Payment Links Locked</span></li>
               </ul>
-              <Link href="/register">
+              <Link href="/onboarding/starter">
                 <Button variant="outline" className="w-full border-2 border-purp-200 text-purp-900 hover:bg-purp-50 font-semibold h-11">Start Free</Button>
               </Link>
             </div>

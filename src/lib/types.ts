@@ -222,12 +222,12 @@ export interface PaymentEvent {
 // ── Joined types for UI convenience ──────────────────────────────────────────
 
 export interface InvoiceWithClient extends Invoice {
-  clients: Pick<Client, "full_name" | "email" | "company_name" | "address"> | null;
+  clients: Pick<Client, "full_name" | "email" | "phone" | "company_name" | "address"> | null;
 }
 
 export interface InvoiceWithLineItems extends Invoice {
   line_items: LineItem[];
-  clients: Pick<Client, "full_name" | "email" | "company_name" | "address"> | null;
+  clients: Pick<Client, "full_name" | "email" | "phone" | "company_name" | "address"> | null;
 }
 
 export interface InvoiceWithPayments extends InvoiceWithLineItems {

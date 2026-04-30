@@ -34,10 +34,27 @@ export default function MerchantSettlementsPage() {
   const [merchant, setMerchant] = useState<Merchant | null>(null);
   const [transactions, setTransactions] = useState<SettlementTx[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedDate, setSelectedDate] = useState(() => {
-    const d = new Date();
-    return d.toISOString().split("T")[0]; // YYYY-MM-DD
-  });
+
+  const todayStr = new Date().toISOString().split("T")[0];
+  const [fromDate, setFromDate] = useState(todayStr);
+  const [toDate, setToDate] = useState(todayStr);
+
+  const applyPreset = (preset: string) => {
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const fmt = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    if (preset === "today") { setFromDate(todayStr); setToDate(todayStr); }
+    else if (preset === "week") {
+      const start = new Date(now); start.setDate(now.getDate() - now.getDay());
+      setFromDate(fmt(start)); setToDate(todayStr);
+    } else if (preset === "month") {
+      setFromDate(`${now.getFullYear()}-${pad(now.getMonth() + 1)}-01`); setToDate(todayStr);
+    } else if (preset === "last_month") {
+      const lm = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const lme = new Date(now.getFullYear(), now.getMonth(), 0);
+      setFromDate(fmt(lm)); setToDate(fmt(lme));
+    }
+  };
 
   useEffect(() => {
     getMerchant().then((m) => setMerchant(m));
@@ -48,8 +65,8 @@ export default function MerchantSettlementsPage() {
     const fetchTx = async () => {
       setLoading(true);
       const sb = createClient();
-      const dayStart = `${selectedDate}T00:00:00.000Z`;
-      const dayEnd = `${selectedDate}T23:59:59.999Z`;
+      const dayStart = `${fromDate}T00:00:00.000Z`;
+      const dayEnd = `${toDate}T23:59:59.999Z`;
 
       const { data } = await sb
         .from("transactions")
@@ -78,7 +95,7 @@ export default function MerchantSettlementsPage() {
       setLoading(false);
     };
     fetchTx();
-  }, [merchant, selectedDate]);
+  }, [merchant, fromDate, toDate]);
 
   // Compute metrics
   const totalCollected = transactions.reduce((s, t) => s + Number(t.amount_paid), 0);
@@ -94,7 +111,7 @@ export default function MerchantSettlementsPage() {
   };
 
   const handleDownload = () => {
-    const dateStr = new Date(selectedDate).toLocaleDateString("en-NG", { day: "2-digit", month: "short", year: "numeric" }).replace(/ /g, "-");
+    const label = fromDate === toDate ? fromDate : `${fromDate}_to_${toDate}`;
     const csvData = transactions.map((t) => ({
       Date: new Date(t.created_at).toLocaleString("en-NG"),
       Invoice: t.invoice_number,
@@ -105,10 +122,10 @@ export default function MerchantSettlementsPage() {
       "Net Settlement (₦)": getNetAmount(t).toFixed(2),
       Reference: t.paystack_reference || "",
     }));
-    downloadCSV(csvData, `PurpLedger_Settlement_${dateStr}`);
+    downloadCSV(csvData, `PurpLedger_Settlement_${label}`);
   };
 
-  const isToday = selectedDate === new Date().toISOString().split("T")[0];
+  const isToday = fromDate === todayStr && toDate === todayStr;
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
@@ -127,18 +144,31 @@ export default function MerchantSettlementsPage() {
         </Button>
       </div>
 
-      {/* Date Picker */}
-      <div className="flex items-center gap-3">
-        <CalendarDays className="h-4 w-4 text-neutral-500" />
-        <Input
-          type="date"
-          value={selectedDate}
-          onChange={(e) => setSelectedDate(e.target.value)}
-          className="w-[180px] border-2 bg-white"
-        />
-        {isToday && (
-          <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 border-2 text-xs">Live — Today</Badge>
-        )}
+      {/* Date Range Picker */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-2">
+          <CalendarDays className="h-4 w-4 text-neutral-500" />
+          <span className="text-sm text-neutral-600 font-medium">From</span>
+          <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="w-[160px] border-2 bg-white" />
+          <span className="text-sm text-neutral-600 font-medium">To</span>
+          <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="w-[160px] border-2 bg-white" />
+        </div>
+        <div className="flex items-center gap-2">
+          {(["today", "week", "month", "last_month"] as const).map((p) => (
+            <button
+              key={p}
+              onClick={() => applyPreset(p)}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-full border-2 transition-colors ${
+                (p === "today" && isToday)
+                  ? "bg-purp-900 text-white border-purp-900"
+                  : "border-purp-200 text-purp-700 hover:bg-purp-50"
+              }`}
+            >
+              {p === "today" ? "Today" : p === "week" ? "This Week" : p === "month" ? "This Month" : "Last Month"}
+            </button>
+          ))}
+          {isToday && <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 border-2 text-xs">Live — Today</Badge>}
+        </div>
       </div>
 
       {/* Metrics */}
