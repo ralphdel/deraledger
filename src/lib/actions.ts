@@ -136,6 +136,8 @@ export async function editInvoice(
     grand_total: number;
     outstanding_balance: number;
     notes: string;
+    allow_partial_payment?: boolean;
+    partial_payment_pct?: number | null;
   },
   lineItems: { item_name: string; quantity: number; unit_rate: number; line_total: number; sort_order: number }[]
 ) {
@@ -689,6 +691,8 @@ export async function createInvoiceAction(data: {
   payment_notes?: string; // v2.1 (for record invoices)
   initial_amount_paid?: number; // v2.1 (for record invoices)
   payment_method?: string; // v2.1
+  allow_partial_payment?: boolean;
+  partial_payment_pct?: number | null;
   line_items: { item_name: string; quantity: number; unit_rate: number }[];
 }) {
   const adminClient = getServiceClient();
@@ -744,6 +748,8 @@ export async function createInvoiceAction(data: {
       pay_by_date: data.pay_by_date || null,
       notes: data.notes || null,
       payment_notes: data.payment_notes || null, // v2.1
+      allow_partial_payment: data.allow_partial_payment || false,
+      partial_payment_pct: data.partial_payment_pct || null,
       short_link: shortToken,
       qr_code_url: null,
     }])

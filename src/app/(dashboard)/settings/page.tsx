@@ -18,6 +18,7 @@ import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { getMerchant } from "@/lib/data";
 import { submitKycAction } from "@/lib/actions";
+import { createClient } from "@/lib/supabase/client";
 import type { Merchant } from "@/lib/types";
 
 const CURRENT_PLATFORM_VERSION = 1;
@@ -42,6 +43,43 @@ export default function SettingsPage() {
   const [kycSuccess, setKycSuccess] = useState(false);
   const [kycError, setKycError] = useState<string | null>(null);
   const [upgradingPlan, setUpgradingPlan] = useState<string | null>(null);
+
+  // Logo state
+  const [uploadingLogo, setUploadingLogo] = useState(false);
+  const [logoUrl, setLogoUrl] = useState<string | null>(null);
+
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !merchant) return;
+
+    setUploadingLogo(true);
+    try {
+      const supabase = createClient();
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${merchant.id}_${Date.now()}.${fileExt}`;
+      
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('merchant_logos')
+        .upload(fileName, file, { upsert: true });
+
+      if (uploadError) throw uploadError;
+
+      const { data: { publicUrl } } = supabase.storage
+        .from('merchant_logos')
+        .getPublicUrl(fileName);
+
+      // Save to database
+      await submitKycAction(merchant.id, { logo_url: publicUrl });
+      
+      setLogoUrl(publicUrl);
+      setMerchant({ ...merchant, logo_url: publicUrl } as Merchant);
+    } catch (err: any) {
+      console.error("Error uploading logo:", err);
+      alert("Failed to upload logo: " + err.message);
+    } finally {
+      setUploadingLogo(false);
+    }
+  };
 
   const handleUpgrade = async (newPlan: "individual" | "corporate") => {
     setUpgradingPlan(newPlan);
@@ -85,6 +123,7 @@ export default function SettingsPage() {
         setFeeDefault(m.fee_absorption_default);
         setBvnNumber(m.bvn || "");
         setCacNumber(m.cac_number || "");
+        setLogoUrl(m.logo_url || null);
       }
       setLoading(false);
     });
@@ -606,14 +645,27 @@ export default function SettingsPage() {
           <div className="space-y-2">
             <Label className="text-sm font-medium">Business Logo</Label>
             <div className="flex items-center gap-4">
-              <div className="w-16 h-16 bg-purp-100 border-2 border-purp-200 border-dashed rounded-lg flex items-center justify-center">
-                <span className="text-2xl font-bold text-purp-700">
-                  {businessName.charAt(0)}
-                </span>
+              <div className="w-16 h-16 bg-purp-100 border-2 border-purp-200 border-dashed rounded-lg flex items-center justify-center overflow-hidden">
+                {logoUrl ? (
+                  <img src={logoUrl} alt="Logo" className="w-full h-full object-cover" />
+                ) : (
+                  <span className="text-2xl font-bold text-purp-700">
+                    {businessName.charAt(0)}
+                  </span>
+                )}
               </div>
-              <Button variant="outline" className="border-2 border-purp-200 text-purp-700">
-                Upload Logo
-              </Button>
+              <div className="relative">
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleLogoUpload}
+                  disabled={uploadingLogo}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+                />
+                <Button variant="outline" disabled={uploadingLogo} className="border-2 border-purp-200 text-purp-700 pointer-events-none">
+                  {uploadingLogo ? "Uploading..." : "Upload Logo"}
+                </Button>
+              </div>
             </div>
           </div>
         </CardContent>

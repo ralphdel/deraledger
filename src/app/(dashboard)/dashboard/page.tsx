@@ -231,7 +231,8 @@ export default function DashboardPage() {
                   <kpi.icon className="h-5 w-5 text-purp-700" />
                 </div>
                 <span
-                  className={`flex items-center gap-0.5 text-xs font-semibold px-2 py-0.5 rounded-full border ${
+                  title={`${kpi.trend === "up" ? "Increased" : "Decreased"} by ${kpi.change} from previous period`}
+                  className={`flex items-center justify-center w-6 h-6 rounded-full border cursor-help ${
                     kpi.title === "Overdue Invoices"
                       ? "text-red-600 bg-red-50 border-red-200"
                       : kpi.trend === "up"
@@ -244,7 +245,6 @@ export default function DashboardPage() {
                   ) : (
                     <ArrowDownRight className="h-3 w-3" />
                   )}
-                  {kpi.change}
                 </span>
               </div>
               <p className="text-2xl font-bold text-purp-900">{kpi.value}</p>
@@ -286,7 +286,7 @@ export default function DashboardPage() {
         {/* Aging Report Bar Chart */}
         <Card className="border-2 border-purp-200 shadow-none">
           <CardHeader className="pb-2">
-            <CardTitle className="text-base font-bold text-purp-900">Aging Report</CardTitle>
+            <CardTitle className="text-base font-bold text-purp-900">Outstanding Invoices</CardTitle>
             <p className="text-xs text-neutral-500">Outstanding balances by age bucket</p>
           </CardHeader>
           <CardContent>

@@ -268,9 +268,13 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
       {/* Left Panel: Invoice Details */}
       <div className="w-full md:w-5/12 lg:w-1/3 bg-purp-900 text-white p-6 md:p-8 flex flex-col md:h-screen md:sticky md:top-0 md:overflow-y-auto">
         <div className="flex items-center gap-3 mb-10">
-          <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center text-purp-900 font-bold text-xl">
-            {businessName.charAt(0)}
-          </div>
+          {merchant?.logo_url ? (
+            <img src={merchant.logo_url} alt={businessName} className="w-12 h-12 rounded-xl object-cover bg-white" />
+          ) : (
+            <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center text-purp-900 font-bold text-xl">
+              {businessName.charAt(0)}
+            </div>
+          )}
           <div>
             <h2 className="font-bold text-lg leading-tight">{businessName}</h2>
             <p className="text-purp-200 text-sm">Official Payment Portal</p>
@@ -360,24 +364,39 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                     max={outstandingBalance}
                     min={0}
                     step="0.01"
+                    readOnly={!invoice.allow_partial_payment || !!invoice.partial_payment_pct}
                     className={`pl-12 h-20 text-3xl font-bold text-purp-900 border-2 rounded-xl ${
                       isBelowMinimum || isAboveMax
                         ? "border-red-400 focus:border-red-500 bg-red-50/50"
                         : "border-purp-200 focus:border-purp-700"
-                    }`}
+                    } ${( !invoice.allow_partial_payment || !!invoice.partial_payment_pct ) ? "bg-neutral-50 cursor-not-allowed opacity-80" : ""}`}
                   />
                 </div>
 
                 {/* Minimum payment info */}
-                <div className="flex items-center justify-between text-xs text-neutral-500 px-1">
-                  <span>Min: {formatNaira(minimumPayment)}</span>
-                  <span>Max: {formatNaira(outstandingBalance)}</span>
-                </div>
+                {invoice.allow_partial_payment && !invoice.partial_payment_pct && (
+                  <div className="flex items-center justify-between text-xs text-neutral-500 px-1">
+                    <span>Min: {formatNaira(minimumPayment)}</span>
+                    <span>Max: {formatNaira(outstandingBalance)}</span>
+                  </div>
+                )}
 
                 <div className="flex gap-2">
-                  <Button type="button" variant="outline" className="flex-1 border-purp-200" onClick={() => handleQuickSelect(0.25)}>25%</Button>
-                  <Button type="button" variant="outline" className="flex-1 border-purp-200" onClick={() => handleQuickSelect(0.5)}>50%</Button>
-                  <Button type="button" variant="outline" className="flex-1 border-purp-200 text-purp-900 font-bold" onClick={() => handleQuickSelect(1)}>Full</Button>
+                  {invoice.allow_partial_payment && invoice.partial_payment_pct && (
+                    <Button type="button" variant="outline" className="flex-1 border-purp-200" onClick={() => handleQuickSelect(Number(invoice.partial_payment_pct) / 100)}>{invoice.partial_payment_pct}%</Button>
+                  )}
+                  {invoice.allow_partial_payment && !invoice.partial_payment_pct && (
+                    <>
+                      <Button type="button" variant="outline" className="flex-1 border-purp-200" onClick={() => handleQuickSelect(0.25)}>25%</Button>
+                      <Button type="button" variant="outline" className="flex-1 border-purp-200" onClick={() => handleQuickSelect(0.5)}>50%</Button>
+                    </>
+                  )}
+                  {(!invoice.allow_partial_payment || invoice.partial_payment_pct) && (
+                    <Button type="button" variant="outline" className="flex-1 border-purp-200 text-purp-900 font-bold" onClick={() => handleQuickSelect(1)}>Full Amount</Button>
+                  )}
+                  {invoice.allow_partial_payment && !invoice.partial_payment_pct && (
+                    <Button type="button" variant="outline" className="flex-1 border-purp-200 text-purp-900 font-bold" onClick={() => handleQuickSelect(1)}>Full</Button>
+                  )}
                 </div>
               </div>
 

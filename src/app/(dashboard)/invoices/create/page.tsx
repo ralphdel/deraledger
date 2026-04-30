@@ -57,6 +57,8 @@ function CreateInvoiceForm() {
   const [taxPct, setTaxPct] = useState("7.5");
   const [feeAbsorption, setFeeAbsorption] = useState("business");
   const [payByDate, setPayByDate] = useState("");
+  const [allowPartialPayment, setAllowPartialPayment] = useState(false);
+  const [partialPaymentPct, setPartialPaymentPct] = useState("50");
   const [notes, setNotes] = useState("");
   const [lineItems, setLineItems] = useState<FormLineItem[]>([
     { id: "1", itemName: "", quantity: "1", unitRate: "", discountPct: "" },
@@ -158,6 +160,8 @@ function CreateInvoiceForm() {
       payment_notes: invoiceType === "record" ? notes : undefined, // Reuse notes for payment ref
       initial_amount_paid: invoiceType === "record" ? parseFloat(initialAmountPaid) || 0 : 0,
       payment_method: paymentMethod,
+      allow_partial_payment: invoiceType === "collection" ? allowPartialPayment : false,
+      partial_payment_pct: (invoiceType === "collection" && allowPartialPayment) ? parseFloat(partialPaymentPct) : null,
       line_items: lineItems
         .filter((li) => li.itemName.trim())
         .map((li) => {
@@ -360,6 +364,43 @@ function CreateInvoiceForm() {
                 </div>
               )}
             </div>
+
+            {invoiceType === "collection" && (
+              <div className="grid sm:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <Label className="text-sm font-medium">Allow Partial Payment?</Label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input 
+                        type="checkbox" 
+                        checked={allowPartialPayment} 
+                        onChange={(e) => setAllowPartialPayment(e.target.checked)}
+                        className="w-4 h-4 accent-purp-600 rounded border-purp-300"
+                      />
+                      <span className="text-xs text-neutral-600">Yes, allow partial</span>
+                    </label>
+                  </div>
+                  {allowPartialPayment && (
+                    <div className="relative mt-2">
+                      <Label className="text-xs text-neutral-500 mb-1 block">Required Percentage</Label>
+                      <div className="relative">
+                        <Input
+                          type="number"
+                          step="1"
+                          min="0"
+                          max="100"
+                          value={partialPaymentPct}
+                          onChange={(e) => setPartialPaymentPct(e.target.value)}
+                          className="border-2 border-purp-200 bg-purp-50 h-11 pr-8"
+                        />
+                        <span className="absolute right-3 top-3 text-neutral-500 font-medium">%</span>
+                      </div>
+                      <p className="text-[10px] text-neutral-500 mt-1">Client must pay exactly this % or the full amount.</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {invoiceType === "record" && (
               <>

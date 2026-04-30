@@ -81,6 +81,8 @@ export interface Invoice {
   payment_notes: string | null;     // v2.1 Record Invoice only
   manual_close_reason: string | null;
   send_reminders: boolean;
+  allow_partial_payment: boolean;
+  partial_payment_pct: number | null;
   created_at: string;
   updated_at: string;
 }
