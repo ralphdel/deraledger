@@ -209,8 +209,8 @@ function CreateInvoiceForm() {
         <div className="grid sm:grid-cols-2 gap-4">
           <Card
             className={`cursor-pointer border-2 transition-all shadow-sm ${invoiceType === "record"
-                ? "border-purp-600 bg-purp-50 ring-2 ring-purp-200"
-                : "border-neutral-200 hover:border-purp-300"
+                ? "border-amber-600 bg-amber-50 ring-2 ring-amber-200"
+                : "border-neutral-200 hover:border-amber-300"
               }`}
             onClick={() => {
               setInvoiceType("record");
@@ -218,13 +218,13 @@ function CreateInvoiceForm() {
             }}
           >
             <CardContent className="p-5 flex items-start gap-4">
-              <div className={`p-2 rounded-lg ${invoiceType === "record" ? "bg-purp-600 text-white" : "bg-neutral-100 text-neutral-500"}`}>
+              <div className={`p-2 rounded-lg ${invoiceType === "record" ? "bg-amber-600 text-white" : "bg-neutral-100 text-neutral-500"}`}>
                 <FileText className="h-5 w-5" />
               </div>
               <div className="flex-1">
-                <h3 className={`font-bold ${invoiceType === "record" ? "text-purp-900" : "text-neutral-700"}`}>Record Invoice</h3>
+                <h3 className={`font-bold ${invoiceType === "record" ? "text-amber-900" : "text-neutral-700"}`}>Record Invoice</h3>
                 <p className="text-xs text-neutral-500 mt-1 leading-relaxed">
-                  For payments handled offline (Cash, Bank Transfer). Does not include a 'Pay Now' button for the client.
+                  For offline bookkeeping. Generates a standard receipt without a Paystack portal.
                 </p>
               </div>
             </CardContent>
@@ -233,8 +233,8 @@ function CreateInvoiceForm() {
           <Card
             className={`border-2 transition-all shadow-sm ${(merchant?.subscription_plan === "starter" || merchant?.verification_status !== "verified") ? "opacity-60 bg-neutral-50 cursor-not-allowed" : "cursor-pointer"
               } ${invoiceType === "collection"
-                ? "border-purp-600 bg-purp-50 ring-2 ring-purp-200"
-                : "border-neutral-200 hover:border-purp-300"
+                ? "border-blue-600 bg-blue-50 ring-2 ring-blue-200"
+                : "border-neutral-200 hover:border-blue-300"
               }`}
             onClick={() => {
               if (merchant?.subscription_plan === "starter" || merchant?.verification_status !== "verified") return; // Locked for starter or unverified
@@ -243,12 +243,12 @@ function CreateInvoiceForm() {
             }}
           >
             <CardContent className="p-5 flex items-start gap-4">
-              <div className={`p-2 rounded-lg ${invoiceType === "collection" ? "bg-purp-600 text-white" : "bg-neutral-100 text-neutral-500"}`}>
+              <div className={`p-2 rounded-lg ${invoiceType === "collection" ? "bg-blue-600 text-white" : "bg-neutral-100 text-neutral-500"}`}>
                 <LinkIcon className="h-5 w-5" />
               </div>
               <div className="flex-1">
                 <div className="flex items-center justify-between">
-                  <h3 className={`font-bold ${invoiceType === "collection" ? "text-purp-900" : "text-neutral-700"}`}>Collection Invoice</h3>
+                  <h3 className={`font-bold ${invoiceType === "collection" ? "text-blue-900" : "text-neutral-700"}`}>Collection Invoice</h3>
                   {merchant?.subscription_plan === "starter" ? (
                     <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-amber-600 bg-amber-100 px-2 py-0.5 rounded-full">
                       <Lock className="h-3 w-3" /> Upgrade
@@ -260,7 +260,7 @@ function CreateInvoiceForm() {
                   ) : null}
                 </div>
                 <p className="text-xs text-neutral-500 mt-1 leading-relaxed">
-                  Generates a secure payment portal link. Clients can pay directly via Card, Transfer, or USSD.
+                  Live payment portal. Clients can pay directly via Card, Transfer, or USSD securely.
                 </p>
               </div>
             </CardContent>

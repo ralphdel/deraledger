@@ -304,7 +304,7 @@ export default function SettingsPage() {
                 <div>
                   <p className="text-sm font-semibold text-purp-900">Starter Account (Free)</p>
                   <p className="text-sm text-neutral-600 mt-1">
-                    You can generate up to 10 invoices in total to test the platform. To collect live payments (₦5M/month) and unlock more invoices, upgrade your plan.
+                    You can generate up to 5 Record Invoices in total to test the platform. To collect live payments (₦5M/month) and unlock Collection invoices, upgrade your plan.
                   </p>
                 </div>
               </div>

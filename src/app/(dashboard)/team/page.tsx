@@ -71,7 +71,7 @@ export default function TeamPage() {
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState("");
   const [copied, setCopied] = useState(false);
-  const [merchantId, setMerchantId] = useState("");
+  const [merchant, setMerchant] = useState<Merchant | null>(null);
   const [workspaceCode, setWorkspaceCode] = useState("");
   const [businessName, setBusinessName] = useState("");
   const [sendingInvite, setSendingInvite] = useState(false);
@@ -135,15 +135,15 @@ export default function TeamPage() {
   };
 
   useEffect(() => {
-    getMerchant().then((merchant) => {
-      if (merchant) {
-        setMerchantId(merchant.id);
-        setBusinessName(merchant.business_name);
-        if (merchant.workspace_code) setWorkspaceCode(merchant.workspace_code);
+    getMerchant().then((m) => {
+      if (m) {
+        setMerchant(m);
+        setBusinessName(m.business_name);
+        if (m.workspace_code) setWorkspaceCode(m.workspace_code);
         
         Promise.all([
-          fetchRoles(merchant.id),
-          loadTeam(merchant.id, merchant.email, merchant.created_at || "2025-01-01")
+          fetchRoles(m.id),
+          loadTeam(m.id, m.email, m.created_at || "2025-01-01")
         ]).then(() => setLoading(false));
       } else {
         setLoading(false);
@@ -172,7 +172,7 @@ export default function TeamPage() {
     }
     setSendingInvite(true);
     
-    const { success, error } = await sendInviteAction(inviteEmail, inviteRole, workspaceCode, businessName, merchantId);
+    const { success, error } = await sendInviteAction(inviteEmail, inviteRole, workspaceCode, businessName, merchant?.id || "");
     
     if (success) {
       setInviteSuccess(`Success! Invite email sent to ${inviteEmail}`);
@@ -181,7 +181,7 @@ export default function TeamPage() {
       // Refresh team list
       const m = await getMerchant();
       if (m) {
-        await loadTeam(merchantId, m.email, m.created_at || "2025-01-01");
+        await loadTeam(m.id, m.email, m.created_at || "2025-01-01");
       }
     } else {
       setInviteError("Failed to send invite: " + error);
@@ -192,17 +192,17 @@ export default function TeamPage() {
 
   const handleDeactivateMember = async (id: string, email: string) => {
     if (confirm(`Are you sure you want to deactivate ${email}? They won't be able to access this workspace.`)) {
-      await deactivateTeamMemberAction(id, merchantId);
+      await deactivateTeamMemberAction(id, merchant?.id || "");
       const m = await getMerchant();
-      if (m) await loadTeam(merchantId, m.email, m.created_at || "2025-01-01");
+      if (m) await loadTeam(m.id, m.email, m.created_at || "2025-01-01");
     }
   };
 
   const handleReactivateMember = async (id: string, email: string) => {
     if (confirm(`Are you sure you want to reactivate ${email}?`)) {
-      await reactivateTeamMemberAction(id, merchantId);
+      await reactivateTeamMemberAction(id, merchant?.id || "");
       const m = await getMerchant();
-      if (m) await loadTeam(merchantId, m.email, m.created_at || "2025-01-01");
+      if (m) await loadTeam(m.id, m.email, m.created_at || "2025-01-01");
     }
   };
 
@@ -213,20 +213,20 @@ export default function TeamPage() {
   const confirmRemoveMember = async () => {
     if (!memberToRemove) return;
     setIsRemoving(true);
-    await removeTeamMemberAction(memberToRemove.id, merchantId);
+    await removeTeamMemberAction(memberToRemove.id, merchant?.id || "");
     const m = await getMerchant();
-    if (m) await loadTeam(merchantId, m.email, m.created_at || "2025-01-01");
+    if (m) await loadTeam(m.id, m.email, m.created_at || "2025-01-01");
     setIsRemoving(false);
     setMemberToRemove(null);
   };
 
   const handleCreateCustomRole = async () => {
-    if (!newRoleName.trim() || !merchantId) return;
+    if (!newRoleName.trim() || !merchant?.id) return;
     setCreatingRole(true);
     setRoleMessage(null);
-    const { success, error } = await createCustomRoleAction(merchantId, newRoleName, newRolePerms);
+    const { success, error } = await createCustomRoleAction(merchant.id, newRoleName, newRolePerms);
     if (success) {
-      await fetchRoles(merchantId);
+      await fetchRoles(merchant.id);
       setNewRoleName("");
       setNewRolePerms(Object.keys(newRolePerms).reduce((acc, key) => ({ ...acc, [key]: false }), {}));
       setRoleMessage({ type: "success", text: "Custom role created successfully!" });
@@ -242,6 +242,33 @@ export default function TeamPage() {
         <h1 className="text-2xl font-bold text-purp-900">Team Management</h1>
         <Card className="border-2 border-purp-200 shadow-none animate-pulse">
           <CardContent className="p-6"><div className="h-32 bg-purp-50 rounded" /></CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  const isStarter = (merchant?.subscription_plan || merchant?.merchant_tier || "starter") === "starter";
+
+  if (isStarter) {
+    return (
+      <div className="max-w-3xl mx-auto space-y-6">
+        <h1 className="text-2xl font-bold text-purp-900">Team Management</h1>
+        <Card className="border-2 border-amber-200 bg-amber-50 shadow-none">
+          <CardContent className="p-10 text-center flex flex-col items-center justify-center">
+            <div className="w-16 h-16 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mb-4 border-2 border-amber-200">
+              <Shield className="w-8 h-8" />
+            </div>
+            <h2 className="text-xl font-bold text-amber-900 mb-2">Team Management is Locked</h2>
+            <p className="text-amber-700 max-w-md mx-auto mb-6 text-sm">
+              Your current Starter plan does not include Team Management and custom Roles. Upgrade your plan to unlock Role-Based Access Control and invite your team.
+            </p>
+            <a href="/settings/subscription">
+              <Button className="bg-amber-600 hover:bg-amber-700 text-white font-bold border-2 border-amber-700">
+                <Crown className="mr-2 h-4 w-4" />
+                Upgrade Plan
+              </Button>
+            </a>
+          </CardContent>
         </Card>
       </div>
     );

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { Bot, Send, ShieldAlert, Sparkles, User, TrendingUp, FileText, Users, DollarSign } from "lucide-react";
+import { Bot, Send, ShieldAlert, Sparkles, User, TrendingUp, FileText, Users, DollarSign, Crown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
@@ -279,6 +279,32 @@ export default function PurpBotPage() {
       setIsLoading(false);
     }, 600 + Math.random() * 800);
   };
+
+  const isStarter = (merchant?.subscription_plan || merchant?.merchant_tier || "starter") === "starter";
+
+  if (isStarter) {
+    return (
+      <div className="max-w-4xl mx-auto space-y-6 h-[calc(100vh-8rem)] flex flex-col items-center justify-center">
+        <Card className="border-2 border-amber-200 bg-amber-50 shadow-none w-full max-w-lg">
+          <CardContent className="p-10 text-center flex flex-col items-center justify-center">
+            <div className="w-16 h-16 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mb-4 border-2 border-amber-200">
+              <Bot className="w-8 h-8" />
+            </div>
+            <h2 className="text-xl font-bold text-amber-900 mb-2">PurpBot is Locked</h2>
+            <p className="text-amber-700 max-w-md mx-auto mb-6 text-sm">
+              Your current Starter plan does not include access to PurpBot AI. Upgrade your plan to get AI-powered financial insights, automated payment follow-ups, and natural language queries about your business data.
+            </p>
+            <a href="/settings/subscription">
+              <Button className="bg-amber-600 hover:bg-amber-700 text-white font-bold border-2 border-amber-700">
+                <Crown className="mr-2 h-4 w-4" />
+                Upgrade Plan
+              </Button>
+            </a>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-4xl mx-auto space-y-4 h-[calc(100vh-8rem)] flex flex-col">

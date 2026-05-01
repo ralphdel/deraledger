@@ -1,4 +1,4 @@
-﻿"use server";
+"use server";
 
 import { createClient } from "@/lib/supabase/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
@@ -412,31 +412,41 @@ export async function adminDeleteMerchantAction(merchantId: string) {
     }
   }
 
-  // Delete in order to respect FK constraints
-  await adminClient.from("audit_logs").delete().eq("merchant_id", merchantId);
-  await adminClient.from("onboarding_sessions").delete().eq("merchant_id", merchantId);
-  await adminClient.from("roles").delete().eq("merchant_id", merchantId);
-  await adminClient.from("merchant_team").delete().eq("merchant_id", merchantId);
-  await adminClient.from("transactions").delete().eq("merchant_id", merchantId);
-  await adminClient.from("manual_payments").delete().eq("merchant_id", merchantId);
-  await adminClient.from("item_catalog").delete().eq("merchant_id", merchantId);
-  await adminClient.from("discount_templates").delete().eq("merchant_id", merchantId);
+  try {
+    // Delete in order to respect FK constraints
+    await adminClient.from("audit_logs").delete().eq("merchant_id", merchantId);
+    await adminClient.from("onboarding_sessions").delete().eq("merchant_id", merchantId);
+    await adminClient.from("roles").delete().eq("merchant_id", merchantId);
+    await adminClient.from("merchant_team").delete().eq("merchant_id", merchantId);
+    // Also try deleting from team_members if it's a separate table
+    await adminClient.from("team_members").delete().eq("merchant_id", merchantId);
+    await adminClient.from("transactions").delete().eq("merchant_id", merchantId);
+    await adminClient.from("manual_payments").delete().eq("merchant_id", merchantId);
+    await adminClient.from("item_catalog").delete().eq("merchant_id", merchantId);
+    await adminClient.from("discount_templates").delete().eq("merchant_id", merchantId);
 
-  // Fetch invoices to delete associated line_items
-  const { data: invoices } = await adminClient.from("invoices").select("id").eq("merchant_id", merchantId);
-  if (invoices && invoices.length > 0) {
-    const invoiceIds = invoices.map((i) => i.id);
-    await adminClient.from("line_items").delete().in("invoice_id", invoiceIds);
+    // Fetch invoices to delete associated line_items
+    const { data: invoices } = await adminClient.from("invoices").select("id").eq("merchant_id", merchantId);
+    if (invoices && invoices.length > 0) {
+      const invoiceIds = invoices.map((i) => i.id);
+      await adminClient.from("line_items").delete().in("invoice_id", invoiceIds);
+    }
+
+    await adminClient.from("invoices").delete().eq("merchant_id", merchantId);
+    await adminClient.from("clients").delete().eq("merchant_id", merchantId);
+    
+    const { error } = await adminClient.from("merchants").delete().eq("id", merchantId);
+    if (error) {
+      console.error("Failed to delete merchant row:", error);
+      return { success: false, error: error.message };
+    }
+
+    revalidatePath("/admin/merchants");
+    return { success: true };
+  } catch (err: any) {
+    console.error("Unexpected error during merchant deletion:", err);
+    return { success: false, error: err.message || "Unknown error" };
   }
-
-  await adminClient.from("invoices").delete().eq("merchant_id", merchantId);
-  await adminClient.from("clients").delete().eq("merchant_id", merchantId);
-  
-  const { error } = await adminClient.from("merchants").delete().eq("id", merchantId);
-  if (error) return { success: false, error: error.message };
-
-  revalidatePath("/admin/merchants");
-  return { success: true };
 }
 
 export async function adminChangePlanAction(
@@ -697,7 +707,7 @@ export async function createInvoiceAction(data: {
 }) {
   const adminClient = getServiceClient();
 
-  // Check Starter tier invoice limit (max 10 total invoices)
+  // Check Starter tier invoice limit (max 5 total invoices)
   const { data: merchantInfo } = await adminClient
     .from("merchants")
     .select("subscription_plan")
@@ -710,8 +720,8 @@ export async function createInvoiceAction(data: {
       .select("*", { count: "exact", head: true })
       .eq("merchant_id", data.merchant_id);
     
-    if (!countError && count !== null && count >= 10) {
-      return { success: false, error: "Starter plan limit reached: You can only generate up to 10 invoices. Please upgrade your plan to continue." };
+    if (!countError && count !== null && count >= 5) {
+      return { success: false, error: "Starter plan limit reached: You can only generate up to 5 Record Invoices. Please upgrade your plan to continue." };
     }
   }
 
@@ -1088,6 +1098,42 @@ export async function bulkCreateClientsAction(merchantId: string, clientsData: a
   return { success: true, count: data.length };
 }
 
+export async function deleteClientAction(clientId: string) {
+  const adminClient = getServiceClient();
+
+  // The user wants to cascade delete. We will manually delete their invoices first to satisfy any foreign keys, if cascade isn't set.
+  // We'll also need to delete transactions and manual_payments and line_items if not cascaded, but typically deleting invoices is enough if invoices -> line_items cascades.
+  // Actually, to be safe, we can just delete the invoices. If there's an error due to other FKs, we'll return it.
+  const { data: invoices } = await adminClient
+    .from("invoices")
+    .select("id")
+    .eq("client_id", clientId);
+
+  if (invoices && invoices.length > 0) {
+    const invoiceIds = invoices.map(i => i.id);
+    
+    // Attempt to delete manual_payments and transactions linked to these invoices just in case
+    await adminClient.from("manual_payments").delete().in("invoice_id", invoiceIds);
+    await adminClient.from("transactions").delete().in("invoice_id", invoiceIds);
+    await adminClient.from("line_items").delete().in("invoice_id", invoiceIds);
+    
+    // Now delete the invoices
+    await adminClient.from("invoices").delete().eq("client_id", clientId);
+  }
+
+  const { error } = await adminClient
+    .from("clients")
+    .delete()
+    .eq("id", clientId);
+
+  if (error) {
+    console.error("Failed to delete client:", error);
+    return { success: false, error: error.message };
+  }
+
+  revalidatePath("/clients");
+  return { success: true };
+}
 export async function bulkCreateInvoicesAction(merchantId: string, invoicesData: any[]) {
   const adminClient = getServiceClient();
 

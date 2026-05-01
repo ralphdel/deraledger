@@ -133,6 +133,16 @@ export async function getTransactions(invoiceId: string): Promise<Transaction[]>
   return (data || []) as Transaction[];
 }
 
+export async function getManualPayments(invoiceId: string) {
+  const { data, error } = await supabase()
+    .from("manual_payments")
+    .select("*")
+    .eq("invoice_id", invoiceId)
+    .order("date_received", { ascending: true });
+  if (error) { console.error("getManualPayments:", error); return []; }
+  return data || [];
+}
+
 export async function getAllTransactions(merchantId?: string): Promise<Transaction[]> {
   const mId = merchantId || await getActiveMerchantId();
   const { data, error } = await supabase()

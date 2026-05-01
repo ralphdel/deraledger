@@ -43,7 +43,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
-import { getInvoiceById, getTransactions, getMerchant, getMonthlyCollectionTotal } from "@/lib/data";
+import { getInvoiceById, getTransactions, getMerchant, getMonthlyCollectionTotal, getManualPayments } from "@/lib/data";
 import { closeInvoiceManually, reopenInvoice, getInvoiceHistory, sendInvoiceEmailAction } from "@/lib/actions";
 import { MANUAL_CLOSE_REASONS } from "@/lib/types";
 import type { InvoiceWithLineItems, Transaction, Merchant, AuditLog } from "@/lib/types";
@@ -70,14 +70,36 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [isPending, startTransition] = useTransition();
 
   const refreshData = async () => {
-    const [inv, txns, merch, collected] = await Promise.all([
+    const [inv, txns, manualTxns, merch, collected] = await Promise.all([
       getInvoiceById(id),
       getTransactions(id),
+      getManualPayments(id),
       getMerchant(),
       getMonthlyCollectionTotal(),
     ]);
     setInvoice(inv);
-    setTransactions(txns);
+    
+    // Combine online transactions and manual payments into a unified array
+    const combinedHistory = [
+      ...txns.map(t => ({
+        id: t.id,
+        date: t.created_at,
+        reference: t.paystack_reference || "-",
+        method: t.payment_method,
+        amount: t.amount_paid,
+        status: t.status,
+      })),
+      ...manualTxns.map(m => ({
+        id: m.id,
+        date: m.date_received,
+        reference: m.reference_note || "-",
+        method: m.payment_method,
+        amount: m.amount,
+        status: "success (manual)",
+      }))
+    ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    
+    setTransactions(combinedHistory as any);
     setMerchant(merch);
     setMonthlyCollected(collected);
     if (inv?.clients?.email) setEmailTo(inv.clients.email);
@@ -523,16 +545,16 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {transactions.map((txn) => (
+                    {transactions.map((txn: any) => (
                       <TableRow key={txn.id} className="border-b border-purp-200">
                         <TableCell className="text-sm">
-                          {new Date(txn.created_at).toLocaleDateString("en-NG", {
+                          {new Date(txn.date).toLocaleDateString("en-NG", {
                             day: "numeric", month: "short", year: "numeric",
                           })}
                         </TableCell>
-                        <TableCell className="text-sm font-mono text-purp-700">{txn.paystack_reference}</TableCell>
-                        <TableCell className="text-sm capitalize">{txn.payment_method.replace("_", " ")}</TableCell>
-                        <TableCell className="text-right font-semibold text-sm">{formatNaira(Number(txn.amount_paid))}</TableCell>
+                        <TableCell className="text-sm font-mono text-purp-700">{txn.reference}</TableCell>
+                        <TableCell className="text-sm capitalize">{txn.method.replace("_", " ")}</TableCell>
+                        <TableCell className="text-right font-semibold text-sm">{formatNaira(Number(txn.amount))}</TableCell>
                         <TableCell>
                           <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 border-2 text-xs font-semibold">
                             {txn.status}
@@ -675,8 +697,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                       `View your invoice here:\n${window.location.origin}/invoices/${invoice.id}/print\n\n` +
                       `Thank you! 🙏`
                     );
-                    const phone = invoice.clients?.phone?.replace(/\D/g, "") || "";
-                    window.open(`https://wa.me/${phone}?text=${msg}`, "_blank");
+                    window.open(`https://wa.me/?text=${msg}`, "_blank");
                   }}
                   className="w-full border-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
                 >

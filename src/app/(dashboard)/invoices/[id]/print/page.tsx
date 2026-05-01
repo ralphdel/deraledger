@@ -4,6 +4,7 @@ import { use, useEffect, useState } from "react";
 import { getInvoiceById, getMerchant } from "@/lib/data";
 import type { InvoiceWithLineItems, Merchant } from "@/lib/types";
 import { formatNaira } from "@/lib/calculations";
+import { Download, Printer } from "lucide-react";
 
 export default function InvoicePrintPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -71,6 +72,24 @@ export default function InvoicePrintPage({ params }: { params: Promise<{ id: str
     void: "#6b7280",
   };
 
+  const handleDownloadPdf = async () => {
+    const element = document.getElementById("invoice-content");
+    if (!element) return;
+    
+    // Dynamically import html2pdf to avoid SSR issues
+    const html2pdf = (await import("html2pdf.js")).default;
+    
+    const opt = {
+      margin: [0.5, 0.5, 0.5, 0.5] as [number, number, number, number], // top, left, bottom, right
+      filename: `${invoice.invoice_number}_${businessName.replace(/\s+/g, "_")}.pdf`,
+      image: { type: 'jpeg', quality: 1 },
+      html2canvas: { scale: 2, useCORS: true },
+      jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' }
+    };
+    
+    html2pdf().set(opt).from(element).save();
+  };
+
   return (
     <>
       <style>{`
@@ -90,12 +109,21 @@ export default function InvoicePrintPage({ params }: { params: Promise<{ id: str
       <div className="no-print" style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 100, background: "#2D1B6B", padding: "10px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <span style={{ color: "white", fontFamily: "Inter, sans-serif", fontWeight: 700, fontSize: 15 }}>PurpLedger — Invoice Preview</span>
         <div style={{ display: "flex", gap: 12 }}>
-          <button
-            onClick={() => window.print()}
-            style={{ background: "white", color: "#2D1B6B", border: "none", borderRadius: 8, padding: "8px 20px", fontWeight: 700, fontSize: 14, cursor: "pointer", fontFamily: "Inter, sans-serif" }}
-          >
-            ⬇ Save as PDF
-          </button>
+          {invoice.invoice_type === "record" ? (
+            <button
+              onClick={handleDownloadPdf}
+              style={{ background: "white", color: "#2D1B6B", border: "none", borderRadius: 8, padding: "8px 20px", fontWeight: 700, fontSize: 14, cursor: "pointer", fontFamily: "Inter, sans-serif", display: "flex", alignItems: "center", gap: "6px" }}
+            >
+              <Download size={16} /> Download PDF
+            </button>
+          ) : (
+            <button
+              onClick={() => window.print()}
+              style={{ background: "white", color: "#2D1B6B", border: "none", borderRadius: 8, padding: "8px 20px", fontWeight: 700, fontSize: 14, cursor: "pointer", fontFamily: "Inter, sans-serif", display: "flex", alignItems: "center", gap: "6px" }}
+            >
+              <Printer size={16} /> Save as PDF
+            </button>
+          )}
           <button
             onClick={() => window.close()}
             style={{ background: "rgba(255,255,255,0.15)", color: "white", border: "1px solid rgba(255,255,255,0.3)", borderRadius: 8, padding: "8px 16px", fontWeight: 600, fontSize: 14, cursor: "pointer", fontFamily: "Inter, sans-serif" }}
@@ -108,7 +136,7 @@ export default function InvoicePrintPage({ params }: { params: Promise<{ id: str
       <div style={{ paddingTop: 64 }} className="no-print" />
 
       {/* Invoice Document */}
-      <div className="invoice-wrapper">
+      <div id="invoice-content" className="invoice-wrapper">
         {/* Header */}
         <div style={{ background: "#2D1B6B", padding: "36px 48px", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>

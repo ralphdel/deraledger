@@ -430,7 +430,9 @@ async function handleInvoicePayment(
   const taxCollected = Math.round(kFactor * Number(invoice.tax_value) * 100) / 100;
   const discountApplied = Math.round(kFactor * Number(invoice.discount_value) * 100) / 100;
   const rawFee = paymentAmount * 0.015 + 100;
-  const paystackFee = invoice.fee_absorption === "customer" ? Math.min(rawFee, 2000) : 0;
+  // We ALWAYS record the actual fee Paystack took.
+  // The fee_absorbed_by column tells us whether this fee was subtracted from the customer's total or the merchant's net.
+  const paystackFee = Math.min(rawFee, 2000);
   const paymentMethod =
     channel === "card" ? "card" : channel === "bank" ? "bank_transfer" : "ussd";
 

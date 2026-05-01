@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import {
   Users, Search, Plus, Mail, Phone, Building2,
-  Bell, BellOff, MessageCircle, AlertTriangle, Info, MapPin, Edit2,
+  Bell, BellOff, MessageCircle, AlertTriangle, Info, MapPin, Edit2, Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { getClients, getInvoices, getMerchant } from "@/lib/data";
+import { deleteClientAction } from "@/lib/actions";
 import { formatNaira } from "@/lib/calculations";
 import type { Client, InvoiceWithClient } from "@/lib/types";
 import { CreateClientModal } from "@/components/CreateClientModal";
@@ -58,6 +59,8 @@ export default function ClientsPage() {
   // Dialog state
   const [dialogOpen, setDialogOpen] = useState(false);
   const [clientToEdit, setClientToEdit] = useState<Client | null>(null);
+  const [clientToDelete, setClientToDelete] = useState<Client | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Merchant context
   const [merchantId, setMerchantId] = useState("");
@@ -128,6 +131,7 @@ export default function ClientsPage() {
           </Button>
         </div>
 
+        {/* Edit Client Modal */}
         <CreateClientModal
           open={dialogOpen}
           onOpenChange={(open) => {
@@ -142,6 +146,72 @@ export default function ClientsPage() {
           merchantId={merchantId}
           clientToEdit={clientToEdit}
         />
+
+        {/* Delete Client Modal */}
+        <Dialog open={!!clientToDelete} onOpenChange={(open) => !open && setClientToDelete(null)}>
+          <DialogContent className="border-2 border-red-200">
+            <DialogHeader>
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-full bg-red-100 flex items-center justify-center">
+                  <AlertTriangle className="h-5 w-5 text-red-600" />
+                </div>
+                <DialogTitle className="text-red-600">Delete Client?</DialogTitle>
+              </div>
+              
+              {clientToDelete && (() => {
+                const clientInvoices = invoices.filter(i => i.client_id === clientToDelete.id);
+                const openInvoices = clientInvoices.filter(i => i.status === "open" || i.status === "partially_paid");
+                const hasOpen = openInvoices.length > 0;
+                
+                return (
+                  <div className="pt-3 space-y-3">
+                    {hasOpen ? (
+                      <div className="bg-red-50 border border-red-200 p-3 rounded-lg text-sm text-red-800">
+                        <strong>Warning:</strong> {clientToDelete.full_name} has <strong>{openInvoices.length} outstanding invoice(s)</strong>.
+                        Deleting this client will permanently delete all associated invoices, transactions, and payment history.
+                      </div>
+                    ) : (
+                      <div className="bg-amber-50 border border-amber-200 p-3 rounded-lg text-sm text-amber-800">
+                        <strong>Note:</strong> All records associated with {clientToDelete.full_name} (including past invoices) will be permanently deleted.
+                      </div>
+                    )}
+                    <p className="text-sm text-neutral-600">
+                      Are you absolutely sure you want to delete <strong>{clientToDelete.full_name}</strong>? This action cannot be undone.
+                    </p>
+                  </div>
+                );
+              })()}
+            </DialogHeader>
+            <DialogFooter className="mt-4">
+              <Button
+                variant="outline"
+                onClick={() => setClientToDelete(null)}
+                disabled={isDeleting}
+                className="border-2 border-neutral-200 hover:bg-neutral-50"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={async () => {
+                  if (!clientToDelete) return;
+                  setIsDeleting(true);
+                  const res = await deleteClientAction(clientToDelete.id);
+                  setIsDeleting(false);
+                  if (res.success) {
+                    setClientToDelete(null);
+                    fetchData();
+                  } else {
+                    alert(res.error);
+                  }
+                }}
+                disabled={isDeleting}
+                className="bg-red-600 hover:bg-red-700 text-white font-semibold border-2 border-red-600"
+              >
+                {isDeleting ? "Deleting..." : "Yes, Delete Client"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
 
       {/* Search */}
@@ -182,6 +252,13 @@ export default function ClientsPage() {
                         title="Edit client"
                       >
                         <Edit2 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => setClientToDelete(client)}
+                        className="text-neutral-400 hover:text-red-600 transition-colors"
+                        title="Delete client"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
                       </button>
                       {/* Reminder badge */}
                       {client.reminder_enabled && client.reminder_channels?.length > 0 && (
