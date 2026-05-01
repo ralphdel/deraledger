@@ -18,12 +18,32 @@ interface Message {
   citations?: string[];
 }
 
+const ROLE_KNOWLEDGE: Record<string, { description: string; permissions: string[] }> = {
+  owner: {
+    description: "Full unrestricted access to all platform features including settlement account management, billing, team management, and all financial operations.",
+    permissions: ["View & create invoices", "Edit & void invoices", "Record payments", "Manage clients (add/edit/delete)", "View analytics & transactions", "Manage KYC & business settings", "Manage billing & subscription", "Manage team members & roles", "Use PurpBot", "View settlements", "Manage settlement account", "Manage advanced settings", "Manage item catalog", "Manage discount templates", "View item catalog", "View discount templates"]
+  },
+  admin: {
+    description: "Broad operational access. Can manage most business functions but CANNOT manage billing, delete clients, void invoices, or change the settlement account.",
+    permissions: ["View & create invoices", "Edit invoices", "Record payments", "Manual close invoices", "Manage clients (add/edit, NOT delete)", "View analytics & transactions", "Change fee settings", "Manage business settings", "Manage team members", "Use PurpBot", "View settlements", "Manage advanced settings", "Manage item catalog", "Manage discount templates", "View item catalog", "View discount templates"]
+  },
+  accountant: {
+    description: "Financial operations access. Can create invoices, record payments, view financial data and analytics, but cannot manage team, delete clients, or change settings.",
+    permissions: ["View & create invoices", "Edit invoices", "Record payments", "Manual close invoices", "View clients", "View analytics & transactions", "Use PurpBot", "View settlements", "View item catalog", "View discount templates"]
+  },
+  support: {
+    description: "Limited client-facing access. Can view invoices and clients, edit client info, but cannot create invoices, view analytics, or access financial settings.",
+    permissions: ["View invoices", "View & edit clients (NOT delete)", "View item catalog"]
+  }
+};
+
 const quickActions = [
   { label: "Top outstanding balance", query: "Which client has the highest outstanding balance?", icon: TrendingUp },
   { label: "Total collected", query: "How much have I collected in total?", icon: DollarSign },
-  { label: "Overdue invoices", query: "Which invoices are expired or overdue?", icon: FileText },
-  { label: "My Verification Status", query: "What is my current tier and KYC verification status?", icon: ShieldAlert },
+  { label: "Overdue invoices", query: "Which invoices are overdue?", icon: FileText },
+  { label: "Role permissions", query: "What can each role do on PurpLedger?", icon: ShieldAlert },
   { label: "Client summary", query: "Give me a summary of all my clients", icon: Users },
+  { label: "My Verification Status", query: "What is my current tier and KYC verification status?", icon: Crown },
 ];
 
 export default function PurpBotPage() {
@@ -49,13 +69,19 @@ export default function PurpBotPage() {
         setDataReady(true);
 
         // Welcome message with real data
+        const todayMs = new Date().setHours(0,0,0,0);
         const openCount = inv.filter((i) => i.status === "open" || i.status === "partially_paid").length;
+        const overdueCount = inv.filter((i) => {
+          if (i.status === "expired" || i.status === "overdue") return true;
+          if ((i.status === "open" || i.status === "partially_paid") && i.pay_by_date) return new Date(i.pay_by_date).getTime() < todayMs;
+          return false;
+        }).length;
         const totalOutstanding = inv.reduce((s, i) => s + Number(i.outstanding_balance), 0);
         setMessages([
           {
             id: "welcome",
             role: "assistant",
-            content: `Hi${merch ? ` ${merch.business_name.split(" ")[0]}` : ""}! I'm PurpBot, your read-only financial analyst. I've loaded your ledger — you have **${inv.length} invoices** (${openCount} active) with **${formatNaira(totalOutstanding)}** outstanding. Ask me anything about your collections, clients, or payment trends.`,
+            content: `Hi${merch ? ` ${merch.business_name.split(" ")[0]}` : ""}! I'm PurpBot, your read-only financial analyst. I've loaded your ledger — you have **${inv.length} invoices** (${openCount} active${overdueCount > 0 ? `, **${overdueCount} overdue ⚠**` : ""}) with **${formatNaira(totalOutstanding)}** outstanding. Ask me anything about your collections, clients, roles, or payment trends.`,
           },
         ]);
       }
@@ -154,13 +180,18 @@ export default function PurpBotPage() {
 
     // Overdue / expired queries
     if (q.includes("overdue") || q.includes("expired") || q.includes("late") || q.includes("past due")) {
-      const expired = invoices.filter((i) => i.status === "expired");
-      if (expired.length === 0) {
-        return { content: "Great news — you have **no expired or overdue invoices** at the moment. All pay-by dates are current.", citations: [] };
+      const todayMs = new Date().setHours(0,0,0,0);
+      const overdue = invoices.filter((i) => {
+        if (i.status === "expired" || i.status === "overdue") return true;
+        if ((i.status === "open" || i.status === "partially_paid") && i.pay_by_date) return new Date(i.pay_by_date).getTime() < todayMs;
+        return false;
+      });
+      if (overdue.length === 0) {
+        return { content: "Great news — you have **no overdue invoices** at the moment. All pay-by dates are current.", citations: [] };
       }
       return {
-        content: `You have **${expired.length} expired invoice(s)**:\n\n${expired.map((i) => `• **${i.invoice_number}** — ${i.clients?.full_name || "Unknown"}: ${formatNaira(Number(i.outstanding_balance))} outstanding (expired ${i.pay_by_date ? new Date(i.pay_by_date).toLocaleDateString("en-NG", { day: "numeric", month: "short" }) : "N/A"})`).join("\n")}\n\nTotal expired balance: **${formatNaira(expired.reduce((s, i) => s + Number(i.outstanding_balance), 0))}**`,
-        citations: expired.map((i) => i.invoice_number),
+        content: `You have **${overdue.length} overdue invoice(s)**:\n\n${overdue.map((i) => `• **${i.invoice_number}** — ${i.clients?.full_name || "Unknown"}: **${formatNaira(Number(i.outstanding_balance))}** outstanding (due ${i.pay_by_date ? new Date(i.pay_by_date).toLocaleDateString("en-NG", { day: "numeric", month: "short", year: "numeric" }) : "N/A"})`).join("\n")}\n\nTotal overdue balance: **${formatNaira(overdue.reduce((s, i) => s + Number(i.outstanding_balance), 0))}**`,
+        citations: overdue.map((i) => i.invoice_number),
       };
     }
 
@@ -199,17 +230,53 @@ export default function PurpBotPage() {
       }
     }
 
+    // Role / permission queries
+    if (q.includes("role") || q.includes("permission") || q.includes("access") || q.includes("what can") || q.includes("who can") || q.includes("team member") || q.includes("invite")) {
+      const roleNames = Object.keys(ROLE_KNOWLEDGE);
+      const matchedRole = roleNames.find(r => q.includes(r));
+      if (matchedRole) {
+        const info = ROLE_KNOWLEDGE[matchedRole];
+        return {
+          content: `**${matchedRole.charAt(0).toUpperCase() + matchedRole.slice(1)} Role**\n\n${info.description}\n\n**Permissions:**\n${info.permissions.map(p => `• ${p}`).join("\n")}`,
+          citations: ["Team & RBAC"],
+        };
+      }
+      // General role overview
+      return {
+        content: `PurpLedger has **4 built-in roles**:\n\n**👑 Owner** — Full access to everything, including settlement account management and billing. Only one per workspace.\n\n**🛡️ Admin** — Broad operational access. Can manage invoices, clients, and team. Cannot void invoices, delete clients, or change the settlement account.\n\n**🧮 Accountant** — Financial operations only. Can create & edit invoices, record payments, view analytics. Cannot manage team or settings.\n\n**🎧 Support** — View-only access to invoices and clients. Can edit client info but cannot create invoices or view financial data.\n\nYou can also create **Custom Roles** with hand-picked permissions from Settings > Team.\n\nAsk me about a specific role, e.g. *"What can an accountant do?"*`,
+        citations: ["Team & RBAC"],
+      };
+    }
+
+    // Settlement queries
+    if (q.includes("settlement") || q.includes("payout") || q.includes("bank account") || q.includes("disburse")) {
+      return {
+        content: `**Settlement Account** — this is the bank account where Paystack disburses funds from your Collection Invoices.\n\n• Only the **Owner** role can add or change the settlement account.\n• Configure it at **Settings > Settlement Account**.\n• Account must be verified (Paystack subaccount creation) before payouts begin.\n• A **1.5% + ₦100 Paystack fee** (capped at ₦2,000) is deducted per transaction in live mode.\n• In test mode, fees show as ₦0 — this is expected.`,
+        citations: ["Settlement Settings"],
+      };
+    }
+
+    // Catalog / discount queries
+    if (q.includes("catalog") || q.includes("catalogue") || q.includes("item") || q.includes("discount template") || q.includes("discount")) {
+      return {
+        content: `**Item Catalog & Discount Templates:**\n\n**Item Catalog** (Settings > Item Catalog):\n• Save products/services with default rates for faster invoicing.\n• Use the *"Use Saved"* button on invoice line items to auto-fill name & rate.\n• Access: Owner & Admin can manage; Accountant & Support can view.\n\n**Discount Templates** (Settings > Discount Templates):\n• Save reusable discount percentages (e.g. Loyalty 10%, Early Payment 5%).\n• Apply them instantly when creating invoices via *"Use Template"*.\n• Access: Owner & Admin can manage; Accountant can view.`,
+        citations: ["Item Catalog", "Discount Templates"],
+      };
+    }
+
     // Invoice queries
-    if (q.includes("invoice") && (q.includes("how many") || q.includes("count") || q.includes("total"))) {
+    if (q.includes("invoice") && (q.includes("how many") || q.includes("count") || q.includes("total") || q.includes("summary"))) {
+      const todayMs = new Date().setHours(0,0,0,0);
       const statusCounts = {
-        open: invoices.filter((i) => i.status === "open").length,
-        partially_paid: invoices.filter((i) => i.status === "partially_paid").length,
+        open: invoices.filter((i) => i.status === "open" && !(i.pay_by_date && new Date(i.pay_by_date).getTime() < todayMs)).length,
+        partially_paid: invoices.filter((i) => i.status === "partially_paid" && !(i.pay_by_date && new Date(i.pay_by_date).getTime() < todayMs)).length,
+        overdue: invoices.filter((i) => { if (i.status === "expired" || i.status === "overdue") return true; if ((i.status === "open" || i.status === "partially_paid") && i.pay_by_date) return new Date(i.pay_by_date).getTime() < todayMs; return false; }).length,
         closed: invoices.filter((i) => i.status === "closed").length,
         manually_closed: invoices.filter((i) => i.status === "manually_closed").length,
-        expired: invoices.filter((i) => i.status === "expired").length,
+        void: invoices.filter((i) => i.status === "void").length,
       };
       return {
-        content: `You have **${invoices.length} total invoices**:\n\n• Open: **${statusCounts.open}**\n• Partially Paid: **${statusCounts.partially_paid}**\n• Closed: **${statusCounts.closed}**\n• Manually Closed: **${statusCounts.manually_closed}**\n• Expired: **${statusCounts.expired}**`,
+        content: `You have **${invoices.length} total invoices**:\n\n• Open: **${statusCounts.open}**\n• Partially Paid: **${statusCounts.partially_paid}**\n• Overdue: **${statusCounts.overdue}** ⚠\n• Closed: **${statusCounts.closed}**\n• Manually Closed: **${statusCounts.manually_closed}**\n• Void: **${statusCounts.void}**`,
         citations: ["Invoice Summary"],
       };
     }
@@ -249,7 +316,7 @@ export default function PurpBotPage() {
 
     // Fallback — general help
     return {
-      content: `I can help with questions like:\n\n• *"Which client has the highest outstanding balance?"*\n• *"How much have I collected in total?"*\n• *"Which invoices are expired?"*\n• *"Give me a summary of all my clients"*\n• *"Tell me about INV-2025-001"*\n• *"What are my payment method breakdowns?"*\n• *"How much have I paid in Paystack fees?"*\n\nTry one of these, or use the quick actions below!`,
+      content: `I can help with questions like:\n\n**Financial:**\n• *"Which client has the highest outstanding balance?"*\n• *"How much have I collected in total?"*\n• *"Which invoices are overdue?"*\n• *"Tell me about INV-2025-001"*\n• *"What are my payment method breakdowns?"*\n\n**Team & Roles:**\n• *"What can an accountant do?"*\n• *"What are the differences between admin and support roles?"*\n• *"Who can manage the settlement account?"*\n\n**Platform:**\n• *"How does the item catalog work?"*\n• *"Tell me about settlement accounts"*\n• *"What is my current KYC status?"*\n\nTry one of these, or use the quick actions below!`,
       citations: [],
     };
   };

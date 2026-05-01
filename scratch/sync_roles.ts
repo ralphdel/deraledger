@@ -34,6 +34,8 @@ const roles = [
       manage_settlement_account: true,
       manage_item_catalog: true,
       manage_discount_template: true,
+      view_item_catalog: true,
+      view_discount_template: true,
     }
   },
   {
@@ -62,6 +64,8 @@ const roles = [
       manage_settlement_account: false,
       manage_item_catalog: true,
       manage_discount_template: true,
+      view_item_catalog: true,
+      view_discount_template: true,
     }
   },
   {
@@ -90,6 +94,8 @@ const roles = [
       manage_settlement_account: false,
       manage_item_catalog: false,
       manage_discount_template: false,
+      view_item_catalog: true,
+      view_discount_template: true,
     }
   },
   {
@@ -118,6 +124,8 @@ const roles = [
       manage_settlement_account: false,
       manage_item_catalog: false,
       manage_discount_template: false,
+      view_item_catalog: true,
+      view_discount_template: false,
     }
   }
 ];

@@ -75,6 +75,8 @@ const PERMISSION_LABELS: Record<string, string> = {
   manage_settlement_account: "Manage Settlement Account",
   manage_item_catalog: "Manage Item Catalog",
   manage_discount_template: "Manage Discount Templates",
+  view_item_catalog: "View Item Catalog",
+  view_discount_template: "View Discount Templates",
 };
 
 export default function TeamPage() {
@@ -258,7 +260,7 @@ export default function TeamPage() {
                       </SelectTrigger>
                       <SelectContent className="border-2 border-purp-200">
                         {roles.map(r => (
-                          <SelectItem key={r.id} value={r.id} disabled={r.name === "owner"}>
+                          <SelectItem key={r.id} value={r.name} disabled={r.name === "owner"}>
                             <div className="flex items-center gap-2 capitalize">
                               <span className={`w-2 h-2 rounded-full ${getRoleConfig(r.name).color.split(" ")[0]}`} />
                               {r.name}

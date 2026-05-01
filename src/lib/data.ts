@@ -229,7 +229,16 @@ export async function getDashboardStats(merchantId?: string) {
     (sum, i) => sum + Number(i.outstanding_balance),
     0
   );
-  const overdueCount = invoices.filter((i) => i.status === "expired").length;
+  const now = new Date();
+  const todayMidnight = new Date(now);
+  todayMidnight.setHours(0, 0, 0, 0);
+  const overdueCount = invoices.filter((i) => {
+    if (i.status === "expired" || i.status === "overdue") return true;
+    if ((i.status === "open" || i.status === "partially_paid") && i.pay_by_date) {
+      return new Date(i.pay_by_date) < todayMidnight;
+    }
+    return false;
+  }).length;
   const totalInvoiced = invoices.reduce((sum, i) => sum + Number(i.grand_total), 0);
   const totalCollected = invoices.reduce((sum, i) => sum + Number(i.amount_paid), 0);
 
@@ -247,7 +256,6 @@ export async function getDashboardStats(merchantId?: string) {
   ];
 
   // Aging buckets
-  const now = new Date();
   const agingData = [
     { bucket: "0-30 days", amount: 0 },
     { bucket: "31-60 days", amount: 0 },

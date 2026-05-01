@@ -341,8 +341,14 @@ export async function sendInviteAction(
     userId = newUser.user.id;
   }
 
-  // Get the role ID
-  const { data: roleData } = await adminClient.from("roles").select("id").eq("name", role).single();
+  // Get the role — the UI passes the role UUID (r.id), so look up by id first.
+  // Fall back to name lookup for backward compatibility.
+  const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(role);
+  const { data: roleData } = await adminClient
+    .from("roles")
+    .select("id")
+    .eq(isUUID ? "id" : "name", role)
+    .single();
   if (!roleData) return { success: false, error: "Invalid role specified" };
   const roleId = roleData.id;
 

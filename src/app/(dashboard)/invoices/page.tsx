@@ -8,13 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { createClient } from "@/lib/supabase/client";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+
 import {
   Table,
   TableBody,
@@ -65,12 +59,27 @@ export default function InvoicesPage() {
     localStorage.setItem("purpledger_invoice_type_filter", value);
   };
 
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const isOverdue = (inv: InvoiceWithClient) => {
+    if (inv.status === "expired" || inv.status === "overdue") return true;
+    if ((inv.status === "open" || inv.status === "partially_paid") && inv.pay_by_date) {
+      return new Date(inv.pay_by_date) < today;
+    }
+    return false;
+  };
+
   const filteredInvoices = invoices.filter((inv) => {
     const matchesType = typeFilter === "all" ? true : (inv.invoice_type === typeFilter || (!inv.invoice_type && typeFilter === "collection"));
     const matchesSearch =
       inv.invoice_number.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (inv.clients?.full_name || "").toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesStatus = statusFilter === "all" || inv.status === statusFilter;
+    const matchesStatus = statusFilter === "all"
+      ? true
+      : statusFilter === "overdue"
+        ? isOverdue(inv)
+        : inv.status === statusFilter;
     return matchesType && matchesSearch && matchesStatus;
   });
 
@@ -97,7 +106,10 @@ export default function InvoicesPage() {
         <div>
           <h1 className="text-2xl font-bold text-purp-900">Invoices</h1>
           <p className="text-neutral-500 text-sm mt-1">
-            {filteredInvoices.length} invoices found · {filteredInvoices.filter(i => i.status === "open" || i.status === "partially_paid").length} active
+            {filteredInvoices.length} invoices found · {filteredInvoices.filter(i => !isOverdue(i) && (i.status === "open" || i.status === "partially_paid")).length} active
+            {filteredInvoices.filter(isOverdue).length > 0 && (
+              <span className="ml-2 text-amber-600 font-semibold">· {filteredInvoices.filter(isOverdue).length} overdue</span>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -191,21 +203,25 @@ export default function InvoicesPage() {
           />
         </div>
 
-        <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v ?? "all")}>
-          <SelectTrigger className="w-full xl:w-48 border-2 border-purp-200 bg-white h-10 shrink-0">
-            <Filter className="mr-2 h-4 w-4 text-neutral-500" />
-            <SelectValue placeholder="Filter by status" />
-          </SelectTrigger>
-          <SelectContent className="border-2 border-purp-200">
-            <SelectItem value="all">All Statuses</SelectItem>
-            <SelectItem value="open">Open</SelectItem>
-            <SelectItem value="partially_paid">Partially Paid</SelectItem>
-            <SelectItem value="closed">Closed</SelectItem>
-            <SelectItem value="manually_closed">Manually Closed</SelectItem>
-            <SelectItem value="expired">Expired</SelectItem>
-            <SelectItem value="void">Void</SelectItem>
-          </SelectContent>
-        </Select>
+
+        <div className="relative shrink-0 w-full xl:w-52">
+          <Filter className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-500 pointer-events-none z-10" />
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="w-full h-10 pl-9 pr-4 border-2 border-purp-200 bg-white rounded-lg text-sm text-neutral-700 font-medium appearance-none focus:outline-none focus:border-purp-500 cursor-pointer"
+          >
+            <option value="all">All Statuses</option>
+            <option value="open">Open</option>
+            <option value="partially_paid">Partially Paid</option>
+            <option value="overdue">⚠ Overdue / Expired</option>
+            <option value="closed">Closed</option>
+            <option value="manually_closed">Manually Closed</option>
+            <option value="void">Void</option>
+          </select>
+          <svg className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-400 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+        </div>
+
       </div>
 
       {/* Type Info Note */}
