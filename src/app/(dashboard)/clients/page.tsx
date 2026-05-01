@@ -64,13 +64,17 @@ export default function ClientsPage() {
 
   // Merchant context
   const [merchantId, setMerchantId] = useState("");
+  const [currentUserRole, setCurrentUserRole] = useState("viewer");
 
   const fetchData = () => {
     setLoading(true);
     Promise.all([getClients(), getInvoices(), getMerchant()]).then(([c, i, m]) => {
       setClients(c);
       setInvoices(i);
-      if (m) setMerchantId(m.id);
+      if (m) {
+        setMerchantId(m.id);
+        setCurrentUserRole(m.currentUserRole || "viewer");
+      }
       setLoading(false);
     });
   };
@@ -244,22 +248,21 @@ export default function ClientsPage() {
                     <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="font-bold text-purp-900 truncate">{client.full_name}</h3>
                       <button
-                        onClick={() => {
-                          setClientToEdit(client);
-                          setDialogOpen(true);
-                        }}
+                        onClick={() => setClientToEdit(client)}
                         className="text-neutral-400 hover:text-purp-700 transition-colors"
                         title="Edit client"
                       >
                         <Edit2 className="w-3.5 h-3.5" />
                       </button>
-                      <button
-                        onClick={() => setClientToDelete(client)}
-                        className="text-neutral-400 hover:text-red-600 transition-colors"
-                        title="Delete client"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      {currentUserRole === "owner" && (
+                        <button
+                          onClick={() => setClientToDelete(client)}
+                          className="text-neutral-400 hover:text-red-600 transition-colors"
+                          title="Delete client"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                       {/* Reminder badge */}
                       {client.reminder_enabled && client.reminder_channels?.length > 0 && (
                         <Badge

@@ -163,7 +163,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       `Pay securely here:\n${paymentUrl}\n\n` +
       `Thank you for your business! 🙏`
     );
-    window.open(`https://wa.me/?text=${message}`, "_blank");
+    window.open(`https://api.whatsapp.com/send?text=${message}`, "_blank");
   };
 
   const sendEmail = () => {
@@ -552,7 +552,27 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                             day: "numeric", month: "short", year: "numeric",
                           })}
                         </TableCell>
-                        <TableCell className="text-sm font-mono text-purp-700">{txn.reference}</TableCell>
+                        <TableCell className="text-sm font-mono text-purp-700">
+                          <div className="flex items-center gap-2">
+                            <span className="truncate max-w-[120px] inline-block" title={txn.reference}>{txn.reference}</span>
+                            {txn.status === "success (manual)" && txn.reference !== "-" && (
+                              <Dialog>
+                                <DialogTrigger render={<Button variant="ghost" size="icon" className="h-6 w-6 text-purp-500 hover:text-purp-700 hover:bg-purp-100 rounded-full" />}>
+                                  <MessageCircle className="h-3.5 w-3.5" />
+                                </DialogTrigger>
+                                <DialogContent className="border-2 border-purp-200">
+                                  <DialogHeader>
+                                    <DialogTitle className="text-purp-900">Payment Note</DialogTitle>
+                                    <DialogDescription>Note added during manual payment</DialogDescription>
+                                  </DialogHeader>
+                                  <div className="bg-purp-50 p-4 rounded-md border border-purp-100 text-sm whitespace-pre-wrap text-neutral-700">
+                                    {txn.reference}
+                                  </div>
+                                </DialogContent>
+                              </Dialog>
+                            )}
+                          </div>
+                        </TableCell>
                         <TableCell className="text-sm capitalize">{txn.method.replace("_", " ")}</TableCell>
                         <TableCell className="text-right font-semibold text-sm">{formatNaira(Number(txn.amount))}</TableCell>
                         <TableCell>

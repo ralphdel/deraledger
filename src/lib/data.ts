@@ -44,20 +44,53 @@ async function getActiveMerchantId(): Promise<string> {
 }
 
 // ── Merchant ────────────────────────────────────────────────────────────────
-export async function getMerchant(id?: string): Promise<Merchant | null> {
+export async function getMerchant(id?: string): Promise<(Merchant & { currentUserRole?: string }) | null> {
   const mId = id || await getActiveMerchantId();
-  const { data, error } = await supabase()
+  const sb = supabase();
+  
+  const { data, error } = await sb
     .from("merchants")
     .select("*")
     .eq("id", mId)
     .single();
+    
   if (error) { 
     if (error.code !== "PGRST116") {
       console.error("getMerchant:", error); 
     }
     return null; 
   }
-  return data as Merchant;
+
+  // Determine current user role
+  let currentUserRole = "viewer"; // default safe fallback
+  const { data: { session } } = await sb.auth.getSession();
+  const user = session?.user;
+
+  if (user) {
+    if (data.user_id === user.id) {
+      currentUserRole = "owner";
+    } else {
+      const { data: teamData } = await sb
+        .from("merchant_team")
+        .select("roles(name)")
+        .eq("merchant_id", mId)
+        .eq("user_id", user.id)
+        .single();
+        
+      if (teamData?.roles) {
+        // @ts-ignore
+        currentUserRole = teamData.roles.name;
+      }
+    }
+  } else {
+    // If no user session, they might be in the public payment portal
+    // Or it's the demo account. If demo account, let's pretend they are owner for demo purposes.
+    if (mId === "00000000-0000-0000-0000-000000000001") {
+      currentUserRole = "owner";
+    }
+  }
+
+  return { ...data, currentUserRole } as Merchant & { currentUserRole?: string };
 }
 
 // ── Clients ─────────────────────────────────────────────────────────────────

@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import {
   Select,
   SelectContent,
@@ -158,7 +159,7 @@ function CreateInvoiceForm() {
       pay_by_date: payByDate || undefined,
       notes: notes || undefined,
       payment_notes: invoiceType === "record" ? notes : undefined, // Reuse notes for payment ref
-      initial_amount_paid: invoiceType === "record" ? parseFloat(initialAmountPaid) || 0 : 0,
+      initial_amount_paid: invoiceType === "record" ? (initialAmountPaid ? parseFloat(initialAmountPaid) : totals.grandTotal) : 0,
       payment_method: paymentMethod,
       allow_partial_payment: invoiceType === "collection" ? allowPartialPayment : false,
       partial_payment_pct: (invoiceType === "collection" && allowPartialPayment) ? parseFloat(partialPaymentPct) : null,
@@ -268,13 +269,18 @@ function CreateInvoiceForm() {
         </div>
 
         {/* Client & Invoice Number */}
-        <Card className="border-2 border-purp-200 shadow-none">
-          <CardHeader className="pb-4">
-            <CardTitle className="text-base font-bold text-purp-900">
-              Invoice Details
+        <Card className={`border-2 shadow-none transition-all duration-300 ${invoiceType === "record" ? "border-amber-200" : "border-blue-200"}`}>
+          <CardHeader className={`pb-4 border-b-2 ${invoiceType === "record" ? "border-amber-100 bg-amber-50/50" : "border-blue-100 bg-blue-50/50"}`}>
+            <CardTitle className="text-base font-bold flex items-center justify-between">
+              <span className={invoiceType === "record" ? "text-amber-900" : "text-blue-900"}>
+                Invoice Details
+              </span>
+              <Badge variant="outline" className={`${invoiceType === "record" ? "bg-amber-100 text-amber-700 border-amber-300" : "bg-blue-100 text-blue-700 border-blue-300"} uppercase tracking-wider text-[10px]`}>
+                {invoiceType === "record" ? "Offline Receipt Mode" : "Live Payment Portal Mode"}
+              </Badge>
             </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-4 pt-4">
             <div className="grid sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label className="text-sm font-medium">Client</Label>
@@ -447,7 +453,7 @@ function CreateInvoiceForm() {
         </Card>
 
         {/* Line Items */}
-        <Card className="border-2 border-purp-200 shadow-none">
+        <Card className={`border-2 shadow-none transition-all duration-300 ${invoiceType === "record" ? "border-amber-200" : "border-blue-200"}`}>
           <CardHeader className="pb-4">
             <div className="flex items-center justify-between">
               <CardTitle className="text-base font-bold text-purp-900">

@@ -17,14 +17,33 @@ export async function GET(
 
   const adminClient = getServiceClient();
 
-  // 1. Look up invoice by its public hash
-  const { data: invoice, error: invError } = await adminClient
-    .from("invoices")
-    .select("*, line_items(*), clients(*)")
-    .eq("invoice_hash", invoiceId)
-    .single();
+  // 1. Look up invoice — try by UUID `id` first, then fall back to `invoice_hash`
+  //    This ensures payment links using either the raw ID (/pay/uuid) or
+  //    a short hash (/pay/hash) both resolve correctly.
+  let invoice: any = null;
 
-  if (invError || !invoice) {
+  const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(invoiceId);
+
+  if (isUUID) {
+    const { data } = await adminClient
+      .from("invoices")
+      .select("*, line_items(*), clients(*)")
+      .eq("id", invoiceId)
+      .maybeSingle();
+    invoice = data;
+  }
+
+  // Fallback: try invoice_hash (for short-link based URLs)
+  if (!invoice) {
+    const { data } = await adminClient
+      .from("invoices")
+      .select("*, line_items(*), clients(*)")
+      .eq("invoice_hash", invoiceId)
+      .maybeSingle();
+    invoice = data;
+  }
+
+  if (!invoice) {
     return NextResponse.json({ error: "Invoice not found" }, { status: 404 });
   }
 

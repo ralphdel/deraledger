@@ -25,7 +25,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ received: true });
   }
 
-  const { metadata, amount, reference, channel } = event.data;
+  const { metadata, amount, reference, channel, fees } = event.data;
   const paymentType: string = metadata?.type ?? "invoice_payment";
 
   // ── Branch: subscription payment vs invoice payment ──────────────────────
@@ -37,7 +37,7 @@ export async function POST(request: Request) {
     return handleSubscriptionUpgrade(metadata, amount, reference);
   }
 
-  return handleInvoicePayment(metadata, amount, reference, channel);
+  return handleInvoicePayment(metadata, amount, reference, channel, fees);
 }
 
 // ── Subscription Upgrade Handler ─────────────────────────────────────────────
@@ -361,7 +361,8 @@ async function handleInvoicePayment(
   metadata: Record<string, unknown>,
   _amount: number,
   reference: string,
-  channel: string
+  channel: string,
+  fees?: number
 ) {
   const invoiceId: string = metadata?.invoice_id as string;
   const paymentAmount: number = Number(metadata?.payment_amount);
@@ -432,7 +433,9 @@ async function handleInvoicePayment(
   const rawFee = paymentAmount * 0.015 + 100;
   // We ALWAYS record the actual fee Paystack took.
   // The fee_absorbed_by column tells us whether this fee was subtracted from the customer's total or the merchant's net.
-  const paystackFee = Math.min(rawFee, 2000);
+  // If Paystack provides the exact fee in the webhook (fees is in kobo), use it!
+  const paystackFee = fees ? (fees / 100) : Math.min(rawFee, 2000);
+  
   const paymentMethod =
     channel === "card" ? "card" : channel === "bank" ? "bank_transfer" : "ussd";
 

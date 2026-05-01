@@ -80,11 +80,11 @@ export default function InvoicePrintPage({ params }: { params: Promise<{ id: str
     const html2pdf = (await import("html2pdf.js")).default;
     
     const opt = {
-      margin: [0.5, 0.5, 0.5, 0.5] as [number, number, number, number], // top, left, bottom, right
+      margin: [0.5, 0.5, 0.5, 0.5] as [number, number, number, number],
       filename: `${invoice.invoice_number}_${businessName.replace(/\s+/g, "_")}.pdf`,
-      image: { type: 'jpeg', quality: 1 },
+      image: { type: 'jpeg' as const, quality: 1 },
       html2canvas: { scale: 2, useCORS: true },
-      jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' }
+      jsPDF: { unit: 'in' as const, format: 'letter' as const, orientation: 'portrait' as const }
     };
     
     html2pdf().set(opt).from(element).save();

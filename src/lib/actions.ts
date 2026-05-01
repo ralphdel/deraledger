@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { revalidatePath } from "next/cache";
+import { requirePermission } from "./rbac";
 import { sendTeamInviteEmail, sendPasswordResetEmail, sendInvoiceEmail } from "./brevo";
 import { PaymentService } from "@/lib/payment";
 
@@ -265,6 +266,7 @@ export async function submitKycAction(merchantId: string, updates: any) {
 }
 
 export async function createCustomRoleAction(merchantId: string, roleName: string, permissions: Record<string, boolean>) {
+  await requirePermission(merchantId, "manage_team");
   const supabase = createSupabaseClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -297,6 +299,7 @@ export async function sendInviteAction(
   businessName: string,
   merchantId: string
 ) {
+  await requirePermission(merchantId, "manage_team");
   if (!email || !role || !workspaceCode || !merchantId) {
     return { success: false, error: "Missing required fields" };
   }
@@ -370,7 +373,7 @@ export async function sendInviteAction(
   return { success: true };
 }
 
-// â”€â”€ Admin Actions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Admin Actions ────────────────────────────────────────────────────────────
 
 export async function adminDeactivateMerchantAction(merchantId: string) {
   const adminClient = getServiceClient();
@@ -414,26 +417,31 @@ export async function adminDeleteMerchantAction(merchantId: string) {
 
   try {
     // Delete in order to respect FK constraints
-    await adminClient.from("audit_logs").delete().eq("merchant_id", merchantId);
-    await adminClient.from("onboarding_sessions").delete().eq("merchant_id", merchantId);
+    await adminClient.from("audit_logs").delete().eq("merchant_id", merchantId).throwOnError();
+    await adminClient.from("onboarding_sessions").delete().eq("merchant_id", merchantId).throwOnError();
+    
+    // Some of these might fail if columns don't exist, so we don't throw on error for ones we aren't 100% sure about
     await adminClient.from("roles").delete().eq("merchant_id", merchantId);
-    await adminClient.from("merchant_team").delete().eq("merchant_id", merchantId);
+    
+    await adminClient.from("merchant_team").delete().eq("merchant_id", merchantId).throwOnError();
+    await adminClient.from("pending_invites").delete().eq("merchant_id", merchantId).throwOnError();
+    
     // Also try deleting from team_members if it's a separate table
     await adminClient.from("team_members").delete().eq("merchant_id", merchantId);
-    await adminClient.from("transactions").delete().eq("merchant_id", merchantId);
-    await adminClient.from("manual_payments").delete().eq("merchant_id", merchantId);
+    
+    await adminClient.from("transactions").delete().eq("merchant_id", merchantId).throwOnError();
+    await adminClient.from("manual_payments").delete().eq("merchant_id", merchantId).throwOnError();
     await adminClient.from("item_catalog").delete().eq("merchant_id", merchantId);
-    await adminClient.from("discount_templates").delete().eq("merchant_id", merchantId);
 
     // Fetch invoices to delete associated line_items
     const { data: invoices } = await adminClient.from("invoices").select("id").eq("merchant_id", merchantId);
     if (invoices && invoices.length > 0) {
       const invoiceIds = invoices.map((i) => i.id);
-      await adminClient.from("line_items").delete().in("invoice_id", invoiceIds);
+      await adminClient.from("line_items").delete().in("invoice_id", invoiceIds).throwOnError();
     }
 
-    await adminClient.from("invoices").delete().eq("merchant_id", merchantId);
-    await adminClient.from("clients").delete().eq("merchant_id", merchantId);
+    await adminClient.from("invoices").delete().eq("merchant_id", merchantId).throwOnError();
+    await adminClient.from("clients").delete().eq("merchant_id", merchantId).throwOnError();
     
     const { error } = await adminClient.from("merchants").delete().eq("id", merchantId);
     if (error) {
@@ -532,7 +540,7 @@ export async function adminResetPasswordAction(merchantId: string) {
   return { success: true, resetLink };
 }
 
-// â”€â”€ Team Member Management â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Team Member Management ───────────────────────────────────────────────────
 
 export async function deactivateTeamMemberAction(teamMemberId: string, merchantId: string) {
   const adminClient = getServiceClient();
@@ -559,6 +567,7 @@ export async function reactivateTeamMemberAction(teamMemberId: string, merchantI
 }
 
 export async function removeTeamMemberAction(teamMemberId: string, merchantId: string) {
+  await requirePermission(merchantId, "manage_team");
   const adminClient = getServiceClient();
   const { error } = await adminClient
     .from("merchant_team")
@@ -1100,6 +1109,16 @@ export async function bulkCreateClientsAction(merchantId: string, clientsData: a
 
 export async function deleteClientAction(clientId: string) {
   const adminClient = getServiceClient();
+
+  // Determine merchantId for permission check
+  const { data: client } = await adminClient.from("clients").select("merchant_id").eq("id", clientId).single();
+  if (!client) return { success: false, error: "Client not found" };
+
+  try {
+    await requirePermission(client.merchant_id, "delete_client");
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
 
   // The user wants to cascade delete. We will manually delete their invoices first to satisfy any foreign keys, if cascade isn't set.
   // We'll also need to delete transactions and manual_payments and line_items if not cascaded, but typically deleting invoices is enough if invoices -> line_items cascades.

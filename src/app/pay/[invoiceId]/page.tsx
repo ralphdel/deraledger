@@ -20,12 +20,40 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
   const [isProcessing, setIsProcessing] = useState(false);
   const [success, setSuccess] = useState(false);
   const [paymentError, setPaymentError] = useState<string | null>(null);
+  const [refreshedInvoice, setRefreshedInvoice] = useState<InvoiceWithLineItems | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   useEffect(() => {
     if (searchParams.has("reference") || searchParams.has("trxref")) {
       setSuccess(true);
+      // Poll for updated invoice data after payment — webhook may take a moment to update DB
+      setIsRefreshing(true);
+      let attempts = 0;
+      const maxAttempts = 6;
+      const poll = async () => {
+        attempts++;
+        try {
+          const res = await fetch(`/api/invoice/${invoiceId}`);
+          const result = await res.json();
+          if (result?.invoice) {
+            const fresh = result.invoice as InvoiceWithLineItems;
+            // Check if DB has been updated (amount_paid changed from initial state)
+            if (attempts >= maxAttempts || Number(fresh.amount_paid) !== Number(invoice?.amount_paid ?? fresh.amount_paid)) {
+              setRefreshedInvoice(fresh);
+              setIsRefreshing(false);
+              return;
+            }
+          }
+        } catch {}
+        if (attempts < maxAttempts) {
+          setTimeout(poll, 1500);
+        } else {
+          setIsRefreshing(false);
+        }
+      };
+      setTimeout(poll, 1500); // Start first attempt after 1.5s to give webhook time
     }
-  }, [searchParams]);
+  }, [searchParams, invoiceId]);
 
   useEffect(() => {
     // Fetch via our secure server-side API route — uses service role key to
@@ -242,6 +270,17 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
   };
 
   if (success) {
+    const displayInvoice = refreshedInvoice || invoice;
+    const updatedOutstanding = Number(displayInvoice?.outstanding_balance ?? 0);
+    const updatedTotalPaid = Number(displayInvoice?.amount_paid ?? 0);
+    // Calculate delta: what was paid IN THIS transaction only
+    // `invoice` holds the pre-payment snapshot; `refreshedInvoice` holds post-payment state
+    const prePaidAmount = Number(invoice?.amount_paid ?? 0);
+    const thisPayment = refreshedInvoice
+      ? Math.max(0, updatedTotalPaid - prePaidAmount)
+      : 0; // if still loading, we don't know yet
+    const isFullyPaid = updatedOutstanding <= 0;
+
     return (
       <div className="min-h-screen bg-purp-50 flex flex-col items-center justify-center p-4">
         <Card className="max-w-md w-full border-2 border-emerald-200">
@@ -250,19 +289,38 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
               <CheckCircle2 className="w-10 h-10 text-emerald-600" />
             </div>
             <h1 className="text-2xl font-bold text-purp-900">Payment Successful</h1>
-            <p className="text-neutral-500 pb-4">
+            <p className="text-neutral-500 pb-2">
               Your payment has been processed securely and the ledger has been updated.
             </p>
-            <div className="bg-purp-50 p-4 rounded-lg text-left text-sm space-y-2 border border-purp-100">
-              <div className="flex justify-between">
-                <span className="text-neutral-500">Invoice</span>
-                <span className="font-medium text-purp-900">{invoice.invoice_number}</span>
+            {isRefreshing ? (
+              <div className="bg-neutral-50 border border-neutral-200 rounded-lg p-4 flex items-center justify-center gap-3 text-sm text-neutral-500">
+                <div className="w-4 h-4 border-2 border-purp-600 border-t-transparent rounded-full animate-spin" />
+                Fetching updated balance...
               </div>
-              <div className="flex justify-between">
-                <span className="text-neutral-500">Current Outstanding Balance</span>
-                <span className="font-medium text-amber-600">{formatNaira(outstandingBalance)}</span>
+            ) : (
+              <div className="bg-purp-50 p-4 rounded-lg text-left text-sm space-y-3 border border-purp-100">
+                <div className="flex justify-between">
+                  <span className="text-neutral-500">Invoice</span>
+                  <span className="font-medium text-purp-900">{displayInvoice?.invoice_number}</span>
+                </div>
+                {thisPayment > 0 && (
+                  <div className="flex justify-between bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 -mx-1">
+                    <span className="font-semibold text-emerald-800">This Payment</span>
+                    <span className="font-bold text-emerald-700">{formatNaira(thisPayment)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between">
+                  <span className="text-neutral-500">Total Paid to Date</span>
+                  <span className="font-medium text-purp-900">{formatNaira(updatedTotalPaid)}</span>
+                </div>
+                <div className="flex justify-between border-t border-purp-100 pt-2">
+                  <span className="text-neutral-500">Outstanding Balance</span>
+                  <span className={`font-bold ${isFullyPaid ? "text-emerald-600" : "text-amber-600"}`}>
+                    {isFullyPaid ? "Fully Paid ✓" : formatNaira(updatedOutstanding)}
+                  </span>
+                </div>
               </div>
-            </div>
+            )}
           </CardContent>
         </Card>
         <div className="mt-8 flex items-center gap-2 text-neutral-400 text-sm">
