@@ -13,6 +13,7 @@ import type {
   AuditLog,
   ItemCatalog,
   DiscountTemplate,
+  Subscription,
 } from "@/lib/types";
 
 // ── Active Merchant ID Resolver ───────────────────────────────────────────────
@@ -91,6 +92,44 @@ export async function getMerchant(id?: string): Promise<(Merchant & { currentUse
   }
 
   return { ...data, currentUserRole } as Merchant & { currentUserRole?: string };
+}
+
+// ── Subscriptions ───────────────────────────────────────────────────────────
+export async function getActiveSubscription(id?: string): Promise<Subscription | null> {
+  const mId = id || await getActiveMerchantId();
+  const sb = supabase();
+  
+  // SuperAdmin Bypass
+  const { data: { user } } = await sb.auth.getUser();
+  if (user?.email === "ralphdel14@yahoo.com") {
+    return {
+      id: "superadmin-bypass",
+      merchant_id: mId,
+      plan_type: "individual",
+      amount_paid: 0,
+      start_date: new Date().toISOString(),
+      expiry_date: new Date(new Date().getTime() + 100 * 365 * 24 * 60 * 60 * 1000).toISOString(), // 100 years
+      status: "active",
+      last_notified_at: null,
+      is_banner_dismissed: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+  }
+  
+  const { data, error } = await sb
+    .from("subscriptions")
+    .select("*")
+    .eq("merchant_id", mId)
+    .eq("status", "active")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .single();
+
+  if (error && error.code !== "PGRST116") {
+    console.error("getActiveSubscription:", error);
+  }
+  return data as Subscription | null;
 }
 
 // ── Clients ─────────────────────────────────────────────────────────────────

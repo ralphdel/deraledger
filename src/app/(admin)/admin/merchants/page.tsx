@@ -40,6 +40,8 @@ interface MerchantStats {
   recordInvoices: number;
   collectionInvoices: number;
   monthlyCollected: number;
+  subscriptionExpiry?: string | null;
+  subscriptionStatus?: string | null;
 }
 
 export default function AdminMerchantsPage() {
@@ -58,11 +60,12 @@ export default function AdminMerchantsPage() {
     setLoading(true);
     const sb = createClient();
 
-    const [merchantRes, teamRes, invoiceRes, txRes] = await Promise.all([
+    const [merchantRes, teamRes, invoiceRes, txRes, subRes] = await Promise.all([
       sb.from("merchants").select("*").order("created_at", { ascending: false }),
       sb.from("merchant_team").select("merchant_id"),
       sb.from("invoices").select("merchant_id, invoice_type"),
       sb.from("transactions").select("merchant_id, amount_paid, created_at").eq("status", "success"),
+      sb.from("subscriptions").select("merchant_id, expiry_date, status").eq("status", "active"),
     ]);
 
     const allMerchants = (merchantRes.data || []) as Merchant[];
@@ -91,6 +94,14 @@ export default function AdminMerchantsPage() {
       if (!stats[t.merchant_id]) return;
       if (t.created_at >= firstOfMonth) {
         stats[t.merchant_id].monthlyCollected += Number(t.amount_paid);
+      }
+    });
+
+    // Add subscription info (take the latest active if multiple)
+    (subRes.data || []).forEach((s: any) => {
+      if (stats[s.merchant_id]) {
+        stats[s.merchant_id].subscriptionExpiry = s.expiry_date;
+        stats[s.merchant_id].subscriptionStatus = s.status;
       }
     });
 
@@ -272,6 +283,7 @@ export default function AdminMerchantsPage() {
                 <TableHead className="font-bold text-neutral-900 text-xs uppercase">Verification</TableHead>
                 <TableHead className="font-bold text-neutral-900 text-xs uppercase">KYC</TableHead>
                 <TableHead className="font-bold text-neutral-900 text-xs uppercase">Monthly Collected</TableHead>
+                <TableHead className="font-bold text-neutral-900 text-xs uppercase">Sub Health</TableHead>
                 <TableHead className="font-bold text-neutral-900 text-xs uppercase">Settlement</TableHead>
                 <TableHead className="font-bold text-neutral-900 text-xs uppercase">Team</TableHead>
                 <TableHead className="font-bold text-neutral-900 text-xs uppercase">Invoices</TableHead>
@@ -290,6 +302,19 @@ export default function AdminMerchantsPage() {
                 const ownerMissing = tier !== "starter" && !m.owner_name;
                 const bizNameMissing = tier === "corporate" && (!m.business_name || !hasConfirmed);
                 const effectiveStatus = (ownerMissing || bizNameMissing) ? "incomplete" : m.verification_status;
+                
+                let subHealth = { text: "Pending Payment", color: "text-neutral-500", bar: "bg-neutral-200", width: "0%" };
+                if (m.email === "ralphdel14@yahoo.com") {
+                  subHealth = { text: "Lifetime (SuperAdmin)", color: "text-purp-600", bar: "bg-purp-500", width: "100%" };
+                } else if (tier === "starter") {
+                  subHealth = { text: "Lifetime", color: "text-purp-600", bar: "bg-purp-500", width: "100%" };
+                } else if (stats.subscriptionExpiry) {
+                  const days = Math.ceil((new Date(stats.subscriptionExpiry).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
+                  if (days < 0) subHealth = { text: "Expired", color: "text-red-600", bar: "bg-red-500", width: "100%" };
+                  else if (days < 7) subHealth = { text: `${days} days left`, color: "text-red-600", bar: "bg-red-500", width: `${Math.max(5, (days/30)*100)}%` };
+                  else if (days <= 14) subHealth = { text: `${days} days left`, color: "text-yellow-600", bar: "bg-yellow-500", width: `${Math.max(5, (days/30)*100)}%` };
+                  else subHealth = { text: `${days} days left`, color: "text-emerald-600", bar: "bg-emerald-500", width: "100%" };
+                }
 
                 return (
                   <TableRow key={m.id} className="border-b hover:bg-neutral-50">
@@ -344,6 +369,16 @@ export default function AdminMerchantsPage() {
                             />
                           </div>
                         )}
+                      </div>
+                    </TableCell>
+
+                    {/* Sub Health */}
+                    <TableCell>
+                      <div className="flex flex-col gap-1 w-24">
+                        <span className={`text-xs font-semibold ${subHealth.color}`}>{subHealth.text}</span>
+                        <div className="w-full bg-neutral-100 rounded-full h-1.5 overflow-hidden border border-neutral-200">
+                          <div className={`${subHealth.bar} h-1.5 rounded-full transition-all`} style={{ width: subHealth.width }} />
+                        </div>
                       </div>
                     </TableCell>
 

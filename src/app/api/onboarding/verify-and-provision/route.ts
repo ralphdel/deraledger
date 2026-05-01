@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
+import { calculateSubscriptionExpiry, PlanType } from "@/lib/subscription";
 
 const supabase = createSupabaseClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -246,20 +247,34 @@ export async function POST(request: Request) {
     }
   }
 
-  // 7. Send welcome email
+  // 7. Calculate Expiry and Create Subscription Record
+  const amountPaidNgn = amount / 100;
+  const expiryDate = calculateSubscriptionExpiry(amountPaidNgn, activePlan as PlanType);
+
+  await supabase.from("subscriptions").insert({
+    merchant_id: merchantId,
+    plan_type: activePlan,
+    amount_paid: amountPaidNgn,
+    start_date: new Date().toISOString(),
+    expiry_date: expiryDate.toISOString(),
+    status: "active"
+  });
+
+  // 8. Send welcome email
   try {
     const { sendOnboardingWelcomeEmail } = await import("@/lib/brevo");
     await sendOnboardingWelcomeEmail(
       email,
       businessName,
       activePlan as "individual" | "corporate",
-      setPasswordLink
+      setPasswordLink,
+      expiryDate.toISOString()
     );
   } catch (e) {
     console.error("Failed to send welcome email:", e);
   }
 
-  // 8. Audit log
+  // 9. Audit log
   await supabase.from("audit_logs").insert({
     event_type: "subscription_payment_confirmed",
     actor_id: null,

@@ -27,9 +27,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { getMerchant } from "@/lib/data";
+import { getMerchant, getActiveSubscription } from "@/lib/data";
 import { logoutUser } from "@/app/(auth)/actions";
-import type { Merchant } from "@/lib/types";
+import type { Merchant, Subscription } from "@/lib/types";
+import { SubscriptionBanner } from "@/components/subscription-banner";
+import { SubscriptionExpiryModal } from "@/components/subscription-expiry-modal";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -46,6 +48,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const pathname = usePathname();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [merchant, setMerchant] = useState<Merchant | null>(null);
+  const [subscription, setSubscription] = useState<Subscription | null>(null);
 
   useEffect(() => {
     getMerchant().then((m) => {
@@ -53,6 +56,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         window.location.href = "/onboarding";
       } else {
         setMerchant(m);
+        getActiveSubscription(m.id).then((sub) => {
+          setSubscription(sub);
+        });
       }
     });
   }, []);
@@ -154,6 +160,18 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
       {/* Main Content */}
       <div className="flex-1 lg:ml-64 print:ml-0 flex flex-col min-h-screen">
+        {subscription && (
+          <>
+            <SubscriptionBanner 
+              daysRemaining={Math.ceil((new Date(subscription.expiry_date).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24))} 
+              planType={subscription.plan_type} 
+            />
+            <SubscriptionExpiryModal 
+              status={subscription.status} 
+              expiryDate={subscription.expiry_date} 
+            />
+          </>
+        )}
         {/* Top Bar */}
         <header className="sticky top-0 z-20 bg-white border-b-2 border-purp-200 h-16 flex items-center px-4 sm:px-6 lg:px-8 print:hidden">
           <button

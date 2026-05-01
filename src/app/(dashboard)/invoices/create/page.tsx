@@ -24,8 +24,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
-import { getClients, getItemCatalog, getDiscountTemplates } from "@/lib/data";
-import type { Client, Merchant, ItemCatalog, DiscountTemplate } from "@/lib/types";
+import { getClients, getItemCatalog, getDiscountTemplates, getActiveSubscription } from "@/lib/data";
+import type { Client, Merchant, ItemCatalog, DiscountTemplate, Subscription } from "@/lib/types";
 import { calculateInvoiceTotals, formatNaira } from "@/lib/calculations";
 import { createInvoiceAction } from "@/lib/actions";
 import { createClient } from "@/lib/supabase/client";
@@ -67,6 +67,7 @@ function CreateInvoiceForm() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [isRestricted, setIsRestricted] = useState(false);
 
   useEffect(() => {
     getClients().then(setClients);
@@ -85,6 +86,12 @@ function CreateInvoiceForm() {
           // Fetch catalog and discount templates
           getItemCatalog(data.id).then(setCatalog);
           getDiscountTemplates(data.id).then(setDiscountTemplates);
+          
+          getActiveSubscription(data.id).then((sub) => {
+            if (sub && sub.status === "expired") {
+              setIsRestricted(true);
+            }
+          });
         }
       }
     });
@@ -138,7 +145,11 @@ function CreateInvoiceForm() {
       return;
     }
     if (!merchant) {
-      setError("Session error: could not load your merchant account. Please refresh.");
+      setError("Unable to resolve merchant identity. Please refresh.");
+      return;
+    }
+    if (isRestricted) {
+      setError("Your subscription has expired. You must renew to create new invoices.");
       return;
     }
     if (lineItems.every((li) => !li.itemName.trim())) {
@@ -703,7 +714,7 @@ function CreateInvoiceForm() {
                 )}
                 <Button
                   type="submit"
-                  disabled={saving || success}
+                  disabled={saving || success || isRestricted}
                   className="w-full h-11 bg-purp-900 hover:bg-purp-700 text-white font-semibold"
                 >
                   {saving ? (
@@ -713,6 +724,11 @@ function CreateInvoiceForm() {
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                       </svg>
                       Creating Invoice...
+                    </span>
+                  ) : isRestricted ? (
+                    <span className="flex items-center gap-2 text-red-100">
+                      <Lock className="h-4 w-4" />
+                      Subscription Expired
                     </span>
                   ) : (
                     <span className="flex items-center gap-2">

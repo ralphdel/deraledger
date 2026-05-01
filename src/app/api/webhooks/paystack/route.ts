@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { PaymentService } from "@/lib/payment";
+import { calculateSubscriptionExpiry, PlanType } from "@/lib/subscription";
 
 const supabase = createSupabaseClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -82,6 +83,42 @@ async function handleSubscriptionUpgrade(
     console.error("Failed to upgrade merchant:", updateError.message);
     return NextResponse.json({ error: "Merchant upgrade failed" }, { status: 500 });
   }
+
+  // Calculate Prorated Expiry
+  const amountPaidNgn = amount / 100;
+  
+  // Get current active subscription
+  const { data: currentSub } = await supabase
+    .from("subscriptions")
+    .select("plan_type, expiry_date")
+    .eq("merchant_id", merchantId)
+    .eq("status", "active")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .single();
+
+  const expiryDate = calculateSubscriptionExpiry(
+    amountPaidNgn, 
+    newPlan as PlanType, 
+    currentSub ? { planType: currentSub.plan_type as PlanType, expiryDate: currentSub.expiry_date } : undefined
+  );
+
+  // Expire old subscription
+  await supabase
+    .from("subscriptions")
+    .update({ status: "expired" })
+    .eq("merchant_id", merchantId)
+    .eq("status", "active");
+
+  // Create new subscription
+  await supabase.from("subscriptions").insert({
+    merchant_id: merchantId,
+    plan_type: newPlan,
+    amount_paid: amountPaidNgn,
+    start_date: new Date().toISOString(),
+    expiry_date: expiryDate.toISOString(),
+    status: "active"
+  });
 
   // Log to audit
   await supabase.from("audit_logs").insert({
@@ -322,6 +359,19 @@ async function handleSubscriptionPayment(
     }
   }
 
+  // Calculate Expiry and Create Subscription Record
+  const amountPaidNgn = amount / 100;
+  const expiryDate = calculateSubscriptionExpiry(amountPaidNgn, activePlan as PlanType);
+
+  await supabase.from("subscriptions").insert({
+    merchant_id: merchantId,
+    plan_type: activePlan,
+    amount_paid: amountPaidNgn,
+    start_date: new Date().toISOString(),
+    expiry_date: expiryDate.toISOString(),
+    status: "active"
+  });
+
   // 5. Send welcome + set-password email via Brevo
   try {
     const { sendOnboardingWelcomeEmail } = await import("@/lib/brevo");
@@ -329,7 +379,8 @@ async function handleSubscriptionPayment(
       email,
       businessName,
       activePlan as "individual" | "corporate",
-      setPasswordLink
+      setPasswordLink,
+      expiryDate.toISOString()
     );
   } catch (e) {
     console.error("Failed to send welcome email:", e);

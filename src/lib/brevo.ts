@@ -301,7 +301,8 @@ export async function sendOnboardingWelcomeEmail(
   toEmail: string,
   businessName: string,
   plan: "starter" | "individual" | "corporate",
-  setPasswordLink: string
+  setPasswordLink: string,
+  expiryDate?: string
 ) {
   const planLabel = plan === "starter" ? "Starter" : plan === "individual" ? "Individual" : "Corporate";
   const planPrice = plan === "starter" ? "Free" : plan === "individual" ? "₦5,000/month" : "₦20,000/month";
@@ -312,7 +313,7 @@ export async function sendOnboardingWelcomeEmail(
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #111827; border: 1px solid #E5E7EB; border-radius: 8px; overflow: hidden;">
       <div style="background-color: #4C1D95; padding: 28px; text-align: center;">
         <h1 style="color: white; margin: 0; font-size: 24px;">Welcome to PurpLedger!</h1>
-        <p style="color: #C4B5FD; margin: 8px 0 0 0; font-size: 14px;">Your ${planLabel} plan (${planPrice}) is now active</p>
+        <p style="color: #C4B5FD; margin: 8px 0 0 0; font-size: 14px;">Your ${planLabel} plan (${planPrice}) is now active${expiryDate ? ` until ${new Date(expiryDate).toLocaleDateString('en-NG')}` : ""}</p>
       </div>
       <div style="padding: 32px;">
         <p>Hello ${businessName},</p>
@@ -411,3 +412,54 @@ export async function sendRecordReminderEmail(
     htmlContent,
   });
 }
+
+/**
+ * Sends a warning email when a subscription is 7 days from expiry.
+ */
+export async function sendSubscriptionExpiringEmail(
+  toEmail: string,
+  businessName: string,
+  planType: string,
+  expiryDate: string,
+  daysRemaining: number
+) {
+  const configuredUrl = process.env.NEXT_PUBLIC_APP_URL || "";
+  const appUrl = configuredUrl || (process.env.NODE_ENV === "production" ? "https://purpledger.vercel.app" : "http://localhost:3000");
+  const settingsLink = `${appUrl}/settings/subscription`;
+  
+  const formattedDate = new Date(expiryDate).toLocaleDateString("en-NG", { year: 'numeric', month: 'long', day: 'numeric' });
+
+  const htmlContent = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #111827; border: 1px solid #E5E7EB; border-radius: 8px; overflow: hidden;">
+      <div style="background-color: #4C1D95; padding: 20px; text-align: center;">
+        <h2 style="color: white; margin: 0;">Subscription Expiring Soon</h2>
+      </div>
+      <div style="padding: 30px;">
+        <p>Hello ${businessName},</p>
+        <p style="font-size: 15px; line-height: 1.6;">
+          This is a friendly reminder that your PurpLedger <strong>${planType.toUpperCase()}</strong> plan will expire in <strong>${daysRemaining} days</strong> (on ${formattedDate}).
+        </p>
+        <div style="background-color: #F9FAFB; border: 1px solid #E5E7EB; padding: 16px; border-radius: 6px; margin: 20px 0;">
+          <p style="margin: 0; color: #374151;">To ensure uninterrupted access to PurpLedger's invoicing and collection tools, please renew your subscription or upgrade before it expires.</p>
+        </div>
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${settingsLink}" style="background-color: #4C1D95; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 16px; display: inline-block;">
+            Renew Subscription
+          </a>
+        </div>
+        <p style="font-size: 14px; color: #4B5563;">Thank you for trusting PurpLedger with your collections.</p>
+      </div>
+      <div style="background-color: #F9FAFB; padding: 16px; text-align: center; border-top: 1px solid #E5E7EB;">
+        <p style="margin: 0; font-size: 12px; color: #9CA3AF;">PurpLedger &mdash; Smart Invoicing &amp; Payment Tracking</p>
+      </div>
+    </div>
+  `;
+
+  return sendEmail({
+    sender: { name: "PurpLedger Subscriptions", email: ADMIN_EMAIL },
+    to: [{ email: toEmail }],
+    subject: `Action Required: Your PurpLedger plan expires in ${daysRemaining} days`,
+    htmlContent,
+  });
+}
+

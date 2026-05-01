@@ -42,6 +42,20 @@ export interface Merchant {
   updated_at: string;
 }
 
+export interface Subscription {
+  id: string;
+  merchant_id: string;
+  plan_type: "individual" | "corporate" | "starter";
+  amount_paid: number;
+  start_date: string;
+  expiry_date: string;
+  status: "active" | "expired" | "cancelled";
+  last_notified_at: string | null;
+  is_banner_dismissed: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Client {
   id: string;
   merchant_id: string;
