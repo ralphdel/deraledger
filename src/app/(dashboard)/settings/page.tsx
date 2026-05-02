@@ -771,6 +771,16 @@ export default function SettingsPage() {
               )
             )}
             
+            {(!merchant?.permissions || merchant.permissions.manage_advance_settings || merchant.permissions.manage_billing) && (
+              <Link href="/settings/billing" className="block p-4 border border-purp-200 rounded-lg hover:bg-purp-50 transition-colors group">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-semibold text-purp-900">Billing &amp; Subscription</span>
+                  <ExternalLink className="w-4 h-4 text-purp-300 group-hover:text-purp-700 transition-colors" />
+                </div>
+                <p className="text-xs text-neutral-500">Manage your subscription, renewals, and billing history.</p>
+              </Link>
+            )}
+            
             {(!merchant?.permissions || merchant.permissions.manage_advance_settings || merchant.permissions.manage_item_catalog || merchant.permissions.view_item_catalog) && (
             <Link href="/settings/catalog" className="block p-4 border border-purp-200 rounded-lg hover:bg-purp-50 transition-colors group">
               <div className="flex items-center justify-between mb-2">

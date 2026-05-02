@@ -414,7 +414,7 @@ export async function sendRecordReminderEmail(
 }
 
 /**
- * Sends a warning email when a subscription is 7 days from expiry.
+ * Sends a warning email when a subscription is nearing expiry (e.g. 7 days or 3 days).
  */
 export async function sendSubscriptionExpiringEmail(
   toEmail: string,
@@ -425,27 +425,73 @@ export async function sendSubscriptionExpiringEmail(
 ) {
   const configuredUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
   const appUrl = configuredUrl || (process.env.NODE_ENV === "development" ? "http://localhost:3000" : "https://purpledger.vercel.app");
-  const settingsLink = `${appUrl}/settings/subscription`;
-  
+  const settingsLink = `${appUrl}/settings/billing`;
+  const amount = planType === "individual" ? "₦5,000" : "₦20,000";
   const formattedDate = new Date(expiryDate).toLocaleDateString("en-NG", { year: 'numeric', month: 'long', day: 'numeric' });
+  const isUrgent = daysRemaining <= 3;
 
   const htmlContent = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #111827; border: 1px solid #E5E7EB; border-radius: 8px; overflow: hidden;">
-      <div style="background-color: #4C1D95; padding: 20px; text-align: center;">
-        <h2 style="color: white; margin: 0;">Subscription Expiring Soon</h2>
+      <div style="background-color: ${isUrgent ? '#D97706' : '#4C1D95'}; padding: 20px; text-align: center;">
+        <h2 style="color: white; margin: 0;">${isUrgent ? 'Urgent: Subscription Expiring Soon' : 'Subscription Expiring Soon'}</h2>
       </div>
       <div style="padding: 30px;">
         <p>Hello ${businessName},</p>
         <p style="font-size: 15px; line-height: 1.6;">
-          This is a friendly reminder that your PurpLedger <strong>${planType.toUpperCase()}</strong> plan will expire in <strong>${daysRemaining} days</strong> (on ${formattedDate}).
+          This is a reminder that your PurpLedger <strong>${planType.toUpperCase()}</strong> plan will expire in <strong>${daysRemaining} days</strong> (on ${formattedDate}).
         </p>
         <div style="background-color: #F9FAFB; border: 1px solid #E5E7EB; padding: 16px; border-radius: 6px; margin: 20px 0;">
-          <p style="margin: 0; color: #374151;">To ensure uninterrupted access to PurpLedger's invoicing and collection tools, please renew your subscription or upgrade before it expires.</p>
+          <p style="margin: 0; color: #374151;">To ensure uninterrupted access to PurpLedger's invoicing and collection tools, please renew your subscription (${amount}) before it expires.</p>
         </div>
         <div style="text-align: center; margin: 30px 0;">
           <a href="${settingsLink}" style="background-color: #4C1D95; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 16px; display: inline-block;">
-            Renew Subscription
+            Renew Now
           </a>
+        </div>
+      </div>
+      <div style="background-color: #F9FAFB; padding: 16px; text-align: center; border-top: 1px solid #E5E7EB;">
+        <p style="margin: 0; font-size: 12px; color: #9CA3AF;">PurpLedger &mdash; Smart Invoicing &amp; Payment Tracking</p>
+      </div>
+    </div>
+  `;
+
+  return sendEmail({
+    sender: { name: "PurpLedger Subscriptions", email: ADMIN_EMAIL },
+    to: [{ email: toEmail }],
+    subject: `Action Required: Your PurpLedger plan expires in ${daysRemaining} days`,
+    htmlContent,
+  });
+}
+
+/**
+ * Sends a confirmation email after a successful renewal.
+ */
+export async function sendSubscriptionRenewalEmail(
+  toEmail: string,
+  businessName: string,
+  planType: string,
+  amountPaid: number,
+  periodStart: string,
+  periodEnd: string,
+  reference: string
+) {
+  const formattedStart = new Date(periodStart).toLocaleDateString("en-NG", { year: 'numeric', month: 'long', day: 'numeric' });
+  const formattedEnd = new Date(periodEnd).toLocaleDateString("en-NG", { year: 'numeric', month: 'long', day: 'numeric' });
+
+  const htmlContent = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #111827; border: 1px solid #E5E7EB; border-radius: 8px; overflow: hidden;">
+      <div style="background-color: #10B981; padding: 20px; text-align: center;">
+        <h2 style="color: white; margin: 0;">Subscription Renewed</h2>
+      </div>
+      <div style="padding: 30px;">
+        <p>Hello ${businessName},</p>
+        <p style="font-size: 15px; line-height: 1.6;">
+          Thank you! Your PurpLedger <strong>${planType.toUpperCase()}</strong> plan has been successfully renewed.
+        </p>
+        <div style="background-color: #F9FAFB; border: 1px solid #E5E7EB; padding: 16px; border-radius: 6px; margin: 20px 0;">
+          <p style="margin: 4px 0; color: #374151;"><strong>Amount Paid:</strong> ₦${amountPaid.toLocaleString('en-US')}</p>
+          <p style="margin: 4px 0; color: #374151;"><strong>New Period:</strong> ${formattedStart} to ${formattedEnd}</p>
+          <p style="margin: 4px 0; color: #374151;"><strong>Reference:</strong> ${reference}</p>
         </div>
         <p style="font-size: 14px; color: #4B5563;">Thank you for trusting PurpLedger with your collections.</p>
       </div>
@@ -458,7 +504,100 @@ export async function sendSubscriptionExpiringEmail(
   return sendEmail({
     sender: { name: "PurpLedger Subscriptions", email: ADMIN_EMAIL },
     to: [{ email: toEmail }],
-    subject: `Action Required: Your PurpLedger plan expires in ${daysRemaining} days`,
+    subject: `Receipt: PurpLedger Subscription Renewed`,
+    htmlContent,
+  });
+}
+
+/**
+ * Sends an email on Day 0 when the subscription has expired.
+ */
+export async function sendSubscriptionExpiredEmail(
+  toEmail: string,
+  businessName: string,
+  planType: string
+) {
+  const configuredUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
+  const appUrl = configuredUrl || (process.env.NODE_ENV === "development" ? "http://localhost:3000" : "https://purpledger.vercel.app");
+  const settingsLink = `${appUrl}/settings/billing`;
+  const amount = planType === "individual" ? "₦5,000" : "₦20,000";
+
+  const htmlContent = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #111827; border: 1px solid #E5E7EB; border-radius: 8px; overflow: hidden;">
+      <div style="background-color: #DC2626; padding: 20px; text-align: center;">
+        <h2 style="color: white; margin: 0;">Subscription Expired</h2>
+      </div>
+      <div style="padding: 30px;">
+        <p>Hello ${businessName},</p>
+        <p style="font-size: 15px; line-height: 1.6;">
+          Your PurpLedger <strong>${planType.toUpperCase()}</strong> plan has expired today.
+        </p>
+        <div style="background-color: #FEF2F2; border: 1px solid #FECACA; padding: 16px; border-radius: 6px; margin: 20px 0; color: #991B1B;">
+          <p style="margin: 0 0 8px 0; font-weight: bold;">Features affected:</p>
+          <ul style="margin: 0; padding-left: 20px; font-size: 14px;">
+            <li>Payment links are now inactive.</li>
+            <li>PurpBot AI is disabled.</li>
+            <li>Team members cannot access the dashboard.</li>
+          </ul>
+        </div>
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${settingsLink}" style="background-color: #4C1D95; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 16px; display: inline-block;">
+            Renew Now &mdash; Restore Access
+          </a>
+        </div>
+      </div>
+      <div style="background-color: #F9FAFB; padding: 16px; text-align: center; border-top: 1px solid #E5E7EB;">
+        <p style="margin: 0; font-size: 12px; color: #9CA3AF;">PurpLedger &mdash; Smart Invoicing &amp; Payment Tracking</p>
+      </div>
+    </div>
+  `;
+
+  return sendEmail({
+    sender: { name: "PurpLedger Subscriptions", email: ADMIN_EMAIL },
+    to: [{ email: toEmail }],
+    subject: `Notice: Your PurpLedger subscription has expired`,
+    htmlContent,
+  });
+}
+
+/**
+ * Sends a daily grace period warning.
+ */
+export async function sendSubscriptionGraceEmail(
+  toEmail: string,
+  businessName: string,
+  daysRemainingBeforeLock: number
+) {
+  const configuredUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
+  const appUrl = configuredUrl || (process.env.NODE_ENV === "development" ? "http://localhost:3000" : "https://purpledger.vercel.app");
+  const settingsLink = `${appUrl}/settings/billing`;
+
+  const htmlContent = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #111827; border: 1px solid #E5E7EB; border-radius: 8px; overflow: hidden;">
+      <div style="background-color: #B45309; padding: 20px; text-align: center;">
+        <h2 style="color: white; margin: 0;">Account Lock Warning</h2>
+      </div>
+      <div style="padding: 30px;">
+        <p>Hello ${businessName},</p>
+        <p style="font-size: 15px; line-height: 1.6;">
+          Your subscription is currently in a grace period. In <strong>${daysRemainingBeforeLock} days</strong>, your account will be fully locked if not renewed.
+        </p>
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${settingsLink}" style="background-color: #4C1D95; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 16px; display: inline-block;">
+            Renew Now
+          </a>
+        </div>
+      </div>
+      <div style="background-color: #F9FAFB; padding: 16px; text-align: center; border-top: 1px solid #E5E7EB;">
+        <p style="margin: 0; font-size: 12px; color: #9CA3AF;">PurpLedger &mdash; Smart Invoicing &amp; Payment Tracking</p>
+      </div>
+    </div>
+  `;
+
+  return sendEmail({
+    sender: { name: "PurpLedger Subscriptions", email: ADMIN_EMAIL },
+    to: [{ email: toEmail }],
+    subject: `Grace Period: ${daysRemainingBeforeLock} days until account lock`,
     htmlContent,
   });
 }

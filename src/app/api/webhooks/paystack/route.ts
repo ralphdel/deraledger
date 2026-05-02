@@ -38,7 +38,130 @@ export async function POST(request: Request) {
     return handleSubscriptionUpgrade(metadata, amount, reference);
   }
 
+  if (paymentType === "subscription_renewal") {
+    return handleSubscriptionRenewal(metadata, amount, reference);
+  }
+
   return handleInvoicePayment(metadata, amount, reference, channel, fees);
+}
+
+// ── Subscription Renewal Handler ─────────────────────────────────────────────
+// Fires when a merchant renews their plan from /settings/billing.
+
+async function handleSubscriptionRenewal(
+  metadata: Record<string, unknown>,
+  amount: number,
+  reference: string
+) {
+  const merchantId = metadata?.merchant_id as string | undefined;
+  const plan = metadata?.plan as "individual" | "corporate" | undefined;
+
+  if (!merchantId || !plan) {
+    console.error("Renewal webhook missing required metadata:", metadata);
+    return NextResponse.json({ received: true });
+  }
+
+  // Idempotency: skip if already processed in subscription_payments
+  const { data: existingPayment } = await supabase
+    .from("subscription_payments")
+    .select("id")
+    .eq("paystack_ref", reference)
+    .single();
+
+  if (existingPayment) {
+    console.log("Duplicate renewal webhook, skipping:", reference);
+    return NextResponse.json({ received: true });
+  }
+
+  const amountPaidNgn = amount / 100;
+
+  // Get current active subscription
+  const { data: currentSub } = await supabase
+    .from("subscriptions")
+    .select("plan_type, expiry_date")
+    .eq("merchant_id", merchantId)
+    .eq("status", "active")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .single();
+
+  const expiryDate = calculateSubscriptionExpiry(
+    amountPaidNgn, 
+    plan as PlanType, 
+    currentSub ? { planType: currentSub.plan_type as PlanType, expiryDate: currentSub.expiry_date } : undefined
+  );
+
+  const periodStart = currentSub && new Date(currentSub.expiry_date) > new Date() 
+    ? new Date(currentSub.expiry_date).toISOString() 
+    : new Date().toISOString();
+
+  // Expire old subscription
+  await supabase
+    .from("subscriptions")
+    .update({ status: "expired" })
+    .eq("merchant_id", merchantId)
+    .eq("status", "active");
+
+  // Create new subscription with reset notifications
+  await supabase.from("subscriptions").insert({
+    merchant_id: merchantId,
+    plan_type: plan,
+    amount_paid: amountPaidNgn,
+    start_date: new Date().toISOString(),
+    expiry_date: expiryDate.toISOString(),
+    status: "active",
+    last_notified_at: null,
+    is_banner_dismissed: false
+  });
+
+  // Insert into subscription_payments
+  await supabase.from("subscription_payments").insert({
+    merchant_id: merchantId,
+    plan: plan,
+    amount_ngn: amountPaidNgn,
+    period_start: periodStart,
+    period_end: expiryDate.toISOString(),
+    paystack_ref: reference,
+    payment_type: "renewal",
+    status: "paid"
+  });
+
+  // Log to audit
+  await supabase.from("audit_logs").insert({
+    event_type: "subscription_renewed",
+    actor_id: null,
+    actor_role: "system",
+    target_id: merchantId,
+    target_type: "merchant",
+    metadata: {
+      actor_name: "System (Paystack Webhook)",
+      plan: plan,
+      reference,
+      amount_ngn: amountPaidNgn,
+    },
+  });
+
+  // Send email
+  try {
+    const { data: mData } = await supabase.from("merchants").select("email, business_name").eq("id", merchantId).single();
+    if (mData?.email) {
+      const { sendSubscriptionRenewalEmail } = await import("@/lib/brevo");
+      await sendSubscriptionRenewalEmail(
+        mData.email,
+        mData.business_name,
+        plan,
+        amountPaidNgn,
+        periodStart,
+        expiryDate.toISOString(),
+        reference
+      );
+    }
+  } catch (e) {
+    console.error("Failed to send renewal confirmation email:", e);
+  }
+
+  console.log(`✅ Subscription renewed: Merchant ${merchantId} — ${reference}`);
+  return NextResponse.json({ received: true });
 }
 
 // ── Subscription Upgrade Handler ─────────────────────────────────────────────
@@ -118,6 +241,22 @@ async function handleSubscriptionUpgrade(
     start_date: new Date().toISOString(),
     expiry_date: expiryDate.toISOString(),
     status: "active"
+  });
+
+  // Insert into subscription_payments
+  const periodStart = currentSub && new Date(currentSub.expiry_date) > new Date() 
+    ? new Date(currentSub.expiry_date).toISOString() 
+    : new Date().toISOString();
+
+  await supabase.from("subscription_payments").insert({
+    merchant_id: merchantId,
+    plan: newPlan,
+    amount_ngn: amountPaidNgn,
+    period_start: periodStart,
+    period_end: expiryDate.toISOString(),
+    paystack_ref: reference,
+    payment_type: "upgrade",
+    status: "paid"
   });
 
   // Log to audit
@@ -370,6 +509,18 @@ async function handleSubscriptionPayment(
     start_date: new Date().toISOString(),
     expiry_date: expiryDate.toISOString(),
     status: "active"
+  });
+
+  // Insert into subscription_payments
+  await supabase.from("subscription_payments").insert({
+    merchant_id: merchantId,
+    plan: activePlan,
+    amount_ngn: amountPaidNgn,
+    period_start: new Date().toISOString(),
+    period_end: expiryDate.toISOString(),
+    paystack_ref: reference,
+    payment_type: "new",
+    status: "paid"
   });
 
   // 5. Send welcome + set-password email via Brevo

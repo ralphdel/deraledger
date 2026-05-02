@@ -155,6 +155,34 @@ export async function getActiveSubscription(id?: string): Promise<Subscription |
   return data as Subscription | null;
 }
 
+export interface SubscriptionPayment {
+  id: string;
+  merchant_id: string;
+  plan: string;
+  amount_ngn: number;
+  period_start: string;
+  period_end: string;
+  paystack_ref: string;
+  payment_type: "new" | "renewal" | "upgrade";
+  status: "paid" | "refunded";
+  created_at: string;
+}
+
+export async function getSubscriptionPayments(merchantId?: string): Promise<SubscriptionPayment[]> {
+  const mId = merchantId || await getActiveMerchantId();
+  const { data, error } = await supabase()
+    .from("subscription_payments")
+    .select("*")
+    .eq("merchant_id", mId)
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.error("getSubscriptionPayments:", error);
+    return [];
+  }
+  return data as SubscriptionPayment[];
+}
+
 // ── Clients ─────────────────────────────────────────────────────────────────
 export async function getClients(merchantId?: string): Promise<Client[]> {
   const mId = merchantId || await getActiveMerchantId();
