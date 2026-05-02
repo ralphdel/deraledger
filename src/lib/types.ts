@@ -41,6 +41,7 @@ export interface Merchant {
   created_at: string;
   updated_at: string;
   permissions?: Record<string, boolean>;
+  subscription_notifications_sent?: Record<string, string> | null;
 }
 
 export interface Subscription {
@@ -50,7 +51,7 @@ export interface Subscription {
   amount_paid: number;
   start_date: string;
   expiry_date: string;
-  status: "active" | "expired" | "cancelled";
+  status: "active" | "expiring_soon" | "grace_period" | "expired" | "cancelled";
   last_notified_at: string | null;
   is_banner_dismissed: boolean;
   created_at: string;

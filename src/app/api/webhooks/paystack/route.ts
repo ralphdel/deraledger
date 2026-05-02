@@ -102,6 +102,11 @@ async function handleSubscriptionRenewal(
     .eq("merchant_id", merchantId)
     .eq("status", "active");
 
+  // Clear notifications JSONB for the new cycle
+  await supabase.from("merchants").update({
+    subscription_notifications_sent: {}
+  }).eq("id", merchantId);
+
   // Create new subscription with reset notifications
   await supabase.from("subscriptions").insert({
     merchant_id: merchantId,
@@ -199,6 +204,7 @@ async function handleSubscriptionUpgrade(
       subscription_plan: newPlan,
       merchant_tier: newPlan,
       monthly_collection_limit: newPlan === "individual" ? 5000000 : 0,
+      subscription_notifications_sent: {},
     })
     .eq("id", merchantId);
 
@@ -397,6 +403,7 @@ async function handleSubscriptionPayment(
         subscription_plan: activePlan,
         merchant_tier: activePlan,
         monthly_collection_limit: activePlan === "individual" ? 5000000 : 0,
+        subscription_notifications_sent: {},
       })
       .eq("id", merchantId);
 
@@ -437,6 +444,7 @@ async function handleSubscriptionPayment(
         verification_status: "unverified",
         fee_absorption_default: "business",
         monthly_collection_limit: activePlan === "individual" ? 5000000 : 0,
+        subscription_notifications_sent: {},
       })
       .select("id")
       .single();

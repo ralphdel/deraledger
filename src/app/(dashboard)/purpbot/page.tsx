@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { getInvoices, getClients, getAllTransactions, getMerchant } from "@/lib/data";
+import { getInvoices, getClients, getAllTransactions, getMerchant, getActiveSubscription } from "@/lib/data";
 import { formatNaira } from "@/lib/calculations";
 import type { InvoiceWithClient, Client, Transaction, Merchant } from "@/lib/types";
 
@@ -58,6 +58,7 @@ export default function PurpBotPage() {
   const [clients, setClients] = useState<Client[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [merchant, setMerchant] = useState<Merchant | null>(null);
+  const [isSubscriptionExpired, setIsSubscriptionExpired] = useState(false);
 
   useEffect(() => {
     Promise.all([getInvoices(), getClients(), getAllTransactions(), getMerchant()]).then(
@@ -66,6 +67,15 @@ export default function PurpBotPage() {
         setClients(cli);
         setTransactions(txn);
         setMerchant(merch);
+        
+        if (merch) {
+          getActiveSubscription(merch.id).then((sub) => {
+            if (sub && sub.status === "expired") {
+              setIsSubscriptionExpired(true);
+            }
+          });
+        }
+        
         setDataReady(true);
 
         // Welcome message with real data
@@ -470,20 +480,29 @@ export default function PurpBotPage() {
 
         <CardContent className="p-4 border-t-2 border-purp-200 bg-purp-50">
           <form onSubmit={handleSend} className="flex gap-3">
-            <Input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="E.g. Which client owes the most? How much have I collected?"
-              className="flex-1 bg-white border-2 border-purp-200 focus:border-purp-700 h-12"
-              disabled={!dataReady}
-            />
-            <Button
-              type="submit"
-              disabled={isLoading || !input.trim() || !dataReady}
-              className="h-12 px-6 bg-purp-900 hover:bg-purp-700 text-white"
-            >
-              <Send className="h-4 w-4 mr-2" />
-              Ask
+              {isSubscriptionExpired ? (
+                <div className="flex-1 bg-red-50 border border-red-200 rounded-lg flex items-center justify-center p-4">
+                  <div className="flex items-center gap-2 text-red-600 font-medium text-sm">
+                    <ShieldAlert className="w-5 h-5" />
+                    <span>PurpBot is deactivated. Please renew your subscription to ask questions.</span>
+                  </div>
+                </div>
+              ) : (
+                <Input
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  placeholder="Ask a question about your ledger..."
+                  className="flex-1 border-purp-200 bg-white"
+                  disabled={isLoading || !dataReady}
+                />
+              )}
+              <Button 
+                type="submit" 
+                className="h-12 px-6 bg-purp-900 hover:bg-purp-800 text-white flex-shrink-0"
+                disabled={isLoading || !input.trim() || !dataReady || isSubscriptionExpired}
+              >
+                <Send className="h-4 w-4 mr-2" />
+                Ask
             </Button>
           </form>
         </CardContent>

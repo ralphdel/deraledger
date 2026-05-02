@@ -13,7 +13,6 @@ const supabase = createClient(
 );
 
 export async function GET(request: Request) {
-  // Validate standard Vercel Cron header if needed
   const authHeader = request.headers.get("authorization");
   if (
     process.env.CRON_SECRET &&
@@ -26,156 +25,106 @@ export async function GET(request: Request) {
   console.log(`Starting Subscription Cron Job at ${now.toISOString()}`);
 
   try {
-    const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-
-    // 1. Process EXPIRED (Day 0)
-    // Find subscriptions that just expired
-    const { data: newlyExpired, error: expiredError } = await supabase
+    // We only care about non-cancelled subscriptions
+    const { data: subs, error } = await supabase
       .from("subscriptions")
-      .select("id, plan_type, expiry_date, merchants(email, business_name)")
-      .lt("expiry_date", now.toISOString())
-      .eq("status", "active");
+      .select("id, merchant_id, plan_type, expiry_date, status, merchants(email, business_name, subscription_notifications_sent)")
+      .neq("status", "cancelled");
 
-    let expiredProcessed = 0;
-    if (expiredError) {
-      console.error("Error fetching expired subscriptions:", expiredError);
-    } else if (newlyExpired && newlyExpired.length > 0) {
-      console.log(`Found ${newlyExpired.length} subscriptions that have expired.`);
+    if (error) throw error;
+
+    let processed = {
+      t7: 0,
+      t3: 0,
+      expired: 0,
+      locked: 0,
+      grace: 0
+    };
+
+    for (const sub of subs || []) {
+      const merchantData = Array.isArray(sub.merchants) ? sub.merchants[0] : sub.merchants;
+      if (!merchantData?.email || sub.plan_type === "starter") continue;
+
+      const expiryDate = new Date(sub.expiry_date);
+      const days = Math.floor((expiryDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
       
-      for (const sub of newlyExpired) {
-        // Update status to expired
-        await supabase
-          .from("subscriptions")
-          .update({ 
-            status: "expired",
-            last_notified_at: now.toISOString()
-          })
-          .eq("id", sub.id);
-
-        expiredProcessed++;
+      const notificationsSent = merchantData.subscription_notifications_sent || {};
+      
+      // Check thresholds
+      if (days <= 7 && days > 3 && !notificationsSent['7_day']) {
+        await sendSubscriptionExpiringEmail(
+          merchantData.email,
+          merchantData.business_name,
+          sub.plan_type,
+          sub.expiry_date,
+          7
+        );
         
-        const merchantData = Array.isArray(sub.merchants) ? sub.merchants[0] : sub.merchants;
-        if (!merchantData?.email) continue;
+        await supabase.from("merchants").update({
+          subscription_notifications_sent: { ...notificationsSent, '7_day': now.toISOString() }
+        }).eq("id", sub.merchant_id);
         
-        try {
-          await sendSubscriptionExpiredEmail(
-            merchantData.email,
-            merchantData.business_name,
-            sub.plan_type
-          );
-          console.log(`Sent Expired Notice to ${merchantData.email}`);
-        } catch (emailErr) {
-          console.error(`Failed to send email to ${merchantData.email}:`, emailErr);
+        await supabase.from("subscriptions").update({ status: "expiring_soon" }).eq("id", sub.id);
+        
+        processed.t7++;
+        console.log(`Sent T-7 warning to ${merchantData.email}`);
+      }
+      
+      if (days <= 3 && days > 0 && !notificationsSent['3_day']) {
+        await sendSubscriptionExpiringEmail(
+          merchantData.email,
+          merchantData.business_name,
+          sub.plan_type,
+          sub.expiry_date,
+          days
+        );
+        
+        await supabase.from("merchants").update({
+          subscription_notifications_sent: { ...notificationsSent, '3_day': now.toISOString() }
+        }).eq("id", sub.merchant_id);
+        
+        processed.t3++;
+        console.log(`Sent T-${days} warning to ${merchantData.email}`);
+      }
+      
+      if (days <= 0 && days > -3 && sub.status !== "grace_period") {
+        await sendSubscriptionExpiredEmail(
+          merchantData.email,
+          merchantData.business_name,
+          sub.plan_type
+        );
+        
+        await supabase.from("subscriptions").update({ status: "grace_period" }).eq("id", sub.id);
+        
+        processed.expired++;
+        console.log(`Marked as Grace Period and sent Expired Notice to ${merchantData.email}`);
+      } else if (days <= 0 && days > -3 && sub.status === "grace_period") {
+        // Send daily grace period warning
+        const lastNotifiedStr = notificationsSent[`grace_day_${Math.abs(days)}`];
+        if (!lastNotifiedStr) {
+           await sendSubscriptionGraceEmail(
+             merchantData.email,
+             merchantData.business_name,
+             3 + days // 0 -> 3, -1 -> 2, -2 -> 1
+           );
+           await supabase.from("merchants").update({
+             subscription_notifications_sent: { ...notificationsSent, [`grace_day_${Math.abs(days)}`]: now.toISOString() }
+           }).eq("id", sub.merchant_id);
+           processed.grace++;
         }
       }
-    }
-
-    // 2. Process GRACE PERIOD (Days 1 to 3 after expiry)
-    // We send a daily grace period warning.
-    const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
-    const { data: graceSubs, error: graceError } = await supabase
-      .from("subscriptions")
-      .select("id, expiry_date, merchants(email, business_name)")
-      .eq("status", "expired")
-      .gte("expiry_date", threeDaysAgo.toISOString())
-      .or(`last_notified_at.is.null,last_notified_at.lt.${twentyFourHoursAgo.toISOString()}`);
-
-    let graceWarningsSent = 0;
-    if (graceError) {
-      console.error("Error fetching grace period subscriptions:", graceError);
-    } else if (graceSubs && graceSubs.length > 0) {
-      console.log(`Found ${graceSubs.length} subscriptions in grace period.`);
       
-      for (const sub of graceSubs) {
-        const expiryDate = new Date(sub.expiry_date);
-        // Calculate days since expiry (1, 2, or 3)
-        const daysSinceExpiry = Math.floor((now.getTime() - expiryDate.getTime()) / (1000 * 60 * 60 * 24));
-        const daysRemainingBeforeLock = 4 - daysSinceExpiry; // Lock happens on day 4
+      if (days <= -3 && sub.status !== "expired") {
+        await supabase.from("subscriptions").update({ status: "expired" }).eq("id", sub.id);
         
-        if (daysRemainingBeforeLock > 0 && daysRemainingBeforeLock <= 3) {
-          const merchantData = Array.isArray(sub.merchants) ? sub.merchants[0] : sub.merchants;
-          if (!merchantData?.email) continue;
-          
-          try {
-            await sendSubscriptionGraceEmail(
-              merchantData.email,
-              merchantData.business_name,
-              daysRemainingBeforeLock
-            );
-
-            await supabase
-              .from("subscriptions")
-              .update({ last_notified_at: now.toISOString() })
-              .eq("id", sub.id);
-              
-            graceWarningsSent++;
-            console.log(`Sent Grace Warning to ${merchantData.email}`);
-          } catch (emailErr) {
-            console.error(`Failed to send email to ${merchantData.email}:`, emailErr);
-          }
-        }
-      }
-    }
-
-    // 3. Process UPCOMING (T-7 and T-3)
-    const sevenDaysFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-    const eightDaysFromNow = new Date(now.getTime() + 8 * 24 * 60 * 60 * 1000);
-    
-    const threeDaysFromNow = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
-    const fourDaysFromNow = new Date(now.getTime() + 4 * 24 * 60 * 60 * 1000);
-
-    const { data: upcomingSubs, error: upcomingError } = await supabase
-      .from("subscriptions")
-      .select("id, plan_type, expiry_date, merchants(email, business_name)")
-      .eq("status", "active")
-      .or(`last_notified_at.is.null,last_notified_at.lt.${twentyFourHoursAgo.toISOString()}`);
-
-    let upcomingWarningsSent = 0;
-    if (upcomingError) {
-      console.error("Error fetching upcoming subscriptions:", upcomingError);
-    } else if (upcomingSubs && upcomingSubs.length > 0) {
-      for (const sub of upcomingSubs) {
-        const expiryDate = new Date(sub.expiry_date);
-        
-        let targetDays = 0;
-        if (expiryDate >= sevenDaysFromNow && expiryDate < eightDaysFromNow) {
-          targetDays = 7;
-        } else if (expiryDate >= threeDaysFromNow && expiryDate < fourDaysFromNow) {
-          targetDays = 3;
-        }
-
-        if (targetDays > 0) {
-          const merchantData = Array.isArray(sub.merchants) ? sub.merchants[0] : sub.merchants;
-          if (!merchantData?.email) continue;
-          
-          try {
-            await sendSubscriptionExpiringEmail(
-              merchantData.email,
-              merchantData.business_name,
-              sub.plan_type,
-              sub.expiry_date,
-              targetDays
-            );
-
-            await supabase
-              .from("subscriptions")
-              .update({ last_notified_at: now.toISOString() })
-              .eq("id", sub.id);
-              
-            upcomingWarningsSent++;
-            console.log(`Sent T-${targetDays} warning to ${merchantData.email}`);
-          } catch (emailErr) {
-            console.error(`Failed to send email to ${merchantData.email}:`, emailErr);
-          }
-        }
+        processed.locked++;
+        console.log(`Marked as Expired (Locked) for ${merchantData.email}`);
       }
     }
 
     return NextResponse.json({
       success: true,
-      expiredProcessed,
-      graceWarningsSent,
-      upcomingWarningsSent
+      processed
     });
   } catch (err: any) {
     console.error("Subscription Cron Failed:", err.message);

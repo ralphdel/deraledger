@@ -112,10 +112,13 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
   // but the invoice is NOT closed — it can only be manually closed by merchant
   const isExpired = invoice.status === "expired";
 
+  // Check if merchant subscription is locked
+  const isMerchantSubscriptionExpired = (merchant as any)?.subscription_status === "expired";
+
   // We no longer strictly block just because the date passed, 
   // so that reopened invoices stay active until explicitly expired again.
   // Determine if payment should be blocked
-  const isPaymentBlocked = isManuallyClosed || isFullyClosed || isVoid || isExpired || limitExceeded;
+  const isPaymentBlocked = isManuallyClosed || isFullyClosed || isVoid || isExpired || limitExceeded || isMerchantSubscriptionExpired;
 
   if (isPaymentBlocked) {
     // Differentiate between "closed" and "link expired"
@@ -131,10 +134,12 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
               {isClosed ? <CheckCircle2 className="w-8 h-8" /> : <Clock className="w-8 h-8" />}
             </div>
             <h1 className="text-xl font-bold text-purp-900">
-              {limitExceeded ? "Merchant Limit Reached" : isClosed ? "Invoice Closed" : "Payment Link Expired"}
+              {isMerchantSubscriptionExpired ? "Payment Link Unavailable" : limitExceeded ? "Merchant Limit Reached" : isClosed ? "Invoice Closed" : "Payment Link Expired"}
             </h1>
             <p className="text-neutral-500">
-              {limitExceeded
+              {isMerchantSubscriptionExpired
+                ? "This payment link is temporarily unavailable. Please contact the merchant directly."
+                : limitExceeded
                 ? "This merchant is currently unable to accept further payments at this time. Please contact them directly."
                 : isClosed
                   ? "This invoice has been closed by the merchant and no further payments can be accepted."

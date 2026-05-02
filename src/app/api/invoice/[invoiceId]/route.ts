@@ -52,13 +52,19 @@ export async function GET(
   //    regardless of RLS policies, so the KYC gate is enforced server-side.
   const { data: merchant, error: merchantError } = await adminClient
     .from("merchants")
-    .select("*")
+    .select("*, subscriptions(*)")
     .eq("id", invoice.merchant_id)
     .single();
 
   if (merchantError || !merchant) {
     return NextResponse.json({ error: "Merchant not found" }, { status: 404 });
   }
+
+  // Find the relevant subscription (not cancelled)
+  const subscription = merchant.subscriptions?.find((sub: any) => sub.status !== "cancelled");
+  // Attach the status to the merchant object for the frontend to read
+  merchant.subscription_status = subscription?.status || "active";
+  delete merchant.subscriptions;
 
   // 3. Monthly collection total
   const now = new Date();

@@ -46,7 +46,7 @@ export async function loginUser(formData: FormData) {
       // 2. Verify team access using the resolved UUID
       const { data: teamData, error: teamError } = await supabase
         .from("merchant_team")
-        .select("id, must_change_password")
+        .select("id, must_change_password, roles(name)")
         .eq("user_id", data.user.id)
         .eq("merchant_id", merchantId)
         .single();
@@ -56,13 +56,26 @@ export async function loginUser(formData: FormData) {
         return { success: false, error: "You do not have access to this business workspace." };
       }
       
+      // 3. Check Subscription Status (Feature Locking)
+      const { data: subData } = await supabase
+        .from("subscriptions")
+        .select("status")
+        .eq("merchant_id", merchantId)
+        .neq("status", "cancelled")
+        .single();
+        
+      if (subData?.status === "expired" && (teamData as any).roles?.name !== "owner") {
+        await supabase.auth.signOut();
+        return { success: false, error: "Team member access is suspended due to an expired subscription. Please ask the account owner to renew." };
+      }
+      
       // Check if the user needs to change their password
       if (teamData.must_change_password) {
         // Don't set the workspace cookie yet, force them to set a password first
         return { success: true, mustChangePassword: true, workspace: formattedCode };
       }
       
-      // 3. Set the cookie using the raw UUID so the rest of the app doesn't break
+      // 4. Set the cookie using the raw UUID so the rest of the app doesn't break
       (await cookies()).set("purpledger_workspace_id", merchantId, {
         httpOnly: false,
         secure: process.env.NODE_ENV === "production",
