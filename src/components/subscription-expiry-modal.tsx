@@ -17,19 +17,18 @@ export function SubscriptionExpiryModal({
   useEffect(() => {
     setMounted(true);
     
-    if (status === "expired") {
+    if (status === "expired" || status === "cancelled") {
       const expiry = new Date(expiryDate);
       const now = new Date();
       
       // Calculate Grace Period
       const hoursSinceExpiry = (now.getTime() - expiry.getTime()) / (1000 * 60 * 60);
       
-      // If past 24h grace period, show the hard modal.
-      // Or if they haven't seen it in this session.
+      // If cancelled OR past 24h grace period, show the hard modal.
       const hasSeenSession = sessionStorage.getItem("purpledger_expiry_seen");
       
-      if (hoursSinceExpiry > 24) {
-        setIsOpen(true); // Hard lock if > 24h
+      if (status === "cancelled" || hoursSinceExpiry > 24) {
+        setIsOpen(true); // Hard lock
       } else if (!hasSeenSession) {
         setIsOpen(true); // Show once if in grace period
         sessionStorage.setItem("purpledger_expiry_seen", "true");
@@ -46,27 +45,34 @@ export function SubscriptionExpiryModal({
           <AlertCircle className="w-6 h-6" />
         </div>
         
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">Subscription Expired</h2>
+        <h2 className="text-2xl font-bold text-gray-900 mb-2">
+          {status === "cancelled" ? "Subscription Deactivated" : "Subscription Expired"}
+        </h2>
         
         <p className="text-gray-600 mb-8 leading-relaxed">
-          Your PurpLedger subscription has expired. You currently have restricted access to your dashboard and cannot create new invoices or accept payments.
+          {status === "cancelled" 
+            ? "Your PurpLedger subscription has been deactivated by an administrator. You no longer have access to invoicing, PurpBot AI, or team management tools." 
+            : "Your PurpLedger subscription has expired. You currently have restricted access to your dashboard and cannot create new invoices or accept payments."
+          }
           Please renew your plan to restore full access.
         </p>
 
         <div className="flex flex-col gap-3">
           <Link 
-            href="/settings/subscription" 
+            href="/settings/billing" 
             className="w-full bg-purple-600 hover:bg-purple-700 text-white font-semibold py-3 px-4 rounded-lg text-center transition-colors shadow-sm"
-            onClick={() => setIsOpen(false)} // allow them to click through to settings
+            onClick={() => setIsOpen(false)}
           >
             Renew / Upgrade Plan
           </Link>
-          <button 
-            onClick={() => setIsOpen(false)}
-            className="w-full bg-white hover:bg-gray-50 text-gray-600 font-medium py-3 px-4 rounded-lg text-center transition-colors border border-gray-200"
-          >
-            View Dashboard (Read-Only)
-          </button>
+          {status !== "cancelled" && (
+            <button 
+              onClick={() => setIsOpen(false)}
+              className="w-full bg-white hover:bg-gray-50 text-gray-600 font-medium py-3 px-4 rounded-lg text-center transition-colors border border-gray-200"
+            >
+              View Dashboard (Read-Only)
+            </button>
+          )}
         </div>
       </div>
     </div>

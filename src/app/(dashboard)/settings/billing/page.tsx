@@ -96,7 +96,11 @@ export default function BillingSettingsPage() {
   let statusBadge = <Badge className="bg-green-100 text-green-800 border-green-200">Active</Badge>;
   let showUrgency = false;
   
-  if (subscription.status === "expired") {
+  if (subscription.status === "cancelled") {
+    statusStr = "Cancelled";
+    statusBadge = <Badge className="bg-neutral-100 text-neutral-800 border-neutral-200">Cancelled</Badge>;
+    showUrgency = true;
+  } else if (subscription.status === "expired") {
     statusStr = "Expired";
     statusBadge = <Badge className="bg-red-100 text-red-800 border-red-200">Expired</Badge>;
     showUrgency = true;
@@ -172,13 +176,15 @@ export default function BillingSettingsPage() {
             </div>
             
             {showUrgency && (
-              <div className={`p-4 rounded-lg ${statusStr === "Expired" ? "bg-red-50 text-red-800 border border-red-200" : "bg-amber-50 text-amber-800 border border-amber-200"}`}>
+              <div className={`p-4 rounded-lg ${statusStr === "Cancelled" ? "bg-neutral-50 text-neutral-800 border border-neutral-200" : statusStr === "Expired" ? "bg-red-50 text-red-800 border border-red-200" : "bg-amber-50 text-amber-800 border border-amber-200"}`}>
                 <p className="font-semibold flex items-center gap-2">
                   <Info className="w-4 h-4" />
-                  {statusStr === "Expired" ? "Your subscription has expired." : `${daysRemaining} days until renewal.`}
+                  {statusStr === "Cancelled" ? "Your subscription has been cancelled." : statusStr === "Expired" ? "Your subscription has expired." : `${daysRemaining} days until renewal.`}
                 </p>
                 <p className="text-sm mt-1 opacity-90">
-                  {statusStr === "Expired" 
+                  {statusStr === "Cancelled" 
+                    ? "Your access has been deactivated by an administrator. Please renew your plan or contact support to restore access."
+                    : statusStr === "Expired" 
                     ? "Renew now to restore access to PurpLedger's premium features including payment links and automated reminders." 
                     : "Please renew your subscription soon to avoid any interruption in your invoicing and collection services."}
                 </p>

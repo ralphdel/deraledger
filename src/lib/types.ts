@@ -42,6 +42,10 @@ export interface Merchant {
   updated_at: string;
   permissions?: Record<string, boolean>;
   subscription_notifications_sent?: Record<string, string> | null;
+  subscription_status?: string;
+  is_hard_locked?: boolean;
+  is_read_only?: boolean;
+  is_suspended?: boolean;
 }
 
 export interface Subscription {

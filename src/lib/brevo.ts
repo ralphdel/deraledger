@@ -602,3 +602,49 @@ export async function sendSubscriptionGraceEmail(
   });
 }
 
+/**
+ * Sends an email when an admin manually cancels (churns) a subscription.
+ */
+export async function sendSubscriptionCancelledEmail(
+  toEmail: string,
+  businessName: string,
+  reason: string
+) {
+  const configuredUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
+  const appUrl = configuredUrl || (process.env.NODE_ENV === "development" ? "http://localhost:3000" : "https://purpledger.vercel.app");
+  const settingsLink = `${appUrl}/settings/billing`;
+
+  const htmlContent = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #111827; border: 1px solid #E5E7EB; border-radius: 8px; overflow: hidden;">
+      <div style="background-color: #111827; padding: 20px; text-align: center;">
+        <h2 style="color: white; margin: 0;">Subscription Deactivated</h2>
+      </div>
+      <div style="padding: 30px;">
+        <p>Hello ${businessName},</p>
+        <p style="font-size: 15px; line-height: 1.6;">
+          Your PurpLedger subscription has been deactivated by an administrator.
+        </p>
+        <div style="background-color: #F9FAFB; border: 1px solid #E5E7EB; padding: 16px; border-radius: 6px; margin: 20px 0;">
+          <p style="margin: 0 0 8px 0; color: #374151;"><strong>Status:</strong> Cancelled</p>
+          <p style="margin: 0; color: #374151;"><strong>Note:</strong> ${reason || "Your subscription has been manually terminated."}</p>
+        </div>
+        <p style="font-size: 14px; color: #4B5563;">Your access to smart invoicing, PurpBot AI, and payment tracking has been restricted. If you believe this was an error, please contact our support team immediately.</p>
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${settingsLink}" style="background-color: #4C1D95; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 16px; display: inline-block;">
+            Re-activate My Account
+          </a>
+        </div>
+      </div>
+      <div style="background-color: #F9FAFB; padding: 16px; text-align: center; border-top: 1px solid #E5E7EB;">
+        <p style="margin: 0; font-size: 12px; color: #9CA3AF;">PurpLedger &mdash; Smart Invoicing &amp; Payment Tracking</p>
+      </div>
+    </div>
+  `;
+
+  return sendEmail({
+    sender: { name: "PurpLedger Subscriptions", email: ADMIN_EMAIL },
+    to: [{ email: toEmail }],
+    subject: `Notice: Your PurpLedger subscription has been cancelled`,
+    htmlContent,
+  });
+}

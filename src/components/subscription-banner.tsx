@@ -6,10 +6,12 @@ import { useEffect, useState } from "react";
 
 export function SubscriptionBanner({ 
   daysRemaining, 
-  planType 
+  planType,
+  status
 }: { 
   daysRemaining: number; 
   planType: string;
+  status?: string;
 }) {
   const [mounted, setMounted] = useState(false);
 
@@ -17,11 +19,14 @@ export function SubscriptionBanner({
     setMounted(true);
   }, []);
 
-  if (!mounted || daysRemaining > 7) return null;
+  if (!mounted) return null;
 
-  const isExpired = daysRemaining <= 0;
+  const isCancelled = status === "cancelled";
+  const isExpired = status === "expired" || daysRemaining <= 0;
   const isUrgent = daysRemaining <= 3 && daysRemaining > 0;
   const isWarning = daysRemaining <= 7 && daysRemaining > 3;
+
+  if (!isCancelled && !isExpired && !isUrgent && !isWarning) return null;
 
   const renewalDate = new Date();
   renewalDate.setDate(renewalDate.getDate() + Math.max(0, daysRemaining));
@@ -34,7 +39,12 @@ export function SubscriptionBanner({
   let message = `Your ${planName} plan renews in ${daysRemaining} days on ${dateStr}. Renew now to avoid interruption.`;
   let Icon = Clock;
 
-  if (isExpired) {
+  if (isCancelled) {
+    bgColor = "bg-neutral-900 text-white border-b border-neutral-800";
+    buttonColor = "bg-purp-600 hover:bg-purp-500 text-white";
+    message = "Your PurpLedger account is currently deactivated by an administrator.";
+    Icon = AlertTriangle;
+  } else if (isExpired) {
     bgColor = "bg-red-50 text-red-900 border-b border-red-200";
     buttonColor = "bg-red-600 hover:bg-red-700 text-white";
     message = "Your subscription has expired. Renew now to restore full access.";
@@ -47,16 +57,16 @@ export function SubscriptionBanner({
   }
 
   return (
-    <div className={`w-full px-4 py-3 flex items-center justify-between text-sm md:text-base font-medium shadow-sm animate-in slide-in-from-top-2 ${bgColor}`}>
+    <div className={`sticky top-0 z-[40] w-full px-4 py-3 flex items-center justify-between text-sm md:text-base font-medium shadow-md animate-in slide-in-from-top-2 ${bgColor}`}>
       <div className="flex items-center gap-2">
-        <Icon className={`h-5 w-5 ${isWarning ? "text-amber-600" : "text-red-600"}`} />
+        <Icon className={`h-5 w-5 ${isCancelled ? "text-purp-400" : isWarning ? "text-amber-600" : "text-red-600"}`} />
         <span>{message}</span>
       </div>
       <Link 
         href="/settings/billing" 
-        className={`px-4 py-1.5 rounded-md text-sm font-semibold transition-colors shadow-sm ${buttonColor}`}
+        className={`px-4 py-1.5 rounded-md text-sm font-semibold transition-colors shadow-sm whitespace-nowrap ${buttonColor}`}
       >
-        Renew Now
+        {isCancelled ? "View Billing" : "Renew Now"}
       </Link>
     </div>
   );

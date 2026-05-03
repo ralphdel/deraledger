@@ -55,12 +55,21 @@ export async function getMerchant(id?: string): Promise<(Merchant & { currentUse
     .eq("id", mId)
     .single();
     
-  if (error) { 
-    if (error.code !== "PGRST116") {
-      console.error("getMerchant:", error); 
-    }
-    return null; 
-  }
+  // Determine subscription status for lock enforcement
+  const { data: subData } = await sb
+    .from("subscriptions")
+    .select("status, expiry_date")
+    .eq("merchant_id", mId)
+    .order("expiry_date", { ascending: false })
+    .limit(1)
+    .single();
+
+  const isCancelled = subData?.status === "cancelled";
+  const isExpired = subData?.status === "expired";
+  const isSuspended = data?.verification_status === "suspended";
+  const expiryDate = subData?.expiry_date ? new Date(subData.expiry_date) : null;
+  const now = new Date();
+  const isHardLocked = isCancelled || (isExpired && expiryDate && (now.getTime() - expiryDate.getTime()) / (1000 * 60 * 60) > 24) || isSuspended;
 
   // Determine current user role and permissions
   let currentUserRole = "viewer"; // default safe fallback
@@ -97,24 +106,68 @@ export async function getMerchant(id?: string): Promise<(Merchant & { currentUse
         permissions = teamData.roles.permissions || {};
       }
     }
-  } else {
-    // If no user session, they might be in the public payment portal
-    // Or it's the demo account. If demo account, let's pretend they are owner for demo purposes.
-    if (mId === "00000000-0000-0000-0000-000000000001") {
-      currentUserRole = "owner";
-      permissions = {
-        view_invoices: true, create_invoice: true, edit_invoice: true, record_payment: true,
-        manual_close: true, void_invoice: true, view_clients: true, manage_clients: true,
-        delete_client: true, view_analytics: true, view_transactions: true, manage_kyc: true,
-        change_fee_settings: true, manage_business: true, manage_billing: true, manage_team: true,
-        use_purpbot: true, view_settlements: true, manage_advance_settings: true,
-        manage_settlement_account: true, manage_item_catalog: true, manage_discount_template: true,
-        view_item_catalog: true, view_discount_template: true
+  } else if (mId === "00000000-0000-0000-0000-000000000001") {
+    currentUserRole = "owner";
+    permissions = {
+      view_invoices: true, create_invoice: true, edit_invoice: true, record_payment: true,
+      manual_close: true, void_invoice: true, view_clients: true, manage_clients: true,
+      delete_client: true, view_analytics: true, view_transactions: true, manage_kyc: true,
+      change_fee_settings: true, manage_business: true, manage_billing: true, manage_team: true,
+      use_purpbot: true, view_settlements: true, manage_advance_settings: true,
+      manage_settlement_account: true, manage_item_catalog: true, manage_discount_template: true,
+      view_item_catalog: true, view_discount_template: true
+    };
+  }
+
+  const isReadOnly = isExpired && !isHardLocked;
+
+  // Apply Lock/Restriction logic: Strip permissions based on status
+  if (currentUserRole !== "superadmin") {
+    if (isHardLocked) {
+      if (isSuspended) {
+        // Suspended for violations: Zero access
+        permissions = {};
+      } else {
+        // Churned/Hard Expired: Only billing access
+        permissions = {
+          manage_billing: true,
+          view_billing: true
+        };
+      }
+    } else if (isReadOnly) {
+      // Expired but in 24h grace period: Read-only access
+      const readOnlyPermissions: Record<string, boolean> = {
+        manage_billing: true,
+        view_billing: true
       };
+      
+      // Keep only view permissions
+      Object.keys(permissions).forEach(key => {
+        if (key.startsWith("view_")) {
+          readOnlyPermissions[key] = true;
+        }
+      });
+      
+      permissions = readOnlyPermissions;
     }
   }
 
-  return { ...data, currentUserRole, permissions } as Merchant & { currentUserRole?: string, permissions?: Record<string, boolean> };
+  return { 
+    ...data, 
+    currentUserRole, 
+    permissions,
+    subscription_status: subData?.status || "none",
+    is_hard_locked: isHardLocked,
+    is_suspended: isSuspended,
+    is_read_only: isReadOnly
+  } as Merchant & { 
+    currentUserRole?: string, 
+    permissions?: Record<string, boolean>,
+    subscription_status: string,
+    is_hard_locked: boolean,
+    is_suspended: boolean,
+    is_read_only: boolean
+  };
 }
 
 // ── Subscriptions ───────────────────────────────────────────────────────────
@@ -144,8 +197,7 @@ export async function getActiveSubscription(id?: string): Promise<Subscription |
     .from("subscriptions")
     .select("*")
     .eq("merchant_id", mId)
-    .eq("status", "active")
-    .order("created_at", { ascending: false })
+    .order("expiry_date", { ascending: false }) // Get the one that expires last (or expired most recently)
     .limit(1)
     .single();
 
@@ -416,4 +468,89 @@ export async function getPublicInvoice(invoiceId: string) {
   const merchant = await getMerchant(invoice.merchant_id);
   const monthlyCollected = await getMonthlyCollectionTotal(invoice.merchant_id);
   return { invoice, merchant, monthlyCollected };
+}
+export interface AppNotification {
+  id: string;
+  title: string;
+  message: string;
+  type: "info" | "warning" | "error" | "success";
+  time: string;
+  isRead: boolean;
+  link?: string;
+}
+
+export async function getNotifications(merchantId?: string): Promise<AppNotification[]> {
+  const mId = merchantId || await getActiveMerchantId();
+  const [merchant, subscription] = await Promise.all([
+    getMerchant(mId),
+    getActiveSubscription(mId)
+  ]);
+
+  const notifications: AppNotification[] = [];
+
+  if (!merchant) return [];
+
+  // 1. KYC Notifications
+  if (merchant.verification_status === "unverified") {
+    notifications.push({
+      id: "kyc-unverified",
+      title: "KYC Verification Needed",
+      message: "Please complete your business verification to unlock higher collection limits.",
+      type: "warning",
+      time: "Action Required",
+      isRead: false,
+      link: "/settings/verification"
+    });
+  } else if (merchant.verification_status === "rejected") {
+    notifications.push({
+      id: "kyc-rejected",
+      title: "Verification Rejected",
+      message: "Your documents were rejected. Please review the notes and re-upload.",
+      type: "error",
+      time: "Important",
+      isRead: false,
+      link: "/settings/verification"
+    });
+  }
+
+  // 2. Subscription Notifications
+  if (subscription) {
+    const now = new Date();
+    const expiry = new Date(subscription.expiry_date);
+    const daysRemaining = Math.ceil((expiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+
+    if (subscription.status === "cancelled") {
+      notifications.push({
+        id: "sub-cancelled",
+        title: "Account Deactivated",
+        message: "Your subscription has been manually cancelled. Features are restricted.",
+        type: "error",
+        time: "Now",
+        isRead: false,
+        link: "/settings/billing"
+      });
+    } else if (daysRemaining <= 0) {
+      notifications.push({
+        id: "sub-expired",
+        title: "Subscription Expired",
+        message: "Your plan has expired. Renew now to restore full dashboard access.",
+        type: "error",
+        time: "Now",
+        isRead: false,
+        link: "/settings/billing"
+      });
+    } else if (daysRemaining <= 7) {
+      notifications.push({
+        id: "sub-warning",
+        title: "Subscription Expiring",
+        message: `Your ${subscription.plan_type} plan expires in ${daysRemaining} days.`,
+        type: "warning",
+        time: `${daysRemaining} days left`,
+        isRead: false,
+        link: "/settings/billing"
+      });
+    }
+  }
+
+  return notifications;
 }
