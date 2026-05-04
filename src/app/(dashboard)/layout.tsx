@@ -75,7 +75,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     { href: "/clients", label: "Clients", icon: Users, requiredPermission: "view_clients" },
     { href: "/settlements", label: "Settlements", icon: Banknote, requiredPermission: "view_settlements" },
     { href: "/accounting-report", label: "Reports", icon: BarChart, requiredPermission: "view_analytics" },
-    { href: "/settings/team", label: "Team", icon: UsersRound, requiredPermission: "manage_team" },
+    { href: "/team", label: "Team", icon: UsersRound, requiredPermission: "manage_team" },
     { href: "/purpbot", label: "PurpBot AI", icon: Bot, requiredPermission: "use_purpbot" },
     { href: "/settings", label: "Settings", icon: Settings },
   ];
@@ -166,7 +166,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
       {/* Main Content */}
       <div className="flex-1 lg:ml-64 print:ml-0 flex flex-col min-h-screen">
-        {subscription && (
+        {/* Subscription Banner — show for active subs OR starter plan with no sub */}
+        {subscription ? (
           <>
             <SubscriptionBanner 
               daysRemaining={Math.ceil((new Date(subscription.expiry_date).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24))} 
@@ -178,7 +179,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               expiryDate={subscription.expiry_date} 
             />
           </>
-        )}
+        ) : merchant?.subscription_plan === "starter" ? (
+          <SubscriptionBanner 
+            daysRemaining={9999} 
+            planType="starter" 
+            status="active"
+          />
+        ) : null}
         {/* Top Bar */}
         <header className="sticky top-0 z-20 bg-white dark:bg-neutral-900 border-b-2 border-purp-200 dark:border-neutral-800 h-16 flex items-center px-4 sm:px-6 lg:px-8 print:hidden">
           <button

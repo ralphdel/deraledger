@@ -371,7 +371,7 @@ export default function PurpBotPage() {
             <p className="text-amber-700 max-w-md mx-auto mb-6 text-sm">
               Your current Starter plan does not include access to PurpBot AI. Upgrade your plan to get AI-powered financial insights, automated payment follow-ups, and natural language queries about your business data.
             </p>
-            <a href="/settings/subscription">
+            <a href="/settings/billing">
               <Button className="bg-amber-600 hover:bg-amber-700 text-white font-bold border-2 border-amber-700">
                 <Crown className="mr-2 h-4 w-4" />
                 Upgrade Plan

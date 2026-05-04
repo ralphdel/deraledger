@@ -76,31 +76,54 @@ export default function BillingSettingsPage() {
     );
   }
 
-  if (!merchant || !subscription) {
+  if (!merchant) {
     return (
       <div className="text-center py-12">
-        <p className="text-neutral-500">Subscription data not found.</p>
+        <p className="text-neutral-500">Merchant data not found.</p>
       </div>
     );
   }
 
-  const isStarter = subscription.plan_type === "starter";
-  const planLabel = isStarter ? "Starter Plan" : subscription.plan_type === "individual" ? "Individual Plan" : "Corporate Plan";
-  const planPrice = isStarter ? "Free" : subscription.plan_type === "individual" ? "₦5,000" : "₦20,000";
+  // For Starter plan merchants with no subscription record, synthesize a virtual one
+  const effectiveSubscription = subscription || (merchant.subscription_plan === "starter" ? {
+    id: "starter-default",
+    merchant_id: merchant.id,
+    plan_type: "starter" as const,
+    amount_paid: 0,
+    start_date: merchant.created_at || new Date().toISOString(),
+    expiry_date: new Date(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000).toISOString(),
+    status: "active",
+    last_notified_at: null,
+    is_banner_dismissed: true,
+    created_at: merchant.created_at || new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  } as Subscription : null);
+
+  if (!effectiveSubscription) {
+    return (
+      <div className="text-center py-12">
+        <p className="text-neutral-500">Subscription data not found. Please contact support.</p>
+      </div>
+    );
+  }
+
+  const isStarter = effectiveSubscription.plan_type === "starter";
+  const planLabel = isStarter ? "Starter Plan" : effectiveSubscription.plan_type === "individual" ? "Individual Plan" : "Corporate Plan";
+  const planPrice = isStarter ? "Free" : effectiveSubscription.plan_type === "individual" ? "₦5,000" : "₦20,000";
   
   const now = new Date();
-  const expiryDate = new Date(subscription.expiry_date);
+  const expiryDate = new Date(effectiveSubscription.expiry_date);
   const daysRemaining = Math.max(0, Math.ceil((expiryDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
   
   let statusStr = "Active";
   let statusBadge = <Badge className="bg-green-100 text-green-800 border-green-200">Active</Badge>;
   let showUrgency = false;
   
-  if (subscription.status === "cancelled") {
+  if (effectiveSubscription.status === "cancelled") {
     statusStr = "Cancelled";
     statusBadge = <Badge className="bg-neutral-100 text-neutral-800 border-neutral-200">Cancelled</Badge>;
     showUrgency = true;
-  } else if (subscription.status === "expired") {
+  } else if (effectiveSubscription.status === "expired") {
     statusStr = "Expired";
     statusBadge = <Badge className="bg-red-100 text-red-800 border-red-200">Expired</Badge>;
     showUrgency = true;
@@ -149,7 +172,7 @@ export default function BillingSettingsPage() {
                 >
                   {renewing ? "Initializing..." : `Renew Now — ${planPrice}`}
                 </Button>
-                {subscription.plan_type === "individual" && (
+                {effectiveSubscription.plan_type === "individual" && (
                   <Link href="/settings/upgrade/corporate" className={cn(buttonVariants({ variant: "outline" }), "border-purp-200 text-purp-900 w-full md:w-auto")}>
                     Upgrade to Corporate — ₦20,000
                   </Link>

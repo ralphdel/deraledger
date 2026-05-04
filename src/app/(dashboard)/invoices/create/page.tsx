@@ -157,6 +157,19 @@ function CreateInvoiceForm() {
       return;
     }
 
+    // Bug 6: Validate initial payment does not exceed grand total
+    if (invoiceType === "record" && initialAmountPaid.trim() !== "") {
+      const paid = parseFloat(initialAmountPaid);
+      if (paid > totals.grandTotal) {
+        setError("Initial payment cannot exceed the grand total. Please enter a valid amount.");
+        return;
+      }
+      if (paid < 0) {
+        setError("Initial payment cannot be negative.");
+        return;
+      }
+    }
+
     setSaving(true);
 
     const result = await createInvoiceAction({
@@ -170,7 +183,7 @@ function CreateInvoiceForm() {
       pay_by_date: payByDate || undefined,
       notes: notes || undefined,
       payment_notes: invoiceType === "record" ? notes : undefined, // Reuse notes for payment ref
-      initial_amount_paid: invoiceType === "record" ? (initialAmountPaid ? parseFloat(initialAmountPaid) : totals.grandTotal) : 0,
+      initial_amount_paid: invoiceType === "record" ? (initialAmountPaid.trim() !== "" ? parseFloat(initialAmountPaid) : 0) : 0,
       payment_method: paymentMethod,
       allow_partial_payment: invoiceType === "collection" ? allowPartialPayment : false,
       partial_payment_pct: (invoiceType === "collection" && allowPartialPayment) ? parseFloat(partialPaymentPct) : null,

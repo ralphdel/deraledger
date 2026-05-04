@@ -811,6 +811,14 @@ export async function createInvoiceAction(data: {
 
   // Handle initial payment for Record Invoice
   if (data.invoice_type === "record" && data.initial_amount_paid && data.initial_amount_paid > 0) {
+    // Server-side guard: initial payment must not exceed grand total
+    if (data.initial_amount_paid > grandTotal) {
+      // Rollback: delete the invoice
+      await adminClient.from("line_items").delete().eq("invoice_id", invoice.id);
+      await adminClient.from("invoices").delete().eq("id", invoice.id);
+      return { success: false, error: "Initial payment cannot exceed the invoice grand total." };
+    }
+
     // Note: We avoid making createInvoiceAction too complex. 
     // We can just call recordManualPaymentAction directly after inserting the line items.
     const paymentRes = await recordManualPaymentAction({

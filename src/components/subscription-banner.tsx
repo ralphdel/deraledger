@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, Clock } from "lucide-react";
+import { AlertTriangle, Clock, Rocket } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
@@ -21,6 +21,28 @@ export function SubscriptionBanner({
 
   if (!mounted) return null;
 
+  // ── Starter Plan Banner ─────────────────────────────────────────────────
+  if (planType === "starter") {
+    return (
+      <div className="sticky top-0 z-[40] w-full px-4 py-3 flex items-center justify-between text-sm md:text-base font-medium shadow-lg bg-gradient-to-r from-purp-800 via-purp-900 to-indigo-900 text-white animate-in slide-in-from-top-2">
+        <div className="flex items-center gap-2">
+          <Rocket className="h-5 w-5 text-amber-400 animate-pulse" />
+          <span>
+            You&apos;re on the <strong>Starter</strong> plan.{" "}
+            <span className="hidden sm:inline">Upgrade to start receiving live payments and unlock premium features.</span>
+          </span>
+        </div>
+        <Link 
+          href="/settings/billing" 
+          className="px-4 py-1.5 rounded-md text-sm font-bold transition-all shadow-sm whitespace-nowrap bg-amber-500 hover:bg-amber-400 text-neutral-900 hover:shadow-md"
+        >
+          Upgrade Now
+        </Link>
+      </div>
+    );
+  }
+
+  // ── Expiry / Cancellation Banners ───────────────────────────────────────
   const isCancelled = status === "cancelled";
   const isExpired = status === "expired" || daysRemaining <= 0;
   const isUrgent = daysRemaining <= 3 && daysRemaining > 0;

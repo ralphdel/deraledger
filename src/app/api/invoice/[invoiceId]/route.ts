@@ -17,56 +17,65 @@ export async function GET(
 
   const adminClient = getServiceClient();
 
-  // 1. Look up invoice — try by UUID `id` first, then fall back to `invoice_hash`
-  //    This ensures payment links using either the raw ID (/pay/uuid) or
-  //    a short hash (/pay/hash) both resolve correctly.
+  // 1. Look up invoice — try by UUID `id` first, then fall back to `invoice_hash` or `short_link`
   let invoice: any = null;
 
   const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(invoiceId);
 
   if (isUUID) {
-    const { data } = await adminClient
+    const { data, error } = await adminClient
       .from("invoices")
       .select("*, line_items(*), clients(*)")
       .eq("id", invoiceId)
       .maybeSingle();
+    if (error) {
+      console.error("Invoice UUID lookup error:", error.message);
+    }
     invoice = data;
   }
 
-  // Fallback: try invoice_hash (for short-link based URLs)
+  // Fallback: try invoice_hash or short_link (for short-link based URLs)
   if (!invoice) {
-    const { data } = await adminClient
+    const { data, error } = await adminClient
       .from("invoices")
       .select("*, line_items(*), clients(*)")
-      .eq("invoice_hash", invoiceId)
+      .or(`invoice_hash.eq.${invoiceId},short_link.eq.${invoiceId}`)
       .maybeSingle();
+    if (error) {
+      console.error("Invoice hash/shortlink lookup error:", error.message);
+    }
     invoice = data;
   }
 
   if (!invoice) {
+    console.error("Invoice not found for ID:", invoiceId);
     return NextResponse.json({ error: "Invoice not found" }, { status: 404 });
   }
 
-  // 2. Fetch full merchant record — this is the critical part.
-  //    Using the service role key GUARANTEES we get the real verification_status
-  //    regardless of RLS policies, so the KYC gate is enforced server-side.
+  // 2. Fetch merchant record — separate query to avoid join issues
   const { data: merchant, error: merchantError } = await adminClient
     .from("merchants")
-    .select("*, subscriptions(*)")
+    .select("*")
     .eq("id", invoice.merchant_id)
     .single();
 
   if (merchantError || !merchant) {
+    console.error("Merchant lookup failed for invoice:", invoice.merchant_id, merchantError?.message);
     return NextResponse.json({ error: "Merchant not found" }, { status: 404 });
   }
 
-  // Find the relevant subscription (not cancelled)
-  const subscription = merchant.subscriptions?.find((sub: any) => sub.status !== "cancelled");
-  // Attach the status to the merchant object for the frontend to read
-  merchant.subscription_status = subscription?.status || "active";
-  delete merchant.subscriptions;
+  // 3. Separate subscription query to avoid RLS join issues
+  const { data: subData } = await adminClient
+    .from("subscriptions")
+    .select("status")
+    .eq("merchant_id", invoice.merchant_id)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
-  // 3. Monthly collection total
+  merchant.subscription_status = subData?.status || "active";
+
+  // 4. Monthly collection total
   const now = new Date();
   const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
   const { data: txData } = await adminClient
@@ -81,9 +90,7 @@ export async function GET(
     0
   );
 
-  // 4. Enforce owner_name guard server-side.
-  //    If merchant is "verified" but owner_name is missing, treat as unverified.
-  //    This handles merchants verified before the owner_name requirement was introduced.
+  // 5. Enforce owner_name guard server-side.
   const isNonStarter = (merchant.subscription_plan || merchant.merchant_tier || "starter") !== "starter";
   const ownerNameMissing = isNonStarter && (!merchant.owner_name || merchant.owner_name.trim() === "");
   const effectiveMerchant = ownerNameMissing

@@ -76,11 +76,13 @@ async function handleSubscriptionRenewal(
   const amountPaidNgn = amount / 100;
 
   // Get current active subscription
+  // Find the most recent subscription — not just active, because the merchant
+  // may be renewing after expiry. We need the context for proration.
   const { data: currentSub } = await supabase
     .from("subscriptions")
     .select("plan_type, expiry_date")
     .eq("merchant_id", merchantId)
-    .eq("status", "active")
+    .in("status", ["active", "expired"])
     .order("created_at", { ascending: false })
     .limit(1)
     .single();
@@ -95,12 +97,12 @@ async function handleSubscriptionRenewal(
     ? new Date(currentSub.expiry_date).toISOString() 
     : new Date().toISOString();
 
-  // Expire old subscription
+  // Expire old subscriptions (both active and expired to clean up)
   await supabase
     .from("subscriptions")
     .update({ status: "expired" })
     .eq("merchant_id", merchantId)
-    .eq("status", "active");
+    .in("status", ["active", "expired"]);
 
   // Clear notifications JSONB for the new cycle
   await supabase.from("merchants").update({
@@ -217,11 +219,12 @@ async function handleSubscriptionUpgrade(
   const amountPaidNgn = amount / 100;
   
   // Get current active subscription
+  // Find the most recent subscription (active or expired) for proration
   const { data: currentSub } = await supabase
     .from("subscriptions")
     .select("plan_type, expiry_date")
     .eq("merchant_id", merchantId)
-    .eq("status", "active")
+    .in("status", ["active", "expired"])
     .order("created_at", { ascending: false })
     .limit(1)
     .single();
@@ -233,11 +236,12 @@ async function handleSubscriptionUpgrade(
   );
 
   // Expire old subscription
+  // Expire old subscriptions (both active and expired)
   await supabase
     .from("subscriptions")
     .update({ status: "expired" })
     .eq("merchant_id", merchantId)
-    .eq("status", "active");
+    .in("status", ["active", "expired"]);
 
   // Create new subscription
   await supabase.from("subscriptions").insert({

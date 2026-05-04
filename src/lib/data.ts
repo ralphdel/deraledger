@@ -197,7 +197,7 @@ export async function getActiveSubscription(id?: string): Promise<Subscription |
     .from("subscriptions")
     .select("*")
     .eq("merchant_id", mId)
-    .order("expiry_date", { ascending: false }) // Get the one that expires last (or expired most recently)
+    .order("created_at", { ascending: false }) // Always get the most recently created subscription
     .limit(1)
     .single();
 

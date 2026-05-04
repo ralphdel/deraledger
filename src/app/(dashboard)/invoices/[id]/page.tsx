@@ -140,7 +140,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
   const paymentProgress =
     Number(invoice.grand_total) > 0
-      ? Math.round((Number(invoice.amount_paid) / Number(invoice.grand_total)) * 100)
+      ? Math.min(100, Math.round((Number(invoice.amount_paid) / Number(invoice.grand_total)) * 100))
       : 0;
 
   const paymentUrl = `${typeof window !== "undefined" ? window.location.origin : "https://purpledger.app"}/pay/${invoice.id}`;
@@ -829,48 +829,97 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                       <Mail className="mr-2 h-4 w-4" />
                       Send via Email
                     </DialogTrigger>
-                    <DialogContent className="border-2 border-purp-200">
-                      <DialogHeader>
-                        <DialogTitle className="text-purp-900">Send Invoice to Email</DialogTitle>
-                        <DialogDescription>
-                          Send {invoice.invoice_number} ({formatNaira(Number(invoice.outstanding_balance))} outstanding) to the client&apos;s email.
-                        </DialogDescription>
-                      </DialogHeader>
-                      <div className="space-y-4 py-2">
-                        <div className="space-y-2">
-                          <Label className="text-sm font-medium">Recipient Email</Label>
-                          <Input
-                            type="email"
-                            value={emailTo}
-                            onChange={(e) => setEmailTo(e.target.value)}
-                            className="border-2 border-purp-200 bg-purp-50 h-11"
-                            placeholder="client@email.com"
-                          />
-                        </div>
-                        <div className="bg-purp-50 border border-purp-200 rounded-lg p-3 text-sm">
-                          <p className="text-neutral-500 text-xs mb-2">Email Preview:</p>
-                          <p className="font-medium text-neutral-900">Invoice {invoice.invoice_number} from {merchant?.business_name || "PurpLedger"}</p>
-                          <p className="text-neutral-500 mt-1 text-xs">
-                            Grand Total: {formatNaira(Number(invoice.grand_total))} · Outstanding: {formatNaira(Number(invoice.outstanding_balance))}
+                    <DialogContent className="border-2 border-purp-200 sm:max-w-md">
+                      {emailSent ? (
+                        /* ── Success State ─────────────────────────────────── */
+                        <div className="flex flex-col items-center justify-center py-8 px-4">
+                          <div className="w-20 h-20 rounded-full bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center mb-5 shadow-lg shadow-emerald-200 animate-in zoom-in-50 duration-300">
+                            <CheckCircle className="h-10 w-10 text-white" />
+                          </div>
+                          <h3 className="text-xl font-bold text-neutral-900 mb-2 animate-in fade-in-0 duration-500">Invoice Sent!</h3>
+                          <p className="text-neutral-500 text-sm text-center mb-1 animate-in fade-in-0 duration-700">
+                            {invoice.invoice_number} has been sent to
                           </p>
-                          <p className="text-purp-700 mt-2 text-xs font-mono truncate">{paymentUrl}</p>
+                          <p className="text-purp-700 font-semibold text-sm mb-6 animate-in fade-in-0 duration-700">{emailTo}</p>
+                          <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 w-full text-center animate-in fade-in-0 duration-1000">
+                            <p className="text-emerald-800 text-xs font-medium">
+                              ✅ The client will receive a professional invoice email with a direct payment link.
+                            </p>
+                          </div>
                         </div>
-                      </div>
-                      <DialogFooter>
-                        <Button
-                          onClick={sendEmail}
-                          disabled={!emailTo || emailSending}
-                          className="bg-blue-600 hover:bg-blue-700 text-white font-semibold"
-                        >
-                          {emailSent ? (
-                            <><CheckCircle className="mr-2 h-4 w-4" /> Sent!</>
-                          ) : emailSending ? (
-                            "Opening mail client..."
-                          ) : (
-                            <><Send className="mr-2 h-4 w-4" /> Send Email</>
-                          )}
-                        </Button>
-                      </DialogFooter>
+                      ) : (
+                        /* ── Pre-Send State ────────────────────────────────── */
+                        <>
+                          <DialogHeader>
+                            <DialogTitle className="text-purp-900 flex items-center gap-2">
+                              <div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center">
+                                <Mail className="h-4 w-4 text-blue-600" />
+                              </div>
+                              Send Invoice via Email
+                            </DialogTitle>
+                            <DialogDescription>
+                              A professional invoice email will be sent with a secure payment link.
+                            </DialogDescription>
+                          </DialogHeader>
+
+                          {/* Invoice Summary Card */}
+                          <div className="bg-gradient-to-br from-purp-50 to-blue-50 border-2 border-purp-200 rounded-xl p-4 space-y-3">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-bold text-purp-600 uppercase tracking-wider">Invoice</span>
+                              <span className="text-sm font-bold text-purp-900">{invoice.invoice_number}</span>
+                            </div>
+                            <Separator className="bg-purp-200" />
+                            <div className="grid grid-cols-2 gap-3 text-sm">
+                              <div>
+                                <span className="text-neutral-500 text-xs">Grand Total</span>
+                                <p className="font-bold text-neutral-900">{formatNaira(Number(invoice.grand_total))}</p>
+                              </div>
+                              <div>
+                                <span className="text-neutral-500 text-xs">Outstanding</span>
+                                <p className="font-bold text-amber-600">{formatNaira(Number(invoice.outstanding_balance))}</p>
+                              </div>
+                            </div>
+                            {invoice.pay_by_date && (
+                              <div className="flex items-center gap-2 text-xs text-neutral-500">
+                                <Clock className="h-3 w-3" />
+                                Due: {new Date(invoice.pay_by_date).toLocaleDateString("en-NG", { day: "numeric", month: "long", year: "numeric" })}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Recipient */}
+                          <div className="space-y-2">
+                            <Label className="text-sm font-medium">Recipient Email</Label>
+                            <Input
+                              type="email"
+                              value={emailTo}
+                              onChange={(e) => setEmailTo(e.target.value)}
+                              className="border-2 border-purp-200 bg-purp-50 h-11"
+                              placeholder="client@email.com"
+                            />
+                          </div>
+
+                          <DialogFooter>
+                            <Button
+                              onClick={sendEmail}
+                              disabled={!emailTo || emailSending}
+                              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold h-11 shadow-md hover:shadow-lg transition-all"
+                            >
+                              {emailSending ? (
+                                <span className="flex items-center gap-2">
+                                  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                                  </svg>
+                                  Sending Invoice...
+                                </span>
+                              ) : (
+                                <><Send className="mr-2 h-4 w-4" /> Send Invoice Email</>
+                              )}
+                            </Button>
+                          </DialogFooter>
+                        </>
+                      )}
                     </DialogContent>
                   </Dialog>
 
