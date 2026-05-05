@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 export default async function AdminSubscriptionsPage() {
   const supabase = await createClient();
 
-  // Fetch all active, expiring, or expired subscriptions
+  // Fetch all subscriptions ordered by most recently created — we'll deduplicate per merchant below
   const { data: subs, error } = await supabase
     .from("subscriptions")
     .select(`
@@ -17,6 +17,7 @@ export default async function AdminSubscriptionsPage() {
       start_date,
       expiry_date,
       amount_paid,
+      created_at,
       merchant_id,
       merchants (
         id,
@@ -24,7 +25,7 @@ export default async function AdminSubscriptionsPage() {
         email
       )
     `)
-    .order("expiry_date", { ascending: true });
+    .order("created_at", { ascending: false });
 
   if (error) {
     console.error("Error fetching subscriptions:", error);
@@ -32,13 +33,21 @@ export default async function AdminSubscriptionsPage() {
 
   const now = new Date();
   
+  // Deduplicate: keep only the most recently created subscription per merchant
+  const seenMerchants = new Set<string>();
+  const latestSubsPerMerchant = (subs || []).filter((sub) => {
+    if (seenMerchants.has(sub.merchant_id)) return false;
+    seenMerchants.add(sub.merchant_id);
+    return true;
+  });
+
   // Process subscriptions for metrics and formatting
   let totalActive = 0;
   let totalMRR = 0;
   let expiringThisWeek = 0;
   let expiredCount = 0;
 
-  const processedSubs = (subs || []).map((sub) => {
+  const processedSubs = latestSubsPerMerchant.map((sub) => {
     const merchant = Array.isArray(sub.merchants) ? sub.merchants[0] : sub.merchants;
     const expiryDate = new Date(sub.expiry_date);
     const startDate = new Date(sub.start_date);

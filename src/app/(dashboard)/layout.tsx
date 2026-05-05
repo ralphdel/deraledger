@@ -85,7 +85,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       {/* Sidebar - Desktop */}
       <aside className="hidden lg:flex flex-col w-64 bg-purp-900 dark:bg-neutral-900 border-r border-purp-800 dark:border-neutral-800 fixed inset-y-0 z-30">
         <div className="p-6">
-          <Link href="/dashboard" className="flex items-center gap-2 text-white">
+          <Link href="/" className="flex items-center gap-2 text-white">
             <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center">
               <div className="w-4 h-4 bg-purp-600 rounded-sm" />
             </div>
@@ -100,11 +100,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <Link
                 key={item.href}
                 href={item.href}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                  isActive
-                    ? "bg-white/15 text-white"
-                    : "text-purp-200 hover:bg-white/10 hover:text-white"
-                }`}
+                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${isActive
+                  ? "bg-white/15 text-white"
+                  : "text-purp-200 hover:bg-white/10 hover:text-white"
+                  }`}
               >
                 <item.icon className="h-5 w-5" />
                 {item.label}
@@ -130,7 +129,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <div className="fixed inset-0 bg-neutral-900/50 backdrop-blur-sm z-40" onClick={() => setSidebarOpen(false)} />
           <aside className="fixed inset-y-0 left-0 w-72 bg-purp-900 dark:bg-neutral-900 z-50 animate-in slide-in-from-left duration-300">
             <div className="p-6 flex items-center justify-between">
-              <Link href="/dashboard" className="flex items-center gap-2 text-white">
+              <Link href="/" className="flex items-center gap-2 text-white">
                 <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center">
                   <div className="w-4 h-4 bg-purp-600 rounded-sm" />
                 </div>
@@ -148,11 +147,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                     key={item.href}
                     href={item.href}
                     onClick={() => setSidebarOpen(false)}
-                    className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                      isActive
-                        ? "bg-white/15 text-white"
-                        : "text-purp-200 hover:bg-white/10 hover:text-white"
-                    }`}
+                    className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${isActive
+                      ? "bg-white/15 text-white"
+                      : "text-purp-200 hover:bg-white/10 hover:text-white"
+                      }`}
                   >
                     <item.icon className="h-5 w-5" />
                     {item.label}
@@ -169,20 +167,20 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         {/* Subscription Banner — show for active subs OR starter plan with no sub */}
         {subscription ? (
           <>
-            <SubscriptionBanner 
-              daysRemaining={Math.ceil((new Date(subscription.expiry_date).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24))} 
-              planType={subscription.plan_type} 
+            <SubscriptionBanner
+              daysRemaining={Math.ceil((new Date(subscription.expiry_date).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24))}
+              planType={subscription.plan_type}
               status={subscription.status}
             />
-            <SubscriptionExpiryModal 
-              status={subscription.status} 
-              expiryDate={subscription.expiry_date} 
+            <SubscriptionExpiryModal
+              status={subscription.status}
+              expiryDate={subscription.expiry_date}
             />
           </>
         ) : merchant?.subscription_plan === "starter" ? (
-          <SubscriptionBanner 
-            daysRemaining={9999} 
-            planType="starter" 
+          <SubscriptionBanner
+            daysRemaining={9999}
+            planType="starter"
             status="active"
           />
         ) : null}
@@ -213,13 +211,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 <div className="p-4 border-b-2 border-purp-100 dark:border-neutral-800 bg-purp-50 dark:bg-neutral-900">
                   <h3 className="font-bold text-purp-900 dark:text-purp-100">Notifications</h3>
                 </div>
-                
+
                 <div className="max-h-[350px] overflow-y-auto">
                   {notifications.length > 0 ? (
                     <div className="divide-y divide-purp-50 dark:divide-neutral-800">
                       {notifications.map((note) => (
-                        <Link 
-                          key={note.id} 
+                        <Link
+                          key={note.id}
                           href={note.link || "#"}
                           className="flex flex-col p-4 hover:bg-purp-50 dark:hover:bg-neutral-800 transition-colors group"
                         >
@@ -227,8 +225,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                             <span className={cn(
                               "text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider",
                               note.type === "error" ? "bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400" :
-                              note.type === "warning" ? "bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400" :
-                              "bg-purp-100 text-purp-600 dark:bg-purp-900/30 dark:text-purp-400"
+                                note.type === "warning" ? "bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400" :
+                                  "bg-purp-100 text-purp-600 dark:bg-purp-900/30 dark:text-purp-400"
                             )}>
                               {note.type}
                             </span>
@@ -260,13 +258,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <DropdownMenuTrigger
                 render={<button className="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-purp-50 dark:hover:bg-neutral-800 transition-colors" />}
               >
-                  <Avatar className="h-8 w-8 border-2 border-purp-200 dark:border-neutral-700">
-                    <AvatarFallback className="bg-purp-100 dark:bg-neutral-800 text-purp-900 dark:text-purp-100 text-xs font-bold">{initials}</AvatarFallback>
-                  </Avatar>
-                  <span className="text-sm font-medium text-purp-900 dark:text-purp-100 hidden sm:block">
-                    {businessName.split(" ").slice(0, 2).join(" ")}
-                  </span>
-                  <ChevronDown className="h-4 w-4 text-neutral-500 dark:text-neutral-400" />
+                <Avatar className="h-8 w-8 border-2 border-purp-200 dark:border-neutral-700">
+                  <AvatarFallback className="bg-purp-100 dark:bg-neutral-800 text-purp-900 dark:text-purp-100 text-xs font-bold">{initials}</AvatarFallback>
+                </Avatar>
+                <span className="text-sm font-medium text-purp-900 dark:text-purp-100 hidden sm:block">
+                  {businessName.split(" ").slice(0, 2).join(" ")}
+                </span>
+                <ChevronDown className="h-4 w-4 text-neutral-500 dark:text-neutral-400" />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-48 border-2 border-purp-200 dark:border-neutral-800 shadow-xl">
                 <DropdownMenuItem render={<Link href="/settings" className="cursor-pointer" />}>
@@ -298,21 +296,21 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 {merchant.is_suspended ? "Account Suspended" : "Access Restricted"}
               </h2>
               <p className="text-neutral-600 dark:text-neutral-400 mb-8">
-                {merchant.is_suspended 
+                {merchant.is_suspended
                   ? "Your account has been suspended due to a violation of our terms of service or suspicious activity. Please contact support to resolve this issue."
                   : "Your account is currently deactivated or has an expired subscription. Access to dashboard features is blocked until your subscription is renewed."
                 }
               </p>
               {merchant.is_suspended ? (
-                <a 
-                  href="mailto:support@purpledger.com" 
+                <a
+                  href="mailto:support@purpledger.com"
                   className="bg-red-600 text-white px-8 py-3 rounded-lg font-bold hover:bg-red-700 transition-colors"
                 >
                   Contact Support
                 </a>
               ) : (
-                <Link 
-                  href="/settings/billing" 
+                <Link
+                  href="/settings/billing"
                   className="bg-purp-900 text-white px-8 py-3 rounded-lg font-bold hover:bg-purp-800 transition-colors"
                 >
                   Go to Billing & Subscription

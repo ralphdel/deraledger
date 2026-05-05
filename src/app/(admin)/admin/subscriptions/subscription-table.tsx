@@ -6,7 +6,11 @@ import {
   Search, 
   Filter,
   ArrowUpDown,
-  ChevronDown
+  ChevronDown,
+  Wrench,
+  CheckCircle,
+  AlertTriangle,
+  Loader2
 } from "lucide-react";
 import { formatNaira } from "@/lib/calculations";
 import { SubscriptionActions } from "./subscription-actions";
@@ -34,6 +38,35 @@ export function SubscriptionTable({ initialSubs }: SubscriptionTableProps) {
     key: "daysRemaining",
     direction: "asc"
   });
+
+  // ── Data Repair Tool state ───────────────────────────────────────────────
+  const [repairEmail, setRepairEmail] = useState("");
+  const [repairing, setRepairing] = useState(false);
+  const [repairResult, setRepairResult] = useState<any | null>(null);
+  const [repairError, setRepairError] = useState<string | null>(null);
+
+  const runRepair = async (emailOverride?: string) => {
+    setRepairing(true);
+    setRepairResult(null);
+    setRepairError(null);
+    try {
+      const res = await fetch("/api/admin/subscriptions/repair", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(emailOverride ? { email: emailOverride } : {}),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setRepairError(data.error || "Repair failed");
+      } else {
+        setRepairResult(data);
+      }
+    } catch (e: any) {
+      setRepairError(e.message || "Unknown error");
+    } finally {
+      setRepairing(false);
+    }
+  };
 
   const filteredAndSortedSubs = useMemo(() => {
     let result = [...initialSubs];
@@ -94,6 +127,101 @@ export function SubscriptionTable({ initialSubs }: SubscriptionTableProps) {
   };
 
   return (
+    <div className="space-y-4">
+      {/* ── Data Repair Panel ─────────────────────────────────────────────── */}
+      <div className="bg-amber-50 border-2 border-amber-200 rounded-xl p-5 space-y-4">
+        <div className="flex items-center gap-2">
+          <Wrench className="h-5 w-5 text-amber-700" />
+          <h3 className="font-bold text-amber-900">Subscription Data Repair Tool</h3>
+        </div>
+        <p className="text-sm text-amber-700">
+          Scans and restores subscriptions incorrectly marked <strong>expired</strong> due to the ordering bug.
+          Only subscriptions with a future <code>expiry_date</code> are affected — no valid expired accounts will be changed.
+        </p>
+
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="flex flex-1 gap-2">
+            <input
+              type="email"
+              placeholder="Target specific email (e.g. lagenial@yahoo.com)"
+              value={repairEmail}
+              onChange={(e) => setRepairEmail(e.target.value)}
+              className="flex-1 px-3 py-2 border-2 border-amber-300 bg-white rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={repairing || !repairEmail.trim()}
+              onClick={() => runRepair(repairEmail.trim())}
+              className="border-2 border-amber-400 bg-amber-100 hover:bg-amber-200 text-amber-900 font-semibold whitespace-nowrap"
+            >
+              {repairing ? <Loader2 className="h-4 w-4 animate-spin" /> : "Fix This Merchant"}
+            </Button>
+          </div>
+          <Button
+            size="sm"
+            disabled={repairing}
+            onClick={() => runRepair()}
+            className="bg-amber-600 hover:bg-amber-700 text-white font-bold whitespace-nowrap"
+          >
+            {repairing ? (
+              <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Scanning...</>
+            ) : (
+              <><Wrench className="mr-2 h-4 w-4" /> Run Full Repair</>
+            )}
+          </Button>
+        </div>
+
+        {repairResult && (
+          <div className="bg-white border border-amber-200 rounded-lg p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <CheckCircle className="h-5 w-5 text-emerald-600" />
+              <span className="font-semibold text-neutral-900">Repair Complete</span>
+            </div>
+            <div className="grid grid-cols-3 gap-3 text-sm">
+              <div className="bg-neutral-50 rounded-lg p-2 text-center">
+                <p className="text-neutral-500 text-xs">Scanned</p>
+                <p className="text-xl font-bold text-neutral-900">{repairResult.summary.total_scanned}</p>
+              </div>
+              <div className="bg-emerald-50 rounded-lg p-2 text-center">
+                <p className="text-emerald-600 text-xs">Repaired</p>
+                <p className="text-xl font-bold text-emerald-700">{repairResult.summary.repaired}</p>
+              </div>
+              <div className="bg-blue-50 rounded-lg p-2 text-center">
+                <p className="text-blue-600 text-xs">Already OK</p>
+                <p className="text-xl font-bold text-blue-700">{repairResult.summary.already_ok}</p>
+              </div>
+            </div>
+            {repairResult.repaired.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-xs font-bold text-neutral-500 uppercase tracking-wider">Fixed Merchants:</p>
+                {repairResult.repaired.map((r: any) => (
+                  <div key={r.subscription_id} className="flex items-center gap-2 text-xs text-emerald-800 bg-emerald-50 rounded px-2 py-1">
+                    <CheckCircle className="h-3 w-3 flex-shrink-0" />
+                    <span><strong>{r.plan_type}</strong> plan — expires {new Date(r.expiry_date).toLocaleDateString("en-NG", { day: "numeric", month: "short", year: "numeric" })}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {repairResult.errors.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-xs font-bold text-red-500 uppercase tracking-wider">Errors:</p>
+                {repairResult.errors.map((e: string, i: number) => (
+                  <div key={i} className="text-xs text-red-800 bg-red-50 rounded px-2 py-1">{e}</div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {repairError && (
+          <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg p-3">
+            <AlertTriangle className="h-4 w-4 text-red-600" />
+            <p className="text-sm text-red-700">{repairError}</p>
+          </div>
+        )}
+      </div>
+
     <div className="bg-white border border-neutral-200 rounded-xl shadow-sm overflow-hidden">
       <div className="p-4 border-b border-neutral-200 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="relative w-full md:w-72">
@@ -284,6 +412,7 @@ export function SubscriptionTable({ initialSubs }: SubscriptionTableProps) {
           </tbody>
         </table>
       </div>
+    </div>
     </div>
   );
 }

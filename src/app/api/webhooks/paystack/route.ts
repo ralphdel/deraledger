@@ -97,20 +97,14 @@ async function handleSubscriptionRenewal(
     ? new Date(currentSub.expiry_date).toISOString() 
     : new Date().toISOString();
 
-  // Expire old subscriptions (both active and expired to clean up)
-  await supabase
-    .from("subscriptions")
-    .update({ status: "expired" })
-    .eq("merchant_id", merchantId)
-    .in("status", ["active", "expired"]);
-
   // Clear notifications JSONB for the new cycle
   await supabase.from("merchants").update({
     subscription_notifications_sent: {}
   }).eq("id", merchantId);
 
-  // Create new subscription with reset notifications
-  await supabase.from("subscriptions").insert({
+  // Update the single subscription row (upsert)
+  // The subscriptions table has a UNIQUE constraint on merchant_id.
+  const { error: subUpsertError } = await supabase.from("subscriptions").upsert({
     merchant_id: merchantId,
     plan_type: plan,
     amount_paid: amountPaidNgn,
@@ -118,8 +112,15 @@ async function handleSubscriptionRenewal(
     expiry_date: expiryDate.toISOString(),
     status: "active",
     last_notified_at: null,
-    is_banner_dismissed: false
-  });
+    is_banner_dismissed: false,
+    updated_at: new Date().toISOString()
+  }, { onConflict: 'merchant_id' });
+
+  if (subUpsertError) {
+    console.error("❌ Renewal webhook: Failed to upsert subscription:", subUpsertError.message);
+    // Return 500 so Paystack retries the webhook
+    return NextResponse.json({ error: "Failed to update subscription" }, { status: 500 });
+  }
 
   // Insert into subscription_payments
   await supabase.from("subscription_payments").insert({

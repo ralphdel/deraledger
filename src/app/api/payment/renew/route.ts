@@ -39,7 +39,8 @@ export async function POST(request: Request) {
       email: user.email || merchant.email || "billing@purpledger.app",
       amountKobo,
       reference,
-      callbackUrl: `${appUrl}/settings/billing`,
+      // Use a dedicated callback URL so we can detect the redirect and verify payment
+      callbackUrl: `${appUrl}/settings/billing/renew-callback`,
       metadata: {
         type: "subscription_renewal",
         merchant_id: merchant.id,

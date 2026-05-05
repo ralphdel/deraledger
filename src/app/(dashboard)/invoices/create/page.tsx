@@ -42,7 +42,7 @@ interface FormLineItem {
 function CreateInvoiceForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const defaultType = (searchParams.get("type") as "record" | "collection") || "collection";
+  const defaultType = (searchParams.get("type") as "record" | "collection") || "record"; // Default to record, not collection
   const [clients, setClients] = useState<Client[]>([]);
   const [catalog, setCatalog] = useState<ItemCatalog[]>([]);
   const [discountTemplates, setDiscountTemplates] = useState<DiscountTemplate[]>([]);
@@ -86,6 +86,14 @@ function CreateInvoiceForm() {
           // Fetch catalog and discount templates
           getItemCatalog(data.id).then(setCatalog);
           getDiscountTemplates(data.id).then(setDiscountTemplates);
+
+          // CRITICAL: Force starter plan merchants to record type only.
+          // This prevents the form from accidentally submitting a collection invoice
+          // if the page loaded without a ?type=record query param.
+          const plan = data.subscription_plan || data.merchant_tier || "starter";
+          if (plan === "starter") {
+            setInvoiceType("record");
+          }
           
           getActiveSubscription(data.id).then((sub) => {
             if (sub && sub.status === "expired") {

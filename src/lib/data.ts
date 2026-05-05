@@ -55,21 +55,26 @@ export async function getMerchant(id?: string): Promise<(Merchant & { currentUse
     .eq("id", mId)
     .single();
     
-  // Determine subscription status for lock enforcement
+  // Determine subscription status for lock enforcement.
+  // CRITICAL: Must order by created_at DESC (not expiry_date) so the most recently
+  // created subscription (the new active one after renewal/upgrade) is always returned first.
+  // Ordering by expiry_date can return an old expired row that has a later date than the new active one.
   const { data: subData } = await sb
     .from("subscriptions")
     .select("status, expiry_date")
     .eq("merchant_id", mId)
-    .order("expiry_date", { ascending: false })
+    .order("created_at", { ascending: false })
     .limit(1)
     .single();
 
   const isCancelled = subData?.status === "cancelled";
   const isExpired = subData?.status === "expired";
   const isSuspended = data?.verification_status === "suspended";
+  const isSuperAdmin = (data as any)?.is_super_admin === true;
   const expiryDate = subData?.expiry_date ? new Date(subData.expiry_date) : null;
   const now = new Date();
-  const isHardLocked = isCancelled || (isExpired && expiryDate && (now.getTime() - expiryDate.getTime()) / (1000 * 60 * 60) > 24) || isSuspended;
+  // SuperAdmin accounts are NEVER locked regardless of subscription state
+  const isHardLocked = !isSuperAdmin && (isCancelled || (isExpired && expiryDate && (now.getTime() - expiryDate.getTime()) / (1000 * 60 * 60) > 24) || isSuspended);
 
   // Determine current user role and permissions
   let currentUserRole = "viewer"; // default safe fallback

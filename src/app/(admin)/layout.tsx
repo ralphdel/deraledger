@@ -64,11 +64,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               <Link
                 key={item.href}
                 href={item.href}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                  isActive
-                    ? "bg-white/15 text-white"
-                    : "text-neutral-400 hover:bg-white/10 hover:text-white"
-                }`}
+                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${isActive
+                  ? "bg-white/15 text-white"
+                  : "text-neutral-400 hover:bg-white/10 hover:text-white"
+                  }`}
               >
                 <item.icon className="h-5 w-5 flex-shrink-0" />
                 {item.label}
@@ -114,11 +113,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                     key={item.href}
                     href={item.href}
                     onClick={() => setSidebarOpen(false)}
-                    className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                      isActive
-                        ? "bg-white/15 text-white"
-                        : "text-neutral-400 hover:bg-white/10 hover:text-white"
-                    }`}
+                    className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${isActive
+                      ? "bg-white/15 text-white"
+                      : "text-neutral-400 hover:bg-white/10 hover:text-white"
+                      }`}
                   >
                     <item.icon className="h-5 w-5" />
                     {item.label}

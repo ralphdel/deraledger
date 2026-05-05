@@ -65,7 +65,13 @@ export default function AdminMerchantsPage() {
       sb.from("merchant_team").select("merchant_id"),
       sb.from("invoices").select("merchant_id, invoice_type"),
       sb.from("transactions").select("merchant_id, amount_paid, created_at").eq("status", "success"),
-      sb.from("subscriptions").select("merchant_id, expiry_date, status").eq("status", "active"),
+      // Fetch ALL non-cancelled subscriptions ordered by created_at DESC.
+      // We deduplicate per merchant below to get the most recent one.
+      // This matches the fix in data.ts and ensures sub health is always current.
+      sb.from("subscriptions")
+        .select("merchant_id, expiry_date, status, created_at")
+        .in("status", ["active", "expiring_soon", "grace_period", "expired"])
+        .order("created_at", { ascending: false }),
     ]);
 
     const allMerchants = (merchantRes.data || []) as Merchant[];
@@ -97,8 +103,12 @@ export default function AdminMerchantsPage() {
       }
     });
 
-    // Add subscription info (take the latest active if multiple)
+    // Add subscription info — keep only the most recently created subscription per merchant
+    // (ordered by created_at DESC above, so first match per merchant_id is the latest)
+    const seenSubMerchants = new Set<string>();
     (subRes.data || []).forEach((s: any) => {
+      if (seenSubMerchants.has(s.merchant_id)) return; // Skip older rows
+      seenSubMerchants.add(s.merchant_id);
       if (stats[s.merchant_id]) {
         stats[s.merchant_id].subscriptionExpiry = s.expiry_date;
         stats[s.merchant_id].subscriptionStatus = s.status;
@@ -303,17 +313,28 @@ export default function AdminMerchantsPage() {
                 const bizNameMissing = tier === "corporate" && (!m.business_name || !hasConfirmed);
                 const effectiveStatus = (ownerMissing || bizNameMissing) ? "incomplete" : m.verification_status;
                 
-                let subHealth = { text: "Pending Payment", color: "text-neutral-500", bar: "bg-neutral-200", width: "0%" };
-                if (m.email === "ralphdel14@yahoo.com") {
+                let subHealth = { text: "No Subscription", color: "text-neutral-400", bar: "bg-neutral-200", width: "0%" };
+                if ((m as any).is_super_admin === true) {
+                  // SuperAdmin accounts never expire
                   subHealth = { text: "Lifetime (SuperAdmin)", color: "text-purp-600", bar: "bg-purp-500", width: "100%" };
                 } else if (tier === "starter") {
-                  subHealth = { text: "Lifetime", color: "text-purp-600", bar: "bg-purp-500", width: "100%" };
+                  subHealth = { text: "Free Tier", color: "text-neutral-500", bar: "bg-neutral-300", width: "100%" };
                 } else if (stats.subscriptionExpiry) {
-                  const days = Math.ceil((new Date(stats.subscriptionExpiry).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
-                  if (days < 0) subHealth = { text: "Expired", color: "text-red-600", bar: "bg-red-500", width: "100%" };
-                  else if (days < 7) subHealth = { text: `${days} days left`, color: "text-red-600", bar: "bg-red-500", width: `${Math.max(5, (days/30)*100)}%` };
-                  else if (days <= 14) subHealth = { text: `${days} days left`, color: "text-yellow-600", bar: "bg-yellow-500", width: `${Math.max(5, (days/30)*100)}%` };
-                  else subHealth = { text: `${days} days left`, color: "text-emerald-600", bar: "bg-emerald-500", width: "100%" };
+                  const expiry = new Date(stats.subscriptionExpiry);
+                  const days = Math.ceil((expiry.getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
+                  const subStatus = stats.subscriptionStatus;
+                  if (days < 0 || subStatus === "expired") {
+                    subHealth = { text: "Expired", color: "text-red-600", bar: "bg-red-500", width: "100%" };
+                  } else if (days < 7) {
+                    subHealth = { text: `${days}d left`, color: "text-red-600", bar: "bg-red-400", width: `${Math.max(5, (days / 30) * 100)}%` };
+                  } else if (days <= 14) {
+                    subHealth = { text: `${days}d left`, color: "text-amber-600", bar: "bg-amber-400", width: `${Math.max(10, (days / 30) * 100)}%` };
+                  } else {
+                    subHealth = { text: `${days}d left`, color: "text-emerald-600", bar: "bg-emerald-500", width: "100%" };
+                  }
+                } else {
+                  // Paid plan but no subscription row found — needs attention
+                  subHealth = { text: "Pending Payment", color: "text-amber-500", bar: "bg-amber-300", width: "10%" };
                 }
 
                 return (

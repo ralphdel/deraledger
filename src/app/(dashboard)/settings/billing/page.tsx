@@ -107,9 +107,13 @@ export default function BillingSettingsPage() {
     );
   }
 
-  const isStarter = effectiveSubscription.plan_type === "starter";
-  const planLabel = isStarter ? "Starter Plan" : effectiveSubscription.plan_type === "individual" ? "Individual Plan" : "Corporate Plan";
-  const planPrice = isStarter ? "Free" : effectiveSubscription.plan_type === "individual" ? "₦5,000" : "₦20,000";
+  // Use merchant.subscription_plan as the authoritative source for the current plan.
+  // The subscription row is used for dates/status, but the plan column on merchants is
+  // always updated atomically during upgrade/renewal so it's the most reliable.
+  const currentPlan = (merchant.subscription_plan || effectiveSubscription.plan_type || "starter") as string;
+  const isStarter = currentPlan === "starter";
+  const planLabel = isStarter ? "Starter Plan" : currentPlan === "individual" ? "Individual Plan" : "Corporate Plan";
+  const planPrice = isStarter ? "Free" : currentPlan === "individual" ? "₦5,000" : "₦20,000";
   
   const now = new Date();
   const expiryDate = new Date(effectiveSubscription.expiry_date);
@@ -172,7 +176,7 @@ export default function BillingSettingsPage() {
                 >
                   {renewing ? "Initializing..." : `Renew Now — ${planPrice}`}
                 </Button>
-                {effectiveSubscription.plan_type === "individual" && (
+                {currentPlan === "individual" && (
                   <Link href="/settings/upgrade/corporate" className={cn(buttonVariants({ variant: "outline" }), "border-purp-200 text-purp-900 w-full md:w-auto")}>
                     Upgrade to Corporate — ₦20,000
                   </Link>

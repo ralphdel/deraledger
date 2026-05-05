@@ -171,6 +171,12 @@ export default function SettingsPage() {
       return;
     }
 
+    // Corporate accounts must provide CAC evidence to be meaningful
+    if (isCorporate && !cacNumber && !cacFile) {
+      setKycError("Corporate accounts require a CAC Number or CAC Certificate. Please provide at least one to proceed.");
+      return;
+    }
+
     setKycSubmitting(true);
 
     // Simulate document upload processing delay
@@ -282,7 +288,7 @@ export default function SettingsPage() {
           {/* Tier Informational Banner */}
           {(merchant?.subscription_plan || merchant?.merchant_tier) === "corporate" ? (
             <div className="flex items-start gap-3 p-4 bg-emerald-50 border border-emerald-200 rounded-lg mb-4">
-              {effectiveVerificationStatus === "verified" ? (
+              {effectiveVerificationStatus === "verified" && (merchant?.cac_document_url || merchant?.cac_number) ? (
                 <CheckCircle className="h-5 w-5 text-emerald-600 mt-0.5 flex-shrink-0" />
               ) : (
                 <Shield className="h-5 w-5 text-emerald-600 mt-0.5 flex-shrink-0" />
@@ -290,9 +296,9 @@ export default function SettingsPage() {
               <div>
                 <p className="text-sm font-semibold text-emerald-800">Corporate Account (Tier 2)</p>
                 <p className="text-sm text-emerald-700 mt-1">
-                  {effectiveVerificationStatus === "verified"
+                  {effectiveVerificationStatus === "verified" && (merchant?.cac_document_url || merchant?.cac_number)
                     ? "Your account is fully verified. You have access to unlimited monthly collections and payment links."
-                    : "Please complete your verification below to activate your unlimited monthly collections and payment links."}
+                    : "Please complete your verification below — submit your BVN, CAC Number, CAC Certificate, and Utility Bill to activate unlimited collections."}
                 </p>
               </div>
             </div>

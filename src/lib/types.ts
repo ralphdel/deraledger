@@ -46,6 +46,7 @@ export interface Merchant {
   is_hard_locked?: boolean;
   is_read_only?: boolean;
   is_suspended?: boolean;
+  is_super_admin?: boolean;
 }
 
 export interface Subscription {

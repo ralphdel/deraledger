@@ -733,6 +733,15 @@ export async function createInvoiceAction(data: {
     .single();
 
   if (merchantInfo?.subscription_plan === "starter") {
+    // Server-side enforcement: Starter plan CANNOT create collection invoices.
+    // If the client somehow sends invoice_type=collection, reject it outright.
+    if (data.invoice_type === "collection") {
+      return { 
+        success: false, 
+        error: "Starter plan merchants cannot create Collection Invoices. Please use a Record Invoice instead, or upgrade your plan." 
+      };
+    }
+
     const { count, error: countError } = await adminClient
       .from("invoices")
       .select("*", { count: "exact", head: true })
@@ -1128,7 +1137,11 @@ export async function deleteClientAction(clientId: string) {
   const adminClient = getServiceClient();
 
   // Determine merchantId for permission check
-  const { data: client } = await adminClient.from("clients").select("merchant_id").eq("id", clientId).single();
+  const { data: client } = await adminClient
+    .from("clients")
+    .select("merchant_id, full_name, email")
+    .eq("id", clientId)
+    .single();
   if (!client) return { success: false, error: "Client not found" };
 
   try {
@@ -1138,35 +1151,62 @@ export async function deleteClientAction(clientId: string) {
     return { success: false, error: err.message };
   }
 
-  // The user wants to cascade delete. We will manually delete their invoices first to satisfy any foreign keys, if cascade isn't set.
-  // We'll also need to delete transactions and manual_payments and line_items if not cascaded, but typically deleting invoices is enough if invoices -> line_items cascades.
-  // Actually, to be safe, we can just delete the invoices. If there's an error due to other FKs, we'll return it.
-  const { data: invoices } = await adminClient
-    .from("invoices")
-    .select("id")
-    .eq("client_id", clientId);
-
-  if (invoices && invoices.length > 0) {
-    const invoiceIds = invoices.map(i => i.id);
-    
-    // Attempt to delete manual_payments and transactions linked to these invoices just in case
-    await adminClient.from("manual_payments").delete().in("invoice_id", invoiceIds);
-    await adminClient.from("transactions").delete().in("invoice_id", invoiceIds);
-    await adminClient.from("line_items").delete().in("invoice_id", invoiceIds);
-    
-    // Now delete the invoices
-    await adminClient.from("invoices").delete().eq("client_id", clientId);
-  }
+  // SOFT DELETE: Do NOT hard-delete clients or their invoices.
+  // This preserves the complete audit trail and prevents financial fraud cover-up.
+  // Clients are marked as deleted and hidden from active UI, but their invoices
+  // and transaction records remain fully intact for auditing and reconciliation.
+  //
+  // Strategy:
+  // 1. Set is_deleted = true and deleted_at = now() on the client row
+  // 2. Anonymize PII (name becomes "[Deleted Client]", email cleared) for data hygiene
+  // 3. Invoices remain untouched — they continue to show "[Deleted Client]" as the client
+  // 4. Log to audit trail
 
   const { error } = await adminClient
     .from("clients")
-    .delete()
+    .update({
+      is_deleted: true,
+      deleted_at: new Date().toISOString(),
+      // Anonymize PII while preserving invoice references
+      full_name: "[Deleted Client]",
+      email: null,
+      phone: null,
+      company_name: null,
+    })
     .eq("id", clientId);
 
   if (error) {
-    console.error("Failed to delete client:", error);
-    return { success: false, error: error.message };
+    // If is_deleted column doesn't exist yet, fall back to a flag-only approach
+    // using a naming convention. This handles cases where the migration hasn't run.
+    const { error: fallbackError } = await adminClient
+      .from("clients")
+      .update({
+        full_name: "[Deleted]",
+        email: null,
+        phone: null,
+      })
+      .eq("id", clientId);
+
+    if (fallbackError) {
+      console.error("Failed to soft-delete client:", fallbackError);
+      return { success: false, error: fallbackError.message };
+    }
   }
+
+  // Log to audit
+  await adminClient.from("audit_logs").insert({
+    event_type: "client_deleted",
+    actor_id: null,
+    actor_role: "merchant",
+    target_id: clientId,
+    target_type: "client",
+    metadata: {
+      actor_name: "Merchant",
+      merchant_id: client.merchant_id,
+      note: "Client soft-deleted. Invoices and transaction records preserved for audit.",
+      original_name: client.full_name,
+    },
+  });
 
   revalidatePath("/clients");
   return { success: true };
