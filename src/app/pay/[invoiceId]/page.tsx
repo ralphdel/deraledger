@@ -96,7 +96,7 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
     );
   }
 
-  const businessName = merchant?.business_name || "PurpLedger Merchant";
+  const businessName = merchant?.business_name || "Deraledger Merchant";
 
   // ── Invoice status logic ──────────────────────────────────────────────────
   // Check if merchant limit is exceeded
@@ -329,7 +329,7 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
           </CardContent>
         </Card>
         <div className="mt-8 flex items-center gap-2 text-neutral-400 text-sm">
-          <Lock className="w-4 h-4" /> SECURED BY PURPLEDGER
+          <Lock className="w-4 h-4" /> SECURED BY DERALEDGER
         </div>
       </div>
     );

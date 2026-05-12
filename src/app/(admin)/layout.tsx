@@ -51,7 +51,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               <ShieldCheck className="h-5 w-5 text-white" />
             </div>
             <div>
-              <span className="text-lg font-bold text-white">PurpLedger</span>
+              <span className="text-lg font-bold text-white">Deraledger</span>
               <span className="text-[10px] font-semibold bg-red-500 text-white px-1.5 py-0.5 rounded ml-2 uppercase tracking-wider">Admin</span>
             </div>
           </Link>
@@ -83,7 +83,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             </Avatar>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium text-white truncate">SuperAdmin</p>
-              <p className="text-xs text-neutral-400 truncate">admin@purpledger.app</p>
+              <p className="text-xs text-neutral-400 truncate">admin@deraledger.app</p>
             </div>
           </div>
         </div>

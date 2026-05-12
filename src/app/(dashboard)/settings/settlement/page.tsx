@@ -276,7 +276,7 @@ export default function SettlementSettingsPage() {
           <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 flex items-start gap-2 mt-4">
             <AlertTriangle className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />
             <p className="text-xs text-blue-700 leading-relaxed">
-              By saving, you authorize PurpLedger to disburse funds collected from your clients into this account. 
+              By saving, you authorize Deraledger to disburse funds collected from your clients into this account. 
               Please ensure the account name matches your registered business name or personal name to avoid settlement delays.
             </p>
           </div>

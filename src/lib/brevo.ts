@@ -47,7 +47,7 @@ export async function sendTeamInviteEmail(
   const htmlContent = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #111827; border: 1px solid #E5E7EB; border-radius: 8px; overflow: hidden;">
       <div style="background-color: #4C1D95; padding: 24px; text-align: center;">
-        <h2 style="color: white; margin: 0; font-size: 22px;">You've been invited to PurpLedger!</h2>
+        <h2 style="color: white; margin: 0; font-size: 22px;">You've been invited to Deraledger!</h2>
       </div>
       <div style="padding: 30px;">
         <p>Hello,</p>
@@ -67,7 +67,7 @@ export async function sendTeamInviteEmail(
         <div style="background-color: #F0FDF4; border: 1px solid #BBF7D0; border-radius: 8px; padding: 20px; margin: 20px 0;">
           <p style="margin: 0 0 12px 0; font-weight: bold; color: #166534;">To accept this invitation:</p>
           <table style="width: 100%; border-collapse: collapse;">
-            <tr><td style="padding: 6px 0; color: #166534; vertical-align: top; width: 24px; font-weight: bold;">1.</td><td style="padding: 6px 0;">Go to the <a href="${loginLink}" style="color: #4C1D95; font-weight: bold;">PurpLedger Login Page</a></td></tr>
+            <tr><td style="padding: 6px 0; color: #166534; vertical-align: top; width: 24px; font-weight: bold;">1.</td><td style="padding: 6px 0;">Go to the <a href="${loginLink}" style="color: #4C1D95; font-weight: bold;">Deraledger Login Page</a></td></tr>
             <tr><td style="padding: 6px 0; color: #166534; vertical-align: top; font-weight: bold;">2.</td><td style="padding: 6px 0;">Enter your email: <strong>${toEmail}</strong></td></tr>
             <tr><td style="padding: 6px 0; color: #166534; vertical-align: top; font-weight: bold;">3.</td><td style="padding: 6px 0;">Enter the temporary password above</td></tr>
             <tr><td style="padding: 6px 0; color: #166534; vertical-align: top; font-weight: bold;">4.</td><td style="padding: 6px 0;">Enter the Business ID: <strong>${workspaceCode}</strong></td></tr>
@@ -86,17 +86,17 @@ export async function sendTeamInviteEmail(
         </p>
       </div>
       <div style="background-color: #F9FAFB; padding: 16px; text-align: center; border-top: 1px solid #E5E7EB;">
-        <p style="margin: 0; font-size: 12px; color: #9CA3AF;">PurpLedger &mdash; Smart Invoicing & Payment Tracking</p>
+        <p style="margin: 0; font-size: 12px; color: #9CA3AF;">Deraledger &mdash; Smart Invoicing & Payment Tracking</p>
       </div>
     </div>
   `;
 
-  const textContent = `You've been invited to join ${businessName} on PurpLedger!\n\nRole: ${role.toUpperCase()}\nBusiness ID: ${workspaceCode}\nTemporary Password: ${tempPassword}\nYour Email: ${toEmail}\n\nSteps:\n1. Go to ${loginLink}\n2. Enter your email: ${toEmail}\n3. Enter the temporary password above\n4. Enter Business ID: ${workspaceCode}\n5. You'll be redirected to set a permanent password\n\nIf you did not expect this, ignore this email.`;
+  const textContent = `You've been invited to join ${businessName} on Deraledger!\n\nRole: ${role.toUpperCase()}\nBusiness ID: ${workspaceCode}\nTemporary Password: ${tempPassword}\nYour Email: ${toEmail}\n\nSteps:\n1. Go to ${loginLink}\n2. Enter your email: ${toEmail}\n3. Enter the temporary password above\n4. Enter Business ID: ${workspaceCode}\n5. You'll be redirected to set a permanent password\n\nIf you did not expect this, ignore this email.`;
 
   return sendEmail({
-    sender: { name: "PurpLedger", email: ADMIN_EMAIL },
+    sender: { name: "Deraledger", email: ADMIN_EMAIL },
     to: [{ email: toEmail }],
-    subject: `You've been invited to join ${businessName} on PurpLedger`,
+    subject: `You've been invited to join ${businessName} on Deraledger`,
     htmlContent,
     textContent,
   });
@@ -109,7 +109,7 @@ export async function sendPasswordResetEmail(toEmail: string, resetLink: string)
         <h2 style="color: white; margin: 0;">Reset Your Password</h2>
       </div>
       <div style="padding: 30px;">
-        <p>We received a request to reset your PurpLedger password.</p>
+        <p>We received a request to reset your Deraledger password.</p>
         <p>Click the button below to create a new password. This link expires in 1 hour.</p>
         <div style="text-align: center; margin: 30px 0;">
           <a href="${resetLink}" style="background-color: #4C1D95; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 16px; display: inline-block;">
@@ -123,9 +123,9 @@ export async function sendPasswordResetEmail(toEmail: string, resetLink: string)
   `;
 
   return sendEmail({
-    sender: { name: "PurpLedger", email: ADMIN_EMAIL },
+    sender: { name: "Deraledger", email: ADMIN_EMAIL },
     to: [{ email: toEmail }],
-    subject: "Reset your PurpLedger password",
+    subject: "Reset your Deraledger password",
     htmlContent,
   });
 }
@@ -312,12 +312,12 @@ export async function sendOnboardingWelcomeEmail(
   const htmlContent = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #111827; border: 1px solid #E5E7EB; border-radius: 8px; overflow: hidden;">
       <div style="background-color: #4C1D95; padding: 28px; text-align: center;">
-        <h1 style="color: white; margin: 0; font-size: 24px;">Welcome to PurpLedger!</h1>
+        <h1 style="color: white; margin: 0; font-size: 24px;">Welcome to Deraledger!</h1>
         <p style="color: #C4B5FD; margin: 8px 0 0 0; font-size: 14px;">Your ${planLabel} plan (${planPrice}) is now active${expiryDate ? ` until ${new Date(expiryDate).toLocaleDateString('en-NG')}` : ""}</p>
       </div>
       <div style="padding: 32px;">
         <p>Hello ${businessName},</p>
-        <p>${plan === "starter" ? `Your <strong>PurpLedger ${planLabel} Plan</strong> is now active. Your account is ready.` : `Your payment for the <strong>PurpLedger ${planLabel} Plan</strong> has been confirmed. Your account is ready.`}</p>
+        <p>${plan === "starter" ? `Your <strong>Deraledger ${planLabel} Plan</strong> is now active. Your account is ready.` : `Your payment for the <strong>Deraledger ${planLabel} Plan</strong> has been confirmed. Your account is ready.`}</p>
         <p>Click the button below to set your password and access your dashboard.</p>
         <div style="text-align: center; margin: 32px 0;">
           <a href="${setPasswordLink}" style="background-color: #4C1D95; color: white; padding: 14px 32px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 16px; display: inline-block;">
@@ -331,15 +331,15 @@ export async function sendOnboardingWelcomeEmail(
         </div>
       </div>
       <div style="background-color: #F9FAFB; padding: 16px; text-align: center; border-top: 1px solid #E5E7EB;">
-        <p style="margin: 0; font-size: 12px; color: #9CA3AF;">PurpLedger &mdash; Smart Invoicing &amp; Payment Tracking</p>
+        <p style="margin: 0; font-size: 12px; color: #9CA3AF;">Deraledger &mdash; Smart Invoicing &amp; Payment Tracking</p>
       </div>
     </div>
   `;
 
   return sendEmail({
-    sender: { name: "PurpLedger", email: ADMIN_EMAIL },
+    sender: { name: "Deraledger", email: ADMIN_EMAIL },
     to: [{ email: toEmail }],
-    subject: `Welcome to PurpLedger — set your password to get started`,
+    subject: `Welcome to Deraledger — set your password to get started`,
     htmlContent,
   });
 }
@@ -400,7 +400,7 @@ export async function sendRecordReminderEmail(
         <p style="font-size: 14px; color: #4B5563;">Thank you for your prompt attention.</p>
       </div>
       <div style="background-color: #F9FAFB; padding: 16px; text-align: center; border-top: 1px solid #E5E7EB;">
-        <p style="margin: 0; font-size: 12px; color: #9CA3AF;">PurpLedger &mdash; Smart Invoicing &amp; Payment Tracking</p>
+        <p style="margin: 0; font-size: 12px; color: #9CA3AF;">Deraledger &mdash; Smart Invoicing &amp; Payment Tracking</p>
       </div>
     </div>
   `;
@@ -438,10 +438,10 @@ export async function sendSubscriptionExpiringEmail(
       <div style="padding: 30px;">
         <p>Hello ${businessName},</p>
         <p style="font-size: 15px; line-height: 1.6;">
-          This is a reminder that your PurpLedger <strong>${planType.toUpperCase()}</strong> plan will expire in <strong>${daysRemaining} days</strong> (on ${formattedDate}).
+          This is a reminder that your Deraledger <strong>${planType.toUpperCase()}</strong> plan will expire in <strong>${daysRemaining} days</strong> (on ${formattedDate}).
         </p>
         <div style="background-color: #F9FAFB; border: 1px solid #E5E7EB; padding: 16px; border-radius: 6px; margin: 20px 0;">
-          <p style="margin: 0; color: #374151;">To ensure uninterrupted access to PurpLedger's invoicing and collection tools, please renew your subscription (${amount}) before it expires.</p>
+          <p style="margin: 0; color: #374151;">To ensure uninterrupted access to Deraledger's invoicing and collection tools, please renew your subscription (${amount}) before it expires.</p>
         </div>
         <div style="text-align: center; margin: 30px 0;">
           <a href="${settingsLink}" style="background-color: #4C1D95; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 16px; display: inline-block;">
@@ -450,15 +450,15 @@ export async function sendSubscriptionExpiringEmail(
         </div>
       </div>
       <div style="background-color: #F9FAFB; padding: 16px; text-align: center; border-top: 1px solid #E5E7EB;">
-        <p style="margin: 0; font-size: 12px; color: #9CA3AF;">PurpLedger &mdash; Smart Invoicing &amp; Payment Tracking</p>
+        <p style="margin: 0; font-size: 12px; color: #9CA3AF;">Deraledger &mdash; Smart Invoicing &amp; Payment Tracking</p>
       </div>
     </div>
   `;
 
   return sendEmail({
-    sender: { name: "PurpLedger Subscriptions", email: ADMIN_EMAIL },
+    sender: { name: "Deraledger Subscriptions", email: ADMIN_EMAIL },
     to: [{ email: toEmail }],
-    subject: `Action Required: Your PurpLedger plan expires in ${daysRemaining} days`,
+    subject: `Action Required: Your Deraledger plan expires in ${daysRemaining} days`,
     htmlContent,
   });
 }
@@ -486,25 +486,25 @@ export async function sendSubscriptionRenewalEmail(
       <div style="padding: 30px;">
         <p>Hello ${businessName},</p>
         <p style="font-size: 15px; line-height: 1.6;">
-          Thank you! Your PurpLedger <strong>${planType.toUpperCase()}</strong> plan has been successfully renewed.
+          Thank you! Your Deraledger <strong>${planType.toUpperCase()}</strong> plan has been successfully renewed.
         </p>
         <div style="background-color: #F9FAFB; border: 1px solid #E5E7EB; padding: 16px; border-radius: 6px; margin: 20px 0;">
           <p style="margin: 4px 0; color: #374151;"><strong>Amount Paid:</strong> ₦${amountPaid.toLocaleString('en-US')}</p>
           <p style="margin: 4px 0; color: #374151;"><strong>New Period:</strong> ${formattedStart} to ${formattedEnd}</p>
           <p style="margin: 4px 0; color: #374151;"><strong>Reference:</strong> ${reference}</p>
         </div>
-        <p style="font-size: 14px; color: #4B5563;">Thank you for trusting PurpLedger with your collections.</p>
+        <p style="font-size: 14px; color: #4B5563;">Thank you for trusting Deraledger with your collections.</p>
       </div>
       <div style="background-color: #F9FAFB; padding: 16px; text-align: center; border-top: 1px solid #E5E7EB;">
-        <p style="margin: 0; font-size: 12px; color: #9CA3AF;">PurpLedger &mdash; Smart Invoicing &amp; Payment Tracking</p>
+        <p style="margin: 0; font-size: 12px; color: #9CA3AF;">Deraledger &mdash; Smart Invoicing &amp; Payment Tracking</p>
       </div>
     </div>
   `;
 
   return sendEmail({
-    sender: { name: "PurpLedger Subscriptions", email: ADMIN_EMAIL },
+    sender: { name: "Deraledger Subscriptions", email: ADMIN_EMAIL },
     to: [{ email: toEmail }],
-    subject: `Receipt: PurpLedger Subscription Renewed`,
+    subject: `Receipt: Deraledger Subscription Renewed`,
     htmlContent,
   });
 }
@@ -530,13 +530,13 @@ export async function sendSubscriptionExpiredEmail(
       <div style="padding: 30px;">
         <p>Hello ${businessName},</p>
         <p style="font-size: 15px; line-height: 1.6;">
-          Your PurpLedger <strong>${planType.toUpperCase()}</strong> plan has expired today.
+          Your Deraledger <strong>${planType.toUpperCase()}</strong> plan has expired today.
         </p>
         <div style="background-color: #FEF2F2; border: 1px solid #FECACA; padding: 16px; border-radius: 6px; margin: 20px 0; color: #991B1B;">
           <p style="margin: 0 0 8px 0; font-weight: bold;">Features affected:</p>
           <ul style="margin: 0; padding-left: 20px; font-size: 14px;">
             <li>Payment links are now inactive.</li>
-            <li>PurpBot AI is disabled.</li>
+            <li>DeraBot AI is disabled.</li>
             <li>Team members cannot access the dashboard.</li>
           </ul>
         </div>
@@ -547,15 +547,15 @@ export async function sendSubscriptionExpiredEmail(
         </div>
       </div>
       <div style="background-color: #F9FAFB; padding: 16px; text-align: center; border-top: 1px solid #E5E7EB;">
-        <p style="margin: 0; font-size: 12px; color: #9CA3AF;">PurpLedger &mdash; Smart Invoicing &amp; Payment Tracking</p>
+        <p style="margin: 0; font-size: 12px; color: #9CA3AF;">Deraledger &mdash; Smart Invoicing &amp; Payment Tracking</p>
       </div>
     </div>
   `;
 
   return sendEmail({
-    sender: { name: "PurpLedger Subscriptions", email: ADMIN_EMAIL },
+    sender: { name: "Deraledger Subscriptions", email: ADMIN_EMAIL },
     to: [{ email: toEmail }],
-    subject: `Notice: Your PurpLedger subscription has expired`,
+    subject: `Notice: Your Deraledger subscription has expired`,
     htmlContent,
   });
 }
@@ -589,13 +589,13 @@ export async function sendSubscriptionGraceEmail(
         </div>
       </div>
       <div style="background-color: #F9FAFB; padding: 16px; text-align: center; border-top: 1px solid #E5E7EB;">
-        <p style="margin: 0; font-size: 12px; color: #9CA3AF;">PurpLedger &mdash; Smart Invoicing &amp; Payment Tracking</p>
+        <p style="margin: 0; font-size: 12px; color: #9CA3AF;">Deraledger &mdash; Smart Invoicing &amp; Payment Tracking</p>
       </div>
     </div>
   `;
 
   return sendEmail({
-    sender: { name: "PurpLedger Subscriptions", email: ADMIN_EMAIL },
+    sender: { name: "Deraledger Subscriptions", email: ADMIN_EMAIL },
     to: [{ email: toEmail }],
     subject: `Grace Period: ${daysRemainingBeforeLock} days until account lock`,
     htmlContent,
@@ -622,13 +622,13 @@ export async function sendSubscriptionCancelledEmail(
       <div style="padding: 30px;">
         <p>Hello ${businessName},</p>
         <p style="font-size: 15px; line-height: 1.6;">
-          Your PurpLedger subscription has been deactivated by an administrator.
+          Your Deraledger subscription has been deactivated by an administrator.
         </p>
         <div style="background-color: #F9FAFB; border: 1px solid #E5E7EB; padding: 16px; border-radius: 6px; margin: 20px 0;">
           <p style="margin: 0 0 8px 0; color: #374151;"><strong>Status:</strong> Cancelled</p>
           <p style="margin: 0; color: #374151;"><strong>Note:</strong> ${reason || "Your subscription has been manually terminated."}</p>
         </div>
-        <p style="font-size: 14px; color: #4B5563;">Your access to smart invoicing, PurpBot AI, and payment tracking has been restricted. If you believe this was an error, please contact our support team immediately.</p>
+        <p style="font-size: 14px; color: #4B5563;">Your access to smart invoicing, DeraBot AI, and payment tracking has been restricted. If you believe this was an error, please contact our support team immediately.</p>
         <div style="text-align: center; margin: 30px 0;">
           <a href="${settingsLink}" style="background-color: #4C1D95; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 16px; display: inline-block;">
             Re-activate My Account
@@ -636,15 +636,15 @@ export async function sendSubscriptionCancelledEmail(
         </div>
       </div>
       <div style="background-color: #F9FAFB; padding: 16px; text-align: center; border-top: 1px solid #E5E7EB;">
-        <p style="margin: 0; font-size: 12px; color: #9CA3AF;">PurpLedger &mdash; Smart Invoicing &amp; Payment Tracking</p>
+        <p style="margin: 0; font-size: 12px; color: #9CA3AF;">Deraledger &mdash; Smart Invoicing &amp; Payment Tracking</p>
       </div>
     </div>
   `;
 
   return sendEmail({
-    sender: { name: "PurpLedger Subscriptions", email: ADMIN_EMAIL },
+    sender: { name: "Deraledger Subscriptions", email: ADMIN_EMAIL },
     to: [{ email: toEmail }],
-    subject: `Notice: Your PurpLedger subscription has been cancelled`,
+    subject: `Notice: Your Deraledger subscription has been cancelled`,
     htmlContent,
   });
 }

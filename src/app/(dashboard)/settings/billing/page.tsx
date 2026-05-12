@@ -212,7 +212,7 @@ export default function BillingSettingsPage() {
                   {statusStr === "Cancelled" 
                     ? "Your access has been deactivated by an administrator. Please renew your plan or contact support to restore access."
                     : statusStr === "Expired" 
-                    ? "Renew now to restore access to PurpLedger's premium features including payment links and automated reminders." 
+                    ? "Renew now to restore access to Deraledger's premium features including payment links and automated reminders." 
                     : "Please renew your subscription soon to avoid any interruption in your invoicing and collection services."}
                 </p>
               </div>

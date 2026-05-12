@@ -11,10 +11,10 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "PurpLedger — The Smart Ledger for Modern Collections",
+  title: "Deraledger — The Smart Ledger for Modern Collections",
   description:
-    "PurpLedger is the smart invoicing platform that handles partial payments, proportional tax allocation, and dynamic ledger tracking. Built for Nigerian businesses.",
-  keywords: ["invoicing", "partial payments", "fintech", "Nigeria", "collections", "PurpLedger"],
+    "Deraledger is the smart invoicing platform that handles partial payments, proportional tax allocation, and dynamic ledger tracking. Built for Nigerian businesses.",
+  keywords: ["invoicing", "partial payments", "fintech", "Nigeria", "collections", "Deraledger"],
 };
 
 export default function RootLayout({

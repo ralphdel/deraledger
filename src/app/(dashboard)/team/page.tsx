@@ -69,7 +69,7 @@ const PERMISSION_LABELS: Record<string, string> = {
   manage_business: "Manage Business Info",
   manage_billing: "Manage Billing",
   manage_team: "Manage Team",
-  use_purpbot: "Use PurpBot AI",
+  use_purpbot: "Use DeraBot AI",
   view_settlements: "View Settlements & Reports",
   manage_advance_settings: "Manage Advance Settings",
   manage_settlement_account: "Manage Settlement Account",

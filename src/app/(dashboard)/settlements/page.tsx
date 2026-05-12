@@ -122,7 +122,7 @@ export default function MerchantSettlementsPage() {
       "Net Settlement (₦)": getNetAmount(t).toFixed(2),
       Reference: t.paystack_reference || "",
     }));
-    downloadCSV(csvData, `PurpLedger_Settlement_${label}`);
+    downloadCSV(csvData, `Deraledger_Settlement_${label}`);
   };
 
   const isToday = fromDate === todayStr && toDate === todayStr;

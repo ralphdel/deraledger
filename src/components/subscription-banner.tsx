@@ -64,7 +64,7 @@ export function SubscriptionBanner({
   if (isCancelled) {
     bgColor = "bg-neutral-900 text-white border-b border-neutral-800";
     buttonColor = "bg-purp-600 hover:bg-purp-500 text-white";
-    message = "Your PurpLedger account is currently deactivated by an administrator.";
+    message = "Your Deraledger account is currently deactivated by an administrator.";
     Icon = AlertTriangle;
   } else if (isExpired) {
     bgColor = "bg-red-50 text-red-900 border-b border-red-200";

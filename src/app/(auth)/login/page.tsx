@@ -50,13 +50,13 @@ export default function LoginPage() {
     <div>
       <div className="lg:hidden flex items-center gap-2 mb-8">
         <div className="w-8 h-8 bg-purp-900 rounded-lg flex items-center justify-center">
-          <span className="text-white font-bold text-sm">P</span>
+          <span className="text-white font-bold text-sm">D</span>
         </div>
-        <span className="text-xl font-bold text-purp-900">PurpLedger</span>
+        <span className="text-xl font-bold text-purp-900">Deraledger</span>
       </div>
 
       <h1 className="text-2xl font-bold text-purp-900">Welcome back</h1>
-      <p className="mt-2 text-neutral-500">Sign in to your PurpLedger account</p>
+      <p className="mt-2 text-neutral-500">Sign in to your Deraledger account</p>
 
       {/* Login Mode Toggle */}
       <div className="flex p-1 mt-6 bg-neutral-100 rounded-lg border border-neutral-200">

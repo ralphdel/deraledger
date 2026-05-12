@@ -36,7 +36,7 @@ export async function POST(request: Request) {
     const appUrl = configuredUrl || (process.env.NODE_ENV === "production" ? "https://purpledger.vercel.app" : "http://localhost:3000");
 
     const result = await PaymentService.initializeTransaction({
-      email: user.email || merchant.email || "billing@purpledger.app",
+      email: user.email || merchant.email || "billing@deraledger.app",
       amountKobo,
       reference,
       // Use a dedicated callback URL so we can detect the redirect and verify payment

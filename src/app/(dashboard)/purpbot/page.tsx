@@ -21,15 +21,15 @@ interface Message {
 const ROLE_KNOWLEDGE: Record<string, { description: string; permissions: string[] }> = {
   owner: {
     description: "Full unrestricted access to all platform features including settlement account management, billing, team management, and all financial operations.",
-    permissions: ["View & create invoices", "Edit & void invoices", "Record payments", "Manage clients (add/edit/delete)", "View analytics & transactions", "Manage KYC & business settings", "Manage billing & subscription", "Manage team members & roles", "Use PurpBot", "View settlements", "Manage settlement account", "Manage advanced settings", "Manage item catalog", "Manage discount templates", "View item catalog", "View discount templates"]
+    permissions: ["View & create invoices", "Edit & void invoices", "Record payments", "Manage clients (add/edit/delete)", "View analytics & transactions", "Manage KYC & business settings", "Manage billing & subscription", "Manage team members & roles", "Use DeraBot", "View settlements", "Manage settlement account", "Manage advanced settings", "Manage item catalog", "Manage discount templates", "View item catalog", "View discount templates"]
   },
   admin: {
     description: "Broad operational access. Can manage most business functions but CANNOT manage billing, delete clients, void invoices, or change the settlement account.",
-    permissions: ["View & create invoices", "Edit invoices", "Record payments", "Manual close invoices", "Manage clients (add/edit, NOT delete)", "View analytics & transactions", "Change fee settings", "Manage business settings", "Manage team members", "Use PurpBot", "View settlements", "Manage advanced settings", "Manage item catalog", "Manage discount templates", "View item catalog", "View discount templates"]
+    permissions: ["View & create invoices", "Edit invoices", "Record payments", "Manual close invoices", "Manage clients (add/edit, NOT delete)", "View analytics & transactions", "Change fee settings", "Manage business settings", "Manage team members", "Use DeraBot", "View settlements", "Manage advanced settings", "Manage item catalog", "Manage discount templates", "View item catalog", "View discount templates"]
   },
   accountant: {
     description: "Financial operations access. Can create invoices, record payments, view financial data and analytics, but cannot manage team, delete clients, or change settings.",
-    permissions: ["View & create invoices", "Edit invoices", "Record payments", "Manual close invoices", "View clients", "View analytics & transactions", "Use PurpBot", "View settlements", "View item catalog", "View discount templates"]
+    permissions: ["View & create invoices", "Edit invoices", "Record payments", "Manual close invoices", "View clients", "View analytics & transactions", "Use DeraBot", "View settlements", "View item catalog", "View discount templates"]
   },
   support: {
     description: "Limited client-facing access. Can view invoices and clients, edit client info, but cannot create invoices, view analytics, or access financial settings.",
@@ -41,7 +41,7 @@ const quickActions = [
   { label: "Top outstanding balance", query: "Which client has the highest outstanding balance?", icon: TrendingUp },
   { label: "Total collected", query: "How much have I collected in total?", icon: DollarSign },
   { label: "Overdue invoices", query: "Which invoices are overdue?", icon: FileText },
-  { label: "Role permissions", query: "What can each role do on PurpLedger?", icon: ShieldAlert },
+  { label: "Role permissions", query: "What can each role do on Deraledger?", icon: ShieldAlert },
   { label: "Client summary", query: "Give me a summary of all my clients", icon: Users },
   { label: "My Verification Status", query: "What is my current tier and KYC verification status?", icon: Crown },
 ];
@@ -91,7 +91,7 @@ export default function PurpBotPage() {
           {
             id: "welcome",
             role: "assistant",
-            content: `Hi${merch ? ` ${merch.business_name.split(" ")[0]}` : ""}! I'm PurpBot, your read-only financial analyst. I've loaded your ledger — you have **${inv.length} invoices** (${openCount} active${overdueCount > 0 ? `, **${overdueCount} overdue ⚠**` : ""}) with **${formatNaira(totalOutstanding)}** outstanding. Ask me anything about your collections, clients, roles, or payment trends.`,
+            content: `Hi${merch ? ` ${merch.business_name.split(" ")[0]}` : ""}! I'm DeraBot, your read-only financial analyst. I've loaded your ledger — you have **${inv.length} invoices** (${openCount} active${overdueCount > 0 ? `, **${overdueCount} overdue ⚠**` : ""}) with **${formatNaira(totalOutstanding)}** outstanding. Ask me anything about your collections, clients, roles, or payment trends.`,
           },
         ]);
       }
@@ -127,7 +127,7 @@ export default function PurpBotPage() {
     if (q.includes("verify") || q.includes("verification") || q.includes("kyc") || q.includes("onboarding") || q.includes("tier")) {
       let statusDetails = "";
       if (merchant?.verification_status === "verified") {
-        statusDetails = `Your account is fully **Verified** and currently on **Tier: ${merchant.merchant_tier.toUpperCase()}**. You have full access to PurpLedger's features and your payment limits correspond to your tier.`;
+        statusDetails = `Your account is fully **Verified** and currently on **Tier: ${merchant.merchant_tier.toUpperCase()}**. You have full access to Deraledger's features and your payment limits correspond to your tier.`;
       } else {
         const cacStatus = merchant?.cac_status || "Unverified";
         const bvnStatus = merchant?.bvn_status || "Unverified";
@@ -253,7 +253,7 @@ export default function PurpBotPage() {
       }
       // General role overview
       return {
-        content: `PurpLedger has **4 built-in roles**:\n\n**👑 Owner** — Full access to everything, including settlement account management and billing. Only one per workspace.\n\n**🛡️ Admin** — Broad operational access. Can manage invoices, clients, and team. Cannot void invoices, delete clients, or change the settlement account.\n\n**🧮 Accountant** — Financial operations only. Can create & edit invoices, record payments, view analytics. Cannot manage team or settings.\n\n**🎧 Support** — View-only access to invoices and clients. Can edit client info but cannot create invoices or view financial data.\n\nYou can also create **Custom Roles** with hand-picked permissions from Settings > Team.\n\nAsk me about a specific role, e.g. *"What can an accountant do?"*`,
+        content: `Deraledger has **4 built-in roles**:\n\n**👑 Owner** — Full access to everything, including settlement account management and billing. Only one per workspace.\n\n**🛡️ Admin** — Broad operational access. Can manage invoices, clients, and team. Cannot void invoices, delete clients, or change the settlement account.\n\n**🧮 Accountant** — Financial operations only. Can create & edit invoices, record payments, view analytics. Cannot manage team or settings.\n\n**🎧 Support** — View-only access to invoices and clients. Can edit client info but cannot create invoices or view financial data.\n\nYou can also create **Custom Roles** with hand-picked permissions from Settings > Team.\n\nAsk me about a specific role, e.g. *"What can an accountant do?"*`,
         citations: ["Team & RBAC"],
       };
     }
@@ -367,9 +367,9 @@ export default function PurpBotPage() {
             <div className="w-16 h-16 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mb-4 border-2 border-amber-200">
               <Bot className="w-8 h-8" />
             </div>
-            <h2 className="text-xl font-bold text-amber-900 mb-2">PurpBot is Locked</h2>
+            <h2 className="text-xl font-bold text-amber-900 mb-2">DeraBot is Locked</h2>
             <p className="text-amber-700 max-w-md mx-auto mb-6 text-sm">
-              Your current Starter plan does not include access to PurpBot AI. Upgrade your plan to get AI-powered financial insights, automated payment follow-ups, and natural language queries about your business data.
+              Your current Starter plan does not include access to DeraBot AI. Upgrade your plan to get AI-powered financial insights, automated payment follow-ups, and natural language queries about your business data.
             </p>
             <a href="/settings/billing">
               <Button className="bg-amber-600 hover:bg-amber-700 text-white font-bold border-2 border-amber-700">
@@ -388,7 +388,7 @@ export default function PurpBotPage() {
       <div>
         <h1 className="text-2xl font-bold text-purp-900 flex items-center gap-2">
           <Bot className="h-6 w-6 text-purp-700" />
-          PurpBot AI
+          DeraBot AI
         </h1>
         <p className="text-neutral-500 text-sm mt-1">
           Your read-only financial analyst. Ask questions about your ledger in plain English.
@@ -398,7 +398,7 @@ export default function PurpBotPage() {
       <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-start gap-3">
         <ShieldAlert className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
         <p className="text-sm text-amber-800">
-          <strong>Read-Only Guarantee:</strong> PurpBot operates with absolute read-only permissions at the database level. It cannot create, edit, or delete any invoices or client data.
+          <strong>Read-Only Guarantee:</strong> DeraBot operates with absolute read-only permissions at the database level. It cannot create, edit, or delete any invoices or client data.
         </p>
       </div>
 
@@ -484,7 +484,7 @@ export default function PurpBotPage() {
                 <div className="flex-1 bg-red-50 border border-red-200 rounded-lg flex items-center justify-center p-4">
                   <div className="flex items-center gap-2 text-red-600 font-medium text-sm">
                     <ShieldAlert className="w-5 h-5" />
-                    <span>PurpBot is deactivated. Please renew your subscription to ask questions.</span>
+                    <span>DeraBot is deactivated. Please renew your subscription to ask questions.</span>
                   </div>
                 </div>
               ) : (

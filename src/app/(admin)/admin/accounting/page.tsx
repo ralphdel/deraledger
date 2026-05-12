@@ -144,7 +144,7 @@ export default function AdminAccountingPage() {
       "Net Settlement (₦)": getNetAmount(t).toFixed(2),
       Reference: t.paystack_reference || "",
     }));
-    downloadCSV(csvData, `PurpLedger_Accounting${suffix}_${label}`);
+    downloadCSV(csvData, `Deraledger_Accounting${suffix}_${label}`);
   };
 
   const isToday = fromDate === todayStr && toDate === todayStr;

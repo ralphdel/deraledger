@@ -19,7 +19,7 @@ const PLAN_CONFIG: Record<string, any> = {
     priceKobo: 0,
     features: [
       "Unlimited Record-only Invoices",
-      "PurpBot AI financial insights",
+      "DeraBot AI financial insights",
       "Invoice sharing (WhatsApp, Email, QR)",
       "Basic audit log",
     ],
@@ -31,7 +31,7 @@ const PLAN_CONFIG: Record<string, any> = {
     features: [
       "Unlimited Record + Collection Invoices",
       "BVN verification for payment links",
-      "PurpBot AI financial insights",
+      "DeraBot AI financial insights",
       "Automated reminders + monthly report",
       "Owner + 1 team member",
       "₦5M monthly collection limit",
@@ -173,9 +173,9 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
       <div className="flex flex-col min-h-screen">
         <header className="py-6 px-6 md:px-12 flex items-center gap-2 bg-white border-b border-neutral-100">
           <div className="w-8 h-8 bg-purp-900 rounded-lg flex items-center justify-center">
-            <span className="text-white font-bold text-sm">P</span>
+              <span className="text-white font-bold text-sm">D</span>
           </div>
-          <span className="text-xl font-bold text-purp-900">PurpLedger</span>
+            <span className="text-xl font-bold text-purp-900">Deraledger</span>
         </header>
         <div className="flex-1 flex flex-col md:flex-row">
           <div className="w-full md:w-1/2 p-6 md:p-12 lg:p-24 flex items-center justify-center bg-purp-50">
@@ -226,7 +226,7 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
                 </div>
                 <div>
                   <p className="text-purp-300 text-sm font-medium uppercase tracking-wider">
-                    PurpLedger
+                    Deraledger
                   </p>
                   <h1 className="text-xl font-bold">{config.label} Plan</h1>
                 </div>
@@ -234,7 +234,7 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
               <div className="mb-8">
                 <span className="text-4xl font-bold">{config.price}</span>
                 <p className="text-purp-300 text-sm mt-1">
-                  PurpLedger absorbs the Paystack processing fee
+                  Deraledger absorbs the Paystack processing fee
                 </p>
               </div>
               <ul className="space-y-3">

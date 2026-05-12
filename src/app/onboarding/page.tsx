@@ -19,7 +19,7 @@ const plans = [
     badge: null,
     features: [
       { text: "Unlimited Record-only Invoices", included: true },
-      { text: "PurpBot AI analyst", included: true },
+      { text: "DeraBot AI analyst", included: true },
       { text: "Invoice sharing (WhatsApp, Email, QR)", included: true },
       { text: "Basic audit log", included: true },
       { text: "Online payment collection", included: false },
@@ -76,9 +76,9 @@ export default function OnboardingPage() {
       <div className="max-w-6xl mx-auto px-4 py-6">
         <Link href="/" className="flex items-center gap-2">
           <div className="w-10 h-10 bg-purp-900 rounded-lg flex items-center justify-center">
-            <span className="text-white font-bold text-lg">P</span>
+            <span className="text-white font-bold text-lg">D</span>
           </div>
-          <span className="text-2xl font-bold text-purp-900">PurpLedger</span>
+          <span className="text-2xl font-bold text-purp-900">Deraledger</span>
         </Link>
       </div>
 
@@ -196,7 +196,7 @@ export default function OnboardingPage() {
           </Link>
         </p>
         <p className="text-xs text-neutral-400 mt-4">
-          © 2026 PurpLedger. All rights reserved.
+          © 2026 Deraledger. All rights reserved.
         </p>
       </div>
     </div>

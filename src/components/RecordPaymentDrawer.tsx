@@ -72,7 +72,7 @@ export function RecordPaymentDrawer({ open, onOpenChange, invoiceId, merchantId,
         <SheetHeader>
           <SheetTitle className="text-purp-900 text-xl font-bold">Record Offline Payment</SheetTitle>
           <SheetDescription>
-            Log a payment received outside of the PurpLedger system. This will update the invoice's outstanding balance.
+            Log a payment received outside of the Deraledger system. This will update the invoice's outstanding balance.
           </SheetDescription>
         </SheetHeader>
 

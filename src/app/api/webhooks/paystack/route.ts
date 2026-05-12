@@ -717,7 +717,7 @@ async function handleInvoicePayment(
     await sendPaymentReceiptEmail(
       fullInvoice.clients.email,
       fullInvoice.clients.full_name || "Valued Client",
-      merchantData?.business_name || "PurpLedger Merchant",
+      merchantData?.business_name || "Deraledger Merchant",
       invoice.invoice_number,
       formatNaira(paymentAmount),
       formatNaira(newOutstanding),

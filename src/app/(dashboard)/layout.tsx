@@ -66,7 +66,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     });
   }, []);
 
-  const businessName = merchant?.business_name || "PurpLedger";
+  const businessName = merchant?.business_name || "Deraledger";
   const initials = businessName.split(" ").map(n => n[0]).join("").toUpperCase().substring(0, 2);
 
   const allNavItems: NavItem[] = [
@@ -76,7 +76,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     { href: "/settlements", label: "Settlements", icon: Banknote, requiredPermission: "view_settlements" },
     { href: "/accounting-report", label: "Reports", icon: BarChart, requiredPermission: "view_analytics" },
     { href: "/team", label: "Team", icon: UsersRound, requiredPermission: "manage_team" },
-    { href: "/purpbot", label: "PurpBot AI", icon: Bot, requiredPermission: "use_purpbot" },
+    { href: "/purpbot", label: "DeraBot AI", icon: Bot, requiredPermission: "use_purpbot" },
     { href: "/settings", label: "Settings", icon: Settings },
   ];
 
@@ -89,7 +89,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center">
               <div className="w-4 h-4 bg-purp-600 rounded-sm" />
             </div>
-            <span className="text-xl font-bold tracking-tight">PurpLedger</span>
+            <span className="text-xl font-bold tracking-tight">Deraledger</span>
           </Link>
         </div>
 
@@ -133,7 +133,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center">
                   <div className="w-4 h-4 bg-purp-600 rounded-sm" />
                 </div>
-                <span className="text-xl font-bold tracking-tight">PurpLedger</span>
+                <span className="text-xl font-bold tracking-tight">Deraledger</span>
               </Link>
               <button onClick={() => setSidebarOpen(false)} className="text-white p-1">
                 <X className="h-6 w-6" />
@@ -303,7 +303,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               </p>
               {merchant.is_suspended ? (
                 <a
-                  href="mailto:support@purpledger.com"
+                  href="mailto:support@deraledger.com"
                   className="bg-red-600 text-white px-8 py-3 rounded-lg font-bold hover:bg-red-700 transition-colors"
                 >
                   Contact Support

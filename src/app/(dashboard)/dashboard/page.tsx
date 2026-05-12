@@ -174,7 +174,7 @@ export default function DashboardPage() {
                 <div>
                   <p className="font-semibold text-sm text-blue-900">Profile Update Required</p>
                   <p className="text-xs text-blue-700 mt-0.5">
-                    We&apos;ve updated PurpLedger! Please go to Settings to update your Trading Name{effectiveTier !== "starter" ? " and Owner's Name" : ""} for a smoother experience.
+                    We&apos;ve updated Deraledger! Please go to Settings to update your Trading Name{effectiveTier !== "starter" ? " and Owner's Name" : ""} for a smoother experience.
                   </p>
                 </div>
               </div>

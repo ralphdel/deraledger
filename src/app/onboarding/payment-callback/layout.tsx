@@ -9,9 +9,9 @@ export default function OnboardingAuthLayout({ children }: { children: React.Rea
         <div>
           <Link href="/" className="flex items-center gap-2">
             <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center">
-              <span className="text-purp-900 font-bold text-lg">P</span>
+              <span className="text-purp-900 font-bold text-lg">D</span>
             </div>
-            <span className="text-2xl font-bold text-white">PurpLedger</span>
+            <span className="text-2xl font-bold text-white">Deraledger</span>
           </Link>
         </div>
         <div>
@@ -25,7 +25,7 @@ export default function OnboardingAuthLayout({ children }: { children: React.Rea
             {[
               "Unlimited Record & Collection Invoices",
               "Proportional tax & discount allocation",
-              "AI-powered insights with PurpBot",
+              "AI-powered insights with DeraBot",
               "Automated reminders — email & WhatsApp",
             ].map((item) => (
               <div key={item} className="flex items-center gap-3">
@@ -39,7 +39,7 @@ export default function OnboardingAuthLayout({ children }: { children: React.Rea
             ))}
           </div>
         </div>
-        <p className="text-purp-200 text-sm">© 2026 PurpLedger. All rights reserved.</p>
+        <p className="text-purp-200 text-sm">© 2026 Deraledger. All rights reserved.</p>
       </div>
 
       {/* Right Panel - Form */}

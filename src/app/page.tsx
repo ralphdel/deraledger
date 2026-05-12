@@ -37,7 +37,7 @@ const features = [
   },
   {
     icon: Bot,
-    title: "PurpBot AI Analyst",
+    title: "DeraBot AI Analyst",
     description:
       "Ask natural language questions about your collections, aging reports, and client history. Read-only by design — your data stays safe.",
   },
@@ -59,7 +59,7 @@ const steps = [
   {
     step: "01",
     title: "Create Your Invoice",
-    description: "Add line items, set discounts and tax. PurpLedger calculates everything and generates a payment link instantly.",
+    description: "Add line items, set discounts and tax. Deraledger calculates everything and generates a payment link instantly.",
   },
   {
     step: "02",
@@ -69,7 +69,7 @@ const steps = [
   {
     step: "03",
     title: "Track Every Naira",
-    description: "Watch payments come in. PurpLedger updates balances in real time, allocates tax proportionally, and closes invoices automatically.",
+    description: "Watch payments come in. Deraledger updates balances in real time, allocates tax proportionally, and closes invoices automatically.",
   },
 ];
 
@@ -82,9 +82,9 @@ export default function LandingPage() {
           <div className="flex items-center justify-between h-16">
             <div className="flex items-center gap-2">
               <div className="w-8 h-8 bg-purp-900 rounded-lg flex items-center justify-center">
-                <span className="text-white font-bold text-sm">P</span>
+                <span className="text-white font-bold text-sm">D</span>
               </div>
-              <span className="text-xl font-bold text-purp-900">PurpLedger</span>
+              <span className="text-xl font-bold text-purp-900">Deraledger</span>
             </div>
             <div className="hidden md:flex items-center gap-8">
               <a href="#features" className="text-neutral-500 hover:text-purp-700 font-medium text-sm">
@@ -128,7 +128,7 @@ export default function LandingPage() {
               <span className="text-purp-700">Modern Collections</span>
             </h1>
             <p className="mt-6 text-lg md:text-xl text-neutral-500 leading-relaxed max-w-2xl mx-auto">
-              Stop issuing multiple invoices for one job. PurpLedger handles partial payments,
+              Stop issuing multiple invoices for one job. Deraledger handles partial payments,
               proportional tax allocation, and dynamic ledger tracking — so every naira is traceable.
             </p>
             <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
@@ -171,7 +171,7 @@ export default function LandingPage() {
               Everything You Need to Collect Smarter
             </h2>
             <p className="mt-4 text-lg text-neutral-500 max-w-2xl mx-auto">
-              PurpLedger replaces rigid invoicing with a living ledger that adapts to how your clients actually pay.
+              Deraledger replaces rigid invoicing with a living ledger that adapts to how your clients actually pay.
             </p>
           </div>
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -239,7 +239,7 @@ export default function LandingPage() {
               <div className="text-3xl font-bold text-purp-900 mb-6">Free</div>
               <ul className="space-y-3 mb-8 flex-1">
                 <li className="flex items-start gap-2"><CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" /><span className="text-neutral-600">Draft Invoicing Enabled</span></li>
-                <li className="flex items-start gap-2"><CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" /><span className="text-neutral-600">PurpBot AI Enabled</span></li>
+                <li className="flex items-start gap-2"><CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" /><span className="text-neutral-600">DeraBot AI Enabled</span></li>
                 <li className="flex items-start gap-2"><XCircle className="h-5 w-5 text-red-500 shrink-0" /><span className="text-neutral-600">₦0 Monthly Collection Limit</span></li>
                 <li className="flex items-start gap-2"><XCircle className="h-5 w-5 text-red-500 shrink-0" /><span className="text-neutral-600">Payment Links Locked</span></li>
               </ul>
@@ -260,7 +260,7 @@ export default function LandingPage() {
                 <li className="flex items-start gap-2"><CheckCircle2 className="h-5 w-5 text-emerald-400 shrink-0" /><span className="text-white">Draft Invoicing Enabled</span></li>
                 <li className="flex items-start gap-2"><CheckCircle2 className="h-5 w-5 text-emerald-400 shrink-0" /><span className="text-white">Payment Links Enabled</span></li>
                 <li className="flex items-start gap-2"><CheckCircle2 className="h-5 w-5 text-emerald-400 shrink-0" /><span className="text-white">₦5,000,000 / mo Limit</span></li>
-                <li className="flex items-start gap-2"><CheckCircle2 className="h-5 w-5 text-emerald-400 shrink-0" /><span className="text-white">PurpBot AI Enabled</span></li>
+                <li className="flex items-start gap-2"><CheckCircle2 className="h-5 w-5 text-emerald-400 shrink-0" /><span className="text-white">DeraBot AI Enabled</span></li>
               </ul>
               <Link href="/onboarding/individual">
                 <Button className="w-full bg-white text-purp-900 hover:bg-purp-100 font-semibold h-11">Get Individual</Button>
@@ -276,7 +276,7 @@ export default function LandingPage() {
                 <li className="flex items-start gap-2"><CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" /><span className="text-neutral-600">Draft Invoicing Enabled</span></li>
                 <li className="flex items-start gap-2"><CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" /><span className="text-neutral-600">Payment Links Enabled</span></li>
                 <li className="flex items-start gap-2"><CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" /><span className="text-neutral-600">Unlimited Collection</span></li>
-                <li className="flex items-start gap-2"><CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" /><span className="text-neutral-600">PurpBot AI Enabled</span></li>
+                <li className="flex items-start gap-2"><CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" /><span className="text-neutral-600">DeraBot AI Enabled</span></li>
               </ul>
               <Link href="/onboarding/corporate">
                 <Button variant="outline" className="w-full border-2 border-purp-200 text-purp-900 hover:bg-purp-50 font-semibold h-11">Get Corporate</Button>
@@ -293,7 +293,7 @@ export default function LandingPage() {
             Ready to Transform Your Collections?
           </h2>
           <p className="mt-4 text-lg text-purp-200 leading-relaxed">
-            Join hundreds of Nigerian businesses using PurpLedger to track every naira,
+            Join hundreds of Nigerian businesses using Deraledger to track every naira,
             honour every partial payment, and eliminate invoice chaos.
           </p>
           <div className="mt-10">
@@ -313,9 +313,9 @@ export default function LandingPage() {
           <div className="flex flex-col md:flex-row items-center justify-between gap-6">
             <div className="flex items-center gap-2">
               <div className="w-8 h-8 bg-purp-900 rounded-lg flex items-center justify-center">
-                <span className="text-white font-bold text-sm">P</span>
+                <span className="text-white font-bold text-sm">D</span>
               </div>
-              <span className="text-lg font-bold text-purp-900">PurpLedger</span>
+              <span className="text-lg font-bold text-purp-900">Deraledger</span>
             </div>
             <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-6 text-sm text-neutral-500">
               <a href="#" className="hover:text-purp-700">Privacy</a>
@@ -324,7 +324,7 @@ export default function LandingPage() {
               <a href="#" className="hover:text-purp-700">Contact</a>
             </div>
             <p className="text-sm text-neutral-500">
-              © 2025 PurpLedger. All rights reserved.
+              © 2025 Deraledger. All rights reserved.
             </p>
           </div>
         </div>

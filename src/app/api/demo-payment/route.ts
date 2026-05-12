@@ -77,7 +77,7 @@ export async function POST(request: Request) {
 
     // Initialize transaction via PaymentService
     const result = await PaymentService.initializeTransaction({
-      email: invoice.clients?.email || "customer@purpledger.app",
+      email: invoice.clients?.email || "customer@deraledger.app",
       amountKobo: chargeAmountKobo,
       reference,
       subaccountCode: merchant.payment_subaccount_code,

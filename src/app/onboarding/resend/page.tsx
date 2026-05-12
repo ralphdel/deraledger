@@ -16,8 +16,8 @@ export default function OnboardingResendPage() {
       <p className="text-neutral-500 text-sm mb-6 max-w-sm mx-auto">
         The link in your welcome email has expired (links are valid for 1 hour). 
         Please contact support at{" "}
-        <a href="mailto:support@purpledger.com" className="text-purp-700 font-medium hover:underline">
-          support@purpledger.com
+        <a href="mailto:support@deraledger.com" className="text-purp-700 font-medium hover:underline">
+          support@deraledger.com
         </a>{" "}
         with your registered email to get a new activation link.
       </p>

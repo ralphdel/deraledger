@@ -51,8 +51,8 @@ export function SubscriptionExpiryModal({
         
         <p className="text-gray-600 mb-8 leading-relaxed">
           {status === "cancelled" 
-            ? "Your PurpLedger subscription has been deactivated by an administrator. You no longer have access to invoicing, PurpBot AI, or team management tools." 
-            : "Your PurpLedger subscription has expired. You currently have restricted access to your dashboard and cannot create new invoices or accept payments."
+            ? "Your Deraledger subscription has been deactivated by an administrator. You no longer have access to invoicing, DeraBot AI, or team management tools." 
+            : "Your Deraledger subscription has expired. You currently have restricted access to your dashboard and cannot create new invoices or accept payments."
           }
           Please renew your plan to restore full access.
         </p>

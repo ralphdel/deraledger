@@ -143,7 +143,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       ? Math.min(100, Math.round((Number(invoice.amount_paid) / Number(invoice.grand_total)) * 100))
       : 0;
 
-  const paymentUrl = `${typeof window !== "undefined" ? window.location.origin : "https://purpledger.app"}/pay/${invoice.id}`;
+  const paymentUrl = `${typeof window !== "undefined" ? window.location.origin : "https://deraledger.app"}/pay/${invoice.id}`;
   const displayLink = invoice.short_link || paymentUrl.replace(/^https?:\/\//, "");
 
   const copyLink = () => {
@@ -154,7 +154,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
   const shareViaWhatsApp = () => {
     const clientName = invoice.clients?.full_name || "Client";
-    const businessName = merchant?.business_name || "PurpLedger";
+    const businessName = merchant?.business_name || "Deraledger";
     const message = encodeURIComponent(
       `Hi ${clientName},\n\n` +
       `You have an invoice from *${businessName}*:\n\n` +
@@ -172,7 +172,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     startTransition(async () => {
       setEmailSending(true);
       const clientName = invoice.clients?.full_name || "Client";
-      const businessName = merchant?.business_name || "PurpLedger";
+      const businessName = merchant?.business_name || "Deraledger";
       
       const result = await sendInvoiceEmailAction({
         toEmail: emailTo,
@@ -711,7 +711,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                   variant="outline"
                   onClick={() => {
                     const msg = encodeURIComponent(
-                      `Hi ${clientName},\n\nPlease find your invoice from *${merchant?.business_name || "PurpLedger"}*:\n\n` +
+                      `Hi ${clientName},\n\nPlease find your invoice from *${merchant?.business_name || "Deraledger"}*:\n\n` +
                       `📄 Invoice: ${invoice.invoice_number}\n` +
                       `💰 Amount Due: ${formatNaira(Number(invoice.outstanding_balance))}\n\n` +
                       `View your invoice here:\n${window.location.origin}/invoices/${invoice.id}/print\n\n` +

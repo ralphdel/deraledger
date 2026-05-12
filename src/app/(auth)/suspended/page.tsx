@@ -15,7 +15,7 @@ export default function SuspendedPage() {
           </div>
           <h1 className="text-2xl font-bold text-purp-900">Account Suspended</h1>
           <p className="text-neutral-500 pb-4">
-            Your PurpLedger merchant account has been suspended by an administrator. You can no longer access your dashboard.
+            Your Deraledger merchant account has been suspended by an administrator. You can no longer access your dashboard.
           </p>
           <div className="bg-red-50 p-4 rounded-lg text-left text-sm space-y-2 border border-red-100">
             <p className="font-medium text-red-800">What does this mean?</p>
@@ -33,7 +33,7 @@ export default function SuspendedPage() {
         </CardContent>
       </Card>
       <p className="text-sm text-neutral-500">
-        Contact support at <a href="mailto:support@purpledger.app" className="text-purp-700 hover:underline">support@purpledger.app</a> for assistance.
+        Contact support at <a href="mailto:support@deraledger.app" className="text-purp-700 hover:underline">support@deraledger.app</a> for assistance.
       </p>
     </div>
   );
