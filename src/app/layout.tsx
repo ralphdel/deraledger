@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
-import Script from "next/script";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import "./globals.css";
 
@@ -11,10 +10,10 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Deraledger — The Smart Ledger for Modern Collections",
+  title: "DeraLedger - Built for Businesses That Get Paid in Parts",
   description:
-    "Deraledger is the smart invoicing platform that handles partial payments, proportional tax allocation, and dynamic ledger tracking. Built for Nigerian businesses.",
-  keywords: ["invoicing", "partial payments", "fintech", "Nigeria", "collections", "Deraledger"],
+    "DeraLedger is collections and receivables infrastructure for African businesses that accept deposits, installments, and fragmented payments.",
+  keywords: ["collections", "receivables", "partial payments", "fintech", "Africa", "DeraLedger"],
 };
 
 export default function RootLayout({

@@ -112,8 +112,12 @@ export default function BillingSettingsPage() {
   // always updated atomically during upgrade/renewal so it's the most reliable.
   const currentPlan = (merchant.subscription_plan || effectiveSubscription.plan_type || "starter") as string;
   const isStarter = currentPlan === "starter";
-  const planLabel = isStarter ? "Starter Plan" : currentPlan === "individual" ? "Individual Plan" : "Corporate Plan";
-  const planPrice = isStarter ? "Free" : currentPlan === "individual" ? "₦5,000" : "₦20,000";
+  const planLabel = isStarter
+    ? "Starter Plan"
+    : currentPlan === "individual"
+      ? "Individual / Collections Plan"
+      : "Business Plan";
+  const planPrice = isStarter ? "Free" : currentPlan === "individual" ? "NGN 5,000" : "NGN 20,000";
   
   const now = new Date();
   const expiryDate = new Date(effectiveSubscription.expiry_date);
@@ -165,7 +169,7 @@ export default function BillingSettingsPage() {
           <div className="flex flex-col gap-3 w-full md:w-auto">
             {isStarter ? (
               <Link href="/settings/upgrade/individual" className={cn(buttonVariants({ variant: "default" }), "bg-purp-900 hover:bg-purp-800 text-white w-full md:w-auto")}>
-                Upgrade Plan
+                Upgrade to Individual / Collections
               </Link>
             ) : (
               <>
@@ -174,11 +178,11 @@ export default function BillingSettingsPage() {
                   disabled={renewing}
                   className="bg-purp-900 hover:bg-purp-800 text-white w-full md:w-auto font-bold"
                 >
-                  {renewing ? "Initializing..." : `Renew Now — ${planPrice}`}
+                  {renewing ? "Initializing..." : `Renew Now - ${planPrice}`}
                 </Button>
                 {currentPlan === "individual" && (
                   <Link href="/settings/upgrade/corporate" className={cn(buttonVariants({ variant: "outline" }), "border-purp-200 text-purp-900 w-full md:w-auto")}>
-                    Upgrade to Corporate — ₦20,000
+                    Upgrade to Business - NGN 20,000
                   </Link>
                 )}
               </>

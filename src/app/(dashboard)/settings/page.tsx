@@ -173,7 +173,7 @@ export default function SettingsPage() {
 
     // Corporate accounts must provide CAC evidence to be meaningful
     if (isCorporate && !cacNumber && !cacFile) {
-      setKycError("Corporate accounts require a CAC Number or CAC Certificate. Please provide at least one to proceed.");
+      setKycError("Business accounts require a CAC Number or CAC Certificate. Please provide at least one to proceed.");
       return;
     }
 
@@ -294,7 +294,7 @@ export default function SettingsPage() {
                 <Shield className="h-5 w-5 text-emerald-600 mt-0.5 flex-shrink-0" />
               )}
               <div>
-                <p className="text-sm font-semibold text-emerald-800">Corporate Account (Tier 2)</p>
+                <p className="text-sm font-semibold text-emerald-800">Business Account</p>
                 <p className="text-sm text-emerald-700 mt-1">
                   {effectiveVerificationStatus === "verified" && (merchant?.cac_document_url || merchant?.cac_number)
                     ? "Your account is fully verified. You have access to unlimited monthly collections and payment links."
@@ -307,17 +307,17 @@ export default function SettingsPage() {
               <div className="flex gap-3">
                 <Shield className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
                 <div>
-                  <p className="text-sm font-semibold text-blue-800">Individual Account (Tier 1)</p>
+                  <p className="text-sm font-semibold text-blue-800">Individual / Collections Account</p>
                   <p className="text-sm text-blue-700 mt-1">
                     {effectiveVerificationStatus === "verified"
-                      ? "Your account is verified. You can collect up to ₦5,000,000 per month. Upgrade to Corporate to unlock unlimited collections and team members."
-                      : "Please complete your BVN verification below to activate your ₦5,000,000 monthly collection limit. Upgrade to Corporate to unlock unlimited collections."}
+                      ? "Your account is verified. You can collect up to NGN 5,000,000 per month. Upgrade to Business to unlock unlimited collections and advanced team controls."
+                      : "Please complete your BVN verification below to activate your NGN 5,000,000 monthly collection limit. Upgrade to Business to unlock unlimited collections."}
                   </p>
                 </div>
               </div>
               <Link href="/settings/upgrade/corporate">
                 <Button className="bg-purp-900 hover:bg-purp-800 text-white shrink-0">
-                  Upgrade to Corporate
+                  Upgrade to Business
                 </Button>
               </Link>
             </div>
@@ -328,19 +328,19 @@ export default function SettingsPage() {
                 <div>
                   <p className="text-sm font-semibold text-purp-900">Starter Account (Free)</p>
                   <p className="text-sm text-neutral-600 mt-1">
-                    You can generate up to 5 Record Invoices in total to test the platform. To collect live payments (₦5M/month) and unlock Collection invoices, upgrade your plan.
+                    You can create record invoices to test the workflow. To collect live payments, unlock payment links, and manage partial collections online, upgrade your plan.
                   </p>
                 </div>
               </div>
               <div className="flex flex-col sm:flex-row gap-2 shrink-0">
                 <Link href="/settings/upgrade/individual">
                   <Button className="w-full sm:w-auto bg-white border border-purp-200 text-purp-900 hover:bg-purp-50">
-                    Upgrade to Individual
+                    Upgrade to Individual / Collections
                   </Button>
                 </Link>
                 <Link href="/settings/upgrade/corporate">
                   <Button className="w-full sm:w-auto bg-purp-900 hover:bg-purp-800 text-white">
-                    Upgrade to Corporate
+                    Upgrade to Business
                   </Button>
                 </Link>
               </div>
@@ -412,14 +412,14 @@ export default function SettingsPage() {
                 <Lock className="h-8 w-8 mx-auto text-neutral-400 mb-2" />
                 <p className="text-sm font-semibold text-neutral-700">Verification Locked</p>
                 <p className="text-xs text-neutral-500 mt-1 max-w-sm mx-auto">
-                  Upgrade to Individual or Corporate to submit verification documents and start collecting payments.
+                  Upgrade to Individual / Collections or Business to submit verification documents and start collecting payments.
                 </p>
                 <div className="flex gap-2 justify-center mt-3">
                   <Link href="/settings/upgrade/individual">
-                    <Button size="sm" variant="outline" className="border-2 text-sm">Upgrade to Individual</Button>
+                    <Button size="sm" variant="outline" className="border-2 text-sm">Upgrade to Individual / Collections</Button>
                   </Link>
                   <Link href="/settings/upgrade/corporate">
-                    <Button size="sm" className="bg-purp-900 hover:bg-purp-800 text-white text-sm">Upgrade to Corporate</Button>
+                    <Button size="sm" className="bg-purp-900 hover:bg-purp-800 text-white text-sm">Upgrade to Business</Button>
                   </Link>
                 </div>
               </div>
@@ -467,7 +467,7 @@ export default function SettingsPage() {
               <div className="relative p-4 bg-neutral-50 border border-neutral-200 rounded-lg opacity-60">
                 <div className="flex items-center gap-2 text-sm text-neutral-500">
                   <Lock className="h-4 w-4" />
-                  <span>CAC Number — <strong>Available on Corporate plan</strong></span>
+                  <span>CAC Number — <strong>Available on Business plan</strong></span>
                 </div>
               </div>
             ) : null}
@@ -499,7 +499,7 @@ export default function SettingsPage() {
               <div className="relative p-4 bg-neutral-50 border border-neutral-200 rounded-lg opacity-60">
                 <div className="flex items-center gap-2 text-sm text-neutral-500">
                   <Lock className="h-4 w-4" />
-                  <span>CAC Certificate — <strong>Available on Corporate plan</strong></span>
+                  <span>CAC Certificate — <strong>Available on Business plan</strong></span>
                 </div>
               </div>
             ) : null}
@@ -531,7 +531,7 @@ export default function SettingsPage() {
               <div className="relative p-4 bg-neutral-50 border border-neutral-200 rounded-lg opacity-60">
                 <div className="flex items-center gap-2 text-sm text-neutral-500">
                   <Lock className="h-4 w-4" />
-                  <span>Utility Bill — <strong>Available on Corporate plan</strong></span>
+                  <span>Utility Bill — <strong>Available on Business plan</strong></span>
                 </div>
               </div>
             ) : null}
@@ -840,4 +840,3 @@ export default function SettingsPage() {
     </div>
   );
 }
-

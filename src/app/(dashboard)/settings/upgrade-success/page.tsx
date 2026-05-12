@@ -10,6 +10,12 @@ function UpgradeSuccessContent() {
   const searchParams = useSearchParams();
   const plan = searchParams.get("plan");
   const reference = searchParams.get("reference");
+  const planLabel =
+    plan === "corporate"
+      ? "Business"
+      : plan === "individual"
+        ? "Individual / Collections"
+        : "your selected";
   
   const [countdown, setCountdown] = useState(5);
   const [verifying, setVerifying] = useState(true);
@@ -58,10 +64,10 @@ function UpgradeSuccessContent() {
       </div>
       <h2 className="text-2xl font-bold text-purp-900">Upgrade Successful!</h2>
       <p className="text-neutral-600 text-lg">
-        Your account has been upgraded to the <span className="font-bold text-purp-900 capitalize">{plan}</span> plan.
+        Your account has been upgraded to the <span className="font-bold text-purp-900">{planLabel}</span> plan.
       </p>
       <div className="bg-purp-50 border border-purp-100 p-4 rounded-xl text-sm text-purp-800">
-        Your collection limits and features have been instantly unlocked.
+        Your workflow, collection limits, and verification steps have been updated.
       </div>
       <Button 
         onClick={() => router.replace("/settings")}

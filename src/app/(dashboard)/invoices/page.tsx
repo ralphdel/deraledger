@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import { createClient } from "@/lib/supabase/client";
 
 import {
   Table,
@@ -17,15 +16,32 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { getInvoices, getMerchant } from "@/lib/data";
+import { getInvoices, getMerchant, getAllTransactions, getAllManualPayments } from "@/lib/data";
 import { formatNaira, getStatusColor, getStatusLabel } from "@/lib/calculations";
-import type { InvoiceWithClient, Merchant } from "@/lib/types";
+import type { InvoiceWithClient, Merchant, Transaction } from "@/lib/types";
+
+type TransactionWithInvoice = Transaction & {
+  invoices?: InvoiceWithClient | null;
+};
+
+type ManualPaymentWithInvoice = {
+  id: string;
+  invoice_id: string;
+  merchant_id: string;
+  amount: number;
+  payment_method: string;
+  date_received: string;
+  created_at: string;
+  invoices?: InvoiceWithClient | null;
+};
 
 export default function InvoicesPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState<"all" | "record" | "collection">("all");
   const [invoices, setInvoices] = useState<InvoiceWithClient[]>([]);
+  const [transactions, setTransactions] = useState<TransactionWithInvoice[]>([]);
+  const [manualPayments, setManualPayments] = useState<ManualPaymentWithInvoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [merchant, setMerchant] = useState<Merchant | null>(null);
 
@@ -36,12 +52,15 @@ export default function InvoicesPage() {
       setTypeFilter(savedType as any);
     }
 
-    const sb = createClient();
     Promise.all([
       getInvoices(),
-      getMerchant()
-    ]).then(([invoiceData, merchantResult]) => {
+      getMerchant(),
+      getAllTransactions(),
+      getAllManualPayments(),
+    ]).then(([invoiceData, merchantResult, transactionData, manualPaymentData]) => {
       setInvoices(invoiceData);
+      setTransactions(transactionData as TransactionWithInvoice[]);
+      setManualPayments(manualPaymentData as ManualPaymentWithInvoice[]);
       if (merchantResult) setMerchant(merchantResult);
       
       // If Starter tier or unverified, force back to Record filter and don't allow Collection
@@ -83,9 +102,28 @@ export default function InvoicesPage() {
     return matchesType && matchesSearch && matchesStatus;
   });
 
-  const totalInvoiced = filteredInvoices.reduce((acc, inv) => acc + Number(inv.grand_total), 0);
-  const totalCollected = filteredInvoices.reduce((acc, inv) => acc + Number(inv.amount_paid), 0);
-  const totalOutstanding = filteredInvoices.reduce((acc, inv) => acc + Number(inv.outstanding_balance), 0);
+  const paymentsByInvoice = new Map<string, number>();
+  transactions
+    .filter((tx) => tx.status === "success")
+    .forEach((tx) => {
+      paymentsByInvoice.set(tx.invoice_id, (paymentsByInvoice.get(tx.invoice_id) || 0) + Number(tx.amount_paid || 0));
+    });
+  manualPayments.forEach((payment) => {
+    paymentsByInvoice.set(payment.invoice_id, (paymentsByInvoice.get(payment.invoice_id) || 0) + Number(payment.amount || 0));
+  });
+
+  const getInvoiceMetrics = (inv: InvoiceWithClient) => {
+    const grandTotal = Number(inv.grand_total || 0);
+    const recordedPaid = Number(inv.amount_paid || 0);
+    const paymentRecordPaid = paymentsByInvoice.get(inv.id) || 0;
+    const paid = Math.min(grandTotal, Math.max(recordedPaid, paymentRecordPaid));
+    const outstanding = Math.max(0, grandTotal - paid);
+    return { grandTotal, paid, outstanding };
+  };
+
+  const totalInvoiced = filteredInvoices.reduce((acc, inv) => acc + Number(inv.grand_total || 0), 0);
+  const totalCollected = filteredInvoices.reduce((acc, inv) => acc + getInvoiceMetrics(inv).paid, 0);
+  const totalOutstanding = filteredInvoices.reduce((acc, inv) => acc + getInvoiceMetrics(inv).outstanding, 0);
 
   if (loading) {
     return (
@@ -259,6 +297,7 @@ export default function InvoicesPage() {
             <TableBody>
               {filteredInvoices.map((inv) => {
                 const isRecord = inv.invoice_type === "record";
+                const metrics = getInvoiceMetrics(inv);
                 return (
                   <TableRow key={inv.id} className="border-b border-purp-200 hover:bg-purp-50 cursor-pointer">
                     <TableCell>
@@ -283,9 +322,9 @@ export default function InvoicesPage() {
                         {getStatusLabel(inv.status)}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-right font-semibold text-sm">{formatNaira(Number(inv.grand_total))}</TableCell>
-                    <TableCell className="text-right text-sm text-emerald-600 font-medium">{formatNaira(Number(inv.amount_paid))}</TableCell>
-                    <TableCell className="text-right text-sm text-amber-600 font-medium">{formatNaira(Number(inv.outstanding_balance))}</TableCell>
+                    <TableCell className="text-right font-semibold text-sm">{formatNaira(metrics.grandTotal)}</TableCell>
+                    <TableCell className="text-right text-sm text-emerald-600 font-medium">{formatNaira(metrics.paid)}</TableCell>
+                    <TableCell className="text-right text-sm text-amber-600 font-medium">{formatNaira(metrics.outstanding)}</TableCell>
                     <TableCell className="text-sm text-neutral-500">
                       {inv.pay_by_date ? new Date(inv.pay_by_date).toLocaleDateString("en-NG", { day: "numeric", month: "short", year: "numeric" }) : "—"}
                     </TableCell>

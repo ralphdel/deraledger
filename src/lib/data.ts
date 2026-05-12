@@ -327,17 +327,24 @@ export async function getAllTransactions(merchantId?: string): Promise<Transacti
   const mId = merchantId || await getActiveMerchantId();
   const { data, error } = await supabase()
     .from("transactions")
-    .select("*, invoices(*)")
+    .select("*, invoices(*, clients(full_name, email, phone, company_name, address))")
+    .eq("merchant_id", mId)
     .order("created_at", { ascending: false });
 
   if (error) { console.error("getAllTransactions:", error); return []; }
+  return (data || []) as Transaction[];
+}
 
-  // Manually filter down to the merchant's invoices
-  // In a real DB, you'd probably join properly, but this is simple enough for the demo.
-  const filtered = (data || []).filter(
-    (tx) => (tx.invoices as any)?.merchant_id === mId
-  );
-  return filtered as Transaction[];
+export async function getAllManualPayments(merchantId?: string) {
+  const mId = merchantId || await getActiveMerchantId();
+  const { data, error } = await supabase()
+    .from("manual_payments")
+    .select("*, invoices(*, clients(full_name, email, phone, company_name, address))")
+    .eq("merchant_id", mId)
+    .order("date_received", { ascending: false });
+
+  if (error) { console.error("getAllManualPayments:", error); return []; }
+  return data || [];
 }
 
 export async function getMonthlyCollectionTotal(merchantId?: string): Promise<number> {
@@ -364,16 +371,36 @@ export async function getMonthlyCollectionTotal(merchantId?: string): Promise<nu
 // ── Dashboard Analytics ─────────────────────────────────────────────────────
 export async function getDashboardStats(merchantId?: string) {
   const mId = merchantId || await getActiveMerchantId();
-  const [invoices, transactions] = await Promise.all([
+  const [invoices, transactions, manualPayments] = await Promise.all([
     getInvoices(mId),
     getAllTransactions(mId),
+    getAllManualPayments(mId),
   ]);
+
+  const paymentsByInvoice = new Map<string, number>();
+  transactions
+    .filter((t) => t.status === "success")
+    .forEach((t) => {
+      paymentsByInvoice.set(t.invoice_id, (paymentsByInvoice.get(t.invoice_id) || 0) + Number(t.amount_paid || 0));
+    });
+  manualPayments.forEach((payment: any) => {
+    paymentsByInvoice.set(payment.invoice_id, (paymentsByInvoice.get(payment.invoice_id) || 0) + Number(payment.amount || 0));
+  });
+
+  const getInvoiceMetrics = (invoice: InvoiceWithClient) => {
+    const grandTotal = Number(invoice.grand_total || 0);
+    const recordedPaid = Number(invoice.amount_paid || 0);
+    const paymentRecordPaid = paymentsByInvoice.get(invoice.id) || 0;
+    const paid = Math.min(grandTotal, Math.max(recordedPaid, paymentRecordPaid));
+    const outstanding = Math.max(0, grandTotal - paid);
+    return { grandTotal, paid, outstanding };
+  };
 
   const openInvoices = invoices.filter(
     (i) => i.status === "open" || i.status === "partially_paid"
   );
   const totalOutstanding = openInvoices.reduce(
-    (sum, i) => sum + Number(i.outstanding_balance),
+    (sum, i) => sum + getInvoiceMetrics(i).outstanding,
     0
   );
   const now = new Date();
@@ -386,8 +413,8 @@ export async function getDashboardStats(merchantId?: string) {
     }
     return false;
   }).length;
-  const totalInvoiced = invoices.reduce((sum, i) => sum + Number(i.grand_total), 0);
-  const totalCollected = invoices.reduce((sum, i) => sum + Number(i.amount_paid), 0);
+  const totalInvoiced = invoices.reduce((sum, i) => sum + getInvoiceMetrics(i).grandTotal, 0);
+  const totalCollected = invoices.reduce((sum, i) => sum + getInvoiceMetrics(i).paid, 0);
 
   // Payment method breakdown
   const successTxns = transactions.filter((t) => t.status === "success");
@@ -412,7 +439,7 @@ export async function getDashboardStats(merchantId?: string) {
   openInvoices.forEach((inv) => {
     const created = new Date(inv.created_at);
     const daysDiff = Math.floor((now.getTime() - created.getTime()) / (1000 * 60 * 60 * 24));
-    const balance = Number(inv.outstanding_balance);
+    const balance = getInvoiceMetrics(inv).outstanding;
     if (daysDiff <= 30) agingData[0].amount += balance;
     else if (daysDiff <= 60) agingData[1].amount += balance;
     else if (daysDiff <= 90) agingData[2].amount += balance;
@@ -441,6 +468,14 @@ export async function getDashboardStats(merchantId?: string) {
     const m = created.getMonth();
     const bucket = monthlyData.find(b => b._year === y && b._month === m);
     if (bucket) bucket.collected += Number(txn.amount_paid);
+  });
+
+  manualPayments.forEach((payment: any) => {
+    const created = new Date(payment.date_received || payment.created_at);
+    const y = created.getFullYear();
+    const m = created.getMonth();
+    const bucket = monthlyData.find(b => b._year === y && b._month === m);
+    if (bucket) bucket.collected += Number(payment.amount);
   });
 
   // Recent activity from audit logs or recent transactions

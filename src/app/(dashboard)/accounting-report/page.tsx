@@ -20,12 +20,29 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { getInvoices, getClients } from "@/lib/data";
+import { getInvoices, getClients, getAllTransactions, getAllManualPayments } from "@/lib/data";
 import { formatNaira } from "@/lib/calculations";
-import type { InvoiceWithClient, Client } from "@/lib/types";
+import type { InvoiceWithClient, Client, Transaction } from "@/lib/types";
+
+type TransactionWithInvoice = Transaction & {
+  invoices?: InvoiceWithClient | null;
+};
+
+type ManualPaymentWithInvoice = {
+  id: string;
+  invoice_id: string;
+  merchant_id: string;
+  amount: number;
+  payment_method: string;
+  date_received: string;
+  created_at: string;
+  invoices?: InvoiceWithClient | null;
+};
 
 export default function AccountingReportPage() {
   const [invoices, setInvoices] = useState<InvoiceWithClient[]>([]);
+  const [transactions, setTransactions] = useState<TransactionWithInvoice[]>([]);
+  const [manualPayments, setManualPayments] = useState<ManualPaymentWithInvoice[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -41,29 +58,55 @@ export default function AccountingReportPage() {
   const [dateTo, setDateTo] = useState(today.toISOString().split("T")[0]);
 
   useEffect(() => {
-    Promise.all([getInvoices(), getClients()]).then(([invData, clientData]) => {
+    Promise.all([getInvoices(), getClients(), getAllTransactions(), getAllManualPayments()]).then(([invData, clientData, txData, manualData]) => {
       setInvoices(invData);
       setClients(clientData);
+      setTransactions(txData as TransactionWithInvoice[]);
+      setManualPayments(manualData as ManualPaymentWithInvoice[]);
       setLoading(false);
     });
   }, []);
 
+  const dateInRange = (value: string | null | undefined) => {
+    if (!value) return false;
+    const itemDate = new Date(value);
+    const isAfterFrom = dateFrom ? itemDate >= new Date(dateFrom + "T00:00:00") : true;
+    const isBeforeTo = dateTo ? itemDate <= new Date(dateTo + "T23:59:59") : true;
+    return isAfterFrom && isBeforeTo;
+  };
+
+  const invoiceMatchesFilters = (inv: InvoiceWithClient | null | undefined) => {
+    if (!inv) return false;
+    const matchesType = typeFilter === "all" || inv.invoice_type === typeFilter;
+    const matchesClient = clientIdFilter === "all" || inv.client_id === clientIdFilter;
+    return matchesType && matchesClient;
+  };
+
   const filteredInvoices = useMemo(() => {
     return invoices.filter((inv) => {
-      // Date filter
-      const invDate = new Date(inv.created_at);
-      const isAfterFrom = dateFrom ? invDate >= new Date(dateFrom + "T00:00:00") : true;
-      const isBeforeTo = dateTo ? invDate <= new Date(dateTo + "T23:59:59") : true;
-
-      // Type filter
-      const matchesType = typeFilter === "all" || inv.invoice_type === typeFilter;
-
-      // Client filter
-      const matchesClient = clientIdFilter === "all" || inv.client_id === clientIdFilter;
-
-      return isAfterFrom && isBeforeTo && matchesType && matchesClient;
+      return dateInRange(inv.created_at) && invoiceMatchesFilters(inv);
     });
   }, [invoices, dateFrom, dateTo, typeFilter, clientIdFilter]);
+
+  const paymentsByInvoice = useMemo(() => {
+    const map = new Map<string, number>();
+    transactions.filter((tx) => tx.status === "success").forEach((tx) => {
+      map.set(tx.invoice_id, (map.get(tx.invoice_id) || 0) + Number(tx.amount_paid || 0));
+    });
+    manualPayments.forEach((payment) => {
+      map.set(payment.invoice_id, (map.get(payment.invoice_id) || 0) + Number(payment.amount || 0));
+    });
+    return map;
+  }, [transactions, manualPayments]);
+
+  const getInvoiceMetrics = (inv: InvoiceWithClient) => {
+    const grandTotal = Number(inv.grand_total || 0);
+    const recordedPaid = Number(inv.amount_paid || 0);
+    const paymentRecordPaid = paymentsByInvoice.get(inv.id) || 0;
+    const paid = Math.min(grandTotal, Math.max(recordedPaid, paymentRecordPaid));
+    const outstanding = Math.max(0, grandTotal - paid);
+    return { grandTotal, paid, outstanding };
+  };
 
   const aggregatedData = useMemo(() => {
     const map = new Map<string, {
@@ -75,7 +118,7 @@ export default function AccountingReportPage() {
       totalOutstanding: number;
     }>();
 
-    filteredInvoices.forEach((inv) => {
+    const ensureClient = (inv: InvoiceWithClient) => {
       const clientId = inv.client_id;
       if (!map.has(clientId)) {
         map.set(clientId, {
@@ -87,12 +130,21 @@ export default function AccountingReportPage() {
           totalOutstanding: 0,
         });
       }
+      return map.get(clientId)!;
+    };
 
-      const clientStat = map.get(clientId)!;
+    filteredInvoices.forEach((inv) => {
+      ensureClient(inv);
+    });
+
+    filteredInvoices.forEach((inv) => {
+      const clientStat = ensureClient(inv);
+      const metrics = getInvoiceMetrics(inv);
+
       clientStat.invoiceCount += 1;
-      clientStat.totalRaised += Number(inv.grand_total || 0);
-      clientStat.totalPaid += Number(inv.amount_paid || 0);
-      clientStat.totalOutstanding += Number(inv.outstanding_balance || 0);
+      clientStat.totalRaised += metrics.grandTotal;
+      clientStat.totalPaid += metrics.paid;
+      clientStat.totalOutstanding += metrics.outstanding;
     });
 
     // Apply search filter to aggregated table
@@ -102,8 +154,8 @@ export default function AccountingReportPage() {
       result = result.filter(r => r.clientName.toLowerCase().includes(q) || r.email.toLowerCase().includes(q));
     }
 
-    return result.sort((a, b) => b.totalRaised - a.totalRaised);
-  }, [filteredInvoices, searchQuery]);
+    return result.sort((a, b) => (b.totalRaised + b.totalPaid) - (a.totalRaised + a.totalPaid));
+  }, [filteredInvoices, paymentsByInvoice, searchQuery]);
 
   const totals = useMemo(() => {
     return aggregatedData.reduce((acc, curr) => ({

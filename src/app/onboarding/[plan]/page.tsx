@@ -1,58 +1,137 @@
 "use client";
 
 import { use, useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Building2,
+  CheckCircle2,
+  Loader2,
+  ShieldCheck,
+  Sparkles,
+  User,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Loader2, Building2, User, ArrowRight, ArrowLeft, CheckCircle2 } from "lucide-react";
+
+type PlanId = "starter" | "individual" | "corporate";
+
+type PlanConfig = {
+  label: string;
+  workflow: string;
+  price: string;
+  checkoutLabel: string;
+  priceKobo: number;
+  verification: string;
+  formDescription: string;
+  footnote: string;
+  successTitle: string;
+  successMessage: string;
+  features: string[];
+};
 
 interface OnboardingPageProps {
   params: Promise<{ plan: string }>;
 }
 
-const PLAN_CONFIG: Record<string, any> = {
+const PLAN_CONFIG: Record<PlanId, PlanConfig> = {
   starter: {
     label: "Starter",
+    workflow: "Bookkeeping and balance tracking",
     price: "Free",
+    checkoutLabel: "Create Free Account",
     priceKobo: 0,
+    verification: "No verification required",
+    formDescription:
+      "Create a free workspace for record invoices, offline collections, and balance visibility.",
+    footnote:
+      "Collection invoices, payment links, QR collections, and partial payment controls unlock after verification.",
+    successTitle: "Starter workspace created",
+    successMessage:
+      "Your free workspace is ready for record invoices, offline collections, and balance tracking.",
     features: [
-      "Unlimited Record-only Invoices",
-      "DeraBot AI financial insights",
-      "Invoice sharing (WhatsApp, Email, QR)",
-      "Basic audit log",
+      "10 record invoices monthly",
+      "Offline payment tracking",
+      "Outstanding balance tracking",
+      "Basic dashboard",
+      "Owner + 1 team member",
     ],
   },
   individual: {
-    label: "Individual",
-    price: "₦5,000/month",
+    label: "Individual / Collections",
+    workflow: "Online collections with automatic balance tracking",
+    price: "NGN 5,000/month",
+    checkoutLabel: "Pay NGN 5,000",
     priceKobo: 500000,
+    verification: "BVN verification required",
+    formDescription:
+      "Set up online collections with BVN verification, payment links, and automatic balance tracking.",
+    footnote:
+      "Designed for growing businesses with a NGN 5M monthly collection limit and predefined team roles.",
+    successTitle: "Collections workspace started",
+    successMessage:
+      "After payment, complete BVN verification to activate payment links and collection invoices.",
     features: [
-      "Unlimited Record + Collection Invoices",
-      "BVN verification for payment links",
-      "DeraBot AI financial insights",
-      "Automated reminders + monthly report",
-      "Owner + 1 team member",
-      "₦5M monthly collection limit",
+      "Unlimited record invoices",
+      "Collection invoices and payment links",
+      "QR collections",
+      "Partial payment controls",
+      "Automatic balance tracking",
+      "5 team members",
+      "NGN 5M monthly collection limit",
     ],
   },
   corporate: {
-    label: "Corporate",
-    price: "₦20,000/month",
+    label: "Business",
+    workflow: "Structured finance team workflows",
+    price: "NGN 20,000/month",
+    checkoutLabel: "Pay NGN 20,000",
     priceKobo: 2000000,
+    verification: "CAC and director verification required",
+    formDescription:
+      "Create a verified business workspace for unlimited collections, advanced access control, and audit visibility.",
+    footnote:
+      "Built for operational businesses that need custom roles, audit logs, and organizational controls.",
+    successTitle: "Business workspace started",
+    successMessage:
+      "After payment, complete business verification to activate unlimited collections and governance controls.",
     features: [
-      "Everything in Individual",
-      "Unlimited team members",
-      "Unlimited collections — no limit",
-      "Full business verification (CAC + BVN + Utility)",
-      "Priority support",
+      "Unlimited record invoices",
+      "Unlimited collection invoices",
+      "Advanced team management",
+      "Full custom RBAC",
+      "Custom roles",
+      "Audit logs",
+      "Advanced reporting",
     ],
   },
 };
 
+function isPlanId(value: string): value is PlanId {
+  return value === "starter" || value === "individual" || value === "corporate";
+}
+
+function BrandHeader() {
+  return (
+    <header className="border-b border-purp-200 bg-white px-4 py-5 sm:px-6 lg:px-8">
+      <div className="mx-auto flex max-w-7xl items-center justify-between">
+        <Link href="/" className="flex items-center gap-2" aria-label="DeraLedger home">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-purp-900 text-sm font-bold text-white">
+            D
+          </div>
+          <span className="text-xl font-bold text-purp-900">DeraLedger</span>
+        </Link>
+        <Link href="/login" className="text-sm font-semibold text-purp-700 hover:text-purp-900">
+          Sign in
+        </Link>
+      </div>
+    </header>
+  );
+}
+
 export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
-  const router = useRouter();
   const { plan } = use(params);
   const [email, setEmail] = useState("");
   const [businessName, setBusinessName] = useState("");
@@ -60,20 +139,31 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
   const [ownerName, setOwnerName] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isSuccess, setIsSuccess] = useState(false);
 
-  // Validate plan
-  if (plan !== "starter" && plan !== "individual" && plan !== "corporate") {
-    router.replace("/onboarding");
+  if (!isPlanId(plan)) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
-        <Loader2 className="w-8 h-8 animate-spin text-purp-700" />
+      <div className="min-h-screen bg-purp-50">
+        <BrandHeader />
+        <main className="mx-auto flex min-h-[70vh] max-w-md flex-col items-center justify-center px-4 text-center">
+          <h1 className="text-3xl font-bold text-purp-900">Plan not found</h1>
+          <p className="mt-3 text-sm leading-relaxed text-neutral-500">
+            Choose a valid DeraLedger workflow to continue onboarding.
+          </p>
+          <Link href="/onboarding" className="mt-6">
+            <Button className="bg-purp-900 text-white hover:bg-purp-700">
+              Back to plans
+              <ArrowRight className="h-4 w-4" />
+            </Button>
+          </Link>
+        </main>
       </div>
     );
   }
 
-  const config = PLAN_CONFIG[plan as string];
-  const Icon = plan === "corporate" ? Building2 : User;
-  const [isSuccess, setIsSuccess] = useState(false);
+  const planId = plan;
+  const config = PLAN_CONFIG[planId];
+  const Icon = planId === "corporate" ? Building2 : planId === "starter" ? Sparkles : User;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -81,7 +171,6 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
     setLoading(true);
 
     try {
-      // 1. Check if email already has an account
       const checkRes = await fetch("/api/onboarding/check-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -95,21 +184,20 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
         return;
       }
 
-      if (plan === "starter") {
-        // Provision directly without Paystack and without session
+      if (planId === "starter") {
         const provisionRes = await fetch("/api/onboarding/provision-starter", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ 
-            email, 
+          body: JSON.stringify({
+            email,
             tradingName: businessName,
             registeredName: registeredName || businessName,
-            ownerName 
+            ownerName,
           }),
         });
-        
+
         const provisionData = await provisionRes.json();
-        
+
         if (provisionData.success) {
           setIsSuccess(true);
         } else {
@@ -119,14 +207,13 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
         return;
       }
 
-      // 2. Create onboarding session (for paid plans)
       const sessionRes = await fetch("/api/onboarding/create-session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          email, 
-          businessName: registeredName || businessName, 
-          plan 
+        body: JSON.stringify({
+          email,
+          businessName: registeredName || businessName,
+          plan: planId,
         }),
       });
       const sessionData = await sessionRes.json();
@@ -137,7 +224,6 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
         return;
       }
 
-      // 3. Initialize Paystack subscription payment (for paid plans)
       const payRes = await fetch("/api/onboarding/initialize-payment", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -146,7 +232,7 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
           tradingName: businessName,
           registeredName: registeredName || businessName,
           ownerName,
-          plan,
+          plan: planId,
           sessionId: sessionData.sessionId,
           amountKobo: config.priceKobo,
         }),
@@ -159,7 +245,6 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
         return;
       }
 
-      // 4. Redirect to Paystack checkout
       window.location.href = payData.authorizationUrl;
     } catch (err: unknown) {
       setError("Something went wrong. Please try again.");
@@ -170,97 +255,93 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
 
   if (isSuccess) {
     return (
-      <div className="flex flex-col min-h-screen">
-        <header className="py-6 px-6 md:px-12 flex items-center gap-2 bg-white border-b border-neutral-100">
-          <div className="w-8 h-8 bg-purp-900 rounded-lg flex items-center justify-center">
-              <span className="text-white font-bold text-sm">D</span>
-          </div>
-            <span className="text-xl font-bold text-purp-900">Deraledger</span>
-        </header>
-        <div className="flex-1 flex flex-col md:flex-row">
-          <div className="w-full md:w-1/2 p-6 md:p-12 lg:p-24 flex items-center justify-center bg-purp-50">
-            <div className="max-w-md w-full bg-white rounded-2xl shadow-xl border border-purp-100 p-8 text-center space-y-6">
-              <div className="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center mx-auto">
-                <CheckCircle2 className="w-10 h-10 text-emerald-600" />
-              </div>
-              <h2 className="text-2xl font-bold text-purp-900">Account Created!</h2>
-              <p className="text-neutral-600 text-lg">
-                Your free Starter workspace for <strong>{businessName}</strong> is ready.
-              </p>
-              <div className="bg-amber-50 border border-amber-200 text-amber-800 p-4 rounded-xl text-sm">
-                <strong>Next Step:</strong> Check your inbox ({email}). We've sent you a secure link to set your password and log into your dashboard.
-              </div>
+      <div className="min-h-screen bg-purp-50">
+        <BrandHeader />
+        <main className="mx-auto grid max-w-6xl gap-8 px-4 py-12 md:grid-cols-2 md:py-16">
+          <section className="rounded-lg border-2 border-purp-200 bg-white p-8 text-center shadow-sm">
+            <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-emerald-100">
+              <CheckCircle2 className="h-10 w-10 text-emerald-600" />
             </div>
-          </div>
-          <div className="hidden md:flex w-1/2 bg-purp-900 p-12 lg:p-24 flex-col justify-between text-white">
-            <div className="max-w-lg">
-              <h2 className="text-4xl font-bold mb-6">Welcome to the future of invoicing.</h2>
-              <p className="text-purp-200 text-lg">
-                You're just one click away from smart ledger tracking and seamless record keeping.
-              </p>
+            <h1 className="mt-6 text-3xl font-bold text-purp-900">{config.successTitle}</h1>
+            <p className="mt-3 text-neutral-600">
+              {config.successMessage} Workspace: <strong>{businessName}</strong>.
+            </p>
+            <div className="mt-6 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+              <strong>Next step:</strong> Check your inbox at {email}. We have sent a secure
+              link to set your password and log into your dashboard.
             </div>
-          </div>
-        </div>
+          </section>
+
+          <section className="rounded-lg bg-purp-900 p-8 text-white">
+            <p className="text-sm font-semibold uppercase tracking-wide text-purp-200">
+              Built for businesses that get paid in parts
+            </p>
+            <h2 className="mt-3 text-3xl font-bold text-white">Track every payment clearly.</h2>
+            <p className="mt-4 leading-relaxed text-purp-200">
+              DeraLedger helps you keep one invoice connected to every deposit, installment,
+              transfer, and remaining balance.
+            </p>
+          </section>
+        </main>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-purp-50 flex items-center justify-center px-4 py-12">
-      <div className="w-full max-w-4xl">
+    <div className="min-h-screen bg-purp-50">
+      <BrandHeader />
+
+      <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6 md:py-12 lg:px-8">
         <Link
           href="/onboarding"
-          className="inline-flex items-center text-sm font-medium text-neutral-500 hover:text-purp-700 transition-colors mb-6"
+          className="mb-6 inline-flex items-center text-sm font-medium text-neutral-500 hover:text-purp-700"
         >
-          <ArrowLeft className="w-4 h-4 mr-1" />
-          Back to Plans
+          <ArrowLeft className="mr-1 h-4 w-4" />
+          Back to plans
         </Link>
 
-        <div className="grid md:grid-cols-2 gap-8">
-          {/* Left — Plan summary */}
-          <div className="bg-purp-900 rounded-2xl p-8 text-white flex flex-col justify-between">
-            <div>
-              <div className="flex items-center gap-3 mb-6">
-                <div className="w-10 h-10 bg-white/10 rounded-lg flex items-center justify-center">
-                  <Icon className="w-5 h-5 text-white" />
-                </div>
-                <div>
-                  <p className="text-purp-300 text-sm font-medium uppercase tracking-wider">
-                    Deraledger
-                  </p>
-                  <h1 className="text-xl font-bold">{config.label} Plan</h1>
-                </div>
+        <div className="grid gap-8 lg:grid-cols-[0.9fr_1.1fr]">
+          <section className="rounded-lg bg-purp-900 p-6 text-white md:p-8">
+            <div className="flex items-start gap-4">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-white/10">
+                <Icon className="h-6 w-6 text-white" />
               </div>
-              <div className="mb-8">
-                <span className="text-4xl font-bold">{config.price}</span>
-                <p className="text-purp-300 text-sm mt-1">
-                  Deraledger absorbs the Paystack processing fee
+              <div>
+                <p className="text-sm font-semibold uppercase tracking-wide text-purp-200">
+                  {config.verification}
                 </p>
+                <h1 className="mt-1 text-3xl font-bold text-white">{config.label}</h1>
+                <p className="mt-2 text-sm text-purp-200">{config.workflow}</p>
               </div>
-              <ul className="space-y-3">
-                {config.features.map((f: string) => (
-                  <li key={f} className="flex items-start gap-2 text-sm">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400 mt-0.5 shrink-0" />
-                    <span className="text-purp-100">{f}</span>
-                  </li>
-                ))}
-              </ul>
             </div>
-            <p className="text-purp-400 text-xs mt-8">
-              Payment links require identity verification after setup. Free to verify.
-            </p>
-          </div>
 
-          {/* Right — Intent capture form */}
-          <div className="bg-white rounded-2xl p-8 shadow-sm border border-purp-100">
-            <h2 className="text-2xl font-bold text-purp-900 mb-2">Get Started</h2>
-            <p className="text-neutral-500 text-sm mb-6">
-              Enter your details to proceed to secure payment.
-            </p>
+            <div className="mt-8 rounded-lg border border-white/10 bg-white/5 p-5">
+              <p className="text-sm text-purp-200">Plan cost</p>
+              <p className="mt-1 text-4xl font-bold text-white">{config.price}</p>
+            </div>
 
-            <form onSubmit={handleSubmit} className="space-y-4">
+            <ul className="mt-8 space-y-3">
+              {config.features.map((feature) => (
+                <li key={feature} className="flex items-start gap-3 text-sm">
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />
+                  <span className="text-purp-50">{feature}</span>
+                </li>
+              ))}
+            </ul>
+
+            <div className="mt-8 rounded-lg border border-white/10 bg-white/5 p-4 text-sm leading-relaxed text-purp-200">
+              <ShieldCheck className="mb-3 h-5 w-5 text-emerald-300" />
+              {config.footnote}
+            </div>
+          </section>
+
+          <section className="rounded-lg border-2 border-purp-200 bg-white p-6 shadow-sm md:p-8">
+            <h2 className="text-2xl font-bold text-purp-900">Start onboarding</h2>
+            <p className="mt-2 text-sm leading-relaxed text-neutral-500">{config.formDescription}</p>
+
+            <form onSubmit={handleSubmit} className="mt-6 space-y-4">
               {error && (
-                <div className="bg-red-50 border border-red-100 text-red-600 text-sm p-3 rounded-lg">
+                <div className="rounded-lg border border-red-100 bg-red-50 p-3 text-sm text-red-600">
                   {error}
                 </div>
               )}
@@ -277,14 +358,19 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
                 />
               </div>
 
-              {plan === "corporate" && (
+              {planId === "corporate" && (
                 <div className="space-y-1.5">
                   <Label htmlFor="registeredName">Registered Business Name</Label>
-                  <p className="text-xs text-neutral-400">Official name registered with CAC. Used for RC Number verification.</p>
-                  <div className="flex items-center gap-3 p-3 bg-purp-50/50 border border-purp-200 rounded-lg">
+                  <p className="text-xs text-neutral-400">
+                    Official CAC-registered name for business verification.
+                  </p>
+                  <label className="flex items-center gap-3 rounded-lg border border-purp-200 bg-purp-50/60 p-3">
                     <input
                       type="checkbox"
-                      checked={registeredName.trim() !== "" && registeredName.trim() === businessName.trim()}
+                      checked={
+                        registeredName.trim() !== "" &&
+                        registeredName.trim() === businessName.trim()
+                      }
                       onChange={(e) => {
                         if (e.target.checked) {
                           setRegisteredName(businessName);
@@ -292,11 +378,11 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
                           setRegisteredName("");
                         }
                       }}
-                      className="w-4 h-4 accent-purp-700"
+                      className="h-4 w-4 accent-purp-700"
                     />
                     <span className="text-sm text-neutral-700">Same as Trading Name</span>
-                  </div>
-                  {!(registeredName.trim() !== "" && registeredName.trim() === businessName.trim()) && (
+                  </label>
+                  {registeredName.trim() !== businessName.trim() && (
                     <Input
                       id="registeredName"
                       value={registeredName}
@@ -309,10 +395,10 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
                 </div>
               )}
 
-              {plan !== "starter" && (
+              {planId !== "starter" && (
                 <div className="space-y-1.5">
                   <Label htmlFor="ownerName">
-                    {plan === "corporate" ? "Highest Shareholder's Full Name" : "Owner's Full Name"}
+                    {planId === "corporate" ? "Director or Highest Shareholder Full Name" : "Owner Full Name"}
                   </Label>
                   <Input
                     id="ownerName"
@@ -323,9 +409,9 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
                     className="h-11 border-2 border-purp-200 focus:border-purp-700"
                   />
                   <p className="text-xs text-neutral-400">
-                    {plan === "corporate"
-                      ? "This name will be used for BVN verification."
-                      : "Must match your BVN for identity verification."}
+                    {planId === "corporate"
+                      ? "This name supports director or shareholder verification."
+                      : "This name should match your BVN verification details."}
                   </p>
                 </div>
               )}
@@ -342,40 +428,49 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
                   className="h-11 border-2 border-purp-200 focus:border-purp-700"
                 />
                 <p className="text-xs text-neutral-400">
-                  Your login email. No password needed here — you&apos;ll set it after payment.
+                  Use the email you want as the workspace login. You will set your password after setup.
                 </p>
               </div>
 
               <Button
-                  type="submit"
-                  disabled={loading}
-                  className="w-full h-12 bg-purp-900 hover:bg-purp-800 text-white font-bold text-base mt-2"
-                >
-                  {loading ? (
-                    <span className="flex items-center gap-2">
-                      <Loader2 className="w-5 h-5 animate-spin" />
-                      Setting up...
-                    </span>
-                  ) : (
-                    <span className="flex items-center justify-between w-full px-2">
-                      <span>{plan === "starter" ? "Create Free Account" : `Pay ${config.price.split("/")[0]}`}</span>
-                      <ArrowRight className="w-5 h-5" />
-                    </span>
-                  )}
-                </Button>
+                type="submit"
+                disabled={loading}
+                className="mt-2 h-12 w-full bg-purp-900 text-base font-bold text-white hover:bg-purp-700"
+              >
+                {loading ? (
+                  <span className="flex items-center gap-2">
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                    Setting up...
+                  </span>
+                ) : (
+                  <span className="flex w-full items-center justify-between px-2">
+                    <span>{config.checkoutLabel}</span>
+                    <ArrowRight className="h-5 w-5" />
+                  </span>
+                )}
+              </Button>
             </form>
 
-            <div className="mt-6 pt-6 border-t border-purp-100 text-center">
-              <p className="text-sm text-neutral-500">
-                Want the free plan instead?{" "}
-                <Link href="/register" className="text-purp-700 font-medium hover:underline">
-                  Start with Starter
-                </Link>
-              </p>
+            <div className="mt-6 border-t border-purp-100 pt-6 text-center">
+              {planId === "starter" ? (
+                <p className="text-sm text-neutral-500">
+                  Need online collections?{" "}
+                  <Link href="/onboarding/individual" className="font-medium text-purp-700 hover:underline">
+                    Choose Individual / Collections
+                  </Link>
+                </p>
+              ) : (
+                <p className="text-sm text-neutral-500">
+                  Prefer to begin with offline tracking?{" "}
+                  <Link href="/onboarding/starter" className="font-medium text-purp-700 hover:underline">
+                    Start with Starter
+                  </Link>
+                </p>
+              )}
             </div>
-          </div>
+          </section>
         </div>
-      </div>
+      </main>
     </div>
   );
 }

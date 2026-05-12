@@ -1,9 +1,17 @@
 "use client";
 
-import { use, useState } from "react";
-import { useRouter } from "next/navigation";
+import { use, useEffect, useState } from "react";
 import Link from "next/link";
-import { Shield, CheckCircle2, ArrowLeft, Loader2, Building2, User, CreditCard } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Building2,
+  CheckCircle2,
+  CreditCard,
+  Loader2,
+  Shield,
+  User,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -11,83 +19,126 @@ import { Label } from "@/components/ui/label";
 import { getMerchant } from "@/lib/data";
 import type { Merchant } from "@/lib/types";
 
+type UpgradePlanId = "individual" | "corporate";
+
+type UpgradePlanConfig = {
+  label: string;
+  routeLabel: string;
+  price: string;
+  interval: string;
+  workflow: string;
+  collectionLimit: string;
+  verification: string;
+  icon: typeof User;
+  features: string[];
+  requirements: string[];
+};
+
 interface UpgradePageProps {
   params: Promise<{ plan: string }>;
 }
 
-const PLAN_CONFIG: Record<string, any> = {
+const PLAN_CONFIG: Record<UpgradePlanId, UpgradePlanConfig> = {
   individual: {
-    label: "Individual",
-    price: "₦5,000",
+    label: "Individual / Collections",
+    routeLabel: "individual",
+    price: "NGN 5,000",
     interval: "/month",
+    workflow: "Online collections with automatic balance tracking",
+    collectionLimit: "NGN 5M monthly collection limit",
+    verification: "BVN verification required",
     icon: User,
-    styles: {
-      card: "border-blue-200 bg-blue-50/30",
-      iconWrap: "bg-blue-100 text-blue-700",
-      check: "text-blue-500",
-    },
     features: [
-      "Unlimited Record Invoices",
-      "Collection Invoices (accept payments)",
-      "BVN verification for instant activation",
-      "Owner + 1 team member",
-      "₦5,000,000 monthly collection limit",
-      "Automated email & WhatsApp reminders",
+      "Unlimited record invoices",
+      "Collection invoices and payment links",
+      "QR collections",
+      "Partial payment controls",
+      "Automatic balance tracking",
+      "5 team members",
+      "Predefined roles with limited permission controls",
     ],
     requirements: [
-      "Bank Verification Number (BVN) to enable payouts.",
+      "Bank Verification Number (BVN) for payment collection activation.",
       "A valid settlement bank account.",
     ],
   },
   corporate: {
-    label: "Corporate",
-    price: "₦20,000",
+    label: "Business",
+    routeLabel: "corporate",
+    price: "NGN 20,000",
     interval: "/month",
+    workflow: "Structured finance team workflows",
+    collectionLimit: "Unlimited monthly collections",
+    verification: "CAC and director verification required",
     icon: Building2,
-    styles: {
-      card: "border-emerald-200 bg-emerald-50/30",
-      iconWrap: "bg-emerald-100 text-emerald-700",
-      check: "text-emerald-500",
-    },
     features: [
-      "Everything in Individual",
-      "Unlimited team members",
-      "Unlimited monthly collections",
-      "Full business verification (CAC + BVN)",
-      "Priority support",
-      "Advanced audit trail",
+      "Unlimited record invoices",
+      "Unlimited collection invoices",
+      "Advanced team management",
+      "Full custom RBAC",
+      "Custom roles",
+      "Audit logs",
+      "Advanced reporting",
     ],
     requirements: [
-      "Corporate Affairs Commission (CAC) Registration Number and Certificate.",
-      "Utility Bill (Proof of Address).",
-      "Bank Verification Number (BVN).",
-      "A valid corporate settlement bank account.",
+      "CAC registration details and supporting business documents.",
+      "Director or highest shareholder verification.",
+      "A valid business settlement bank account.",
     ],
   },
 };
 
+function isUpgradePlanId(value: string): value is UpgradePlanId {
+  return value === "individual" || value === "corporate";
+}
+
 export default function UpgradePlanPage({ params }: UpgradePageProps) {
-  const router = useRouter();
   const { plan } = use(params);
-  
   const [loading, setLoading] = useState(false);
+  const [loadingMerchant, setLoadingMerchant] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [merchant, setMerchant] = useState<Merchant | null>(null);
   const [ownerName, setOwnerName] = useState("");
   const [sameOwner, setSameOwner] = useState(true);
 
-  useState(() => {
-    getMerchant().then((m) => {
-      if (m) {
-        setMerchant(m);
-        setOwnerName(m.owner_name || "");
-      }
-    });
-  });
+  useEffect(() => {
+    let active = true;
 
-  if (plan !== "individual" && plan !== "corporate") {
-    router.replace("/settings");
-    return null;
+    getMerchant()
+      .then((m) => {
+        if (!active) return;
+        setMerchant(m);
+        setOwnerName(m?.owner_name || "");
+      })
+      .finally(() => {
+        if (active) setLoadingMerchant(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  if (!isUpgradePlanId(plan)) {
+    return (
+      <div className="mx-auto max-w-3xl space-y-6">
+        <Link
+          href="/settings"
+          className="inline-flex items-center text-sm font-medium text-neutral-500 hover:text-purp-700"
+        >
+          <ArrowLeft className="mr-1 h-4 w-4" />
+          Back to Settings
+        </Link>
+        <Card className="border-2 border-purp-200 shadow-none">
+          <CardContent className="p-8 text-center">
+            <h1 className="text-2xl font-bold text-purp-900">Upgrade plan not found</h1>
+            <p className="mt-2 text-sm text-neutral-500">
+              Choose Individual / Collections or Business to continue.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    );
   }
 
   const config = PLAN_CONFIG[plan];
@@ -95,9 +146,10 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
 
   const handleUpgrade = async () => {
     if (!ownerName.trim()) {
-      setError("Please provide the owner/shareholder name before upgrading.");
+      setError("Please provide the owner or shareholder name before upgrading.");
       return;
     }
+
     setError(null);
     setLoading(true);
 
@@ -108,7 +160,7 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
         body: JSON.stringify({ newPlan: plan, ownerName: ownerName.trim() }),
       });
       const data = await res.json();
-      
+
       if (data.authorizationUrl) {
         window.location.href = data.authorizationUrl;
       } else {
@@ -116,118 +168,132 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
         setLoading(false);
       }
     } catch (e) {
+      console.error(e);
       setError("An unexpected error occurred while initializing payment.");
       setLoading(false);
     }
   };
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
+    <div className="mx-auto max-w-5xl space-y-6">
       <Link
         href="/settings"
-        className="inline-flex items-center text-sm font-medium text-neutral-500 hover:text-purp-700 transition-colors"
+        className="inline-flex items-center text-sm font-medium text-neutral-500 hover:text-purp-700"
       >
-        <ArrowLeft className="w-4 h-4 mr-1" />
+        <ArrowLeft className="mr-1 h-4 w-4" />
         Back to Settings
       </Link>
 
       <div>
         <h1 className="text-2xl font-bold text-purp-900">Upgrade to {config.label}</h1>
-        <p className="text-neutral-500 text-sm mt-1">
-          Review the plan features and verification requirements before subscribing.
+        <p className="mt-1 text-sm text-neutral-500">
+          Review the workflow, collection access, and verification requirements before subscribing.
         </p>
       </div>
 
-      <div className="grid md:grid-cols-2 gap-6">
-        {/* Left Col: Features */}
-        <Card className={`border-2 shadow-none ${config.styles.card}`}>
-          <CardHeader>
-            <div className={`w-12 h-12 rounded-xl flex items-center justify-center mb-4 ${config.styles.iconWrap}`}>
-              <Icon className="w-6 h-6" />
+      <div className="grid gap-6 lg:grid-cols-[0.95fr_1.05fr]">
+        <Card className="border-2 border-purp-900 bg-purp-900 py-0 text-white shadow-none">
+          <CardHeader className="px-6 pb-0 pt-6">
+            <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-lg bg-white/10">
+              <Icon className="h-6 w-6 text-white" />
             </div>
-            <CardTitle className="text-xl font-bold text-purp-900">{config.label} Plan</CardTitle>
-            <div className="mt-2">
-              <span className="text-3xl font-bold text-purp-900">{config.price}</span>
-              <span className="text-sm text-neutral-500 ml-1">{config.interval}</span>
+            <p className="text-xs font-semibold uppercase tracking-wide text-purp-200">
+              {config.verification}
+            </p>
+            <CardTitle className="text-2xl font-bold text-white">{config.label}</CardTitle>
+            <p className="text-sm leading-relaxed text-purp-200">{config.workflow}</p>
+            <div className="pt-3">
+              <span className="text-4xl font-bold text-white">{config.price}</span>
+              <span className="ml-1 text-sm text-purp-200">{config.interval}</span>
             </div>
           </CardHeader>
-          <CardContent>
-            <h3 className="font-semibold text-purp-900 mb-3">What&apos;s included:</h3>
-            <ul className="space-y-3">
-              {config.features.map((f: string) => (
-                <li key={f} className="flex items-start gap-2 text-sm">
-                  <CheckCircle2 className={`w-4 h-4 mt-0.5 shrink-0 ${config.styles.check}`} />
-                  <span className="text-neutral-700">{f}</span>
+          <CardContent className="px-6 pb-6 pt-5">
+            <div className="rounded-lg border border-white/10 bg-white/5 p-4 text-sm font-semibold text-purp-50">
+              {config.collectionLimit}
+            </div>
+            <h2 className="mt-6 text-sm font-bold text-white">Included</h2>
+            <ul className="mt-3 space-y-3">
+              {config.features.map((feature) => (
+                <li key={feature} className="flex items-start gap-2 text-sm">
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />
+                  <span className="text-purp-50">{feature}</span>
                 </li>
               ))}
             </ul>
           </CardContent>
         </Card>
 
-        {/* Right Col: Requirements & Payment */}
         <div className="space-y-6">
-          <Card className="border-2 border-amber-200 shadow-none bg-amber-50/30">
+          <Card className="border-2 border-amber-200 bg-amber-50/40 shadow-none">
             <CardHeader className="pb-3">
-              <CardTitle className="text-base font-bold text-amber-900 flex items-center gap-2">
-                <Shield className="w-5 h-5 text-amber-600" />
+              <CardTitle className="flex items-center gap-2 text-base font-bold text-amber-900">
+                <Shield className="h-5 w-5 text-amber-600" />
                 Verification Requirements
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-sm text-amber-800 mb-4">
-                To comply with financial regulations and activate payment collection on the {config.label} tier, you must provide the following after your upgrade:
+              <p className="mb-4 text-sm leading-relaxed text-amber-800">
+                Payment collection is activated after the required checks for this workflow.
               </p>
               <ul className="space-y-2">
-                {config.requirements.map((req: string, i: number) => (
-                  <li key={i} className="flex items-start gap-2 text-sm text-amber-800">
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0 mt-1.5" />
-                    <span>{req}</span>
+                {config.requirements.map((requirement) => (
+                  <li key={requirement} className="flex items-start gap-2 text-sm text-amber-800">
+                    <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
+                    <span>{requirement}</span>
                   </li>
                 ))}
               </ul>
-              <p className="text-xs text-amber-700/80 mt-4 italic">
-                You can upload these documents securely from your Settings page once the upgrade is complete.
-              </p>
             </CardContent>
           </Card>
 
           <Card className="border-2 border-purp-200 shadow-none">
-            <CardContent className="pt-6 space-y-4">
-              {/* Owner Name Field */}
-              {merchant?.subscription_plan === "individual" && plan === "corporate" ? (
+            <CardContent className="space-y-4 p-6">
+              {loadingMerchant ? (
+                <div className="flex items-center gap-2 rounded-lg bg-purp-50 p-4 text-sm text-purp-900">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading workspace details...
+                </div>
+              ) : merchant?.subscription_plan === "individual" && plan === "corporate" ? (
                 <div className="space-y-3">
-                  <Label className="text-sm font-medium">Highest Shareholder&apos;s Full Name</Label>
-                  <div className="flex items-center gap-3 p-3 bg-neutral-50 border rounded-lg">
+                  <Label className="text-sm font-medium">
+                    Director or Highest Shareholder Full Name
+                  </Label>
+                  <label className="flex items-center gap-3 rounded-lg border border-purp-200 bg-purp-50/60 p-3">
                     <input
                       type="checkbox"
                       checked={sameOwner}
                       onChange={(e) => {
                         setSameOwner(e.target.checked);
-                        if (e.target.checked) setOwnerName(merchant?.owner_name || "");
-                        else setOwnerName("");
+                        if (e.target.checked) {
+                          setOwnerName(merchant?.owner_name || "");
+                        } else {
+                          setOwnerName("");
+                        }
                       }}
-                      className="w-4 h-4 accent-purp-700"
+                      className="h-4 w-4 accent-purp-700"
                     />
                     <span className="text-sm text-neutral-700">
                       Same as current owner ({merchant?.owner_name || "not set"})
                     </span>
-                  </div>
+                  </label>
                   {!sameOwner && (
                     <div className="space-y-1">
                       <Input
                         value={ownerName}
                         onChange={(e) => setOwnerName(e.target.value)}
-                        placeholder="Enter new shareholder name"
+                        placeholder="Enter director or shareholder name"
                         className="h-11 border-2 border-purp-200"
                       />
-                      <p className="text-xs text-amber-600">A new BVN verification will be required for this name.</p>
+                      <p className="text-xs text-amber-600">
+                        A new verification check will be required for this name.
+                      </p>
                     </div>
                   )}
                 </div>
               ) : (
                 <div className="space-y-1.5">
                   <Label className="text-sm font-medium">
-                    {plan === "corporate" ? "Highest Shareholder's Full Name" : "Owner's Full Name"}
+                    {plan === "corporate" ? "Director or Highest Shareholder Full Name" : "Owner Full Name"}
                   </Label>
                   <Input
                     value={ownerName}
@@ -235,7 +301,11 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
                     placeholder="e.g. Adebayo Olanrewaju"
                     className="h-11 border-2 border-purp-200"
                   />
-                  <p className="text-xs text-neutral-500">This name will be used for BVN verification.</p>
+                  <p className="text-xs text-neutral-500">
+                    {plan === "corporate"
+                      ? "This name supports director or shareholder verification."
+                      : "This name should match your BVN verification details."}
+                  </p>
                 </div>
               )}
 
@@ -247,36 +317,39 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
                     disabled
                     className="h-11 border-2 border-neutral-200 bg-neutral-50"
                   />
-                  <p className="text-xs text-neutral-500">Your CAC-registered business name. Update in Settings after upgrade if needed.</p>
+                  <p className="text-xs text-neutral-500">
+                    Your CAC-registered business name can be updated from Settings after upgrade.
+                  </p>
                 </div>
               )}
 
               {error && (
-                <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm font-medium border border-red-100 flex items-start gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-red-600 shrink-0 mt-1.5" />
+                <div className="flex items-start gap-2 rounded-lg border border-red-100 bg-red-50 p-3 text-sm font-medium text-red-600">
+                  <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-red-600" />
                   {error}
                 </div>
               )}
-              
-              <Button 
+
+              <Button
                 onClick={handleUpgrade}
-                disabled={loading}
-                className="w-full h-12 bg-purp-900 hover:bg-purp-800 text-white font-bold text-base"
+                disabled={loading || loadingMerchant}
+                className="h-12 w-full bg-purp-900 text-base font-bold text-white hover:bg-purp-700"
               >
                 {loading ? (
                   <span className="flex items-center gap-2">
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                    Initializing Payment...
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                    Initializing payment...
                   </span>
                 ) : (
                   <span className="flex items-center gap-2">
-                    <CreditCard className="w-5 h-5" />
-                    Pay with Paystack
+                    <CreditCard className="h-5 w-5" />
+                    Continue to Paystack
+                    <ArrowRight className="h-4 w-4" />
                   </span>
                 )}
               </Button>
-              <p className="text-center text-xs text-neutral-500 mt-3">
-                Secured by Paystack. You will be redirected to complete your payment.
+              <p className="text-center text-xs text-neutral-500">
+                Secured by Paystack. You will be redirected to complete payment.
               </p>
             </CardContent>
           </Card>
