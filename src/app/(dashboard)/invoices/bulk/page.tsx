@@ -40,6 +40,8 @@ type RawInvoiceRow = {
   "Unit Rate (blank uses Catalog)"?: string | number;
   "Allow Partial Payment (yes/no)"?: string;
   "Minimum Payment %"?: string | number;
+  "Initial Payment Amount"?: string | number;
+  "Payment Method (cash/bank_transfer/pos)"?: string;
   "Pay By Date (YYYY-MM-DD)"?: string | number;
   "Fee Absorption (business/customer)"?: string;
   Notes?: string;
@@ -61,6 +63,8 @@ type ParsedInvoice = {
   fee_absorption: "business" | "customer";
   allow_partial_payment: boolean;
   partial_payment_pct: number | null;
+  initial_amount_paid?: number;
+  payment_method?: string;
   lineItems: {
     item_name: string;
     quantity: number;
@@ -68,22 +72,6 @@ type ParsedInvoice = {
     line_total: number;
   }[];
 };
-
-const invoiceHeaders = [
-  "Invoice Group",
-  "Client",
-  "Invoice Type (collection/record)",
-  "Discount Template Name",
-  "Tax Percentage",
-  "Item Name",
-  "Quantity",
-  "Unit Rate (blank uses Catalog)",
-  "Allow Partial Payment (yes/no)",
-  "Minimum Payment %",
-  "Pay By Date (YYYY-MM-DD)",
-  "Fee Absorption (business/customer)",
-  "Notes",
-];
 
 function text(value: unknown) {
   return String(value ?? "").trim();
@@ -122,6 +110,7 @@ export default function BulkInvoicesPage() {
   const [error, setError] = useState("");
   const [warnings, setWarnings] = useState<string[]>([]);
   const [success, setSuccess] = useState(false);
+  const [templateType, setTemplateType] = useState<"collection" | "record">("collection");
 
   const [merchantId, setMerchantId] = useState("");
   const [clients, setClients] = useState<Client[]>([]);
@@ -140,6 +129,7 @@ export default function BulkInvoicesPage() {
   }, []);
 
   const downloadTemplate = async () => {
+    const isRecord = templateType === "record";
     const ExcelJS = await import("exceljs");
     const workbook = new ExcelJS.Workbook();
     workbook.creator = "DeraLedger";
@@ -158,9 +148,49 @@ export default function BulkInvoicesPage() {
     const itemOptions = catalog.map((item) => item.item_name);
     const discountOptions = discounts.map((discount) => discount.name);
 
+    // Record templates omit collection-only columns but include initial payment fields.
+    // Collection templates include all columns.
+    const headers = isRecord
+      ? [
+          "Invoice Group",
+          "Client",
+          "Invoice Type (collection/record)",
+          "Discount Template Name",
+          "Tax Percentage",
+          "Item Name",
+          "Quantity",
+          "Unit Rate (blank uses Catalog)",
+          "Initial Payment Amount",
+          "Payment Method (cash/bank_transfer/pos)",
+          "Pay By Date (YYYY-MM-DD)",
+          "Notes",
+        ]
+      : [
+          "Invoice Group",
+          "Client",
+          "Invoice Type (collection/record)",
+          "Discount Template Name",
+          "Tax Percentage",
+          "Item Name",
+          "Quantity",
+          "Unit Rate (blank uses Catalog)",
+          "Allow Partial Payment (yes/no)",
+          "Minimum Payment %",
+          "Pay By Date (YYYY-MM-DD)",
+          "Fee Absorption (business/customer)",
+          "Notes",
+        ];
+
+    // Derive column letter by header name so validations are always correct.
+    const colOf = (name: string) => {
+      const idx = headers.indexOf(name);
+      return idx >= 0 ? String.fromCharCode(65 + idx) : null;
+    };
+
     optionsSheet.state = "veryHidden";
-    optionsSheet.getRow(1).values = ["Clients", "Items", "Discounts", "Invoice Types", "Fee Absorption", "Yes/No"];
-    const maxOptionRows = Math.max(clientOptions.length, itemOptions.length, discountOptions.length, 2);
+    optionsSheet.getRow(1).values = ["Clients", "Items", "Discounts", "Invoice Types", "Fee Absorption", "Yes/No", "Payment Methods"];
+    const paymentMethodOptions = ["cash", "bank_transfer", "pos"];
+    const maxOptionRows = Math.max(clientOptions.length, itemOptions.length, discountOptions.length, paymentMethodOptions.length, 2);
     for (let index = 0; index < maxOptionRows; index += 1) {
       const row = optionsSheet.getRow(index + 2);
       row.getCell(1).value = clientOptions[index] || null;
@@ -169,6 +199,7 @@ export default function BulkInvoicesPage() {
       row.getCell(4).value = ["collection", "record"][index] || null;
       row.getCell(5).value = ["business", "customer"][index] || null;
       row.getCell(6).value = ["yes", "no"][index] || null;
+      row.getCell(7).value = paymentMethodOptions[index] || null;
     }
 
     const firstCatalogItem = catalog[0]?.item_name || "Consultation";
@@ -176,23 +207,70 @@ export default function BulkInvoicesPage() {
     const firstDiscount = discounts[0]?.name || "";
     const firstClient = clientOptions[0] || "Client Name <client@example.com>";
     const dueDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+    const invoiceTypeValue = isRecord ? "record" : "collection";
 
-    invoicesSheet.addRow(invoiceHeaders);
-    invoicesSheet.addRow(["Invoice 1", firstClient, "collection", firstDiscount, 7.5, firstCatalogItem, 1, "", "yes", 25, dueDate, "business", "First row controls invoice-level fields."]);
-    invoicesSheet.addRow(["Invoice 1", firstClient, "collection", firstDiscount, 7.5, secondCatalogItem, 2, "", "yes", 25, dueDate, "business", ""]);
-    invoicesSheet.columns = invoiceHeaders.map((header) => ({ header, key: header, width: Math.max(16, header.length + 2) }));
+    const sampleRow1 = isRecord
+      ? ["Invoice 1", firstClient, invoiceTypeValue, firstDiscount, 7.5, firstCatalogItem, 1, "", 0, "cash", dueDate, "First row controls invoice-level fields."]
+      : ["Invoice 1", firstClient, invoiceTypeValue, firstDiscount, 7.5, firstCatalogItem, 1, "", "yes", 25, dueDate, "business", "First row controls invoice-level fields."];
+    const sampleRow2 = isRecord
+      ? ["Invoice 1", firstClient, invoiceTypeValue, firstDiscount, 7.5, secondCatalogItem, 2, "", "", "", dueDate, ""]
+      : ["Invoice 1", firstClient, invoiceTypeValue, firstDiscount, 7.5, secondCatalogItem, 2, "", "yes", 25, dueDate, "business", ""];
+
+    invoicesSheet.addRow(headers);
+    invoicesSheet.addRow(sampleRow1);
+    invoicesSheet.addRow(sampleRow2);
+    invoicesSheet.columns = headers.map((header) => ({ header, key: header, width: Math.max(16, header.length + 2) }));
     invoicesSheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
     invoicesSheet.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF2D1B6B" } };
     invoicesSheet.views = [{ state: "frozen", ySplit: 1 }];
 
-    const listFormula = (column: string, count: number) => `='Dropdown Options'!$${column}$2:$${column}$${Math.max(count + 1, 3)}`;
+    const listFormula = (optCol: string, count: number) =>
+      `='Dropdown Options'!$${optCol}$2:$${optCol}$${Math.max(count + 1, 3)}`;
+
     for (let rowNumber = 2; rowNumber <= 201; rowNumber += 1) {
-      invoicesSheet.getCell(`B${rowNumber}`).dataValidation = { type: "list", allowBlank: false, formulae: [listFormula("A", clientOptions.length)] };
-      invoicesSheet.getCell(`C${rowNumber}`).dataValidation = { type: "list", allowBlank: false, formulae: [listFormula("D", 2)] };
-      invoicesSheet.getCell(`D${rowNumber}`).dataValidation = { type: "list", allowBlank: true, formulae: [listFormula("C", discountOptions.length)] };
-      invoicesSheet.getCell(`F${rowNumber}`).dataValidation = { type: "list", allowBlank: false, formulae: [listFormula("B", itemOptions.length)] };
-      invoicesSheet.getCell(`I${rowNumber}`).dataValidation = { type: "list", allowBlank: true, formulae: [listFormula("F", 2)] };
-      invoicesSheet.getCell(`L${rowNumber}`).dataValidation = { type: "list", allowBlank: false, formulae: [listFormula("E", 2)] };
+      const clientCol = colOf("Client");
+      const discountCol = colOf("Discount Template Name");
+      const itemCol = colOf("Item Name");
+      const partialCol = colOf("Allow Partial Payment (yes/no)");
+      const feeCol = colOf("Fee Absorption (business/customer)");
+
+      if (clientCol) {
+        invoicesSheet.getCell(`${clientCol}${rowNumber}`).dataValidation = {
+          type: "list", allowBlank: false, formulae: [listFormula("A", clientOptions.length)],
+        };
+      }
+      if (discountCol) {
+        invoicesSheet.getCell(`${discountCol}${rowNumber}`).dataValidation = {
+          type: "list", allowBlank: true, formulae: [listFormula("C", discountOptions.length)],
+        };
+      }
+      if (itemCol) {
+        invoicesSheet.getCell(`${itemCol}${rowNumber}`).dataValidation = {
+          type: "list", allowBlank: false, formulae: [listFormula("B", itemOptions.length)],
+        };
+      }
+      // Collection-only dropdowns
+      if (!isRecord) {
+        if (partialCol) {
+          invoicesSheet.getCell(`${partialCol}${rowNumber}`).dataValidation = {
+            type: "list", allowBlank: true, formulae: [listFormula("F", 2)],
+          };
+        }
+        if (feeCol) {
+          invoicesSheet.getCell(`${feeCol}${rowNumber}`).dataValidation = {
+            type: "list", allowBlank: false, formulae: [listFormula("E", 2)],
+          };
+        }
+      }
+      // Record-only: payment method dropdown
+      if (isRecord) {
+        const pmCol = colOf("Payment Method (cash/bank_transfer/pos)");
+        if (pmCol) {
+          invoicesSheet.getCell(`${pmCol}${rowNumber}`).dataValidation = {
+            type: "list", allowBlank: true, formulae: [listFormula("G", paymentMethodOptions.length)],
+          };
+        }
+      }
     }
 
     clientsSheet.addRow(["Client Name", "Email", "Company", "Phone"]);
@@ -201,21 +279,31 @@ export default function BulkInvoicesPage() {
     catalog.forEach((item) => catalogSheet.addRow([item.item_name, item.default_rate, item.description, item.is_active ? "yes" : "no"]));
     discountsSheet.addRow(["Template Name", "Percentage", "Active"]);
     discounts.forEach((discount) => discountsSheet.addRow([discount.name, discount.percentage, discount.is_active ? "yes" : "no"]));
-    instructionsSheet.addRows([
-      ["Bulk Invoice Import Instructions"],
-      ["1. Fill the Invoices sheet only. Dropdowns are preloaded from your clients, item catalog, and discount templates."],
-      ["2. Use the same Invoice Group for multiple line items that belong to one invoice."],
-      ["3. The Client, Item Name, Discount Template, Fee Absorption, and Yes/No columns have dropdowns."],
-      ["4. Leave Unit Rate blank to use a matching item catalog rate."],
-      ["5. First row for each Invoice Group controls invoice-level fields such as type, discount, tax, pay date, and notes."],
-      ["6. For record invoices, collection-only fields such as partial payment and fee absorption are ignored."],
-    ]);
+
+    const instructionRows = isRecord
+      ? [
+          ["Bulk Record Invoice Import Instructions"],
+          ["1. Fill the Invoices sheet only. This template is pre-configured for Record invoices."],
+          ["2. Use the same Invoice Group for multiple line items that belong to one invoice."],
+          ["3. The Client, Item Name, and Discount Template columns have dropdowns."],
+          ["4. Leave Unit Rate blank to use a matching item catalog rate."],
+          ["5. First row for each Invoice Group controls invoice-level fields: discount, tax, pay date, and notes."],
+          ["6. Payment fields (partial payment, fee absorption) are not applicable to record invoices."],
+        ]
+      : [
+          ["Bulk Collection Invoice Import Instructions"],
+          ["1. Fill the Invoices sheet only. This template is pre-configured for Collection invoices."],
+          ["2. Use the same Invoice Group for multiple line items that belong to one invoice."],
+          ["3. The Client, Item Name, Discount Template, Fee Absorption, and Yes/No columns have dropdowns."],
+          ["4. Leave Unit Rate blank to use a matching item catalog rate."],
+          ["5. First row for each Invoice Group controls invoice-level fields: discount, tax, partial payment, fee absorption, pay date, and notes."],
+          ["6. Allow Partial Payment and Fee Absorption only apply to collection invoices."],
+        ];
+    instructionsSheet.addRows(instructionRows);
 
     [clientsSheet, catalogSheet, discountsSheet, instructionsSheet].forEach((sheet) => {
       sheet.getRow(1).font = { bold: true };
-      sheet.columns.forEach((column) => {
-        column.width = 24;
-      });
+      sheet.columns.forEach((column) => { column.width = 24; });
     });
 
     const buffer = await workbook.xlsx.writeBuffer();
@@ -225,7 +313,7 @@ export default function BulkInvoicesPage() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = "deraledger_bulk_invoices_template.xlsx";
+    link.download = `deraledger_bulk_${templateType}_invoices_template.xlsx`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -348,6 +436,17 @@ export default function BulkInvoicesPage() {
           taxPct
         );
 
+        // Record-only: initial payment
+        const rawInitial = invoiceType === "record" ? numberValue(firstRow["Initial Payment Amount"], 0) : 0;
+        const initialAmountPaid = rawInitial > 0 ? rawInitial : undefined;
+        const paymentMethod = invoiceType === "record"
+          ? (text(firstRow["Payment Method (cash/bank_transfer/pos)"]) || "cash")
+          : undefined;
+
+        if (initialAmountPaid !== undefined && initialAmountPaid > totals.grandTotal) {
+          rowWarnings.push(`${ref}: Initial Payment Amount (${initialAmountPaid}) exceeds grand total (${totals.grandTotal}). It will be capped to the grand total.`);
+        }
+
         return {
           bulk_ref: ref,
           client_id: matchedClient?.id || "",
@@ -364,6 +463,8 @@ export default function BulkInvoicesPage() {
           fee_absorption: feeAbsorption,
           allow_partial_payment: allowPartial,
           partial_payment_pct: allowPartial && partialPct > 0 ? partialPct : null,
+          initial_amount_paid: initialAmountPaid,
+          payment_method: paymentMethod,
           lineItems,
         } satisfies ParsedInvoice;
       });
@@ -456,13 +557,46 @@ export default function BulkInvoicesPage() {
               <CardTitle className="text-base font-bold text-purp-900">Instructions</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4 text-sm text-neutral-600">
-              <p>1. Download the Excel workbook.</p>
+              <p>1. Select your invoice type below, then download the template.</p>
               <p>2. Fill the <strong>Invoices</strong> sheet.</p>
               <p>3. Dropdowns are preloaded from your clients, catalog, and discount templates.</p>
-              <p>4. First row in each group controls invoice-level settings. Record invoices ignore collection-only fields.</p>
-              <Button onClick={downloadTemplate} className="mt-2 w-full border-2 border-purp-200 bg-purp-100 font-semibold text-purp-900 shadow-none hover:bg-purp-200">
+              <p>4. First row in each group controls invoice-level settings.</p>
+
+              {/* Invoice type selector */}
+              <div className="rounded-lg border-2 border-purp-200 bg-purp-50 p-1 flex gap-1">
+                <button
+                  type="button"
+                  onClick={() => setTemplateType("collection")}
+                  className={`flex-1 rounded-md py-2 text-xs font-semibold transition-colors ${
+                    templateType === "collection"
+                      ? "bg-purp-900 text-white"
+                      : "text-purp-700 hover:bg-purp-100"
+                  }`}
+                >
+                  Collection
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTemplateType("record")}
+                  className={`flex-1 rounded-md py-2 text-xs font-semibold transition-colors ${
+                    templateType === "record"
+                      ? "bg-purp-900 text-white"
+                      : "text-purp-700 hover:bg-purp-100"
+                  }`}
+                >
+                  Record
+                </button>
+              </div>
+
+              <p className="text-xs text-neutral-400">
+                {templateType === "collection"
+                  ? "Includes payment links, partial payment controls, and fee absorption."
+                  : "Offline tracking only. Payment and fee fields are excluded."}
+              </p>
+
+              <Button onClick={downloadTemplate} className="mt-1 w-full border-2 border-purp-200 bg-purp-100 font-semibold text-purp-900 shadow-none hover:bg-purp-200">
                 <Download className="mr-2 h-4 w-4" />
-                Download Excel Template
+                Download {templateType === "collection" ? "Collection" : "Record"} Template
               </Button>
             </CardContent>
           </Card>
@@ -537,6 +671,9 @@ export default function BulkInvoicesPage() {
                         <TableHead className="whitespace-nowrap font-bold text-purp-900">Type</TableHead>
                         <TableHead className="whitespace-nowrap font-bold text-purp-900">Items</TableHead>
                         <TableHead className="whitespace-nowrap font-bold text-purp-900">Partial</TableHead>
+                        {parsedData.some((inv) => inv.invoice_type === "record") && (
+                          <TableHead className="whitespace-nowrap font-bold text-purp-900">Initial Paid</TableHead>
+                        )}
                         <TableHead className="whitespace-nowrap font-bold text-purp-900">Grand Total</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -568,8 +705,17 @@ export default function BulkInvoicesPage() {
                           <TableCell className="text-sm capitalize text-neutral-500">{inv.invoice_type}</TableCell>
                           <TableCell className="text-sm text-neutral-500">{inv.lineItems.length} item(s)</TableCell>
                           <TableCell className="text-sm text-neutral-500">
-                            {inv.allow_partial_payment ? `${inv.partial_payment_pct || 0}% min` : "No"}
+                            {inv.invoice_type === "collection"
+                              ? (inv.allow_partial_payment ? `${inv.partial_payment_pct || 0}% min` : "No")
+                              : "—"}
                           </TableCell>
+                          {parsedData.some((i) => i.invoice_type === "record") && (
+                            <TableCell className="text-sm text-neutral-500">
+                              {inv.invoice_type === "record"
+                                ? (inv.initial_amount_paid ? formatNaira(inv.initial_amount_paid) : "—")
+                                : "—"}
+                            </TableCell>
+                          )}
                           <TableCell className="font-semibold text-purp-900">{formatNaira(inv.grand_total)}</TableCell>
                         </TableRow>
                       ))}

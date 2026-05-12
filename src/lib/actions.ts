@@ -1277,7 +1277,20 @@ export async function bulkCreateInvoicesAction(merchantId: string, invoicesData:
 
       await adminClient.from("line_items").insert(formattedItems);
     }
-    
+
+    // 4. Record initial payment for record invoices
+    if (inv.invoice_type === "record" && inv.initial_amount_paid && inv.initial_amount_paid > 0) {
+      const safeAmount = Math.min(inv.initial_amount_paid, inv.grand_total);
+      await recordManualPaymentAction({
+        invoice_id: createdInvoice.id,
+        merchant_id: merchantId,
+        amount: safeAmount,
+        payment_method: inv.payment_method || "cash",
+        date_received: new Date().toISOString().split("T")[0],
+        reference_note: inv.notes || undefined,
+      });
+    }
+
     createdInvoices.push(createdInvoice);
   }
 
