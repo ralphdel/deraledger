@@ -46,7 +46,12 @@ export function LivenessCamera({ onComplete, onCancel, onFallback }: LivenessCam
         
         if (videoRef.current) {
           videoRef.current.srcObject = mediaStream;
-          videoRef.current.play();
+          const playPromise = videoRef.current.play();
+          if (playPromise !== undefined) {
+            playPromise.catch((e) => {
+              console.warn("Video play interrupted by load request:", e);
+            });
+          }
         }
         setIsInitializing(false);
       } catch (err: any) {
@@ -127,18 +132,18 @@ export function LivenessCamera({ onComplete, onCancel, onFallback }: LivenessCam
   }
 
   return (
-    <div className="bg-neutral-900 rounded-2xl overflow-hidden border border-neutral-800 shadow-2xl relative">
+    <div className="bg-gradient-to-br from-indigo-950 via-purp-950 to-neutral-950 rounded-2xl overflow-hidden border border-purp-800/50 shadow-2xl relative shadow-purp-900/20">
       {/* Header */}
-      <div className="absolute top-0 inset-x-0 p-4 flex justify-between items-center z-10 bg-gradient-to-b from-black/60 to-transparent">
-        <div className="flex items-center gap-2">
-          <div className="bg-purp-600 text-white text-xs font-bold px-2.5 py-1 rounded-full uppercase tracking-wider">
-            Step {currentStep + 1} of 3
+      <div className="absolute top-0 inset-x-0 p-4 flex justify-between items-center z-10 bg-gradient-to-b from-black/80 to-transparent">
+        <div className="flex items-center gap-3">
+          <div className="bg-gradient-to-r from-purp-600 to-indigo-600 text-white text-[10px] font-bold px-3 py-1.5 rounded-full uppercase tracking-wider shadow-lg">
+            Step {currentStep + 1} / 3
           </div>
-          <span className="text-white font-medium text-sm drop-shadow-md">
+          <span className="text-white font-semibold text-sm drop-shadow-md">
             {LIVENESS_STEPS[currentStep]?.title}
           </span>
         </div>
-        <button onClick={onCancel} className="text-white/80 hover:text-white bg-black/20 hover:bg-black/40 p-2 rounded-full transition-colors">
+        <button onClick={onCancel} className="text-white/70 hover:text-white bg-white/10 hover:bg-white/20 backdrop-blur-md p-2 rounded-full transition-all duration-200 border border-white/10">
           <X className="h-5 w-5" />
         </button>
       </div>
@@ -146,15 +151,16 @@ export function LivenessCamera({ onComplete, onCancel, onFallback }: LivenessCam
       {/* Video Feed */}
       <div className="relative aspect-[3/4] sm:aspect-video bg-black flex items-center justify-center overflow-hidden">
         {isInitializing && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center text-white/50 z-10">
-            <Camera className="h-8 w-8 animate-pulse mb-2" />
-            <span className="text-sm">Accessing camera...</span>
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-purp-300 z-10 bg-indigo-950/50 backdrop-blur-md">
+            <Camera className="h-10 w-10 animate-bounce mb-3 text-purp-400" />
+            <span className="text-sm font-medium tracking-wide">Initializing secure camera...</span>
           </div>
         )}
         
         <video 
           ref={videoRef}
-          className="w-full h-full object-cover transform scale-x-[-1]" // Mirror the video for natural feel
+          className="w-full h-full object-cover transform scale-x-[-1] transition-opacity duration-700 ease-in-out" // Mirror the video for natural feel
+          style={{ opacity: isInitializing ? 0 : 1 }}
           playsInline
           muted
           autoPlay
@@ -162,12 +168,17 @@ export function LivenessCamera({ onComplete, onCancel, onFallback }: LivenessCam
         
         {/* Face Guide Overlay */}
         {!isInitializing && (
-          <div className="absolute inset-0 pointer-events-none flex items-center justify-center p-8">
-            <div className="w-full max-w-[250px] aspect-[3/4] border-2 border-white/30 rounded-[100px] shadow-[0_0_0_9999px_rgba(0,0,0,0.4)] transition-all duration-300 relative">
-              <div className="absolute -bottom-16 inset-x-0 text-center">
-                <p className="text-white text-lg font-bold drop-shadow-md">
-                  {LIVENESS_STEPS[currentStep]?.instruction}
-                </p>
+          <div className="absolute inset-0 pointer-events-none flex items-center justify-center p-8 z-20">
+            <div className="w-full max-w-[280px] aspect-[3/4] rounded-[120px] shadow-[0_0_0_9999px_rgba(0,0,0,0.6)] transition-all duration-500 relative border-2 border-white/20 backdrop-blur-[2px]">
+              {/* Scanline animation effect */}
+              <div className="absolute inset-x-0 h-1 bg-gradient-to-r from-transparent via-purp-400 to-transparent opacity-50 animate-scanline" />
+              
+              <div className="absolute -bottom-20 inset-x-0 text-center">
+                <div className="inline-block bg-black/60 backdrop-blur-md border border-white/10 rounded-xl px-4 py-3 shadow-xl">
+                  <p className="text-white text-base font-bold drop-shadow-md">
+                    {LIVENESS_STEPS[currentStep]?.instruction}
+                  </p>
+                </div>
               </div>
             </div>
           </div>
@@ -178,14 +189,14 @@ export function LivenessCamera({ onComplete, onCancel, onFallback }: LivenessCam
       </div>
 
       {/* Footer Controls */}
-      <div className="bg-neutral-950 p-6 flex items-center justify-between">
-        <div className="flex gap-1.5">
+      <div className="bg-neutral-950/90 backdrop-blur-xl p-6 flex items-center justify-between border-t border-white/5 z-30 relative">
+        <div className="flex gap-2">
           {LIVENESS_STEPS.map((_, idx) => (
             <div 
               key={idx} 
-              className={`h-2 w-8 rounded-full transition-colors ${
-                idx < currentStep ? 'bg-emerald-500' : 
-                idx === currentStep ? 'bg-purp-500' : 'bg-neutral-800'
+              className={`h-2 rounded-full transition-all duration-500 ${
+                idx < currentStep ? 'bg-emerald-500 w-8 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 
+                idx === currentStep ? 'bg-gradient-to-r from-purp-400 to-indigo-400 w-12 shadow-[0_0_10px_rgba(167,139,250,0.5)]' : 'bg-white/10 w-6'
               }`} 
             />
           ))}
@@ -195,16 +206,18 @@ export function LivenessCamera({ onComplete, onCancel, onFallback }: LivenessCam
           onClick={handleCapture} 
           disabled={isInitializing}
           size="lg"
-          className="rounded-full w-16 h-16 p-0 bg-white hover:bg-neutral-200 border-4 border-neutral-400 text-neutral-900 transition-transform active:scale-95 shadow-[0_0_15px_rgba(255,255,255,0.3)]"
+          className="relative group rounded-full w-20 h-20 p-0 bg-white hover:bg-neutral-200 border-4 border-purp-200 text-purp-900 transition-all duration-200 active:scale-95 shadow-[0_0_25px_rgba(255,255,255,0.4)]"
         >
-          <Camera className="h-6 w-6" />
+          {/* Inner pulse ring */}
+          <div className="absolute inset-0 rounded-full border-4 border-purp-500 opacity-0 group-hover:opacity-100 group-hover:animate-ping" />
+          <Camera className="h-8 w-8" />
           <span className="sr-only">Capture</span>
         </Button>
         
         <Button 
           variant="ghost" 
           size="sm" 
-          className="text-neutral-400 hover:text-white hover:bg-neutral-800"
+          className="text-neutral-400 hover:text-white hover:bg-white/10 backdrop-blur-sm rounded-full px-4"
           onClick={handleRetry}
           disabled={currentStep === 0 || isInitializing}
         >

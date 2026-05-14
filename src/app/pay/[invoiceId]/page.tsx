@@ -7,7 +7,8 @@ import type { InvoiceWithLineItems, Merchant } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { ShieldCheck, Receipt, Clock, CheckCircle2, Lock, AlertTriangle, Info, AlertCircle } from "lucide-react";
+import { Label } from "@/components/ui/label";
+import { ShieldCheck, Receipt, Clock, CheckCircle2, Lock, AlertTriangle, Info, AlertCircle, Copy, Wallet } from "lucide-react";
 
 export default function PublicPaymentPortal({ params }: { params: Promise<{ invoiceId: string }> }) {
   const { invoiceId } = use(params);
@@ -22,6 +23,21 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
   const [paymentError, setPaymentError] = useState<string | null>(null);
   const [refreshedInvoice, setRefreshedInvoice] = useState<InvoiceWithLineItems | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [cryptoDetails, setCryptoDetails] = useState<{
+    address: string;
+    network: string;
+    coin: string;
+    fiatAmount: number;
+    reference: string;
+  } | null>(null);
+
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = (text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   useEffect(() => {
     if (searchParams.has("reference") || searchParams.has("trxref")) {
@@ -260,7 +276,16 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
       
       const result = await res.json();
       
-      if (result.success && result.authorizationUrl) {
+      if (result.success && result.isCrypto) {
+        setCryptoDetails({
+          address: result.cryptoAddress,
+          network: result.cryptoNetwork,
+          coin: result.cryptoCoin,
+          fiatAmount: result.fiatAmount,
+          reference: result.reference,
+        });
+        setIsProcessing(false);
+      } else if (result.success && result.authorizationUrl) {
         // Redirect to Paystack standard checkout page
         window.location.href = result.authorizationUrl;
       } else {
@@ -421,10 +446,58 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
       <div className="w-full md:w-7/12 lg:w-2/3 p-4 md:p-8 flex items-center justify-center">
         <Card className="w-full max-w-lg border-2 border-purp-200 shadow-xl shadow-purp-900/5">
           <CardHeader className="text-center pb-2">
-            <h2 className="text-2xl font-bold text-purp-900">Make a Payment</h2>
-            <p className="text-neutral-500">You can pay in full or make a partial payment.</p>
+            <h2 className="text-2xl font-bold text-purp-900">
+              {cryptoDetails ? "Crypto Payment" : "Make a Payment"}
+            </h2>
+            <p className="text-neutral-500">
+              {cryptoDetails ? "Send exact amount to the address below." : "You can pay in full or make a partial payment."}
+            </p>
           </CardHeader>
           <CardContent>
+            {cryptoDetails ? (
+              <div className="space-y-6 animate-in fade-in zoom-in duration-300">
+                <div className="bg-neutral-900 text-white rounded-xl p-6 text-center space-y-4">
+                  <div className="w-16 h-16 bg-white/10 rounded-full flex items-center justify-center mx-auto">
+                    <Wallet className="w-8 h-8 text-white" />
+                  </div>
+                  <div>
+                    <p className="text-neutral-400 text-sm">Send Exact Amount</p>
+                    <p className="text-3xl font-bold font-mono tracking-tight text-emerald-400">
+                      {formatNaira(cryptoDetails.fiatAmount)}
+                    </p>
+                    <p className="text-neutral-500 text-xs mt-1">
+                      Equivalent in {cryptoDetails.coin.toUpperCase()} ({cryptoDetails.network})
+                    </p>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <Label className="text-sm font-medium text-purp-900">Deposit Address ({cryptoDetails.network})</Label>
+                  <div className="flex gap-2">
+                    <Input 
+                      readOnly 
+                      value={cryptoDetails.address} 
+                      className="font-mono text-sm bg-purp-50 border-purp-200 text-purp-900 h-12"
+                    />
+                    <Button 
+                      onClick={() => handleCopy(cryptoDetails.address)} 
+                      className="h-12 w-12 bg-purp-100 hover:bg-purp-200 text-purp-700 border-2 border-purp-200"
+                      variant="outline"
+                      title="Copy Address"
+                    >
+                      {copied ? <CheckCircle2 className="h-5 w-5 text-emerald-600" /> : <Copy className="h-5 w-5" />}
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-amber-800 text-sm flex items-start gap-3">
+                  <Info className="h-5 w-5 flex-shrink-0 mt-0.5" />
+                  <p>
+                    Ensure you send the exact equivalent of <strong>{formatNaira(cryptoDetails.fiatAmount)}</strong> on the <strong>{cryptoDetails.network}</strong> network. The invoice will update automatically once the transaction receives network confirmations.
+                  </p>
+                </div>
+              </div>
+            ) : (
             <form onSubmit={handlePayment} className="space-y-6">
               <div className="space-y-3">
                 <div className="relative">
@@ -565,6 +638,7 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                   : `Pay ${invoice.fee_absorption === "customer" ? formatNaira(allocation.totalCharge) : formatNaira(allocation.amountPaid)}`}
               </Button>
             </form>
+            )}
           </CardContent>
         </Card>
       </div>

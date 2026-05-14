@@ -61,6 +61,12 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Merchant is not verified or has no settlement account set up" }, { status: 403 });
     }
 
+    if (invoice.payment_provider === "monnify") {
+      return NextResponse.json({ 
+        error: "Monnify is currently undergoing maintenance. Please contact the merchant for an alternative payment link." 
+      }, { status: 400 });
+    }
+
     // Calculate k-factor and total charge
     const kFactor = grandTotal > 0 ? cappedPayment / grandTotal : 0;
     
@@ -75,24 +81,42 @@ export async function POST(request: Request) {
     const reference = `purp_${invoiceId.slice(0, 8)}_${Date.now()}`;
     const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
 
-    // Initialize transaction via PaymentService
+    const metadata = {
+      type: "invoice_payment",
+      invoice_id: invoice.id,
+      invoice_number: invoice.invoice_number,
+      merchant_id: invoice.merchant_id,
+      payment_amount: cappedPayment,
+      k_factor: kFactor,
+    };
+
+    if (invoice.payment_provider === "breet") {
+      // Crypto Checkout
+      const result = await PaymentService.generateCryptoDepositAddress({
+        assetId: "BTC", // Defaulting to BTC for Breet scaffold
+        label: reference,
+      });
+
+      return NextResponse.json({
+        success: true,
+        isCrypto: true,
+        cryptoAddress: result.address,
+        cryptoNetwork: result.asset || "BTC",
+        cryptoCoin: result.asset || "BTC",
+        fiatAmount: chargeAmount,
+        reference,
+      });
+    }
+
+    // Default: Fiat Checkout (Paystack)
     const result = await PaymentService.initializeTransaction({
       email: invoice.clients?.email || "customer@deraledger.app",
       amountKobo: chargeAmountKobo,
       reference,
       subaccountCode: merchant.payment_subaccount_code,
-      // Provide a callback URL. The gateway will redirect back to the invoice page.
-      // We can append a verify parameter so the frontend knows it just came back.
       callbackUrl: `${appUrl}/pay/${invoiceId}?reference=${reference}`,
-      bearer: invoice.fee_absorption === "customer" ? "account" : "account", // Actually we calculate the fee ourselves and add it to the amount, so we just absorb it (so the full chargeAmount is processed, and paystack deducts the fee from that). 
-      metadata: {
-        type: "invoice_payment",
-        invoice_id: invoice.id,
-        invoice_number: invoice.invoice_number,
-        merchant_id: invoice.merchant_id,
-        payment_amount: cappedPayment,
-        k_factor: kFactor,
-      },
+      bearer: "account",
+      metadata,
     });
 
     return NextResponse.json({
