@@ -53,6 +53,31 @@ export interface WebhookVerificationResult {
   error?: string;
 }
 
+export interface CryptoDepositAddressParams {
+  assetId: string;
+  label: string;
+}
+
+export interface CryptoDepositAddressResult {
+  id: string;
+  vaultId?: string;
+  address: string;
+  asset?: string;
+  label?: string;
+  raw?: Record<string, unknown>;
+}
+
+export interface CryptoTransactionResult {
+  id: string;
+  status?: string;
+  event?: string;
+  asset?: string;
+  cryptoAmount?: number;
+  amountInUSD?: number;
+  txHash?: string;
+  raw?: Record<string, unknown>;
+}
+
 export interface IPaymentProcessor {
   initializeTransaction(p: TransactionParams): Promise<TransactionResult>;
   verifyTransaction(reference: string): Promise<Record<string, unknown>>;

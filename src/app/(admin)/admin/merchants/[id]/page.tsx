@@ -224,6 +224,7 @@ export default function MerchantDetailPage() {
           <CardContent className="space-y-3">
             {[
               { label: "BVN", value: merchant.bvn, status: merchant.bvn_status },
+              { label: "Selfie", value: merchant.selfie_url ? "Submitted" : null, status: merchant.selfie_status },
               { label: "CAC Number", value: merchant.cac_number, status: merchant.cac_status },
               { label: "CAC Document", value: merchant.cac_document_url ? "Uploaded" : null, status: merchant.cac_status },
               { label: "Utility Bill", value: merchant.utility_document_url ? "Uploaded" : null, status: merchant.utility_status },
@@ -239,6 +240,12 @@ export default function MerchantDetailPage() {
             {merchant.kyc_submitted_at && (
               <p className="text-xs text-neutral-500">Submitted: {new Date(merchant.kyc_submitted_at).toLocaleDateString("en-NG", { day: "numeric", month: "short", year: "numeric" })}</p>
             )}
+            <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-xs text-blue-800">
+              <p className="font-semibold">Dojah Check</p>
+              <p>Reference: {merchant.dojah_reference || "Not submitted"}</p>
+              <p>Match score: {merchant.dojah_match_score ?? "N/A"}%</p>
+              <p>Attempts: {merchant.kyc_attempt_count ?? 0}</p>
+            </div>
           </CardContent>
         </Card>
 

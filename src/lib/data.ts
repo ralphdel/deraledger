@@ -14,6 +14,7 @@ import type {
   ItemCatalog,
   DiscountTemplate,
   Subscription,
+  Reference,
 } from "@/lib/types";
 
 // ── Active Merchant ID Resolver ───────────────────────────────────────────────
@@ -274,6 +275,17 @@ export async function getDiscountTemplates(merchantId?: string): Promise<Discoun
     .order("percentage", { ascending: true });
   if (error) { console.error("getDiscountTemplates:", error); return []; }
   return (data || []) as DiscountTemplate[];
+}
+
+export async function getReferences(merchantId?: string): Promise<Reference[]> {
+  const mId = merchantId || await getActiveMerchantId();
+  const { data, error } = await supabase()
+    .from("references")
+    .select("*")
+    .eq("merchant_id", mId)
+    .order("created_at", { ascending: false });
+  if (error) { console.error("getReferences:", error); return []; }
+  return (data || []) as Reference[];
 }
 
 // ── Invoices ────────────────────────────────────────────────────────────────

@@ -24,8 +24,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
-import { getClients, getItemCatalog, getDiscountTemplates, getActiveSubscription } from "@/lib/data";
-import type { Client, Merchant, ItemCatalog, DiscountTemplate, Subscription } from "@/lib/types";
+import { getClients, getItemCatalog, getDiscountTemplates, getActiveSubscription, getReferences } from "@/lib/data";
+import type { Client, Merchant, ItemCatalog, DiscountTemplate, Reference } from "@/lib/types";
 import { calculateInvoiceTotals, formatNaira } from "@/lib/calculations";
 import { createInvoiceAction } from "@/lib/actions";
 import { createClient } from "@/lib/supabase/client";
@@ -44,15 +44,18 @@ function CreateInvoiceForm() {
   const searchParams = useSearchParams();
   const defaultType = (searchParams.get("type") as "record" | "collection") || "record"; // Default to record, not collection
   const [clients, setClients] = useState<Client[]>([]);
+  const [references, setReferences] = useState<Reference[]>([]);
   const [catalog, setCatalog] = useState<ItemCatalog[]>([]);
   const [discountTemplates, setDiscountTemplates] = useState<DiscountTemplate[]>([]);
   const [merchant, setMerchant] = useState<Merchant | null>(null);
   const [invoiceType, setInvoiceType] = useState<"record" | "collection">(defaultType);
+  const [paymentProvider, setPaymentProvider] = useState("paystack");
   const [initialAmountPaid, setInitialAmountPaid] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("cash");
   const [useCustomNumber, setUseCustomNumber] = useState(false);
   const [invoiceNumber, setInvoiceNumber] = useState("");
   const [clientId, setClientId] = useState("");
+  const [referenceId, setReferenceId] = useState("");
   const [createClientModalOpen, setCreateClientModalOpen] = useState(false);
   const [discountPct, setDiscountPct] = useState("0");
   const [taxPct, setTaxPct] = useState("7.5");
@@ -86,6 +89,7 @@ function CreateInvoiceForm() {
           // Fetch catalog and discount templates
           getItemCatalog(data.id).then(setCatalog);
           getDiscountTemplates(data.id).then(setDiscountTemplates);
+          getReferences(data.id).then(setReferences);
 
           // CRITICAL: Force starter plan merchants to record type only.
           // This prevents the form from accidentally submitting a collection invoice
@@ -183,6 +187,7 @@ function CreateInvoiceForm() {
     const result = await createInvoiceAction({
       merchant_id: merchant.id,
       client_id: clientId,
+      reference_id: referenceId || null,
       invoice_number: useCustomNumber ? invoiceNumber : undefined,
       invoice_type: invoiceType,
       discount_pct: parseFloat(discountPct) || 0,
@@ -195,6 +200,7 @@ function CreateInvoiceForm() {
       payment_method: paymentMethod,
       allow_partial_payment: invoiceType === "collection" ? allowPartialPayment : false,
       partial_payment_pct: (invoiceType === "collection" && allowPartialPayment) ? parseFloat(partialPaymentPct) : null,
+      payment_provider: invoiceType === "collection" ? paymentProvider : undefined,
       line_items: lineItems
         .filter((li) => li.itemName.trim())
         .map((li) => {
@@ -401,6 +407,44 @@ function CreateInvoiceForm() {
                     <SelectContent className="border-2 border-purp-200">
                       <SelectItem value="business">Business Absorbs</SelectItem>
                       <SelectItem value="customer">Customer Absorbs</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+            </div>
+
+            <div className="grid sm:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label className="text-sm font-medium">Reference / Project</Label>
+                  <Link href="/references" className="text-xs font-semibold text-purp-700 hover:underline">
+                    Manage
+                  </Link>
+                </div>
+                <Select value={referenceId || "none"} onValueChange={(v) => setReferenceId(v === "none" ? "" : String(v))}>
+                  <SelectTrigger className="border-2 border-purp-200 bg-purp-50 h-11">
+                    <SelectValue placeholder="Optional" />
+                  </SelectTrigger>
+                  <SelectContent className="border-2 border-purp-200">
+                    <SelectItem value="none">No reference</SelectItem>
+                    {references.map((ref) => (
+                      <SelectItem key={ref.id} value={ref.id}>{ref.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {invoiceType === "collection" && (
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium">Payment Provider</Label>
+                  <Select value={paymentProvider} onValueChange={(v) => setPaymentProvider(v ?? "paystack")}>
+                    <SelectTrigger className="border-2 border-purp-200 bg-purp-50 h-11">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="border-2 border-purp-200">
+                      <SelectItem value="paystack">Paystack (Cards & Transfer)</SelectItem>
+                      <SelectItem value="monnify">Monnify (Dynamic Accounts)</SelectItem>
+                      <SelectItem value="breet">Breet (Crypto OTC)</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>

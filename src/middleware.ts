@@ -71,10 +71,9 @@ export async function middleware(request: NextRequest) {
       const merchantId = request.cookies.get("purpledger_workspace_id")?.value;
       
       if (merchantId) {
-        // 1. Check if merchant is suspended
         const { data: merchantData } = await supabase
           .from("merchants")
-          .select("verification_status")
+          .select("verification_status, last_acknowledged_version")
           .eq("id", merchantId)
           .single();
           
@@ -101,6 +100,8 @@ export async function middleware(request: NextRequest) {
             return NextResponse.redirect(url);
           }
         }
+
+        // Check removed: Now handled via UI Modal on the dashboard directly
       }
     }
 

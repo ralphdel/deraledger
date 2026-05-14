@@ -3,6 +3,7 @@
 // Import this — never import an adapter directly.
 
 import { PaystackAdapter } from "./adapters/PaystackAdapter";
+import { BreetAdapter } from "./adapters/BreetAdapter";
 import type {
   IPaymentProcessor,
   TransactionParams,
@@ -12,6 +13,9 @@ import type {
   BankListItem,
   AccountResolutionResult,
   WebhookVerificationResult,
+  CryptoDepositAddressParams,
+  CryptoDepositAddressResult,
+  CryptoTransactionResult,
 } from "./types";
 
 function createProcessor(): IPaymentProcessor {
@@ -38,12 +42,20 @@ function createProcessor(): IPaymentProcessor {
 // Lazily initialised singleton — avoids creating an instance at module parse time
 // which would throw if env vars aren't available during static analysis.
 let _processor: IPaymentProcessor | null = null;
+let _breet: BreetAdapter | null = null;
 
 function getProcessor(): IPaymentProcessor {
   if (!_processor) {
     _processor = createProcessor();
   }
   return _processor;
+}
+
+function getBreetProcessor(): BreetAdapter {
+  if (!_breet) {
+    _breet = new BreetAdapter();
+  }
+  return _breet;
 }
 
 // ── Public PaymentService API ──────────────────────────────────────────────────
@@ -76,5 +88,17 @@ export const PaymentService = {
 
   verifyWebhook(payload: unknown, signature: string): WebhookVerificationResult {
     return getProcessor().verifyWebhook(payload, signature);
+  },
+
+  generateCryptoDepositAddress(p: CryptoDepositAddressParams): Promise<CryptoDepositAddressResult> {
+    return getBreetProcessor().generateAddress(p);
+  },
+
+  fetchCryptoTransaction(transactionId: string): Promise<CryptoTransactionResult> {
+    return getBreetProcessor().fetchTransaction(transactionId);
+  },
+
+  verifyBreetWebhook(secretHeader: string | null): WebhookVerificationResult {
+    return getBreetProcessor().verifyWebhook(secretHeader);
   },
 } as const;

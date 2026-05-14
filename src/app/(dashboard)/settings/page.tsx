@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useTransition } from "react";
 import Link from "next/link";
-import { Save, Shield, Upload, FileCheck, AlertTriangle, CheckCircle, Clock, ArrowRight, ExternalLink, Lock } from "lucide-react";
+import { Save, Shield, Upload, FileCheck, AlertTriangle, CheckCircle, Clock, ArrowRight, ExternalLink, Lock, Camera } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -17,7 +17,9 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { getMerchant } from "@/lib/data";
-import { submitKycAction } from "@/lib/actions";
+import { submitDojahKycAction, submitKycAction } from "@/lib/actions";
+import { CreateClientModal } from "@/components/CreateClientModal";
+import { LivenessCamera } from "@/components/kyc/liveness-camera";
 import { createClient } from "@/lib/supabase/client";
 import type { Merchant } from "@/lib/types";
 
@@ -39,6 +41,7 @@ export default function SettingsPage() {
   const [cacNumber, setCacNumber] = useState("");
   const [utilityFile, setUtilityFile] = useState<File | null>(null);
   const [bvnNumber, setBvnNumber] = useState("");
+  const [selfieFile, setSelfieFile] = useState<File | null>(null);
   const [kycSubmitting, setKycSubmitting] = useState(false);
   const [kycSuccess, setKycSuccess] = useState(false);
   const [kycError, setKycError] = useState<string | null>(null);
@@ -47,6 +50,10 @@ export default function SettingsPage() {
   // Logo state
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
+
+  const [livenessImages, setLivenessImages] = useState<string[]>([]);
+  const [showLivenessCamera, setShowLivenessCamera] = useState(false);
+  const [livenessFallback, setLivenessFallback] = useState(false);
 
   const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -138,7 +145,7 @@ export default function SettingsPage() {
         setEmail(m.email);
         setPhone(m.phone || "");
         setFeeDefault(m.fee_absorption_default);
-        setBvnNumber(m.bvn || "");
+        setBvnNumber(/^\d{11}$/.test(m.bvn || "") ? (m.bvn || "") : "");
         setCacNumber(m.cac_number || "");
         setLogoUrl(m.logo_url || null);
       }
@@ -166,8 +173,8 @@ export default function SettingsPage() {
   const handleKycSubmit = async () => {
     if (!merchant) return;
 
-    if (!cacNumber && !bvnNumber && !cacFile && !utilityFile) {
-      setKycError("Please provide at least one document or number to submit verification.");
+    if (!bvnNumber || (livenessImages.length === 0 && !selfieFile)) {
+      setKycError("Please provide your BVN and complete the selfie verification.");
       return;
     }
 
@@ -178,43 +185,52 @@ export default function SettingsPage() {
     }
 
     setKycSubmitting(true);
+    const toBase64 = (file: File) =>
+      new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = String(reader.result || "");
+          resolve(result.includes(",") ? result.split(",")[1] : result);
+        };
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+      });
 
-    // Simulate document upload processing delay
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    try {
+      let finalSelfieBase64: string | string[];
+      let finalSelfieFileName: string | string[];
 
-    const updates: any = {
-      verification_status: "pending",
-      kyc_submitted_at: new Date().toISOString(),
-      kyc_notes: `Documents submitted: CAC=${cacFile?.name || "N/A"}, Utility=${utilityFile?.name || "N/A"}`,
-    };
+      if (livenessImages.length > 0) {
+        finalSelfieBase64 = livenessImages;
+        finalSelfieFileName = livenessImages.map((_, i) => `liveness-${i}-${Date.now()}.jpg`);
+      } else {
+        finalSelfieBase64 = await toBase64(selfieFile!);
+        finalSelfieFileName = selfieFile!.name;
+      }
 
-    if (cacNumber) updates.cac_number = cacNumber;
-    if (bvnNumber) updates.bvn = bvnNumber;
-    if (cacFile) {
-      updates.cac_document_url = `uploaded_${cacFile.name}`;
-      updates.cac_status = "pending";
-    }
-    if (utilityFile) {
-      updates.utility_document_url = `uploaded_${utilityFile.name}`;
-      updates.utility_status = "pending";
-    }
-    if (bvnNumber && merchant.bvn_status === "unverified") {
-      updates.bvn_status = "pending";
-    }
-    if (cacNumber && (!merchant.cac_status || merchant.cac_status === "unverified")) {
-      updates.cac_status = "pending";
-    }
+      const { success, error, updates } = await submitDojahKycAction({
+        merchantId: merchant.id,
+        bvn: bvnNumber,
+        selfieBase64: finalSelfieBase64,
+        selfieFileName: finalSelfieFileName,
+        cacNumber: cacNumber || undefined,
+        cacDocumentName: cacFile?.name,
+        utilityDocumentName: utilityFile?.name,
+      });
 
-    const { success, error } = await submitKycAction(merchant.id, updates);
-
-    if (success) {
-      setMerchant({ ...merchant, ...updates, verification_status: "pending" as const });
-      setKycSuccess(true);
-      setKycError(null);
-    } else {
-      setKycError("Submission failed: " + error + ". Please ensure your database schema is up to date.");
+      if (success) {
+        setMerchant({ ...merchant, ...(updates || {}) } as Merchant);
+        setKycSuccess(true);
+        setKycError(null);
+      } else {
+        if (updates) setMerchant({ ...merchant, ...updates } as Merchant);
+        setKycError("Submission failed: " + error);
+      }
+    } catch (err) {
+      setKycError(err instanceof Error ? err.message : "Could not read selfie image.");
+    } finally {
+      setKycSubmitting(false);
     }
-    setKycSubmitting(false);
   };
 
   const renderStatusBadge = (status: string | undefined) => {
@@ -446,6 +462,44 @@ export default function SettingsPage() {
               </div>
             )}
 
+            {!isStarter && (
+              <div className="space-y-2">
+                <Label className="text-sm font-medium flex items-center gap-2">
+                  <Shield className="h-4 w-4 text-purp-700" />
+                  Live Selfie Capture
+                  {renderStatusBadge(merchant?.selfie_status)}
+                </Label>
+                <p className="text-xs text-neutral-500">Used with your BVN for secure face match verification.</p>
+                <div className="flex items-center gap-3">
+                  {!livenessFallback && merchant?.selfie_status !== "verified" && merchant?.selfie_status !== "pending" ? (
+                    <Button 
+                      onClick={() => setShowLivenessCamera(true)}
+                      variant="outline"
+                      disabled={profileIncomplete}
+                      className="border-2 border-purp-200 bg-purp-50 hover:bg-purp-100 text-purp-700"
+                    >
+                      <Camera className="h-4 w-4 mr-2" />
+                      {livenessImages.length > 0 ? "Retake Live Pictures" : "Start Live Camera Capture"}
+                    </Button>
+                  ) : (
+                    <Input
+                      type="file"
+                      accept=".png,.jpg,.jpeg"
+                      onChange={(e) => setSelfieFile(e.target.files?.[0] || null)}
+                      className="border-2 border-purp-200 bg-white h-11 file:mr-3 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-purp-100 file:text-purp-700"
+                      disabled={profileIncomplete || merchant?.selfie_status === "verified" || merchant?.selfie_status === "pending"}
+                    />
+                  )}
+                  
+                  {(livenessImages.length > 0 || selfieFile || merchant?.selfie_url) && (
+                    <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700 text-xs whitespace-nowrap">
+                      <CheckCircle className="mr-1 h-3 w-3" /> {merchant?.selfie_url ? "Submitted" : (livenessImages.length > 0 ? "3 Images Captured" : "Selected")}
+                    </Badge>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* CAC Number — Corporate only */}
             {isCorporate ? (
               <div className="space-y-2">
@@ -539,7 +593,7 @@ export default function SettingsPage() {
 
           <Button
             onClick={handleKycSubmit}
-            disabled={profileIncomplete || kycSubmitting || (!cacFile && !utilityFile && !bvnNumber && !cacNumber)}
+            disabled={profileIncomplete || kycSubmitting || !bvnNumber || !selfieFile}
             className="w-full h-11 bg-purp-900 hover:bg-purp-700 text-white font-semibold"
           >
             {kycSubmitting ? (
@@ -837,6 +891,25 @@ export default function SettingsPage() {
         </Button>
       </div>
       )}
+      {showLivenessCamera && (
+        <div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-4">
+          <div className="w-full max-w-md">
+            <LivenessCamera
+              onComplete={(images) => {
+                setLivenessImages(images);
+                setShowLivenessCamera(false);
+              }}
+              onCancel={() => setShowLivenessCamera(false)}
+              onFallback={(error) => {
+                setLivenessFallback(true);
+                setShowLivenessCamera(false);
+                setKycError("Camera failed: " + error + ". Please use the manual file upload.");
+              }}
+            />
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

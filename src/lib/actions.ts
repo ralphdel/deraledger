@@ -6,6 +6,14 @@ import { revalidatePath } from "next/cache";
 import { requirePermission } from "./rbac";
 import { sendTeamInviteEmail, sendPasswordResetEmail, sendInvoiceEmail } from "./brevo";
 import { PaymentService } from "@/lib/payment";
+import { DojahProvider, extractDojahMatchScore } from "@/lib/kyc/dojah.provider";
+import {
+  canCreateInvoice,
+  canCreateCollectionInvoice,
+  canAddActiveCollectionInvoice,
+  canInviteTeamMember,
+  canCreateCustomRole,
+} from "@/lib/services/access-control";
 
 // Service role client for admin-level operations
 function getServiceClient() {
@@ -75,7 +83,107 @@ async function logAudit(
   }
 }
 
+// ── Stream 5: Invoice Archive + Delete Policy ─────────────────────────────────
+
+export async function archiveInvoiceAction(invoiceId: string, merchantId: string) {
+  const adminClient = getServiceClient();
+
+  const { data: invoice } = await adminClient
+    .from("invoices")
+    .select("status, merchant_id, invoice_number")
+    .eq("id", invoiceId)
+    .single();
+
+  if (!invoice) return { success: false, error: "Invoice not found." };
+  if (invoice.merchant_id !== merchantId) return { success: false, error: "Unauthorized." };
+
+  const { error } = await adminClient
+    .from("invoices")
+    .update({
+      is_archived: true,
+      archived_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", invoiceId);
+
+  if (error) return { success: false, error: error.message };
+
+  await logAudit("archived", invoiceId, "invoice", {
+    invoice_number: invoice.invoice_number,
+    status: invoice.status,
+  });
+
+  revalidatePath("/invoices");
+  return { success: true };
+}
+
+export async function unarchiveInvoiceAction(invoiceId: string, merchantId: string) {
+  const adminClient = getServiceClient();
+
+  const { data: invoice } = await adminClient
+    .from("invoices")
+    .select("merchant_id")
+    .eq("id", invoiceId)
+    .single();
+
+  if (!invoice) return { success: false, error: "Invoice not found." };
+  if (invoice.merchant_id !== merchantId) return { success: false, error: "Unauthorized." };
+
+  const { error } = await adminClient
+    .from("invoices")
+    .update({ is_archived: false, archived_at: null, updated_at: new Date().toISOString() })
+    .eq("id", invoiceId);
+
+  if (error) return { success: false, error: error.message };
+  revalidatePath("/invoices");
+  return { success: true };
+}
+
+export async function deleteInvoiceAction(invoiceId: string, merchantId: string) {
+  const adminClient = getServiceClient();
+
+  const { data: invoice } = await adminClient
+    .from("invoices")
+    .select("status, merchant_id, invoice_number, amount_paid, invoice_type")
+    .eq("id", invoiceId)
+    .single();
+
+  if (!invoice) return { success: false, error: "Invoice not found." };
+  if (invoice.merchant_id !== merchantId) return { success: false, error: "Unauthorized." };
+
+  // Deletion policy: cannot delete if any payment has been made
+  if (Number(invoice.amount_paid || 0) > 0) {
+    return {
+      success: false,
+      error: "Cannot delete an invoice that has received payment. Archive it instead.",
+    };
+  }
+
+  // Cannot delete fully paid or partially paid invoices
+  if (["paid", "partially_paid"].includes(invoice.status)) {
+    return {
+      success: false,
+      error: `Cannot delete a ${invoice.status} invoice. Archive it instead to hide it from your list.`,
+    };
+  }
+
+  // Delete line items first (FK constraint)
+  await adminClient.from("line_items").delete().eq("invoice_id", invoiceId);
+
+  const { error } = await adminClient.from("invoices").delete().eq("id", invoiceId);
+  if (error) return { success: false, error: error.message };
+
+  await logAudit("deleted", invoiceId, "invoice", {
+    invoice_number: invoice.invoice_number,
+    reason: "Merchant hard-delete of open/draft invoice",
+  });
+
+  revalidatePath("/invoices");
+  return { success: true };
+}
+
 export async function closeInvoiceManually(invoiceId: string, reason: string) {
+
   const supabase = await createClient();
 
   const { error } = await supabase
@@ -268,6 +376,16 @@ export async function submitKycAction(merchantId: string, updates: any) {
 export async function createCustomRoleAction(merchantId: string, roleName: string, permissions: Record<string, boolean>) {
   const permCheck = await requirePermission(merchantId, "manage_team");
   if (!permCheck.permitted) return { success: false, error: permCheck.error };
+
+  // Plan gate: custom roles require Business plan
+  const adminClientRole = getServiceClient();
+  const { data: roleCheckInfo } = await adminClientRole
+    .from("merchants").select("subscription_plan, merchant_tier").eq("id", merchantId).single();
+  if (roleCheckInfo) {
+    const gate = canCreateCustomRole(roleCheckInfo);
+    if (!gate.allowed) return { success: false, error: gate.reason };
+  }
+
   const supabase = createSupabaseClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -304,6 +422,19 @@ export async function sendInviteAction(
   if (!permCheck.permitted) return { success: false, error: permCheck.error };
   if (!email || !role || !workspaceCode || !merchantId) {
     return { success: false, error: "Missing required fields" };
+  }
+
+  // Plan gate: check team seat limit
+  const adminClientInvite = getServiceClient();
+  const { data: inviteInfo } = await adminClientInvite
+    .from("merchants").select("subscription_plan, merchant_tier").eq("id", merchantId).single();
+  if (inviteInfo) {
+    const { count: teamCount } = await adminClientInvite
+      .from("merchant_team").select("*", { count: "exact", head: true })
+      .eq("merchant_id", merchantId).eq("is_active", true);
+    const totalSeats = (teamCount || 0) + 1;
+    const gate = canInviteTeamMember(inviteInfo, totalSeats);
+    if (!gate.allowed) return { success: false, error: gate.reason };
   }
 
   const supabase = await createClient();
@@ -709,8 +840,10 @@ export async function updateClientAction(clientId: string, clientData: {
 export async function createInvoiceAction(data: {
   merchant_id: string;
   client_id: string;
+  reference_id?: string | null;
+  handled_by?: string | null;
   invoice_number?: string;
-  invoice_type?: "record" | "collection"; // v2.1
+  invoice_type?: "record" | "collection";
   discount_pct: number;
   tax_pct: number;
   fee_absorption: "business" | "customer";
@@ -719,6 +852,7 @@ export async function createInvoiceAction(data: {
   payment_notes?: string; // v2.1 (for record invoices)
   initial_amount_paid?: number; // v2.1 (for record invoices)
   payment_method?: string; // v2.1
+  payment_provider?: string; // v2.1 (for collection invoices: paystack, monnify, breet)
   allow_partial_payment?: boolean;
   partial_payment_pct?: number | null;
   line_items: { item_name: string; quantity: number; unit_rate: number }[];
@@ -728,29 +862,39 @@ export async function createInvoiceAction(data: {
   // Check Starter tier invoice limit (max 5 total invoices)
   const { data: merchantInfo } = await adminClient
     .from("merchants")
-    .select("subscription_plan")
+    .select("subscription_plan, merchant_tier, verification_status")
     .eq("id", data.merchant_id)
     .single();
 
-  if (merchantInfo?.subscription_plan === "starter") {
-    // Server-side enforcement: Starter plan CANNOT create collection invoices.
-    // If the client somehow sends invoice_type=collection, reject it outright.
-    if (data.invoice_type === "collection") {
-      return { 
-        success: false, 
-        error: "Starter plan merchants cannot create Collection Invoices. Please use a Record Invoice instead, or upgrade your plan." 
-      };
-    }
+  const requestedType = data.invoice_type || "collection";
 
-    const { count, error: countError } = await adminClient
+  // Centralized access control checks
+  const { count: lifetimeCount } = await adminClient
+    .from("invoices")
+    .select("*", { count: "exact", head: true })
+    .eq("merchant_id", data.merchant_id);
+
+  const createCheck = canCreateInvoice(merchantInfo!, lifetimeCount ?? 0);
+  if (!createCheck.allowed) return { success: false, error: createCheck.reason };
+
+  if (requestedType === "collection") {
+    const collectionCheck = canCreateCollectionInvoice(merchantInfo!);
+    if (!collectionCheck.allowed) return { success: false, error: collectionCheck.reason };
+
+    const { count: activeCollCount } = await adminClient
       .from("invoices")
       .select("*", { count: "exact", head: true })
-      .eq("merchant_id", data.merchant_id);
-    
-    if (!countError && count !== null && count >= 5) {
-      return { success: false, error: "Starter plan limit reached: You can only generate up to 5 Record Invoices. Please upgrade your plan to continue." };
-    }
+      .eq("merchant_id", data.merchant_id)
+      .eq("invoice_type", "collection")
+      .in("status", ["open", "partially_paid"]);
+
+    const activeCheck = canAddActiveCollectionInvoice(merchantInfo!, activeCollCount ?? 0);
+    if (!activeCheck.allowed) return { success: false, error: activeCheck.reason };
   }
+
+  const plan = merchantInfo?.subscription_plan || merchantInfo?.merchant_tier || "starter";
+  const effectiveType: "record" | "collection" = plan === "starter" ? "record" : requestedType;
+
 
   // Calculate totals server-side
   const subtotal = data.line_items.reduce((sum, li) => sum + li.quantity * li.unit_rate, 0);
@@ -770,8 +914,10 @@ export async function createInvoiceAction(data: {
     .insert([{
       merchant_id: data.merchant_id,
       client_id: data.client_id,
+      reference_id: data.reference_id || null,
+      handled_by: data.handled_by || null,
       invoice_number: invoiceNumber,
-      invoice_type: data.invoice_type || "collection", // v2.1
+      invoice_type: effectiveType,
       status: "open",
       subtotal,
       discount_pct: data.discount_pct,
@@ -787,6 +933,7 @@ export async function createInvoiceAction(data: {
       payment_notes: data.payment_notes || null, // v2.1
       allow_partial_payment: data.allow_partial_payment || false,
       partial_payment_pct: data.partial_payment_pct || null,
+      payment_provider: data.payment_provider || "paystack",
       short_link: shortToken,
       qr_code_url: null,
     }])
@@ -1298,3 +1445,245 @@ export async function bulkCreateInvoicesAction(merchantId: string, invoicesData:
   return { success: true, count: createdInvoices.length };
 }
 
+
+
+// Platform Update Acknowledgement
+
+export async function acknowledgeUpdateAction(merchantId: string) {
+
+  const adminClient = getServiceClient();
+
+  const { data: setting } = await adminClient
+
+    .from("platform_settings").select("value").eq("key", "current_platform_version").single();
+
+  const currentVersion = parseInt(setting?.value || "1", 10);
+
+  const { error } = await adminClient
+
+    .from("merchants").update({ last_acknowledged_version: currentVersion }).eq("id", merchantId);
+
+  if (error) return { success: false, error: error.message };
+
+  return { success: true };
+
+}
+
+// ── References ────────────────────────────────────────────────────────────────
+
+export async function createReferenceAction(data: {
+  merchant_id: string;
+  name: string;
+  description?: string;
+}) {
+  const adminClient = getServiceClient();
+  const { data: ref, error } = await adminClient
+    .from("references")
+    .insert({
+      merchant_id: data.merchant_id,
+      name: data.name.trim(),
+      description: data.description?.trim() || null,
+    })
+    .select("id")
+    .single();
+
+  if (error) return { success: false, error: error.message };
+  revalidatePath("/references");
+  return { success: true, id: ref.id };
+}
+
+// ── KYC Dojah Submission ──────────────────────────────────────────────────────
+
+export async function submitDojahKycAction(params: {
+  merchantId: string;
+  bvn: string;
+  selfieBase64: string | string[];
+  selfieFileName: string | string[];
+  cacNumber?: string;
+  cacDocumentName?: string;
+  utilityDocumentName?: string;
+}) {
+  const adminClient = getServiceClient();
+
+  // Rate limiting: max 5 attempts
+  const { data: merchant } = await adminClient
+    .from("merchants")
+    .select("kyc_attempt_count, kyc_locked_until, subscription_plan, merchant_tier, owner_name")
+    .eq("id", params.merchantId)
+    .single();
+
+  const attemptCount = merchant?.kyc_attempt_count ?? 0;
+  if (merchant?.kyc_locked_until && new Date(merchant.kyc_locked_until) > new Date()) {
+    return {
+      success: false,
+      error: `KYC submissions are temporarily locked. Please try again after ${new Date(merchant.kyc_locked_until).toLocaleString("en-NG")}.`,
+    };
+  }
+  if (attemptCount >= 5) {
+    const lockUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    await adminClient
+      .from("merchants")
+      .update({ kyc_locked_until: lockUntil })
+      .eq("id", params.merchantId);
+    return {
+      success: false,
+      error: "Maximum KYC attempts reached. Your account is locked for 24 hours.",
+    };
+  }
+
+  try {
+    let finalSelfieFileName = "";
+    let primaryBase64 = "";
+
+    // Handle multiple liveness frames or single upload
+    if (Array.isArray(params.selfieBase64) && Array.isArray(params.selfieFileName)) {
+      primaryBase64 = params.selfieBase64[0]; // Dojah gets the "straight face"
+      const filenames = [];
+      for (let i = 0; i < params.selfieBase64.length; i++) {
+        const buffer = Buffer.from(params.selfieBase64[i], "base64");
+        const filename = `${params.merchantId}/${params.selfieFileName[i]}`;
+        await adminClient.storage.from("kyc-documents").upload(filename, buffer, {
+          contentType: "image/jpeg",
+          upsert: true,
+        });
+        filenames.push(filename);
+      }
+      finalSelfieFileName = JSON.stringify(filenames);
+    } else {
+      primaryBase64 = params.selfieBase64 as string;
+      finalSelfieFileName = params.selfieFileName as string;
+      const buffer = Buffer.from(primaryBase64, "base64");
+      const filename = `${params.merchantId}/${finalSelfieFileName}`;
+      await adminClient.storage.from("kyc-documents").upload(filename, buffer, {
+        contentType: "image/jpeg",
+        upsert: true,
+      });
+    }
+
+    // Call Dojah BVN + Selfie combined verification
+    const dojah = new DojahProvider();
+    const result = await dojah.verifyBVNWithSelfie({
+      bvn: params.bvn,
+      selfieBase64: primaryBase64,
+      customerReference: params.merchantId,
+    });
+
+    const matchScore = extractDojahMatchScore(result);
+    const dojahSuccess = result.status === true || result.entity?.bvn === params.bvn;
+    const selfieMatch = matchScore !== null && matchScore >= 70;
+
+    const plan = merchant?.subscription_plan || merchant?.merchant_tier || "starter";
+    const newBvnStatus: string = dojahSuccess ? "verified" : "rejected";
+    const newSelfieStatus: string = selfieMatch ? "verified" : "rejected";
+
+    const updates: Record<string, unknown> = {
+      bvn: params.bvn,
+      bvn_status: newBvnStatus,
+      selfie_url: finalSelfieFileName,
+      selfie_status: newSelfieStatus,
+      dojah_reference: result.reference_id || null,
+      dojah_match_score: matchScore,
+      kyc_attempt_count: attemptCount + 1,
+      kyc_last_attempt_at: new Date().toISOString(),
+      kyc_submitted_at: new Date().toISOString(),
+      verification_status: newBvnStatus === "verified" && newSelfieStatus === "verified" ? "pending" : "rejected",
+    };
+
+    if (params.cacNumber) updates.cac_number = params.cacNumber;
+    if (params.cacDocumentName) {
+      updates.cac_document_url = params.cacDocumentName;
+      updates.cac_status = "pending";
+    }
+    if (params.utilityDocumentName) {
+      updates.utility_document_url = params.utilityDocumentName;
+      updates.utility_status = "pending";
+    }
+
+    await adminClient.from("merchants").update(updates).eq("id", params.merchantId);
+
+    revalidatePath("/settings");
+    revalidatePath("/admin/verification");
+
+    return {
+      success: newBvnStatus === "verified",
+      error: newBvnStatus !== "verified" ? "BVN verification failed. Please check your details and try again." : undefined,
+      updates,
+    };
+  } catch (err: any) {
+    console.error("Dojah KYC error:", err);
+    await adminClient
+      .from("merchants")
+      .update({ kyc_attempt_count: attemptCount + 1, kyc_last_attempt_at: new Date().toISOString() })
+      .eq("id", params.merchantId);
+    return { success: false, error: err.message || "KYC verification service error. Please try again." };
+  }
+
+}
+
+// ── Admin KYC Document Status Update ─────────────────────────────────────────
+
+export async function adminUpdateKycDocumentStatusAction(
+  merchantId: string,
+  field: "cac_status" | "bvn_status" | "utility_status" | "selfie_status",
+  status: "verified" | "rejected",
+  notes?: string
+) {
+  const adminClient = getServiceClient();
+
+  const updates: Record<string, unknown> = {
+    [field]: status,
+    kyc_reviewed_at: new Date().toISOString(),
+  };
+
+  if (notes) updates.kyc_notes = notes;
+
+  // After updating individual document status, recompute overall verification_status
+  const { data: current } = await adminClient
+    .from("merchants")
+    .select("bvn_status, selfie_status, cac_status, utility_status, subscription_plan, merchant_tier")
+    .eq("id", merchantId)
+    .single();
+
+  if (current) {
+    const merged = { ...current, [field]: status };
+    const plan = merged.subscription_plan || merged.merchant_tier || "starter";
+
+    let overallStatus: string;
+    if (plan === "corporate") {
+      // Corporate needs BVN+selfie+CAC all verified
+      const allVerified =
+        merged.bvn_status === "verified" &&
+        merged.selfie_status === "verified" &&
+        merged.cac_status === "verified";
+      const anyRejected =
+        merged.bvn_status === "rejected" ||
+        merged.selfie_status === "rejected" ||
+        merged.cac_status === "rejected";
+      overallStatus = allVerified ? "verified" : anyRejected ? "rejected" : "pending";
+    } else {
+      // Individual needs BVN+selfie
+      const allVerified = merged.bvn_status === "verified" && merged.selfie_status === "verified";
+      const anyRejected = merged.bvn_status === "rejected" || merged.selfie_status === "rejected";
+      overallStatus = allVerified ? "verified" : anyRejected ? "rejected" : "pending";
+    }
+
+    updates.verification_status = overallStatus;
+  }
+
+  const { error } = await adminClient
+    .from("merchants")
+    .update(updates)
+    .eq("id", merchantId);
+
+  if (error) return { success: false, error: error.message };
+
+  await logAudit("kyc_doc_review", merchantId, "merchant", {
+    field,
+    status,
+    notes: notes || null,
+    actor: "admin",
+  });
+
+  revalidatePath("/admin/verification");
+  return { success: true, updates };
+}

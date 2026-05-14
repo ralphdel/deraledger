@@ -26,6 +26,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { PlatformUpdateModal } from "@/components/platform-update-modal";
 
 const adminNavItems = [
   { href: "/admin", label: "Overview", icon: LayoutDashboard },
@@ -174,6 +175,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         {/* Page Content */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8">{children}</main>
       </div>
+      <PlatformUpdateModal />
     </div>
   );
 }

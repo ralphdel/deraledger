@@ -8,4 +8,7 @@ export type {
   BankListItem,
   AccountResolutionResult,
   WebhookVerificationResult,
+  CryptoDepositAddressParams,
+  CryptoDepositAddressResult,
+  CryptoTransactionResult,
 } from "./types";

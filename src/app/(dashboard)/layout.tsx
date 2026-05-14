@@ -17,6 +17,7 @@ import {
   Banknote,
   BarChart,
   AlertCircle,
+  FolderKanban,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
@@ -35,6 +36,7 @@ import type { Merchant, Subscription } from "@/lib/types";
 import { SubscriptionBanner } from "@/components/subscription-banner";
 import { SubscriptionExpiryModal } from "@/components/subscription-expiry-modal";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { PlatformUpdateModal } from "@/components/platform-update-modal";
 
 interface NavItem {
   href: string;
@@ -72,6 +74,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const allNavItems: NavItem[] = [
     { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
     { href: "/invoices", label: "Invoices", icon: FileText, requiredPermission: "view_invoices" },
+    { href: "/references", label: "References", icon: FolderKanban, requiredPermission: "view_invoices" },
     { href: "/clients", label: "Clients", icon: Users, requiredPermission: "view_clients" },
     { href: "/settlements", label: "Settlements", icon: Banknote, requiredPermission: "view_settlements" },
     { href: "/accounting-report", label: "Reports", icon: BarChart, requiredPermission: "view_analytics" },
@@ -322,6 +325,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           )}
         </main>
       </div>
+      <PlatformUpdateModal />
     </div>
   );
 }

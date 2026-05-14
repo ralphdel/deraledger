@@ -37,7 +37,7 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { createClient } from "@/lib/supabase/client";
-import { submitKycAction } from "@/lib/actions";
+import { adminUpdateKycDocumentStatusAction } from "@/lib/actions";
 import type { Merchant } from "@/lib/types";
 
 export default function VerificationQueuePage() {
@@ -64,6 +64,7 @@ export default function VerificationQueuePage() {
     const hasConfirmed = (m.platform_version ?? 0) >= 1;
     if (tier !== "starter" && !m.owner_name) return "incomplete";
     if (tier === "corporate" && (!m.business_name || !hasConfirmed)) return "incomplete";
+    if (tier !== "starter" && m.bvn_status === "verified" && (m.selfie_status || "unverified") !== "verified") return "pending";
     return m.verification_status;
   };
 
@@ -98,57 +99,24 @@ export default function VerificationQueuePage() {
     }
   };
 
-  const updateItemStatus = async (merchant: Merchant, field: "cac_status" | "bvn_status" | "utility_status", status: "verified" | "rejected") => {
-    const sb = createClient();
-    
-    // Build new state to compute overall verification_status
-    const newState = { ...merchant, [field]: status };
-    
-    // Determine overall verification status from document statuses
-    // This NEVER touches subscription_plan or merchant_tier (Two-Axis Gate, Section 2.1)
-    const plan = newState.subscription_plan || newState.merchant_tier || "starter";
-    let newOverallStatus: string;
+  const updateItemStatus = async (merchant: Merchant, field: "cac_status" | "bvn_status" | "utility_status" | "selfie_status", status: "verified" | "rejected") => {
+    const { success, error, updates } = await adminUpdateKycDocumentStatusAction(
+      merchant.id,
+      field,
+      status,
+      reviewNotes || undefined
+    );
 
-    if (plan === "corporate") {
-      // Corporate requires all three docs verified
-      const allVerified = newState.cac_status === "verified" && newState.utility_status === "verified" && newState.bvn_status === "verified";
-      const anyRejected = newState.cac_status === "rejected" || newState.utility_status === "rejected" || newState.bvn_status === "rejected";
-      const anyPending = newState.cac_status === "pending" || newState.utility_status === "pending" || newState.bvn_status === "pending";
-      
-      if (allVerified) newOverallStatus = "verified";
-      else if (anyRejected) newOverallStatus = "rejected";
-      else if (anyPending) newOverallStatus = "pending";
-      else newOverallStatus = "unverified";
-    } else if (plan === "individual") {
-      // Individual requires only BVN
-      if (newState.bvn_status === "verified") newOverallStatus = "verified";
-      else if (newState.bvn_status === "rejected") newOverallStatus = "rejected";
-      else if (newState.bvn_status === "pending") newOverallStatus = "pending";
-      else newOverallStatus = "unverified";
-    } else {
-      // Starter — no verification needed
-      newOverallStatus = "unverified";
-    }
-
-    const updates: Record<string, unknown> = { 
-      [field]: status,
-      verification_status: newOverallStatus,
-      kyc_notes: reviewNotes || `Admin marked ${field.replace('_', ' ')} as ${status}`
-    };
-
-    const { success, error } = await submitKycAction(merchant.id, updates);
-    
     if (success) {
       setMerchants(merchants.map((m) =>
-        m.id === merchant.id ? { ...m, ...updates } as Merchant : m
+        m.id === merchant.id ? { ...m, ...(updates || {}) } as Merchant : m
       ));
-      setSelectedMerchant({ ...merchant, ...updates } as Merchant);
+      setSelectedMerchant({ ...merchant, ...(updates || {}) } as Merchant);
     } else {
       setReviewError("Failed to update status: " + error);
     }
     setReviewNotes("");
   };
-
   const pendingCount = merchants.filter((m) => m.verification_status === "pending").length;
   const incompleteCount = merchants.filter((m) => getEffectiveStatus(m) === "incomplete").length;
 
@@ -253,6 +221,27 @@ export default function VerificationQueuePage() {
                       </div>
                     </div>
                     <div className="border-t pt-4 space-y-3">
+                      <div className="rounded-lg border bg-blue-50 p-3 text-sm">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <p className="font-semibold text-blue-900">Dojah BVN + Selfie Check</p>
+                            <p className="text-xs text-blue-700">
+                              Ref: {selectedMerchant?.dojah_reference || m.dojah_reference || "Not submitted"}
+                            </p>
+                          </div>
+                          <Badge variant="outline" className="border-blue-200 bg-white text-blue-700 text-xs">
+                            Score: {selectedMerchant?.dojah_match_score ?? m.dojah_match_score ?? "N/A"}%
+                          </Badge>
+                        </div>
+                        <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-blue-800">
+                          <span>Attempts: {selectedMerchant?.kyc_attempt_count ?? m.kyc_attempt_count ?? 0}</span>
+                          <span>
+                            Last: {(selectedMerchant?.kyc_last_attempt_at || m.kyc_last_attempt_at)
+                              ? new Date(selectedMerchant?.kyc_last_attempt_at || m.kyc_last_attempt_at || "").toLocaleDateString("en-NG")
+                              : "N/A"}
+                          </span>
+                        </div>
+                      </div>
                       <h4 className="font-semibold text-sm">Submitted Documents & Details</h4>
                       <div className="space-y-2">
                         <div className="flex items-center justify-between bg-neutral-50 p-2 rounded">
@@ -285,6 +274,23 @@ export default function VerificationQueuePage() {
                               <div className="flex gap-1">
                                 <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-emerald-600 hover:bg-emerald-100" onClick={() => updateItemStatus(selectedMerchant || m, 'bvn_status', 'verified')}><CheckCircle className="h-4 w-4" /></Button>
                                 <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-red-600 hover:bg-red-100" onClick={() => updateItemStatus(selectedMerchant || m, 'bvn_status', 'rejected')}><XCircle className="h-4 w-4" /></Button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between bg-neutral-50 p-2 rounded">
+                          <div>
+                            <p className="text-xs text-neutral-500">Selfie</p>
+                            <p className="font-medium text-sm">{(selectedMerchant?.selfie_url || m.selfie_url) ? "Submitted" : "N/A"}</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Badge variant="outline" className={`text-xs capitalize border-2 ${statusColor(selectedMerchant?.selfie_status || m.selfie_status || 'unverified')}`}>
+                              {selectedMerchant?.selfie_status || m.selfie_status || 'unverified'}
+                            </Badge>
+                            {(selectedMerchant?.selfie_status || m.selfie_status) === "pending" && (
+                              <div className="flex gap-1">
+                                <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-emerald-600 hover:bg-emerald-100" onClick={() => updateItemStatus(selectedMerchant || m, 'selfie_status', 'verified')}><CheckCircle className="h-4 w-4" /></Button>
+                                <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-red-600 hover:bg-red-100" onClick={() => updateItemStatus(selectedMerchant || m, 'selfie_status', 'rejected')}><XCircle className="h-4 w-4" /></Button>
                               </div>
                             )}
                           </div>

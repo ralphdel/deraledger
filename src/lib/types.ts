@@ -22,9 +22,16 @@ export interface Merchant {
   bvn: string | null;
   cac_document_url: string | null;
   utility_document_url: string | null;
+  selfie_url?: string | null;
   cac_status: "unverified" | "pending" | "verified" | "rejected";
   utility_status: "unverified" | "pending" | "verified" | "rejected";
   bvn_status: "unverified" | "pending" | "verified" | "rejected";
+  selfie_status?: "unverified" | "pending" | "verified" | "rejected";
+  dojah_reference?: string | null;
+  dojah_match_score?: number | null;
+  kyc_attempt_count?: number;
+  kyc_last_attempt_at?: string | null;
+  kyc_provider_metadata?: Record<string, unknown> | null;
   // Settlement fields (v2.1)
   settlement_bank_name: string | null;
   settlement_bank_code: string | null;
@@ -38,6 +45,7 @@ export interface Merchant {
   monthly_collection_limit: number;
   holds_pending_review: boolean;
   platform_version: number;
+  last_acknowledged_version?: number;
   created_at: string;
   updated_at: string;
   permissions?: Record<string, boolean>;
@@ -82,6 +90,8 @@ export interface Invoice {
   id: string;
   merchant_id: string;
   client_id: string;
+  reference_id?: string | null;
+  handled_by?: string | null;
   invoice_number: string;
   invoice_type: "record" | "collection";  // v2.1
   status: "open" | "partially_paid" | "closed" | "manually_closed" | "overdue" | "expired" | "void";
@@ -104,6 +114,21 @@ export interface Invoice {
   send_reminders: boolean;
   allow_partial_payment: boolean;
   partial_payment_pct: number | null;
+  created_at: string;
+  updated_at: string;
+  archived_at?: string | null;
+  is_archived?: boolean;
+  payment_provider?: string | null;
+  crypto_deposit_address?: string | null;
+  crypto_asset?: string | null;
+}
+
+export interface Reference {
+  id: string;
+  merchant_id: string;
+  name: string;
+  description: string | null;
+  handled_by: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -270,32 +295,45 @@ export const SUBSCRIPTION_PLANS = {
   starter: {
     label: "Starter",
     price: 0,
-    invoiceLimit: 5,
-    clientLimit: 10,
-    teamLimit: 0,
+    invoiceLimit: 10,        // Lifetime record invoice cap (NOT monthly)
+    clientLimit: Infinity,
+    teamLimit: 2,            // Owner + 1 invited seat
     canCollect: false,
-    canUsePurpBot: false,
+    canUsePurpBot: true,
     canUseAnalytics: false,
+    canCustomRoles: false,
+    canRemoveWatermark: false,
+    watermarkRequired: true,
   },
   individual: {
     label: "Individual",
     price: 5000,
     invoiceLimit: Infinity,
     clientLimit: Infinity,
-    teamLimit: 2,
-    canCollect: true, // requires BVN verification
+    teamLimit: 2,            // 2 seats total
+    activeCollectionLimit: 20,
+    monthlyCollectionLimitNgn: 5_000_000,
+    canCollect: true,        // requires BVN+selfie verified
     canUsePurpBot: true,
     canUseAnalytics: true,
+    canCustomRoles: false,
+    canRemoveWatermark: false,
+    watermarkRequired: true,
   },
   corporate: {
-    label: "Corporate",
+    label: "Business",
     price: 20000,
     invoiceLimit: Infinity,
     clientLimit: Infinity,
     teamLimit: Infinity,
-    canCollect: true, // requires all docs verified
+    activeCollectionLimit: Infinity,
+    monthlyCollectionLimitNgn: Infinity,
+    canCollect: true,        // requires full business KYC
     canUsePurpBot: true,
     canUseAnalytics: true,
+    canCustomRoles: true,
+    canRemoveWatermark: true,
+    watermarkRequired: false,
   },
 } as const;
 
