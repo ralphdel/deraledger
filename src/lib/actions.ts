@@ -1569,11 +1569,34 @@ export async function submitDojahKycAction(params: {
     });
 
     const matchScore = extractDojahMatchScore(result);
-    const dojahSuccess = result.status === true || result.entity?.bvn === params.bvn;
-    const selfieMatch = matchScore !== null && matchScore >= 70;
+    let dojahSuccess = result.status === true || result.entity?.bvn === params.bvn;
+    let selfieMatch = matchScore !== null && matchScore >= 70;
+    let nameMatch = true;
+
+    const isSandbox = process.env.VERIFICATION_MODE === "sandbox" || process.env.DOJAH_BASE_URL?.includes("sandbox") || process.env.NODE_ENV !== "production";
+
+    if (isSandbox) {
+      // In Sandbox mode, Dojah returns mocked data and fake identities, so we bypass strict checks
+      dojahSuccess = true;
+      selfieMatch = true;
+      nameMatch = true;
+    } else {
+      // Production Name matching logic
+      if (dojahSuccess && merchant?.owner_name && result.entity) {
+        const ownerNames = merchant.owner_name.toLowerCase().split(/\s+/);
+        const bvnNames = [
+          result.entity.first_name,
+          result.entity.last_name,
+          result.entity.middle_name
+        ].filter(Boolean).map(n => n!.toLowerCase());
+
+        // We require at least one part of the owner name to match a part of the BVN name
+        nameMatch = ownerNames.some((on: string) => bvnNames.includes(on));
+      }
+    }
 
     const plan = merchant?.subscription_plan || merchant?.merchant_tier || "starter";
-    const newBvnStatus: string = dojahSuccess ? "verified" : "rejected";
+    const newBvnStatus: string = (dojahSuccess && nameMatch) ? "verified" : "rejected";
     const newSelfieStatus: string = selfieMatch ? "verified" : "rejected";
 
     const updates: Record<string, unknown> = {
@@ -1586,8 +1609,17 @@ export async function submitDojahKycAction(params: {
       kyc_attempt_count: attemptCount + 1,
       kyc_last_attempt_at: new Date().toISOString(),
       kyc_submitted_at: new Date().toISOString(),
-      verification_status: newBvnStatus === "verified" && newSelfieStatus === "verified" ? "pending" : "rejected",
     };
+
+    let overallStatus: string;
+    if (plan === "corporate") {
+      overallStatus = "pending"; // Corporate always requires manual CAC document review
+    } else {
+      const allVerified = newBvnStatus === "verified" && newSelfieStatus === "verified";
+      overallStatus = allVerified ? "verified" : "rejected";
+    }
+
+    updates.verification_status = overallStatus;
 
     if (params.cacNumber) updates.cac_number = params.cacNumber;
     if (params.cacDocumentName) {
@@ -1604,9 +1636,24 @@ export async function submitDojahKycAction(params: {
     revalidatePath("/settings");
     revalidatePath("/admin/verification");
 
+    const overallSuccess = newBvnStatus === "verified" && newSelfieStatus === "verified";
+    let errorMessage: string | undefined = undefined;
+
+    if (!overallSuccess) {
+      if (!dojahSuccess) {
+        errorMessage = "BVN verification failed. Please check your BVN number and try again.";
+      } else if (!nameMatch) {
+        errorMessage = "BVN name does not match your registered profile name. Please update your profile name or use the correct BVN.";
+      } else if (!selfieMatch) {
+        errorMessage = "Face match failed. Please ensure you are in a well-lit area and match the BVN photo.";
+      } else {
+        errorMessage = "Verification failed. Please try again.";
+      }
+    }
+
     return {
-      success: newBvnStatus === "verified",
-      error: newBvnStatus !== "verified" ? "BVN verification failed. Please check your details and try again." : undefined,
+      success: overallSuccess,
+      error: errorMessage,
       updates,
     };
   } catch (err: any) {

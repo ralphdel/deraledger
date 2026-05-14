@@ -54,6 +54,7 @@ export default function SettingsPage() {
   const [livenessImages, setLivenessImages] = useState<string[]>([]);
   const [showLivenessCamera, setShowLivenessCamera] = useState(false);
   const [livenessFallback, setLivenessFallback] = useState(false);
+  const [isBvnLocked, setIsBvnLocked] = useState(false);
 
   const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -173,6 +174,11 @@ export default function SettingsPage() {
   const handleKycSubmit = async () => {
     if (!merchant) return;
 
+    if (!isBvnLocked && merchant?.bvn_status !== "verified" && merchant?.bvn_status !== "pending") {
+      setKycError("Please lock your BVN first.");
+      return;
+    }
+
     if (!bvnNumber || (livenessImages.length === 0 && !selfieFile)) {
       setKycError("Please provide your BVN and complete the selfie verification.");
       return;
@@ -225,9 +231,13 @@ export default function SettingsPage() {
       } else {
         if (updates) setMerchant({ ...merchant, ...updates } as Merchant);
         setKycError("Submission failed: " + error);
+        setIsBvnLocked(false);
+        setLivenessImages([]);
       }
     } catch (err) {
       setKycError(err instanceof Error ? err.message : "Could not read selfie image.");
+      setIsBvnLocked(false);
+      setLivenessImages([]);
     } finally {
       setKycSubmitting(false);
     }
@@ -450,15 +460,38 @@ export default function SettingsPage() {
                   {renderStatusBadge(merchant?.bvn_status)}
                 </Label>
                 <p className="text-xs text-neutral-500">Must match the name: <strong>{ownerName || "Set owner name below"}</strong></p>
-                <Input
-                  type="text"
-                  maxLength={11}
-                  placeholder="22XXXXXXXXX"
-                  value={bvnNumber}
-                  onChange={(e) => setBvnNumber(e.target.value.replace(/\D/g, ""))}
-                  className="border-2 border-purp-200 bg-white h-11 max-w-xs"
-                  disabled={profileIncomplete || merchant?.bvn_status === "verified" || merchant?.bvn_status === "pending"}
-                />
+                <div className="flex items-center gap-3">
+                  <Input
+                    type="text"
+                    maxLength={11}
+                    placeholder="22XXXXXXXXX"
+                    value={bvnNumber}
+                    onChange={(e) => setBvnNumber(e.target.value.replace(/\D/g, ""))}
+                    className="border-2 border-purp-200 bg-white h-11 max-w-xs"
+                    disabled={profileIncomplete || merchant?.bvn_status === "verified" || merchant?.bvn_status === "pending" || isBvnLocked}
+                  />
+                  {!(merchant?.bvn_status === "verified" || merchant?.bvn_status === "pending") && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setIsBvnLocked(true)}
+                      disabled={bvnNumber.length !== 11 || isBvnLocked}
+                      className={`h-11 border-2 ${isBvnLocked ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'border-purp-200 text-purp-700'}`}
+                    >
+                      {isBvnLocked ? <><CheckCircle className="mr-2 h-4 w-4" /> Locked</> : "Lock & Continue"}
+                    </Button>
+                  )}
+                  {isBvnLocked && !(merchant?.bvn_status === "verified" || merchant?.bvn_status === "pending") && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() => setIsBvnLocked(false)}
+                      className="text-neutral-500 hover:text-red-600"
+                    >
+                      Edit
+                    </Button>
+                  )}
+                </div>
               </div>
             )}
 
@@ -470,6 +503,11 @@ export default function SettingsPage() {
                   {renderStatusBadge(merchant?.selfie_status)}
                 </Label>
                 <p className="text-xs text-neutral-500">Used with your BVN for secure face match verification.</p>
+                {!(isBvnLocked || merchant?.bvn_status === "verified" || merchant?.bvn_status === "pending") ? (
+                  <div className="p-4 bg-neutral-50 border border-neutral-200 rounded-lg text-sm text-neutral-500 flex items-center gap-2">
+                    <Lock className="h-4 w-4" /> Please enter and lock your 11-digit BVN above to unlock the secure camera.
+                  </div>
+                ) : (
                 <div className="flex items-center gap-3">
                   {!livenessFallback && merchant?.selfie_status !== "verified" && merchant?.selfie_status !== "pending" ? (
                     <Button 
@@ -497,6 +535,7 @@ export default function SettingsPage() {
                     </Badge>
                   )}
                 </div>
+                )}
               </div>
             )}
 
@@ -593,7 +632,7 @@ export default function SettingsPage() {
 
           <Button
             onClick={handleKycSubmit}
-            disabled={profileIncomplete || kycSubmitting || !bvnNumber || !selfieFile}
+            disabled={profileIncomplete || kycSubmitting || !bvnNumber || (!selfieFile && livenessImages.length === 0)}
             className="w-full h-11 bg-purp-900 hover:bg-purp-700 text-white font-semibold"
           >
             {kycSubmitting ? (
@@ -617,6 +656,16 @@ export default function SettingsPage() {
             <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm font-medium border border-red-100 flex items-start gap-2">
               <span className="w-1.5 h-1.5 rounded-full bg-red-600 shrink-0 mt-1.5" />
               {kycError}
+            </div>
+          )}
+
+          {kycSuccess && (
+            <div className="bg-emerald-50 text-emerald-700 p-4 rounded-lg text-sm font-medium border border-emerald-200 flex items-start gap-3 animate-in fade-in zoom-in duration-300">
+              <CheckCircle className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-bold text-emerald-800">Verification Submitted Successfully</p>
+                <p className="text-emerald-700 mt-1">Your BVN and Liveness photos have been securely processed.</p>
+              </div>
             </div>
           )}
         </CardContent>
