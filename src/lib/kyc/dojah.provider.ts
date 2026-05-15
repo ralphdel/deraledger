@@ -70,6 +70,38 @@ export class DojahProvider {
 
     return json as DojahBVNSelfieResult;
   }
+
+  async verifyCAC(params: {
+    rcNumber: string;
+    companyName?: string;
+  }): Promise<any> {
+    if (!this.isConfigured()) {
+      throw new Error("Dojah is not configured. Set DOJAH_APP_ID and DOJAH_SECRET_KEY.");
+    }
+
+    const url = new URL("/api/v1/kyc/cac", this.baseUrl);
+    url.searchParams.set("rc_number", params.rcNumber);
+    if (params.companyName) {
+      url.searchParams.set("company_name", params.companyName);
+    }
+
+    const res = await fetch(url.toString(), {
+      method: "GET",
+      headers: {
+        AppId: this.appId,
+        Authorization: this.secretKey,
+        "Accept": "application/json"
+      }
+    });
+
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const message = typeof json?.error === "string" ? json.error : typeof json?.message === "string" ? json.message : `Dojah request failed with ${res.status}`;
+      throw new Error(message);
+    }
+
+    return json;
+  }
 }
 
 export function extractDojahMatchScore(result: DojahBVNSelfieResult): number | null {

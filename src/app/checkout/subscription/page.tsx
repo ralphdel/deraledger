@@ -144,7 +144,19 @@ function SubscriptionCheckoutContent() {
 
       const handler = pop.setup({
         key: process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY,
+        email: checkoutData.email,
+        amount: checkoutData.amountKobo,
+        ref: data.reference,
         access_code: data.accessCode,
+        metadata: {
+          type: "subscription",
+          plan: checkoutData.plan,
+          email: checkoutData.email,
+          business_name: checkoutData.registeredName,
+          trading_name: checkoutData.businessName,
+          owner_name: checkoutData.ownerName || null,
+          session_id: checkoutData.sessionId,
+        },
         callback: (response: { reference: string }) => {
           sessionStorage.removeItem("subscriptionCheckout");
           router.push(`/onboarding/payment-callback?reference=${response.reference}`);

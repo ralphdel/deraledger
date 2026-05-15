@@ -35,10 +35,10 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Missing metadata" }, { status: 400 });
     }
 
-    // Check if already updated (idempotency)
+    // Check if already updated (idempotency) and get current owner name
     const { data: merchant } = await supabaseAdmin
       .from("merchants")
-      .select("subscription_plan")
+      .select("subscription_plan, owner_name")
       .eq("id", merchantId)
       .single();
 
@@ -47,14 +47,27 @@ export async function POST(request: Request) {
     }
 
     // Update merchant plan and limits
+    const updates: Record<string, any> = {
+      subscription_plan: newPlan,
+      merchant_tier: newPlan,
+      monthly_collection_limit: newPlan === "individual" ? 5000000 : 0,
+    };
+
+    if (ownerName) {
+      updates.owner_name = ownerName;
+      // If the owner name has changed, reset the identity verification so the new director can verify
+      if (merchant?.owner_name && merchant.owner_name !== ownerName) {
+        updates.bvn = null;
+        updates.bvn_status = "unverified";
+        updates.selfie_url = null;
+        updates.selfie_status = "unverified";
+        updates.verification_status = "unverified";
+      }
+    }
+
     const { error: updateError } = await supabaseAdmin
       .from("merchants")
-      .update({
-        subscription_plan: newPlan,
-        merchant_tier: newPlan,
-        monthly_collection_limit: newPlan === "individual" ? 5000000 : 0,
-        owner_name: ownerName, // Ensure we persist the owner_name provided during upgrade
-      })
+      .update(updates)
       .eq("id", merchantId);
 
     if (updateError) {

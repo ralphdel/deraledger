@@ -215,6 +215,12 @@ export default function SettingsPage() {
         finalSelfieFileName = selfieFile!.name;
       }
 
+      let finalCacBase64: string | undefined;
+      let finalUtilityBase64: string | undefined;
+
+      if (cacFile) finalCacBase64 = await toBase64(cacFile);
+      if (utilityFile) finalUtilityBase64 = await toBase64(utilityFile);
+
       const { success, error, updates } = await submitDojahKycAction({
         merchantId: merchant.id,
         bvn: bvnNumber,
@@ -222,7 +228,9 @@ export default function SettingsPage() {
         selfieFileName: finalSelfieFileName,
         cacNumber: cacNumber || undefined,
         cacDocumentName: cacFile?.name,
+        cacFileBase64: finalCacBase64,
         utilityDocumentName: utilityFile?.name,
+        utilityFileBase64: finalUtilityBase64,
       });
 
       if (success) {

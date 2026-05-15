@@ -191,7 +191,7 @@ async function handleSubscriptionUpgrade(
   // Verify merchant exists
   const { data: merchant } = await supabase
     .from("merchants")
-    .select("id")
+    .select("id, owner_name")
     .eq("id", merchantId)
     .single();
 
@@ -201,14 +201,28 @@ async function handleSubscriptionUpgrade(
   }
 
   // Update merchant plan and limits
+  const ownerName = metadata?.owner_name as string | undefined;
+  const updates: Record<string, any> = {
+    subscription_plan: newPlan,
+    merchant_tier: newPlan,
+    monthly_collection_limit: newPlan === "individual" ? 5000000 : 0,
+    subscription_notifications_sent: {},
+  };
+
+  if (ownerName) {
+    updates.owner_name = ownerName;
+    if (merchant.owner_name && merchant.owner_name !== ownerName) {
+      updates.bvn = null;
+      updates.bvn_status = "unverified";
+      updates.selfie_url = null;
+      updates.selfie_status = "unverified";
+      updates.verification_status = "unverified";
+    }
+  }
+
   const { error: updateError } = await supabase
     .from("merchants")
-    .update({
-      subscription_plan: newPlan,
-      merchant_tier: newPlan,
-      monthly_collection_limit: newPlan === "individual" ? 5000000 : 0,
-      subscription_notifications_sent: {},
-    })
+    .update(updates)
     .eq("id", merchantId);
 
   if (updateError) {
@@ -237,22 +251,23 @@ async function handleSubscriptionUpgrade(
   );
 
   // Expire old subscription
-  // Expire old subscriptions (both active and expired)
-  await supabase
-    .from("subscriptions")
-    .update({ status: "expired" })
-    .eq("merchant_id", merchantId)
-    .in("status", ["active", "expired"]);
-
-  // Create new subscription
-  await supabase.from("subscriptions").insert({
+  // Upsert the subscription (overwrites the old one) since it has a UNIQUE constraint on merchant_id
+  const { error: subUpsertError } = await supabase.from("subscriptions").upsert({
     merchant_id: merchantId,
     plan_type: newPlan,
     amount_paid: amountPaidNgn,
     start_date: new Date().toISOString(),
     expiry_date: expiryDate.toISOString(),
-    status: "active"
-  });
+    status: "active",
+    last_notified_at: null,
+    is_banner_dismissed: false,
+    updated_at: new Date().toISOString()
+  }, { onConflict: 'merchant_id' });
+
+  if (subUpsertError) {
+    console.error("❌ Upgrade webhook: Failed to upsert subscription:", subUpsertError.message);
+    return NextResponse.json({ error: "Failed to update subscription" }, { status: 500 });
+  }
 
   // Insert into subscription_payments
   const periodStart = currentSub && new Date(currentSub.expiry_date) > new Date() 

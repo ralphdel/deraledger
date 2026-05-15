@@ -1569,14 +1569,16 @@ export async function submitDojahKycAction(params: {
   selfieFileName: string | string[];
   cacNumber?: string;
   cacDocumentName?: string;
+  cacFileBase64?: string;
   utilityDocumentName?: string;
+  utilityFileBase64?: string;
 }) {
   const adminClient = getServiceClient();
 
   // Rate limiting: max 5 attempts
   const { data: merchant } = await adminClient
     .from("merchants")
-    .select("kyc_attempt_count, kyc_locked_until, subscription_plan, merchant_tier, owner_name")
+    .select("kyc_attempt_count, kyc_locked_until, subscription_plan, merchant_tier, owner_name, business_name")
     .eq("id", params.merchantId)
     .single();
 
@@ -1692,13 +1694,58 @@ export async function submitDojahKycAction(params: {
 
     updates.verification_status = overallStatus;
 
-    if (params.cacNumber) updates.cac_number = params.cacNumber;
-    if (params.cacDocumentName) {
-      updates.cac_document_url = params.cacDocumentName;
-      updates.cac_status = "pending";
+    if (params.cacNumber) {
+      updates.cac_number = params.cacNumber;
+      if (isSandbox) {
+        updates.cac_status = "verified";
+      } else {
+        try {
+          const cacResult = await dojah.verifyCAC({
+            rcNumber: params.cacNumber,
+          });
+          if (cacResult.entity && cacResult.entity.company_name) {
+            const dojahName = cacResult.entity.company_name.toLowerCase();
+            const myName = (merchant?.business_name || "").toLowerCase();
+            
+            // Allow if exact match, or one string is contained within the other
+            if (dojahName.includes(myName) || myName.includes(dojahName)) {
+              updates.cac_status = "verified";
+            } else {
+              throw new Error(`RC Number belongs to '${cacResult.entity.company_name}', which does not match your registered Business Name.`);
+            }
+          } else {
+            throw new Error("Invalid RC Number.");
+          }
+        } catch (e: any) {
+          console.error("Dojah CAC error:", e);
+          return { success: false, error: `CAC Verification Failed: ${e.message || "Invalid RC Number"}` };
+        }
+      }
     }
-    if (params.utilityDocumentName) {
-      updates.utility_document_url = params.utilityDocumentName;
+    const getMimeType = (filename: string) => {
+      const ext = filename.split('.').pop()?.toLowerCase();
+      if (ext === 'png') return 'image/png';
+      if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
+      return 'application/pdf';
+    };
+
+    if (params.cacDocumentName && params.cacFileBase64) {
+      const buffer = Buffer.from(params.cacFileBase64, "base64");
+      const filename = `${params.merchantId}/CAC-${Date.now()}-${params.cacDocumentName}`;
+      await adminClient.storage.from("kyc-documents").upload(filename, buffer, { contentType: getMimeType(params.cacDocumentName), upsert: true });
+      const { data: { publicUrl } } = adminClient.storage.from("kyc-documents").getPublicUrl(filename);
+      updates.cac_document_url = publicUrl;
+      // Do not overwrite cac_status if it was already verified via Dojah API
+      if (updates.cac_status !== "verified") {
+        updates.cac_status = "pending";
+      }
+    }
+    if (params.utilityDocumentName && params.utilityFileBase64) {
+      const buffer = Buffer.from(params.utilityFileBase64, "base64");
+      const filename = `${params.merchantId}/UTILITY-${Date.now()}-${params.utilityDocumentName}`;
+      await adminClient.storage.from("kyc-documents").upload(filename, buffer, { contentType: getMimeType(params.utilityDocumentName), upsert: true });
+      const { data: { publicUrl } } = adminClient.storage.from("kyc-documents").getPublicUrl(filename);
+      updates.utility_document_url = publicUrl;
       updates.utility_status = "pending";
     }
 

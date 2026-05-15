@@ -113,10 +113,19 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
       const reference = data.reference;
       const handler = pop.setup({
         key: process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY,
+        email: merchant?.email || "billing@deraledger.app",
+        amount: config.priceKobo,
+        ref: data.reference,
         access_code: data.accessCode,
-        callback: (_response: { reference: string }) => {
+        metadata: {
+          type: "subscription_upgrade",
+          merchant_id: merchant?.id,
+          new_plan: plan,
+          owner_name: ownerName || null,
+        },
+        callback: (response: { reference: string }) => {
           sessionStorage.removeItem("upgradeCheckout");
-          router.push(`/settings/upgrade-success?reference=${reference}&plan=${plan}`);
+          router.push(`/settings/upgrade-success?reference=${response.reference}&plan=${plan}`);
         },
         onClose: () => setLoading(false),
       });
