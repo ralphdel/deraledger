@@ -2,6 +2,7 @@
 
 import { use, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
   ArrowRight,
@@ -100,6 +101,8 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
   const [merchant, setMerchant] = useState<Merchant | null>(null);
   const [ownerName, setOwnerName] = useState("");
   const [sameOwner, setSameOwner] = useState(true);
+  // Lock owner_name once BVN or selfie has been identity-verified
+  const isOwnerNameLocked = merchant?.bvn_status === "verified" || merchant?.selfie_status === "verified";
 
   useEffect(() => {
     let active = true;
@@ -144,34 +147,16 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
   const config = PLAN_CONFIG[plan];
   const Icon = config.icon;
 
+  const router = useRouter();
+
   const handleUpgrade = async () => {
     if (!ownerName.trim()) {
       setError("Please provide the owner or shareholder name before upgrading.");
       return;
     }
-
-    setError(null);
-    setLoading(true);
-
-    try {
-      const res = await fetch("/api/payment/upgrade", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ newPlan: plan, ownerName: ownerName.trim() }),
-      });
-      const data = await res.json();
-
-      if (data.authorizationUrl) {
-        window.location.href = data.authorizationUrl;
-      } else {
-        setError(data.error || "Failed to initialize upgrade payment.");
-        setLoading(false);
-      }
-    } catch (e) {
-      console.error(e);
-      setError("An unexpected error occurred while initializing payment.");
-      setLoading(false);
-    }
+    // Save owner name then navigate to the checkout page
+    sessionStorage.setItem("upgradeCheckout", JSON.stringify({ ownerName: ownerName.trim() }));
+    router.push(`/checkout/upgrade/${plan}`);
   };
 
   return (
@@ -292,17 +277,31 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
                 </div>
               ) : (
                 <div className="space-y-1.5">
-                  <Label className="text-sm font-medium">
-                    {plan === "corporate" ? "Director or Highest Shareholder Full Name" : "Owner Full Name"}
-                  </Label>
+                  <div className="flex items-center gap-2">
+                    <Label className="text-sm font-medium">
+                      {plan === "corporate" ? "Director or Highest Shareholder Full Name" : "Owner Full Name"}
+                    </Label>
+                    {isOwnerNameLocked && (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 rounded px-1.5 py-0.5">
+                        🔒 Identity Verified
+                      </span>
+                    )}
+                  </div>
                   <Input
                     value={ownerName}
-                    onChange={(e) => setOwnerName(e.target.value)}
+                    onChange={(e) => !isOwnerNameLocked && setOwnerName(e.target.value)}
                     placeholder="e.g. Adebayo Olanrewaju"
-                    className="h-11 border-2 border-purp-200"
+                    disabled={isOwnerNameLocked}
+                    className={`h-11 border-2 ${
+                      isOwnerNameLocked
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-900 cursor-not-allowed"
+                        : "border-purp-200"
+                    }`}
                   />
                   <p className="text-xs text-neutral-500">
-                    {plan === "corporate"
+                    {isOwnerNameLocked
+                      ? "Name is locked — matched and verified against your BVN identity."
+                      : plan === "corporate"
                       ? "This name supports director or shareholder verification."
                       : "This name should match your BVN verification details."}
                   </p>
@@ -332,21 +331,14 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
 
               <Button
                 onClick={handleUpgrade}
-                disabled={loading || loadingMerchant}
+                disabled={loadingMerchant}
                 className="h-12 w-full bg-purp-900 text-base font-bold text-white hover:bg-purp-700"
               >
-                {loading ? (
-                  <span className="flex items-center gap-2">
-                    <Loader2 className="h-5 w-5 animate-spin" />
-                    Initializing payment...
-                  </span>
-                ) : (
-                  <span className="flex items-center gap-2">
-                    <CreditCard className="h-5 w-5" />
-                    Continue to Paystack
-                    <ArrowRight className="h-4 w-4" />
-                  </span>
-                )}
+                <span className="flex items-center gap-2">
+                  <CreditCard className="h-5 w-5" />
+                  Continue to Checkout
+                  <ArrowRight className="h-4 w-4" />
+                </span>
               </Button>
               <p className="text-center text-xs text-neutral-500">
                 Secured by Paystack. You will be redirected to complete payment.

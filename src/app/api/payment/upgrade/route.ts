@@ -51,6 +51,8 @@ export async function POST(request: Request) {
     return NextResponse.json({
       success: true,
       authorizationUrl: result.authorizationUrl,
+      accessCode: result.accessCode,
+      reference,
     });
   } catch (error: any) {
     console.error("Upgrade initialization failed:", error);

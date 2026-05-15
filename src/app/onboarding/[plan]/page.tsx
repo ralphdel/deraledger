@@ -1,6 +1,7 @@
 "use client";
 
 import { use, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -133,6 +134,7 @@ function BrandHeader() {
 
 export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
   const { plan } = use(params);
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [businessName, setBusinessName] = useState("");
   const [registeredName, setRegisteredName] = useState("");
@@ -140,6 +142,7 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isSuccess, setIsSuccess] = useState(false);
+
 
   if (!isPlanId(plan)) {
     return (
@@ -224,28 +227,17 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
         return;
       }
 
-      const payRes = await fetch("/api/onboarding/initialize-payment", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email,
-          tradingName: businessName,
-          registeredName: registeredName || businessName,
-          ownerName,
-          plan: planId,
-          sessionId: sessionData.sessionId,
-          amountKobo: config.priceKobo,
-        }),
-      });
-      const payData = await payRes.json();
-
-      if (!payData.authorizationUrl) {
-        setError("Failed to initialize payment. Please try again.");
-        setLoading(false);
-        return;
-      }
-
-      window.location.href = payData.authorizationUrl;
+      // Store checkout data and navigate to the checkout page
+      sessionStorage.setItem("subscriptionCheckout", JSON.stringify({
+        email,
+        businessName,
+        registeredName: registeredName || businessName,
+        ownerName,
+        plan: planId,
+        sessionId: sessionData.sessionId,
+        amountKobo: config.priceKobo,
+      }));
+      router.push(`/checkout/subscription?plan=${planId}`);
     } catch (err: unknown) {
       setError("Something went wrong. Please try again.");
       console.error(err);

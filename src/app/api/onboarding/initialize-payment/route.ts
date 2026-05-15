@@ -31,7 +31,11 @@ export async function POST(request: Request) {
       },
     });
 
-    return NextResponse.json({ authorizationUrl: result.authorizationUrl, reference });
+    return NextResponse.json({
+      authorizationUrl: result.authorizationUrl,
+      accessCode: result.accessCode,
+      reference,
+    });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Payment initialization failed";
     console.error("Payment init error:", message);

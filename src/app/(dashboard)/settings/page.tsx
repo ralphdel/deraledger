@@ -161,7 +161,8 @@ export default function SettingsPage() {
     const updates: Record<string, unknown> = {
       business_name: effectiveTier === "corporate" ? (businessName || tradingName) : (tradingName || businessName),
       trading_name: tradingName,
-      owner_name: ownerName || null,
+      // Only write owner_name if it has NOT been identity-verified — prevents post-verification name changes
+      ...(!isOwnerNameLocked && { owner_name: ownerName || null }),
       phone: phone || null,
       fee_absorption_default: feeDefault,
       platform_version: CURRENT_PLATFORM_VERSION,
@@ -262,6 +263,8 @@ export default function SettingsPage() {
   const businessNameMissing = isCorporate && !businessName.trim();
   const profileIncomplete = ownerNameMissing || businessNameMissing;
   const effectiveVerificationStatus = profileIncomplete ? "unverified" : verificationStatus;
+  // Lock owner_name once BVN or selfie has been verified — name is legally bound to identity
+  const isOwnerNameLocked = merchant?.bvn_status === "verified" || merchant?.selfie_status === "verified";
 
   if (loading) {
     return (
@@ -737,18 +740,37 @@ export default function SettingsPage() {
           )}
           {!isStarter && (
             <div className="space-y-2">
-              <Label className="text-sm font-medium">{ownerLabel} <span className="text-red-500">*</span></Label>
+              <div className="flex items-center gap-2">
+                <Label className="text-sm font-medium">{ownerLabel} <span className="text-red-500">*</span></Label>
+                {isOwnerNameLocked && (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 rounded px-1.5 py-0.5">
+                    🔒 Identity Verified
+                  </span>
+                )}
+              </div>
               <p className="text-xs text-neutral-500">
-                {isCorporate
+                {isOwnerNameLocked
+                  ? "This name is locked — it has been matched and verified against your BVN identity. Contact admin to reset if a correction is needed."
+                  : isCorporate
                   ? "Full legal name of the shareholder with the highest share. Used to verify BVN."
                   : "Your full legal name as it appears on your BVN. Used for identity verification."}
               </p>
               <Input
                 value={ownerName}
-                onChange={(e) => setOwnerName(e.target.value)}
+                onChange={(e) => !isOwnerNameLocked && setOwnerName(e.target.value)}
                 placeholder="e.g. Adebayo Olanrewaju"
-                className="border-2 border-purp-200 bg-purp-50 h-11"
+                disabled={isOwnerNameLocked}
+                className={`border-2 h-11 ${
+                  isOwnerNameLocked
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-900 cursor-not-allowed"
+                    : "border-purp-200 bg-purp-50"
+                }`}
               />
+              {isOwnerNameLocked && (
+                <p className="text-[11px] text-emerald-600">
+                  ✓ Name locked after successful BVN verification. Admin reset required to modify.
+                </p>
+              )}
             </div>
           )}
           <div className="grid sm:grid-cols-2 gap-4">
