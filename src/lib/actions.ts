@@ -252,7 +252,15 @@ export async function editInvoice(
 ) {
   const supabase = await createClient();
 
-  // 1. Update invoice numeric fields
+  // 0. Fetch current invoice snapshot to build a detailed audit diff
+  //    Also preserves reference_id, handled_by — we never overwrite them here.
+  const { data: currentInvoice } = await supabase
+    .from("invoices")
+    .select("grand_total, notes, allow_partial_payment, partial_payment_pct, reference_id, handled_by")
+    .eq("id", invoiceId)
+    .single();
+
+  // 1. Update only the mutable financial fields — reference_id and handled_by are NOT touched
   const { error: invoiceError } = await supabase
     .from("invoices")
     .update({
@@ -296,7 +304,32 @@ export async function editInvoice(
     return { success: false, error: insertError.message };
   }
 
-  await logAudit("edit", invoiceId, "invoice", { changes: "Updated line items, totals, and notes" });
+  // 4. Build a detailed, field-level audit diff for the activity timeline
+  const changes: string[] = [];
+  if (currentInvoice) {
+    if (Number(currentInvoice.grand_total) !== updates.grand_total) {
+      changes.push(`Invoice amount updated from ₦${Number(currentInvoice.grand_total).toLocaleString()} to ₦${updates.grand_total.toLocaleString()}`);
+    }
+    if ((currentInvoice.notes || "") !== (updates.notes || "")) {
+      changes.push("Notes / terms updated");
+    }
+    if (currentInvoice.allow_partial_payment !== updates.allow_partial_payment) {
+      changes.push(`Partial payment ${updates.allow_partial_payment ? "enabled" : "disabled"}`);
+    }
+    if (currentInvoice.partial_payment_pct !== updates.partial_payment_pct) {
+      changes.push(`Partial payment percentage updated to ${updates.partial_payment_pct ?? 0}%`);
+    }
+  }
+  changes.push(`Line items modified (${lineItems.length} items)`);
+
+  await logAudit("edit", invoiceId, "invoice", {
+    changes: changes.join(" | "),
+    previous_total: currentInvoice ? Number(currentInvoice.grand_total) : null,
+    new_total: updates.grand_total,
+    items_count: lineItems.length,
+    reference_id: currentInvoice?.reference_id ?? null,
+    handled_by: currentInvoice?.handled_by ?? null,
+  });
 
   revalidatePath(`/invoices/${invoiceId}`);
   revalidatePath("/invoices");
@@ -855,6 +888,7 @@ export async function createInvoiceAction(data: {
   payment_provider?: string; // v2.1 (for collection invoices: paystack, monnify, breet)
   allow_partial_payment?: boolean;
   partial_payment_pct?: number | null;
+  invoice_stage?: 'deposit' | 'milestone' | 'balance' | 'standard' | null;
   line_items: { item_name: string; quantity: number; unit_rate: number }[];
 }) {
   const adminClient = getServiceClient();
@@ -918,6 +952,10 @@ export async function createInvoiceAction(data: {
       handled_by: data.handled_by || null,
       invoice_number: invoiceNumber,
       invoice_type: effectiveType,
+      // invoice_stage only applies to collection invoices with a reference
+      invoice_stage: (effectiveType === "collection" && data.reference_id)
+        ? (data.invoice_stage || "standard")
+        : "standard",
       status: "open",
       subtotal,
       discount_pct: data.discount_pct,
@@ -1475,6 +1513,8 @@ export async function createReferenceAction(data: {
   merchant_id: string;
   name: string;
   description?: string;
+  handled_by?: string;
+  project_total_value?: number;
 }) {
   const adminClient = getServiceClient();
   const { data: ref, error } = await adminClient
@@ -1483,6 +1523,8 @@ export async function createReferenceAction(data: {
       merchant_id: data.merchant_id,
       name: data.name.trim(),
       description: data.description?.trim() || null,
+      handled_by: data.handled_by?.trim() || null,
+      project_total_value: data.project_total_value ?? 0,
     })
     .select("id")
     .single();
@@ -1490,6 +1532,32 @@ export async function createReferenceAction(data: {
   if (error) return { success: false, error: error.message };
   revalidatePath("/references");
   return { success: true, id: ref.id };
+}
+
+export async function updateReferenceAction(data: {
+  id: string;
+  merchant_id: string;
+  name?: string;
+  description?: string;
+  handled_by?: string;
+  project_total_value?: number;
+}) {
+  const adminClient = getServiceClient();
+  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (data.name !== undefined) updates.name = data.name.trim();
+  if (data.description !== undefined) updates.description = data.description?.trim() || null;
+  if (data.handled_by !== undefined) updates.handled_by = data.handled_by?.trim() || null;
+  if (data.project_total_value !== undefined) updates.project_total_value = data.project_total_value ?? 0;
+
+  const { error } = await adminClient
+    .from("references")
+    .update(updates)
+    .eq("id", data.id)
+    .eq("merchant_id", data.merchant_id);
+
+  if (error) return { success: false, error: error.message };
+  revalidatePath("/references");
+  return { success: true };
 }
 
 // ── KYC Dojah Submission ──────────────────────────────────────────────────────
@@ -1613,10 +1681,13 @@ export async function submitDojahKycAction(params: {
 
     let overallStatus: string;
     if (plan === "corporate") {
-      overallStatus = "pending"; // Corporate always requires manual CAC document review
+      // Corporate requires CAC + utility bill manual review — always pending admin review
+      overallStatus = "pending_admin_review";
     } else {
+      // Individual: BVN + selfie verified by Dojah, but still needs admin manual review
+      // before full payment collection access is granted
       const allVerified = newBvnStatus === "verified" && newSelfieStatus === "verified";
-      overallStatus = allVerified ? "verified" : "rejected";
+      overallStatus = allVerified ? "pending_admin_review" : "rejected";
     }
 
     updates.verification_status = overallStatus;
@@ -1684,37 +1755,31 @@ export async function adminUpdateKycDocumentStatusAction(
 
   if (notes) updates.kyc_notes = notes;
 
-  // After updating individual document status, recompute overall verification_status
+  // After updating individual document status, recompute overall verification_status.
+  // IMPORTANT: Individual document review never auto-grants "verified" — only
+  // adminApproveVerificationAction does that. Documents land in pending_admin_review.
   const { data: current } = await adminClient
     .from("merchants")
-    .select("bvn_status, selfie_status, cac_status, utility_status, subscription_plan, merchant_tier")
+    .select("bvn_status, selfie_status, cac_status, utility_status, subscription_plan, merchant_tier, verification_status")
     .eq("id", merchantId)
     .single();
 
   if (current) {
     const merged = { ...current, [field]: status };
     const plan = merged.subscription_plan || merged.merchant_tier || "starter";
+    const anyRejected = [
+      merged.bvn_status, merged.selfie_status, merged.cac_status, merged.utility_status
+    ].some(s => s === "rejected");
 
-    let overallStatus: string;
-    if (plan === "corporate") {
-      // Corporate needs BVN+selfie+CAC all verified
-      const allVerified =
-        merged.bvn_status === "verified" &&
-        merged.selfie_status === "verified" &&
-        merged.cac_status === "verified";
-      const anyRejected =
-        merged.bvn_status === "rejected" ||
-        merged.selfie_status === "rejected" ||
-        merged.cac_status === "rejected";
-      overallStatus = allVerified ? "verified" : anyRejected ? "rejected" : "pending";
-    } else {
-      // Individual needs BVN+selfie
-      const allVerified = merged.bvn_status === "verified" && merged.selfie_status === "verified";
-      const anyRejected = merged.bvn_status === "rejected" || merged.selfie_status === "rejected";
-      overallStatus = allVerified ? "verified" : anyRejected ? "rejected" : "pending";
+    // Only change to rejected if any doc is rejected and we aren't already verified
+    // Don't auto-promote to verified — that's reserved for adminApproveVerificationAction
+    if (anyRejected && current.verification_status !== "verified") {
+      updates.verification_status = "rejected";
+    } else if (!anyRejected && current.verification_status === "rejected") {
+      // Un-reject if no more rejections
+      updates.verification_status = "pending_admin_review";
     }
-
-    updates.verification_status = overallStatus;
+    // Otherwise leave verification_status as-is (pending_admin_review, etc.)
   }
 
   const { error } = await adminClient
@@ -1733,4 +1798,166 @@ export async function adminUpdateKycDocumentStatusAction(
 
   revalidatePath("/admin/verification");
   return { success: true, updates };
+}
+
+// ── Admin Verification Lifecycle Actions ──────────────────────────────────────
+
+/**
+ * Approve: grants final verified status. Only reachable via manual admin review.
+ * Unlocks: collection invoices, payment links, settlement workflows.
+ */
+export async function adminApproveVerificationAction(merchantId: string) {
+  const adminClient = getServiceClient();
+
+  const { error } = await adminClient
+    .from("merchants")
+    .update({
+      verification_status: "verified",
+      kyc_reviewed_at: new Date().toISOString(),
+      kyc_rejection_reason: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", merchantId);
+
+  if (error) return { success: false, error: error.message };
+
+  await logAudit("admin_verification_approved", merchantId, "merchant", {
+    actor: "admin",
+    new_status: "verified",
+  });
+
+  revalidatePath("/admin/verification");
+  revalidatePath("/admin/merchants");
+  return { success: true };
+}
+
+/**
+ * Reject: blocks verification completely. Reason is REQUIRED.
+ * Rejected merchants cannot create collection invoices or access payment flows.
+ * Stored in kyc_rejection_reason for merchant visibility.
+ */
+export async function adminRejectVerificationAction(merchantId: string, reason: string) {
+  if (!reason || reason.trim().length < 10) {
+    return { success: false, error: "Rejection reason must be at least 10 characters." };
+  }
+
+  const adminClient = getServiceClient();
+
+  const { error } = await adminClient
+    .from("merchants")
+    .update({
+      verification_status: "rejected",
+      kyc_rejection_reason: reason.trim(),
+      kyc_reviewed_at: new Date().toISOString(),
+      kyc_notes: reason.trim(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", merchantId);
+
+  if (error) return { success: false, error: error.message };
+
+  await logAudit("admin_verification_rejected", merchantId, "merchant", {
+    actor: "admin",
+    new_status: "rejected",
+    rejection_reason: reason.trim(),
+  });
+
+  revalidatePath("/admin/verification");
+  revalidatePath("/admin/merchants");
+  return { success: true };
+}
+
+/**
+ * Reset: returns merchant to unverified / pending state.
+ * Previous documents are archived (not deleted — audit-safe).
+ * Merchant must re-upload all documents to restart verification.
+ */
+export async function adminResetVerificationAction(merchantId: string) {
+  const adminClient = getServiceClient();
+
+  // Archive previous document references (prefix with archived_ timestamp)
+  const { data: merchant } = await adminClient
+    .from("merchants")
+    .select("cac_document_url, utility_document_url, selfie_url, cac_number")
+    .eq("id", merchantId)
+    .single();
+
+  const archiveTimestamp = new Date().toISOString();
+
+  const { error } = await adminClient
+    .from("merchants")
+    .update({
+      verification_status: "unverified",
+      // Reset all document statuses
+      cac_status: "unverified",
+      bvn_status: "unverified",
+      utility_status: "unverified",
+      selfie_status: "unverified",
+      // Clear document URLs (archived in audit log)
+      cac_document_url: null,
+      utility_document_url: null,
+      selfie_url: null,
+      // Clear KYC metadata
+      dojah_reference: null,
+      dojah_match_score: null,
+      kyc_rejection_reason: null,
+      kyc_notes: null,
+      kyc_submitted_at: null,
+      kyc_attempt_count: 0,
+      kyc_reset_at: archiveTimestamp,
+      updated_at: archiveTimestamp,
+    })
+    .eq("id", merchantId);
+
+  if (error) return { success: false, error: error.message };
+
+  // Audit log preserves what was archived — never deleted
+  await logAudit("admin_verification_reset", merchantId, "merchant", {
+    actor: "admin",
+    new_status: "unverified",
+    archived_at: archiveTimestamp,
+    archived_cac_document: merchant?.cac_document_url ?? null,
+    archived_utility_document: merchant?.utility_document_url ?? null,
+    archived_selfie: merchant?.selfie_url ?? null,
+    archived_cac_number: merchant?.cac_number ?? null,
+  });
+
+  revalidatePath("/admin/verification");
+  revalidatePath("/admin/merchants");
+  return { success: true };
+}
+
+/**
+ * Request Reupload: sets verification to requires_reupload.
+ * Merchant receives notification and must re-submit specific documents.
+ * Friendlier alternative to hard Reject.
+ */
+export async function adminRequestReuploadAction(merchantId: string, reason: string) {
+  if (!reason || reason.trim().length < 5) {
+    return { success: false, error: "Please specify which documents need to be re-uploaded." };
+  }
+
+  const adminClient = getServiceClient();
+
+  const { error } = await adminClient
+    .from("merchants")
+    .update({
+      verification_status: "requires_reupload",
+      kyc_rejection_reason: reason.trim(),
+      kyc_notes: `Additional verification information required: ${reason.trim()}`,
+      kyc_reviewed_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", merchantId);
+
+  if (error) return { success: false, error: error.message };
+
+  await logAudit("admin_verification_reupload_requested", merchantId, "merchant", {
+    actor: "admin",
+    new_status: "requires_reupload",
+    reason: reason.trim(),
+  });
+
+  revalidatePath("/admin/verification");
+  return { success: true };
 }

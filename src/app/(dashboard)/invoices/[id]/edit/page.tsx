@@ -17,9 +17,9 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { getInvoiceById, getItemCatalog, getDiscountTemplates } from "@/lib/data";
+import { getInvoiceById, getItemCatalog, getDiscountTemplates, getReferences } from "@/lib/data";
 import { editInvoice } from "@/lib/actions";
-import type { InvoiceWithLineItems, ItemCatalog, DiscountTemplate } from "@/lib/types";
+import type { InvoiceWithLineItems, ItemCatalog, DiscountTemplate, Reference } from "@/lib/types";
 import { calculateInvoiceTotals, formatNaira, getStatusColor, getStatusLabel } from "@/lib/calculations";
 
 interface FormLineItem {
@@ -45,6 +45,7 @@ export default function EditInvoicePage({ params }: { params: Promise<{ id: stri
   const [lineItems, setLineItems] = useState<FormLineItem[]>([]);
   const [catalog, setCatalog] = useState<ItemCatalog[]>([]);
   const [discountTemplates, setDiscountTemplates] = useState<DiscountTemplate[]>([]);
+  const [references, setReferences] = useState<Reference[]>([]);
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState("");
 
@@ -53,7 +54,7 @@ export default function EditInvoicePage({ params }: { params: Promise<{ id: stri
       getInvoiceById(id),
       getItemCatalog(),
       getDiscountTemplates(),
-    ]).then(([inv, cat, tpls]) => {
+    ]).then(async ([inv, cat, tpls]) => {
       if (inv) {
         setInvoice(inv);
         setDiscountPct(String(inv.discount_pct));
@@ -70,6 +71,9 @@ export default function EditInvoicePage({ params }: { params: Promise<{ id: stri
             isNew: false,
           }))
         );
+        // Load references for this merchant for name resolution
+        const refs = await getReferences(inv.merchant_id);
+        setReferences(refs);
       }
       setCatalog(cat);
       setDiscountTemplates(tpls);
@@ -206,6 +210,26 @@ export default function EditInvoicePage({ params }: { params: Promise<{ id: stri
           </p>
         </div>
       </div>
+
+      {/* Read-only: preserved reference + handled_by context */}
+      {(invoice.reference_id || invoice.handled_by) && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm flex items-start gap-2">
+          <div className="flex-1">
+            {invoice.reference_id && (
+              <p className="text-blue-800">
+                <span className="font-semibold">Reference:</span>{" "}
+                <span>{references.find(r => r.id === invoice.reference_id)?.name || invoice.reference_id}</span>
+              </p>
+            )}
+            {invoice.handled_by && (
+              <p className="text-blue-700 text-xs mt-0.5">
+                <span className="font-semibold">Handled by:</span> {invoice.handled_by}
+              </p>
+            )}
+            <p className="text-blue-500 text-xs mt-1">Reference and handled-by associations are preserved automatically on save.</p>
+          </div>
+        </div>
+      )}
 
       {/* Warning for partially paid invoices */}
       {amountPaid > 0 && (

@@ -97,5 +97,53 @@ export async function GET(
     ? { ...merchant, verification_status: "unverified", bvn_status: "unverified" }
     : merchant;
 
-  return NextResponse.json({ invoice, merchant: effectiveMerchant, monthlyCollected });
+  // 6. Fetch reference context if invoice belongs to a project
+  let referenceContext: {
+    name: string;
+    projectTotalValue: number;
+    totalCollected: number;
+    outstandingBalance: number;
+    collectionProgress: number;
+    hasProjectTotal: boolean;
+  } | null = null;
+
+  if (invoice.reference_id) {
+    const { data: ref } = await adminClient
+      .from("references")
+      .select("name, project_total_value")
+      .eq("id", invoice.reference_id)
+      .maybeSingle();
+
+    if (ref) {
+      // Fetch all sibling collection invoices under same reference
+      const { data: siblings } = await adminClient
+        .from("invoices")
+        .select("amount_paid, invoice_type")
+        .eq("reference_id", invoice.reference_id)
+        .eq("invoice_type", "collection");
+
+      const totalCollected = (siblings || []).reduce(
+        (sum: number, s: any) => sum + Number(s.amount_paid ?? 0), 0
+      );
+      const projectTotalValue = Number(ref.project_total_value ?? 0);
+      const hasProjectTotal = projectTotalValue > 0;
+      const outstandingBalance = hasProjectTotal
+        ? Math.max(0, projectTotalValue - totalCollected)
+        : 0;
+      const collectionProgress = hasProjectTotal
+        ? Math.min(100, Math.round((totalCollected / projectTotalValue) * 100))
+        : 0;
+
+      referenceContext = {
+        name: ref.name,
+        projectTotalValue,
+        totalCollected,
+        outstandingBalance,
+        collectionProgress,
+        hasProjectTotal,
+      };
+    }
+  }
+
+  return NextResponse.json({ invoice, merchant: effectiveMerchant, monthlyCollected, referenceContext });
 }

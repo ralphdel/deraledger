@@ -2,43 +2,32 @@
 
 import { useEffect, useState } from "react";
 import {
-  ShieldCheck,
-  ShieldAlert,
-  ShieldX,
-  Clock,
-  CheckCircle,
-  XCircle,
-  MessageSquare,
-  Search,
-  Eye,
+  ShieldCheck, ShieldAlert, ShieldX, Clock, CheckCircle, XCircle,
+  Search, Eye, RotateCcw, UploadCloud, ExternalLink,
 } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-  DialogFooter,
-  DialogDescription,
+  Dialog, DialogContent, DialogHeader, DialogTitle,
+  DialogTrigger, DialogDescription,
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { createClient } from "@/lib/supabase/client";
-import { adminUpdateKycDocumentStatusAction } from "@/lib/actions";
+
+import {
+  adminUpdateKycDocumentStatusAction,
+  adminApproveVerificationAction,
+  adminRejectVerificationAction,
+  adminResetVerificationAction,
+  adminRequestReuploadAction,
+} from "@/lib/actions";
 import type { Merchant } from "@/lib/types";
+
+type ActionMode = "idle" | "reject" | "reupload";
 
 export default function VerificationQueuePage() {
   const [merchants, setMerchants] = useState<Merchant[]>([]);
@@ -46,9 +35,17 @@ export default function VerificationQueuePage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedMerchant, setSelectedMerchant] = useState<Merchant | null>(null);
   const [reviewNotes, setReviewNotes] = useState("");
+  const [actionReason, setActionReason] = useState("");
+  const [actionMode, setActionMode] = useState<ActionMode>("idle");
+  const [actionLoading, setActionLoading] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
+  const [actionSuccess, setActionSuccess] = useState<string | null>(null);
 
   useEffect(() => {
+    loadMerchants();
+  }, []);
+
+  const loadMerchants = () => {
     const sb = createClient();
     sb.from("merchants")
       .select("*")
@@ -57,7 +54,14 @@ export default function VerificationQueuePage() {
         setMerchants((data || []) as Merchant[]);
         setLoading(false);
       });
-  }, []);
+  };
+
+  const refreshMerchant = (updates: Partial<Merchant>) => {
+    if (!selectedMerchant) return;
+    const updated = { ...selectedMerchant, ...updates } as Merchant;
+    setSelectedMerchant(updated);
+    setMerchants(prev => prev.map(m => m.id === updated.id ? updated : m));
+  };
 
   const getEffectiveStatus = (m: Merchant) => {
     const tier = m.subscription_plan || m.merchant_tier || "starter";
@@ -68,21 +72,22 @@ export default function VerificationQueuePage() {
     return m.verification_status;
   };
 
-  const getFilteredMerchants = (status: string) => {
-    return merchants
-      .filter((m) => status === "all" ? true : getEffectiveStatus(m) === status)
-      .filter((m) =>
+  const getFilteredMerchants = (status: string) =>
+    merchants
+      .filter(m => status === "all" ? true : getEffectiveStatus(m) === status)
+      .filter(m =>
         (m.trading_name || m.business_name).toLowerCase().includes(searchQuery.toLowerCase()) ||
         m.email.toLowerCase().includes(searchQuery.toLowerCase())
       );
-  };
 
   const statusIcon = (status: string) => {
     switch (status) {
       case "verified": return <CheckCircle className="h-4 w-4 text-emerald-600" />;
+      case "pending_admin_review": return <ShieldCheck className="h-4 w-4 text-blue-600" />;
       case "pending": return <Clock className="h-4 w-4 text-amber-600" />;
+      case "requires_reupload": return <UploadCloud className="h-4 w-4 text-orange-500" />;
       case "rejected": return <XCircle className="h-4 w-4 text-red-600" />;
-      case "suspended": return <ShieldX className="h-4 w-4 text-red-600" />;
+      case "suspended": case "restricted": return <ShieldX className="h-4 w-4 text-red-600" />;
       case "incomplete": return <ShieldAlert className="h-4 w-4 text-amber-500" />;
       default: return <ShieldAlert className="h-4 w-4 text-neutral-400" />;
     }
@@ -91,355 +96,331 @@ export default function VerificationQueuePage() {
   const statusColor = (status: string) => {
     switch (status) {
       case "verified": return "bg-emerald-50 text-emerald-700 border-emerald-200";
+      case "pending_admin_review": return "bg-blue-50 text-blue-700 border-blue-200";
       case "pending": return "bg-amber-50 text-amber-700 border-amber-200";
+      case "requires_reupload": return "bg-orange-50 text-orange-700 border-orange-200";
       case "rejected": return "bg-red-50 text-red-700 border-red-200";
-      case "suspended": return "bg-red-50 text-red-700 border-red-200";
+      case "suspended": case "restricted": return "bg-red-50 text-red-700 border-red-200";
       case "incomplete": return "bg-amber-50 text-amber-600 border-amber-200";
       default: return "bg-neutral-50 text-neutral-600 border-neutral-200";
     }
   };
 
   const updateItemStatus = async (merchant: Merchant, field: "cac_status" | "bvn_status" | "utility_status" | "selfie_status", status: "verified" | "rejected") => {
-    const { success, error, updates } = await adminUpdateKycDocumentStatusAction(
-      merchant.id,
-      field,
-      status,
-      reviewNotes || undefined
-    );
-
-    if (success) {
-      setMerchants(merchants.map((m) =>
-        m.id === merchant.id ? { ...m, ...(updates || {}) } as Merchant : m
-      ));
-      setSelectedMerchant({ ...merchant, ...(updates || {}) } as Merchant);
-    } else {
-      setReviewError("Failed to update status: " + error);
-    }
+    const { success, error, updates } = await adminUpdateKycDocumentStatusAction(merchant.id, field, status, reviewNotes || undefined);
+    if (success) refreshMerchant(updates || {});
+    else setReviewError("Failed to update: " + error);
     setReviewNotes("");
   };
-  const pendingCount = merchants.filter((m) => m.verification_status === "pending").length;
-  const incompleteCount = merchants.filter((m) => getEffectiveStatus(m) === "incomplete").length;
 
-  if (loading) {
-    return (
-      <div className="space-y-6">
-        <h1 className="text-2xl font-bold text-neutral-900">Verification Queue</h1>
-        <Card className="border shadow-none animate-pulse">
-          <CardContent className="p-6"><div className="h-48 bg-neutral-100 rounded" /></CardContent>
-        </Card>
-      </div>
-    );
-  }
+  const handleApprove = async () => {
+    if (!selectedMerchant) return;
+    setActionLoading(true); setReviewError(null);
+    const res = await adminApproveVerificationAction(selectedMerchant.id);
+    if (res.success) {
+      refreshMerchant({ verification_status: "verified" });
+      setActionSuccess("Merchant approved and marked as verified.");
+      setActionMode("idle");
+    } else setReviewError(res.error || "Approval failed.");
+    setActionLoading(false);
+  };
 
-  const MerchantTable = ({ data }: { data: Merchant[] }) => (
-    <Table>
-      <TableHeader>
-        <TableRow className="bg-neutral-50 border-b hover:bg-neutral-50">
-          <TableHead className="font-bold text-neutral-900 text-xs uppercase">Business</TableHead>
-          <TableHead className="font-bold text-neutral-900 text-xs uppercase">Email</TableHead>
-          <TableHead className="font-bold text-neutral-900 text-xs uppercase">Tier</TableHead>
-          <TableHead className="font-bold text-neutral-900 text-xs uppercase">Status</TableHead>
-          <TableHead className="font-bold text-neutral-900 text-xs uppercase">Submitted</TableHead>
-          <TableHead className="font-bold text-neutral-900 text-xs uppercase text-right">Actions</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {data.map((m) => (
-          <TableRow key={m.id} className="border-b hover:bg-neutral-50">
-            <TableCell className="font-medium text-sm">{m.trading_name || m.business_name}</TableCell>
-            <TableCell className="text-sm text-neutral-500">{m.email}</TableCell>
-            <TableCell>
-              <Badge variant="outline" className="text-xs capitalize border-2 bg-purple-50 text-purple-700 border-purple-200">
-                {m.subscription_plan || m.merchant_tier}
-              </Badge>
-            </TableCell>
-            <TableCell>
-              <Badge variant="outline" className={`text-xs capitalize border-2 ${statusColor(getEffectiveStatus(m))}`}>
-                {statusIcon(getEffectiveStatus(m))}
-                <span className="ml-1">{getEffectiveStatus(m)}</span>
-              </Badge>
-            </TableCell>
-            <TableCell className="text-sm text-neutral-500">
-              {m.kyc_submitted_at
-                ? new Date(m.kyc_submitted_at).toLocaleDateString("en-NG", { day: "numeric", month: "short", year: "numeric" })
-                : "—"}
-            </TableCell>
-            <TableCell className="text-right">
+  const handleReject = async () => {
+    if (!selectedMerchant || !actionReason.trim()) return;
+    setActionLoading(true); setReviewError(null);
+    const res = await adminRejectVerificationAction(selectedMerchant.id, actionReason.trim());
+    if (res.success) {
+      refreshMerchant({ verification_status: "rejected", kyc_rejection_reason: actionReason.trim() });
+      setActionSuccess("Verification rejected. Reason stored in audit log.");
+      setActionMode("idle"); setActionReason("");
+    } else setReviewError(res.error || "Rejection failed.");
+    setActionLoading(false);
+  };
+
+  const handleReset = async () => {
+    if (!selectedMerchant) return;
+    setActionLoading(true); setReviewError(null);
+    const res = await adminResetVerificationAction(selectedMerchant.id);
+    if (res.success) {
+      refreshMerchant({ verification_status: "unverified", cac_status: "unverified", bvn_status: "unverified", utility_status: "unverified", selfie_status: "unverified" });
+      setActionSuccess("Verification reset. Merchant must re-upload all documents.");
+      setActionMode("idle");
+    } else setReviewError(res.error || "Reset failed.");
+    setActionLoading(false);
+  };
+
+  const handleReupload = async () => {
+    if (!selectedMerchant || !actionReason.trim()) return;
+    setActionLoading(true); setReviewError(null);
+    const res = await adminRequestReuploadAction(selectedMerchant.id, actionReason.trim());
+    if (res.success) {
+      refreshMerchant({ verification_status: "requires_reupload" });
+      setActionSuccess("Reupload request sent. Merchant notified.");
+      setActionMode("idle"); setActionReason("");
+    } else setReviewError(res.error || "Request failed.");
+    setActionLoading(false);
+  };
+
+  const openReview = (m: Merchant) => {
+    setSelectedMerchant(m);
+    setReviewNotes(""); setActionReason(""); setActionMode("idle");
+    setReviewError(null); setActionSuccess(null);
+  };
+
+  const pendingCount = merchants.filter(m => m.verification_status === "pending").length;
+  const adminReviewCount = merchants.filter(m => m.verification_status === "pending_admin_review").length;
+  const incompleteCount = merchants.filter(m => getEffectiveStatus(m) === "incomplete").length;
+  const reuploadCount = merchants.filter(m => m.verification_status === "requires_reupload").length;
+
+  if (loading) return (
+    <div className="space-y-6">
+      <h1 className="text-2xl font-bold text-neutral-900">Verification Queue</h1>
+      <Card className="border shadow-none animate-pulse"><CardContent className="p-6"><div className="h-48 bg-neutral-100 rounded" /></CardContent></Card>
+    </div>
+  );
+
+  const MerchantList = ({ data }: { data: Merchant[] }) => (
+    <div className="divide-y divide-neutral-100">
+      {data.map(m => {
+        const status = getEffectiveStatus(m);
+        return (
+          <div key={m.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 hover:bg-neutral-50 transition-colors">
+            <div className="flex items-start gap-3 min-w-0">
+              <div className="w-9 h-9 rounded-full bg-purp-100 flex items-center justify-center text-purp-700 font-bold text-sm flex-shrink-0">
+                {(m.trading_name || m.business_name || "?").charAt(0).toUpperCase()}
+              </div>
+              <div className="min-w-0">
+                <p className="font-semibold text-neutral-900 text-sm truncate">{m.trading_name || m.business_name}</p>
+                <p className="text-xs text-neutral-500 truncate">{m.email}</p>
+                <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                  <Badge variant="outline" className="text-[10px] capitalize border bg-purple-50 text-purple-700 border-purple-200 px-1.5">
+                    {m.subscription_plan || m.merchant_tier}
+                  </Badge>
+                  <Badge variant="outline" className={`text-[10px] capitalize border flex items-center gap-1 px-1.5 ${statusColor(status)}`}>
+                    {statusIcon(status)}
+                    <span>{status.replace(/_/g, " ")}</span>
+                  </Badge>
+                  {m.kyc_submitted_at && (
+                    <span className="text-[10px] text-neutral-400">
+                      {new Date(m.kyc_submitted_at).toLocaleDateString("en-NG", { day: "numeric", month: "short", year: "numeric" })}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+            <div className="flex-shrink-0 self-start sm:self-center">
               <Dialog>
-                <DialogTrigger
-                  render={<Button variant="outline" size="sm" className="border-2" onClick={() => { setSelectedMerchant(m); setReviewNotes(""); }} />}
-                >
-                  <Eye className="mr-1 h-3 w-3" /> Review
-                </DialogTrigger>
-                <DialogContent className="max-w-lg">
+                <DialogTrigger render={
+                  <Button variant="outline" size="sm" className="border-2 h-8" onClick={() => openReview(m)}>
+                    <Eye className="mr-1.5 h-3.5 w-3.5" /> Review
+                  </Button>
+                } />
+                <DialogContent className="w-[95vw] max-w-2xl max-h-[92vh] overflow-y-auto">
                   <DialogHeader>
-                    <DialogTitle className="text-neutral-900">Review: {m.trading_name || m.business_name}</DialogTitle>
-                    <DialogDescription>
-                      Review merchant verification details and take action.
-                    </DialogDescription>
+                    <DialogTitle className="text-neutral-900 text-base">
+                      {m.trading_name || m.business_name}
+                    </DialogTitle>
+                    <DialogDescription>KYC Review — take action below.</DialogDescription>
                   </DialogHeader>
-                  <div className="space-y-4 py-2">
-                    {/* Owner Name Missing Warning */}
-                    {getEffectiveStatus(m) === "incomplete" && (
-                      <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg">
-                        <ShieldAlert className="h-4 w-4 text-amber-600 mt-0.5 flex-shrink-0" />
-                        <div className="text-xs text-amber-800">
-                          <strong>Profile incomplete — verification blocked.</strong>
-                          <ul className="mt-1 list-disc list-inside space-y-0.5">
-                            {!m.owner_name && (
-                              <li>{(m.subscription_plan || m.merchant_tier) === "corporate" ? "Highest shareholder" : "Owner"}&apos;s name not provided (required for BVN).</li>
-                            )}
-                            {(m.subscription_plan || m.merchant_tier) === "corporate" && (!m.business_name || (m.platform_version ?? 0) < 1) && (
-                              <li>Registered business name needs confirmation (required for CAC/RC verification).</li>
-                            )}
-                          </ul>
+
+                  {selectedMerchant && (
+                    <div className="space-y-4 py-1">
+                      {selectedMerchant.kyc_rejection_reason && (
+                        <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm">
+                          <p className="text-xs text-red-500 font-semibold mb-1">Previous Rejection / Reupload Reason</p>
+                          <p className="text-red-800">{selectedMerchant.kyc_rejection_reason}</p>
+                        </div>
+                      )}
+
+                      {/* Status + Plan row */}
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <Badge variant="outline" className={`text-xs capitalize border-2 flex items-center gap-1.5 px-2 py-1 ${statusColor(getEffectiveStatus(selectedMerchant))}`}>
+                          {statusIcon(getEffectiveStatus(selectedMerchant))}
+                          <span>{getEffectiveStatus(selectedMerchant).replace(/_/g, " ")}</span>
+                        </Badge>
+                        <span className="text-xs text-neutral-400 capitalize">{selectedMerchant.subscription_plan || selectedMerchant.merchant_tier} plan</span>
+                      </div>
+
+                      {/* Merchant info grid */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-neutral-50 rounded-xl p-3 text-sm">
+                        <div><p className="text-neutral-400 text-xs mb-0.5">Email</p><p className="font-medium truncate">{selectedMerchant.email}</p></div>
+                        <div><p className="text-neutral-400 text-xs mb-0.5">Phone</p><p className="font-medium">{selectedMerchant.phone || "—"}</p></div>
+                        <div className="sm:col-span-2">
+                          <p className="text-neutral-400 text-xs mb-0.5">Owner / Director (BVN match)</p>
+                          <p className={`font-semibold ${selectedMerchant.owner_name ? "text-neutral-900" : "text-red-600"}`}>
+                            {selectedMerchant.owner_name || "⚠ Not provided"}
+                          </p>
                         </div>
                       </div>
-                    )}
-                    <div className="grid grid-cols-2 gap-4 text-sm">
-                      <div>
-                        <p className="text-neutral-500">Email</p>
-                        <p className="font-medium">{m.email}</p>
-                      </div>
-                      <div>
-                        <p className="text-neutral-500">Phone</p>
-                        <p className="font-medium">{m.phone || "—"}</p>
-                      </div>
-                      <div>
-                        <p className="text-neutral-500">Tier</p>
-                        <p className="font-medium capitalize">{selectedMerchant?.subscription_plan || selectedMerchant?.merchant_tier || m.subscription_plan || m.merchant_tier}</p>
-                      </div>
-                      <div>
-                        <p className="text-neutral-500">Effective Status</p>
-                        <Badge variant="outline" className={`text-xs capitalize border-2 ${statusColor(getEffectiveStatus(selectedMerchant || m))}`}>
-                          {getEffectiveStatus(selectedMerchant || m)}
-                        </Badge>
-                      </div>
-                      <div className="col-span-2">
-                        <p className="text-neutral-500">Owner / Shareholder (for BVN match)</p>
-                        <p className={`font-semibold ${m.owner_name || selectedMerchant?.owner_name ? "text-purp-900" : "text-red-600"}`}>{m.owner_name || selectedMerchant?.owner_name || "⚠ Not provided — verification blocked"}</p>
-                      </div>
-                    </div>
-                    <div className="border-t pt-4 space-y-3">
-                      <div className="rounded-lg border bg-blue-50 p-3 text-sm">
-                        <div className="flex items-center justify-between gap-3">
+
+                      {/* Dojah block */}
+                      <div className="rounded-xl border border-blue-200 bg-blue-50 p-3">
+                        <div className="flex items-center justify-between gap-3 flex-wrap">
                           <div>
-                            <p className="font-semibold text-blue-900">Dojah BVN + Selfie Check</p>
-                            <p className="text-xs text-blue-700">
-                              Ref: {selectedMerchant?.dojah_reference || m.dojah_reference || "Not submitted"}
-                            </p>
+                            <p className="font-semibold text-blue-900 text-sm">Dojah BVN + Selfie Check</p>
+                            <p className="text-xs text-blue-600 mt-0.5">Ref: {selectedMerchant.dojah_reference || "Not submitted"}</p>
                           </div>
-                          <Badge variant="outline" className="border-blue-200 bg-white text-blue-700 text-xs">
-                            Score: {selectedMerchant?.dojah_match_score ?? m.dojah_match_score ?? "N/A"}%
+                          <Badge variant="outline" className="border-blue-200 bg-white text-blue-700 font-bold">
+                            Score: {selectedMerchant.dojah_match_score ?? "N/A"}%
                           </Badge>
                         </div>
-                        <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-blue-800">
-                          <span>Attempts: {selectedMerchant?.kyc_attempt_count ?? m.kyc_attempt_count ?? 0}</span>
-                          <span>
-                            Last: {(selectedMerchant?.kyc_last_attempt_at || m.kyc_last_attempt_at)
-                              ? new Date(selectedMerchant?.kyc_last_attempt_at || m.kyc_last_attempt_at || "").toLocaleDateString("en-NG")
-                              : "N/A"}
-                          </span>
-                        </div>
                       </div>
-                      <h4 className="font-semibold text-sm">Submitted Documents & Details</h4>
+
+                      {/* Documents */}
                       <div className="space-y-2">
-                        <div className="flex items-center justify-between bg-neutral-50 p-2 rounded">
-                          <div>
-                            <p className="text-xs text-neutral-500">CAC Number</p>
-                            <p className="font-medium text-sm">{selectedMerchant?.cac_number || m.cac_number || "—"}</p>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Badge variant="outline" className={`text-xs capitalize border-2 ${statusColor(selectedMerchant?.cac_status || m.cac_status || 'unverified')}`}>
-                              {selectedMerchant?.cac_status || m.cac_status || 'unverified'}
-                            </Badge>
-                            {(selectedMerchant?.cac_status || m.cac_status) === "pending" && (
-                              <div className="flex gap-1">
-                                <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-emerald-600 hover:bg-emerald-100" onClick={() => updateItemStatus(selectedMerchant || m, 'cac_status', 'verified')}><CheckCircle className="h-4 w-4" /></Button>
-                                <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-red-600 hover:bg-red-100" onClick={() => updateItemStatus(selectedMerchant || m, 'cac_status', 'rejected')}><XCircle className="h-4 w-4" /></Button>
+                        <h4 className="font-semibold text-sm text-neutral-900">Documents</h4>
+                        <div className="space-y-2">
+                          {([
+                            { label: "CAC Number", value: selectedMerchant.cac_number, field: "cac_status" as const, statusVal: selectedMerchant.cac_status },
+                            { label: "BVN", value: selectedMerchant.bvn, field: "bvn_status" as const, statusVal: selectedMerchant.bvn_status },
+                            { label: "Selfie", value: selectedMerchant.selfie_url ? "Submitted" : null, field: "selfie_status" as const, statusVal: selectedMerchant.selfie_status },
+                            { label: "CAC Document", value: selectedMerchant.cac_document_url, field: "cac_status" as const, isDoc: true, statusVal: selectedMerchant.cac_status },
+                            { label: "Utility Bill", value: selectedMerchant.utility_document_url, field: "utility_status" as const, isDoc: true, statusVal: selectedMerchant.utility_status },
+                          ]).map(({ label, value, field, isDoc, statusVal }) => (
+                            <div key={label} className="flex flex-wrap items-center justify-between gap-2 bg-neutral-50 border border-neutral-100 rounded-lg px-3 py-2">
+                              <div className="min-w-0">
+                                <p className="text-xs text-neutral-500">{label}</p>
+                                {isDoc && value ? (
+                                  <a href={value as string} target="_blank" rel="noreferrer" className="text-purp-600 hover:underline text-sm flex items-center gap-1">
+                                    View Document <ExternalLink className="h-3 w-3" />
+                                  </a>
+                                ) : (
+                                  <p className="font-medium text-sm truncate max-w-[180px]">{value as string || "—"}</p>
+                                )}
                               </div>
-                            )}
-                          </div>
-                        </div>
-                        <div className="flex items-center justify-between bg-neutral-50 p-2 rounded">
-                          <div>
-                            <p className="text-xs text-neutral-500">BVN</p>
-                            <p className="font-medium text-sm">{selectedMerchant?.bvn || m.bvn || "—"}</p>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Badge variant="outline" className={`text-xs capitalize border-2 ${statusColor(selectedMerchant?.bvn_status || m.bvn_status || 'unverified')}`}>
-                              {selectedMerchant?.bvn_status || m.bvn_status || 'unverified'}
-                            </Badge>
-                            {(selectedMerchant?.bvn_status || m.bvn_status) === "pending" && (
-                              <div className="flex gap-1">
-                                <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-emerald-600 hover:bg-emerald-100" onClick={() => updateItemStatus(selectedMerchant || m, 'bvn_status', 'verified')}><CheckCircle className="h-4 w-4" /></Button>
-                                <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-red-600 hover:bg-red-100" onClick={() => updateItemStatus(selectedMerchant || m, 'bvn_status', 'rejected')}><XCircle className="h-4 w-4" /></Button>
+                              <div className="flex items-center gap-2 flex-shrink-0">
+                                <Badge variant="outline" className={`text-xs capitalize border ${statusColor(statusVal || "unverified")}`}>
+                                  {statusVal || "unverified"}
+                                </Badge>
+                                {statusVal === "pending" && (
+                                  <div className="flex gap-1">
+                                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-emerald-600 hover:bg-emerald-50" onClick={() => updateItemStatus(selectedMerchant, field, "verified")}><CheckCircle className="h-4 w-4" /></Button>
+                                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-red-600 hover:bg-red-50" onClick={() => updateItemStatus(selectedMerchant, field, "rejected")}><XCircle className="h-4 w-4" /></Button>
+                                  </div>
+                                )}
                               </div>
-                            )}
-                          </div>
-                        </div>
-                        <div className="flex items-center justify-between bg-neutral-50 p-2 rounded">
-                          <div>
-                            <p className="text-xs text-neutral-500">Selfie</p>
-                            <p className="font-medium text-sm">{(selectedMerchant?.selfie_url || m.selfie_url) ? "Submitted" : "N/A"}</p>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Badge variant="outline" className={`text-xs capitalize border-2 ${statusColor(selectedMerchant?.selfie_status || m.selfie_status || 'unverified')}`}>
-                              {selectedMerchant?.selfie_status || m.selfie_status || 'unverified'}
-                            </Badge>
-                            {(selectedMerchant?.selfie_status || m.selfie_status) === "pending" && (
-                              <div className="flex gap-1">
-                                <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-emerald-600 hover:bg-emerald-100" onClick={() => updateItemStatus(selectedMerchant || m, 'selfie_status', 'verified')}><CheckCircle className="h-4 w-4" /></Button>
-                                <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-red-600 hover:bg-red-100" onClick={() => updateItemStatus(selectedMerchant || m, 'selfie_status', 'rejected')}><XCircle className="h-4 w-4" /></Button>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                        <div className="flex items-center justify-between bg-neutral-50 p-2 rounded">
-                          <div>
-                            <p className="text-xs text-neutral-500">CAC Document</p>
-                            <p className="font-medium text-sm">
-                              {(selectedMerchant?.cac_document_url || m.cac_document_url) ? (
-                                <a href="#" target="_blank" className="text-purp-600 hover:underline">View Document</a>
-                              ) : "—"}
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Badge variant="outline" className={`text-xs capitalize border-2 ${statusColor(selectedMerchant?.cac_status || m.cac_status || 'unverified')}`}>
-                              {selectedMerchant?.cac_status || m.cac_status || 'unverified'}
-                            </Badge>
-                            {(selectedMerchant?.cac_status || m.cac_status) === "pending" && (
-                              <div className="flex gap-1">
-                                <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-emerald-600 hover:bg-emerald-100" onClick={() => updateItemStatus(selectedMerchant || m, 'cac_status', 'verified')}><CheckCircle className="h-4 w-4" /></Button>
-                                <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-red-600 hover:bg-red-100" onClick={() => updateItemStatus(selectedMerchant || m, 'cac_status', 'rejected')}><XCircle className="h-4 w-4" /></Button>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                        <div className="flex items-center justify-between bg-neutral-50 p-2 rounded">
-                          <div>
-                            <p className="text-xs text-neutral-500">Utility Bill</p>
-                            <p className="font-medium text-sm">
-                              {(selectedMerchant?.utility_document_url || m.utility_document_url) ? (
-                                <a href="#" target="_blank" className="text-purp-600 hover:underline">View Document</a>
-                              ) : "—"}
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Badge variant="outline" className={`text-xs capitalize border-2 ${statusColor(selectedMerchant?.utility_status || m.utility_status || 'unverified')}`}>
-                              {selectedMerchant?.utility_status || m.utility_status || 'unverified'}
-                            </Badge>
-                            {(selectedMerchant?.utility_status || m.utility_status) === "pending" && (
-                              <div className="flex gap-1">
-                                <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-emerald-600 hover:bg-emerald-100" onClick={() => updateItemStatus(selectedMerchant || m, 'utility_status', 'verified')}><CheckCircle className="h-4 w-4" /></Button>
-                                <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-red-600 hover:bg-red-100" onClick={() => updateItemStatus(selectedMerchant || m, 'utility_status', 'rejected')}><XCircle className="h-4 w-4" /></Button>
-                              </div>
-                            )}
-                          </div>
+                            </div>
+                          ))}
                         </div>
                       </div>
-                    </div>
-                    {m.kyc_notes && (
-                      <div className="bg-neutral-50 p-3 rounded-lg border text-sm">
-                        <p className="text-neutral-500 text-xs mb-1">Previous Notes</p>
-                        <p>{m.kyc_notes}</p>
+
+                      {/* Review notes */}
+                      <div className="space-y-1.5">
+                        <Label className="text-sm font-medium">Review Notes (optional)</Label>
+                        <Textarea value={reviewNotes} onChange={e => setReviewNotes(e.target.value)} placeholder="Add notes about this document review..." className="min-h-[56px] text-sm" />
                       </div>
-                    )}
-                    <div className="space-y-2">
-                      <Label className="text-sm font-medium">Review Notes</Label>
-                      <Textarea
-                        value={reviewNotes}
-                        onChange={(e) => setReviewNotes(e.target.value)}
-                        placeholder="Add notes about this verification decision..."
-                        className="min-h-[80px]"
-                      />
-                    </div>
-                  </div>
-                  {reviewError && (
-                    <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm font-medium border border-red-100 flex items-center gap-2">
-                      <span className="w-1.5 h-1.5 rounded-full bg-red-600 shrink-0" />
-                      {reviewError}
+
+                      {/* Reason input */}
+                      {(actionMode === "reject" || actionMode === "reupload") && (
+                        <div className="space-y-2 bg-red-50 border border-red-200 rounded-xl p-3">
+                          <Label className="text-sm font-semibold text-red-800">
+                            {actionMode === "reject" ? "Rejection Reason (required)" : "Documents needed (required)"}
+                          </Label>
+                          <Textarea
+                            value={actionReason}
+                            onChange={e => setActionReason(e.target.value)}
+                            placeholder={actionMode === "reject" ? "Explain why verification is being rejected..." : "Specify which documents need to be re-uploaded..."}
+                            className="min-h-[80px] border-red-300 bg-white text-sm"
+                          />
+                          {actionMode === "reject" && actionReason.trim().length > 0 && actionReason.trim().length < 10 && (
+                            <p className="text-xs text-red-600">Reason must be at least 10 characters.</p>
+                          )}
+                        </div>
+                      )}
+
+                      {reviewError && <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm font-medium border border-red-100">{reviewError}</div>}
+                      {actionSuccess && <div className="bg-emerald-50 text-emerald-700 p-3 rounded-lg text-sm font-medium border border-emerald-100">{actionSuccess}</div>}
                     </div>
                   )}
-                  <DialogFooter className="gap-2">
-                    <Button
-                      variant="outline"
-                      onClick={() => { setSelectedMerchant(null); setReviewError(null); }}
-                    >
-                      Close Review
-                    </Button>
-                  </DialogFooter>
+
+                  {/* Action buttons */}
+                  <div className="border-t pt-4 mt-2">
+                    {actionMode === "idle" ? (
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        <Button className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs h-9" disabled={actionLoading || selectedMerchant?.verification_status === "verified"} onClick={handleApprove}>
+                          <CheckCircle className="h-3.5 w-3.5 mr-1" />{actionLoading ? "..." : "Approve"}
+                        </Button>
+                        <Button variant="destructive" className="text-xs h-9" disabled={actionLoading || selectedMerchant?.verification_status === "rejected"} onClick={() => { setActionMode("reject"); setActionReason(""); }}>
+                          <XCircle className="h-3.5 w-3.5 mr-1" />Reject
+                        </Button>
+                        <Button variant="outline" className="border-orange-300 text-orange-700 hover:bg-orange-50 text-xs h-9" disabled={actionLoading} onClick={() => { setActionMode("reupload"); setActionReason(""); }}>
+                          <UploadCloud className="h-3.5 w-3.5 mr-1" />Reupload
+                        </Button>
+                        <Button variant="outline" className="border-neutral-300 text-xs h-9" disabled={actionLoading} onClick={handleReset}>
+                          <RotateCcw className="h-3.5 w-3.5 mr-1" />Reset
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="flex gap-2 flex-wrap">
+                        <Button variant="outline" className="text-xs h-9" onClick={() => { setActionMode("idle"); setActionReason(""); }}>Cancel</Button>
+                        {actionMode === "reject" && (
+                          <Button variant="destructive" className="text-xs h-9" disabled={actionLoading || actionReason.trim().length < 10} onClick={handleReject}>
+                            {actionLoading ? "Rejecting..." : "Confirm Reject"}
+                          </Button>
+                        )}
+                        {actionMode === "reupload" && (
+                          <Button className="bg-orange-600 hover:bg-orange-700 text-white text-xs h-9" disabled={actionLoading || actionReason.trim().length < 5} onClick={handleReupload}>
+                            {actionLoading ? "Sending..." : "Request Reupload"}
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </DialogContent>
               </Dialog>
-            </TableCell>
-          </TableRow>
-        ))}
-        {data.length === 0 && (
-          <TableRow>
-            <TableCell colSpan={6} className="text-center py-8 text-neutral-500 text-sm">
-              No merchants found.
-            </TableCell>
-          </TableRow>
-        )}
-      </TableBody>
-    </Table>
+            </div>
+          </div>
+        );
+      })}
+      {data.length === 0 && (
+        <div className="py-12 text-center text-sm text-neutral-400">No merchants found.</div>
+      )}
+    </div>
   );
+
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-neutral-900">Verification Queue</h1>
         <p className="text-neutral-500 text-sm mt-1">
-          {pendingCount > 0 || incompleteCount > 0
-            ? `${pendingCount} pending review, ${incompleteCount} incomplete (missing owner name)`
-            : "All merchants have been reviewed"}
+          {adminReviewCount > 0 ? `${adminReviewCount} awaiting admin review` : ""}
+          {pendingCount > 0 ? ` · ${pendingCount} pending` : ""}
+          {incompleteCount > 0 ? ` · ${incompleteCount} incomplete` : ""}
+          {reuploadCount > 0 ? ` · ${reuploadCount} reupload requested` : ""}
+          {adminReviewCount === 0 && pendingCount === 0 && incompleteCount === 0 && reuploadCount === 0 ? "All merchants have been reviewed." : ""}
         </p>
       </div>
 
       <div className="relative max-w-md">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-500" />
-        <Input
-          placeholder="Search merchants..."
-          className="pl-10 border-2 bg-white"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-        />
+        <Input placeholder="Search merchants..." className="pl-10 border-2 bg-white" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
       </div>
 
-      <Tabs defaultValue="pending" className="space-y-4">
-        <TabsList className="bg-neutral-100">
+      <Tabs defaultValue="pending_admin_review" className="space-y-4">
+        <TabsList className="bg-neutral-100 flex-wrap h-auto gap-1">
+          <TabsTrigger value="pending_admin_review" className="data-[state=active]:bg-blue-100 data-[state=active]:text-blue-800">
+            Admin Review {adminReviewCount > 0 && <Badge className="ml-1.5 bg-blue-500 text-white text-[10px] px-1.5">{adminReviewCount}</Badge>}
+          </TabsTrigger>
           <TabsTrigger value="pending" className="data-[state=active]:bg-amber-100 data-[state=active]:text-amber-800">
             Pending {pendingCount > 0 && <Badge className="ml-1.5 bg-amber-500 text-white text-[10px] px-1.5">{pendingCount}</Badge>}
+          </TabsTrigger>
+          <TabsTrigger value="requires_reupload" className="data-[state=active]:bg-orange-100 data-[state=active]:text-orange-700">
+            Reupload {reuploadCount > 0 && <Badge className="ml-1.5 bg-orange-500 text-white text-[10px] px-1.5">{reuploadCount}</Badge>}
           </TabsTrigger>
           <TabsTrigger value="incomplete" className="data-[state=active]:bg-amber-100 data-[state=active]:text-amber-700">
             Incomplete {incompleteCount > 0 && <Badge className="ml-1.5 bg-amber-400 text-white text-[10px] px-1.5">{incompleteCount}</Badge>}
           </TabsTrigger>
-          <TabsTrigger value="verified" className="data-[state=active]:bg-emerald-100 data-[state=active]:text-emerald-800">
-            Verified
-          </TabsTrigger>
-          <TabsTrigger value="rejected" className="data-[state=active]:bg-red-100 data-[state=active]:text-red-800">
-            Rejected
-          </TabsTrigger>
-          <TabsTrigger value="all" className="data-[state=active]:bg-neutral-200">
-            All
-          </TabsTrigger>
+          <TabsTrigger value="verified" className="data-[state=active]:bg-emerald-100 data-[state=active]:text-emerald-800">Verified</TabsTrigger>
+          <TabsTrigger value="rejected" className="data-[state=active]:bg-red-100 data-[state=active]:text-red-800">Rejected</TabsTrigger>
+          <TabsTrigger value="all" className="data-[state=active]:bg-neutral-200">All</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="pending">
-          <Card className="border shadow-none"><CardContent className="p-0"><MerchantTable data={getFilteredMerchants("pending")} /></CardContent></Card>
-        </TabsContent>
-        <TabsContent value="incomplete">
-          <Card className="border shadow-none"><CardContent className="p-0"><MerchantTable data={getFilteredMerchants("incomplete")} /></CardContent></Card>
-        </TabsContent>
-        <TabsContent value="verified">
-          <Card className="border shadow-none"><CardContent className="p-0"><MerchantTable data={getFilteredMerchants("verified")} /></CardContent></Card>
-        </TabsContent>
-        <TabsContent value="rejected">
-          <Card className="border shadow-none"><CardContent className="p-0"><MerchantTable data={getFilteredMerchants("rejected")} /></CardContent></Card>
-        </TabsContent>
-        <TabsContent value="all">
-          <Card className="border shadow-none"><CardContent className="p-0"><MerchantTable data={getFilteredMerchants("all")} /></CardContent></Card>
-        </TabsContent>
+        {["pending_admin_review","pending","requires_reupload","incomplete","verified","rejected","all"].map(tab => (
+          <TabsContent key={tab} value={tab}>
+            <Card className="border shadow-none"><CardContent className="p-0"><MerchantList data={getFilteredMerchants(tab)} /></CardContent></Card>
+          </TabsContent>
+        ))}
       </Tabs>
     </div>
   );

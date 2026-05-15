@@ -8,7 +8,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
-import { ShieldCheck, Receipt, Clock, CheckCircle2, Lock, AlertTriangle, Info, AlertCircle, Copy, Wallet } from "lucide-react";
+import { ShieldCheck, Receipt, Clock, CheckCircle2, Lock, AlertTriangle, Info, AlertCircle, Copy, Wallet, CreditCard, ArrowRightLeft, Sparkles } from "lucide-react";
+
+// Feature flags — controls which payment rails are active
+const PROVIDER_FLAGS = {
+  paystack: true,   // Card + Bank Transfer via Paystack
+  monnify: false,   // Dynamic bank accounts via Monnify (coming soon)
+  breet: false,     // Crypto OTC via Breet (coming soon)
+};
 
 export default function PublicPaymentPortal({ params }: { params: Promise<{ invoiceId: string }> }) {
   const { invoiceId } = use(params);
@@ -21,6 +28,7 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
   const [isProcessing, setIsProcessing] = useState(false);
   const [success, setSuccess] = useState(false);
   const [paymentError, setPaymentError] = useState<string | null>(null);
+  const [paymentMethod, setPaymentMethod] = useState<"card" | "transfer" | "crypto">("card");
   const [refreshedInvoice, setRefreshedInvoice] = useState<InvoiceWithLineItems | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [cryptoDetails, setCryptoDetails] = useState<{
@@ -32,6 +40,14 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
   } | null>(null);
 
   const [copied, setCopied] = useState(false);
+  const [referenceContext, setReferenceContext] = useState<{
+    name: string;
+    projectTotalValue: number;
+    totalCollected: number;
+    outstandingBalance: number;
+    collectionProgress: number;
+    hasProjectTotal: boolean;
+  } | null>(null);
 
   const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -82,6 +98,9 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
           setMerchant(result.merchant);
           setMonthlyCollected(result.monthlyCollected ?? 0);
           setInputAmount(Number(result.invoice.outstanding_balance).toString());
+          if (result.referenceContext?.hasProjectTotal) {
+            setReferenceContext(result.referenceContext);
+          }
         }
         setLoading(false);
       })
@@ -443,19 +462,123 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
       </div>
 
       {/* Right Panel: Payment Interaction */}
-      <div className="w-full md:w-7/12 lg:w-2/3 p-4 md:p-8 flex items-center justify-center">
+      <div className="w-full md:w-7/12 lg:w-2/3 p-4 md:p-8 flex flex-col items-center justify-center gap-4">
+
+        {/* Project Progress Card — only when project_total_value > 0 */}
+        {referenceContext && referenceContext.hasProjectTotal && (
+          <div className="w-full max-w-lg">
+            <div className="bg-white border-2 border-purp-200 rounded-2xl p-4 space-y-3 shadow-sm">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 bg-purp-100 rounded-lg flex items-center justify-center">
+                  <Wallet className="w-4 h-4 text-purp-700" />
+                </div>
+                <div>
+                  <p className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wide">Project</p>
+                  <p className="font-bold text-purp-900 text-sm leading-tight">{referenceContext.name}</p>
+                </div>
+              </div>
+
+              {/* Progress bar */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-neutral-500">Collection Progress</span>
+                  <span className={`font-bold ${
+                    referenceContext.collectionProgress >= 100 ? "text-emerald-600" :
+                    referenceContext.collectionProgress >= 80  ? "text-emerald-500" :
+                    referenceContext.collectionProgress >= 50  ? "text-blue-600"   : "text-amber-600"
+                  }`}>{referenceContext.collectionProgress}%</span>
+                </div>
+                <div className="w-full bg-neutral-100 rounded-full h-2 overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all duration-700 ${
+                      referenceContext.collectionProgress >= 100 ? "bg-emerald-500" :
+                      referenceContext.collectionProgress >= 80  ? "bg-emerald-400" :
+                      referenceContext.collectionProgress >= 50  ? "bg-blue-500"   : "bg-amber-400"
+                    }`}
+                    style={{ width: `${Math.min(100, referenceContext.collectionProgress)}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Stats row */}
+              <div className="grid grid-cols-3 gap-2">
+                <div className="text-center bg-neutral-50 rounded-lg p-2">
+                  <p className="text-[10px] text-neutral-400 font-medium uppercase tracking-wide">Total</p>
+                  <p className="text-sm font-bold text-purp-900">{formatNaira(referenceContext.projectTotalValue)}</p>
+                </div>
+                <div className="text-center bg-emerald-50 rounded-lg p-2">
+                  <p className="text-[10px] text-emerald-500 font-medium uppercase tracking-wide">Collected</p>
+                  <p className="text-sm font-bold text-emerald-700">{formatNaira(referenceContext.totalCollected)}</p>
+                </div>
+                <div className={`text-center rounded-lg p-2 ${referenceContext.outstandingBalance > 0 ? "bg-amber-50" : "bg-emerald-50"}`}>
+                  <p className={`text-[10px] font-medium uppercase tracking-wide ${referenceContext.outstandingBalance > 0 ? "text-amber-500" : "text-emerald-500"}`}>Outstanding</p>
+                  <p className={`text-sm font-bold ${referenceContext.outstandingBalance > 0 ? "text-amber-700" : "text-emerald-700"}`}>
+                    {referenceContext.outstandingBalance > 0 ? formatNaira(referenceContext.outstandingBalance) : "Settled ✓"}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         <Card className="w-full max-w-lg border-2 border-purp-200 shadow-xl shadow-purp-900/5">
           <CardHeader className="text-center pb-2">
             <h2 className="text-2xl font-bold text-purp-900">
               {cryptoDetails ? "Crypto Payment" : "Make a Payment"}
             </h2>
             <p className="text-neutral-500">
-              {cryptoDetails ? "Send exact amount to the address below." : "You can pay in full or make a partial payment."}
+              {cryptoDetails ? "Send exact amount to the address below." : "Choose your preferred payment method."}
             </p>
           </CardHeader>
           <CardContent>
+            {/* Payment Method Tabs */}
+            {!cryptoDetails && (
+              <div className="flex gap-2 mb-6 p-1 bg-neutral-100 rounded-xl">
+                {/* Card / Bank */}
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod("card")}
+                  className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-lg text-xs font-semibold transition-all duration-200 ${
+                    paymentMethod === "card"
+                      ? "bg-white shadow text-purp-900 ring-1 ring-purp-200"
+                      : "text-neutral-500 hover:text-neutral-700"
+                  }`}
+                >
+                  <CreditCard className="h-5 w-5" />
+                  <span>Card / Bank</span>
+                </button>
+                {/* Transfer */}
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod("transfer")}
+                  className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-lg text-xs font-semibold transition-all duration-200 ${
+                    paymentMethod === "transfer"
+                      ? "bg-white shadow text-purp-900 ring-1 ring-purp-200"
+                      : "text-neutral-500 hover:text-neutral-700"
+                  }`}
+                >
+                  <ArrowRightLeft className="h-5 w-5" />
+                  <span>Transfer</span>
+                </button>
+                {/* Crypto — Coming Soon */}
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod("crypto")}
+                  className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-lg text-xs font-semibold transition-all duration-200 relative ${
+                    paymentMethod === "crypto"
+                      ? "bg-white shadow text-purp-900 ring-1 ring-purp-200"
+                      : "text-neutral-400 hover:text-neutral-500"
+                  }`}
+                >
+                  <Sparkles className="h-5 w-5" />
+                  <span>Crypto</span>
+                  <span className="absolute -top-1 -right-1 bg-amber-400 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full leading-none">SOON</span>
+                </button>
+              </div>
+            )}
             {cryptoDetails ? (
               <div className="space-y-6 animate-in fade-in zoom-in duration-300">
+                {/* existing crypto details UI — unchanged */}
                 <div className="bg-neutral-900 text-white rounded-xl p-6 text-center space-y-4">
                   <div className="w-16 h-16 bg-white/10 rounded-full flex items-center justify-center mx-auto">
                     <Wallet className="w-8 h-8 text-white" />
@@ -470,32 +593,39 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                     </p>
                   </div>
                 </div>
-
                 <div className="space-y-3">
                   <Label className="text-sm font-medium text-purp-900">Deposit Address ({cryptoDetails.network})</Label>
                   <div className="flex gap-2">
-                    <Input 
-                      readOnly 
-                      value={cryptoDetails.address} 
-                      className="font-mono text-sm bg-purp-50 border-purp-200 text-purp-900 h-12"
-                    />
-                    <Button 
-                      onClick={() => handleCopy(cryptoDetails.address)} 
-                      className="h-12 w-12 bg-purp-100 hover:bg-purp-200 text-purp-700 border-2 border-purp-200"
-                      variant="outline"
-                      title="Copy Address"
-                    >
+                    <Input readOnly value={cryptoDetails.address} className="font-mono text-sm bg-purp-50 border-purp-200 text-purp-900 h-12" />
+                    <Button onClick={() => handleCopy(cryptoDetails.address)} className="h-12 w-12 bg-purp-100 hover:bg-purp-200 text-purp-700 border-2 border-purp-200" variant="outline" title="Copy Address">
                       {copied ? <CheckCircle2 className="h-5 w-5 text-emerald-600" /> : <Copy className="h-5 w-5" />}
                     </Button>
                   </div>
                 </div>
-
                 <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-amber-800 text-sm flex items-start gap-3">
                   <Info className="h-5 w-5 flex-shrink-0 mt-0.5" />
-                  <p>
-                    Ensure you send the exact equivalent of <strong>{formatNaira(cryptoDetails.fiatAmount)}</strong> on the <strong>{cryptoDetails.network}</strong> network. The invoice will update automatically once the transaction receives network confirmations.
+                  <p>Ensure you send the exact equivalent of <strong>{formatNaira(cryptoDetails.fiatAmount)}</strong> on the <strong>{cryptoDetails.network}</strong> network.</p>
+                </div>
+              </div>
+            ) : paymentMethod === "crypto" ? (
+              /* Coming Soon state for Crypto */
+              <div className="py-8 text-center space-y-4 animate-in fade-in duration-300">
+                <div className="w-16 h-16 bg-amber-50 rounded-full flex items-center justify-center mx-auto border-2 border-amber-100">
+                  <Sparkles className="w-8 h-8 text-amber-500" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-purp-900 text-lg">Coming Soon</h3>
+                  <p className="text-neutral-500 text-sm mt-1 max-w-xs mx-auto">
+                    Crypto payments will be available soon. This payment option is part of our MVP rollout.
                   </p>
                 </div>
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-amber-800 text-sm">
+                  <p className="font-medium">This payment method is currently unavailable during MVP rollout.</p>
+                  <p className="text-xs mt-1 text-amber-700">Please use Card/Bank or Transfer to complete your payment.</p>
+                </div>
+                <Button type="button" variant="outline" className="border-purp-200" onClick={() => setPaymentMethod("card")}>
+                  Use Card / Bank Transfer Instead
+                </Button>
               </div>
             ) : (
             <form onSubmit={handlePayment} className="space-y-6">

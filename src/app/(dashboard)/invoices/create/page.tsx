@@ -49,8 +49,9 @@ function CreateInvoiceForm() {
   const [discountTemplates, setDiscountTemplates] = useState<DiscountTemplate[]>([]);
   const [merchant, setMerchant] = useState<Merchant | null>(null);
   const [invoiceType, setInvoiceType] = useState<"record" | "collection">(defaultType);
-  const [paymentProvider, setPaymentProvider] = useState("paystack");
   const [initialAmountPaid, setInitialAmountPaid] = useState("");
+  const [referenceGroupSummary, setReferenceGroupSummary] = useState<{ totalBilled: number; totalPaid: number; projectTotalValue: number; hasProjectTotal: boolean; outstandingBalance: number; suggestedAmount: number } | null>(null);
+  const [invoiceStage, setInvoiceStage] = useState<'deposit' | 'milestone' | 'balance' | 'standard'>('standard');
   const [paymentMethod, setPaymentMethod] = useState("cash");
   const [useCustomNumber, setUseCustomNumber] = useState(false);
   const [invoiceNumber, setInvoiceNumber] = useState("");
@@ -187,7 +188,8 @@ function CreateInvoiceForm() {
     const result = await createInvoiceAction({
       merchant_id: merchant.id,
       client_id: clientId,
-      reference_id: referenceId || null,
+      // Record invoices NEVER get a reference_id — lightweight records only
+      reference_id: invoiceType === "collection" ? (referenceId || null) : null,
       invoice_number: useCustomNumber ? invoiceNumber : undefined,
       invoice_type: invoiceType,
       discount_pct: parseFloat(discountPct) || 0,
@@ -195,12 +197,13 @@ function CreateInvoiceForm() {
       fee_absorption: invoiceType === "record" ? "business" : (feeAbsorption as "business" | "customer"),
       pay_by_date: payByDate || undefined,
       notes: notes || undefined,
-      payment_notes: invoiceType === "record" ? notes : undefined, // Reuse notes for payment ref
+      payment_notes: invoiceType === "record" ? notes : undefined,
       initial_amount_paid: invoiceType === "record" ? (initialAmountPaid.trim() !== "" ? parseFloat(initialAmountPaid) : 0) : 0,
       payment_method: paymentMethod,
       allow_partial_payment: invoiceType === "collection" ? allowPartialPayment : false,
       partial_payment_pct: (invoiceType === "collection" && allowPartialPayment) ? parseFloat(partialPaymentPct) : null,
-      payment_provider: invoiceType === "collection" ? paymentProvider : undefined,
+      // payment_provider is always server-defaulted to paystack — not merchant-selected
+      invoice_stage: (invoiceType === "collection" && referenceId) ? invoiceStage : undefined,
       line_items: lineItems
         .filter((li) => li.itemName.trim())
         .map((li) => {
@@ -413,43 +416,130 @@ function CreateInvoiceForm() {
               )}
             </div>
 
-            <div className="grid sm:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label className="text-sm font-medium">Reference / Project</Label>
-                  <Link href="/references" className="text-xs font-semibold text-purp-700 hover:underline">
-                    Manage
-                  </Link>
-                </div>
-                <Select value={referenceId || "none"} onValueChange={(v) => setReferenceId(v === "none" ? "" : String(v))}>
-                  <SelectTrigger className="border-2 border-purp-200 bg-purp-50 h-11">
-                    <SelectValue placeholder="Optional" />
-                  </SelectTrigger>
-                  <SelectContent className="border-2 border-purp-200">
-                    <SelectItem value="none">No reference</SelectItem>
-                    {references.map((ref) => (
-                      <SelectItem key={ref.id} value={ref.id}>{ref.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {invoiceType === "collection" && (
+            {/* Reference / Project — ONLY for collection invoices */}
+            {invoiceType === "collection" && (
+              <div className="grid sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label className="text-sm font-medium">Payment Provider</Label>
-                  <Select value={paymentProvider} onValueChange={(v) => setPaymentProvider(v ?? "paystack")}>
+                  <div className="flex items-center justify-between">
+                    <Label className="text-sm font-medium">Reference / Project</Label>
+                    <Link href="/references" className="text-xs font-semibold text-purp-700 hover:underline">
+                      Manage
+                    </Link>
+                  </div>
+                  <Select
+                    value={referenceId || "none"}
+                    onValueChange={async (v) => {
+                      const newRef = v === "none" ? "" : String(v);
+                      setReferenceId(newRef);
+                      setReferenceGroupSummary(null);
+                      setInvoiceStage('standard');
+                      if (newRef && merchant) {
+                        try {
+                          const sb = (await import("@/lib/supabase/client")).createClient();
+                          const [{ data: refData }, { data: groupInvs }] = await Promise.all([
+                            sb.from("references").select("project_total_value").eq("id", newRef).single(),
+                            sb.from("invoices").select("grand_total, amount_paid, invoice_type").eq("merchant_id", merchant.id).eq("reference_id", newRef),
+                          ]);
+                          const collectionInvs = (groupInvs || []).filter((i: any) => i.invoice_type === "collection");
+                          const totalBilled = collectionInvs.reduce((s: number, i: any) => s + Number(i.grand_total), 0);
+                          const totalPaid = collectionInvs.reduce((s: number, i: any) => s + Number(i.amount_paid), 0);
+                          const projectTotalValue = Number(refData?.project_total_value ?? 0);
+                          const hasProjectTotal = projectTotalValue > 0;
+                          const outstandingBalance = hasProjectTotal
+                            ? Math.max(0, projectTotalValue - totalPaid)
+                            : Math.max(0, totalBilled - totalPaid);
+                          const suggestedAmount = hasProjectTotal ? outstandingBalance : 0;
+                          setReferenceGroupSummary({ totalBilled, totalPaid, projectTotalValue, hasProjectTotal, outstandingBalance, suggestedAmount });
+                          // Auto-suggest: populate first line item unit rate
+                          if (suggestedAmount > 0) {
+                            setLineItems(prev => prev.map((li, idx) =>
+                              idx === 0 && !li.itemName.trim()
+                                ? { ...li, itemName: 'Balance Payment', unitRate: String(suggestedAmount), quantity: '1' }
+                                : li
+                            ));
+                          }
+                        } catch {}
+                      }
+                    }}
+                  >
                     <SelectTrigger className="border-2 border-purp-200 bg-purp-50 h-11">
-                      <SelectValue />
+                      <SelectValue placeholder="Optional" />
                     </SelectTrigger>
                     <SelectContent className="border-2 border-purp-200">
-                      <SelectItem value="paystack">Paystack (Cards & Transfer)</SelectItem>
-                      <SelectItem value="monnify">Monnify (Dynamic Accounts)</SelectItem>
-                      <SelectItem value="breet">Breet (Crypto OTC)</SelectItem>
+                      <SelectItem value="none">No reference</SelectItem>
+                      {references.map((ref) => (
+                        <SelectItem key={ref.id} value={ref.id}>{ref.name}</SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
+                  {referenceGroupSummary && (
+                    <div className="mt-2 bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs space-y-1">
+                      <p className="font-semibold text-blue-900">📊 Project Collection Summary</p>
+                      {referenceGroupSummary.hasProjectTotal && (
+                        <>
+                          <div className="flex justify-between text-blue-700">
+                            <span>Project total</span>
+                            <span className="font-mono font-bold">{formatNaira(referenceGroupSummary.projectTotalValue)}</span>
+                          </div>
+                          <div className="w-full bg-blue-100 rounded-full h-1.5 overflow-hidden">
+                            <div className="h-full bg-blue-500 rounded-full" style={{ width: `${Math.min(100, Math.round((referenceGroupSummary.totalPaid / referenceGroupSummary.projectTotalValue) * 100))}%` }} />
+                          </div>
+                        </>
+                      )}
+                      <div className="flex justify-between text-blue-700">
+                        <span>Total billed so far</span>
+                        <span className="font-mono font-bold">{formatNaira(referenceGroupSummary.totalBilled)}</span>
+                      </div>
+                      <div className="flex justify-between text-blue-700">
+                        <span>Already collected</span>
+                        <span className="font-mono font-bold text-emerald-600">{formatNaira(referenceGroupSummary.totalPaid)}</span>
+                      </div>
+                      <div className="flex justify-between border-t border-blue-200 pt-1 text-blue-900">
+                        <span className="font-semibold">Outstanding balance</span>
+                        <span className="font-mono font-bold text-amber-700">{formatNaira(referenceGroupSummary.outstandingBalance)}</span>
+                      </div>
+                      {referenceGroupSummary.suggestedAmount > 0 && (
+                        <p className="text-blue-600 text-[11px] pt-0.5">💡 First line item auto-populated with suggested balance.</p>
+                      )}
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
+              </div>
+            )}
+            {invoiceType === "record" && (
+              <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700">
+                <span className="font-semibold">Note:</span> Record invoices are lightweight offline records and do not support project reference grouping.
+              </div>
+            )}
+
+            {/* Invoice Stage — only shown when collection + reference selected */}
+            {invoiceType === "collection" && referenceId && (
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">Invoice Stage</Label>
+                <div className="grid grid-cols-4 gap-2">
+                  {(["deposit", "milestone", "balance", "standard"] as const).map((stage) => (
+                    <button
+                      key={stage}
+                      type="button"
+                      onClick={() => setInvoiceStage(stage)}
+                      className={`py-2 px-1 rounded-lg border-2 text-xs font-semibold capitalize transition-all ${
+                        invoiceStage === stage
+                          ? "border-purp-700 bg-purp-50 text-purp-900"
+                          : "border-neutral-200 bg-white text-neutral-500 hover:border-purp-300"
+                      }`}
+                    >
+                      {stage === "deposit" ? "🏦 Deposit" :
+                       stage === "milestone" ? "🎯 Milestone" :
+                       stage === "balance" ? "✅ Balance" : "📄 Standard"}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-neutral-400">
+                  Stage helps track where this invoice falls in the project lifecycle.
+                </p>
+              </div>
+            )}
+
 
             {invoiceType === "collection" && (
               <div className="grid sm:grid-cols-2 gap-4">

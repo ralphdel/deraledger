@@ -11,7 +11,7 @@ export interface Merchant {
   phone: string | null;
   logo_url: string | null;
   fee_absorption_default: "business" | "customer";
-  verification_status: "unverified" | "pending" | "verified" | "rejected" | "suspended";
+  verification_status: "unverified" | "pending" | "pending_admin_review" | "requires_reupload" | "verified" | "rejected" | "suspended" | "restricted";
   // v2.1: subscription_plan replaces merchant_tier
   subscription_plan: "starter" | "individual" | "corporate";
   // Keep merchant_tier during migration — both columns exist in DB
@@ -32,6 +32,9 @@ export interface Merchant {
   kyc_attempt_count?: number;
   kyc_last_attempt_at?: string | null;
   kyc_provider_metadata?: Record<string, unknown> | null;
+  kyc_rejection_reason?: string | null;
+  kyc_reviewed_at?: string | null;
+  kyc_reset_at?: string | null;
   // Settlement fields (v2.1)
   settlement_bank_name: string | null;
   settlement_bank_code: string | null;
@@ -121,6 +124,7 @@ export interface Invoice {
   payment_provider?: string | null;
   crypto_deposit_address?: string | null;
   crypto_asset?: string | null;
+  invoice_stage?: 'deposit' | 'milestone' | 'balance' | 'standard' | null;
 }
 
 export interface Reference {
@@ -129,6 +133,7 @@ export interface Reference {
   name: string;
   description: string | null;
   handled_by: string | null;
+  project_total_value?: number | null;
   created_at: string;
   updated_at: string;
 }
