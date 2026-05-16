@@ -1,7 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const url = request.nextUrl.clone();
   if (url.pathname.startsWith('/admin') && url.pathname !== '/admin-login') {
     const adminSession = request.cookies.get('admin_session')?.value;

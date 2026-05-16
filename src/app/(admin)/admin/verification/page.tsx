@@ -24,10 +24,11 @@ import {
   adminRejectVerificationAction,
   adminResetVerificationAction,
   adminRequestReuploadAction,
+  adminGetKycDocumentUrlAction,
 } from "@/lib/actions";
 import type { Merchant } from "@/lib/types";
 
-type ActionMode = "idle" | "reject" | "reupload";
+type ActionMode = "idle" | "reject" | "reupload" | "reset";
 
 export default function VerificationQueuePage() {
   const [merchants, setMerchants] = useState<Merchant[]>([]);
@@ -63,11 +64,13 @@ export default function VerificationQueuePage() {
     setMerchants(prev => prev.map(m => m.id === updated.id ? updated : m));
   };
 
-  const getEffectiveStatus = (m: Merchant) => {
+  const getEffectiveStatus = (m: Merchant | null): string => {
+    if (!m) return "unverified";
     const tier = m.subscription_plan || m.merchant_tier || "starter";
     const hasConfirmed = (m.platform_version ?? 0) >= 1;
     if (tier !== "starter" && !m.owner_name) return "incomplete";
     if (tier === "corporate" && (!m.business_name || !hasConfirmed)) return "incomplete";
+    if (tier !== "starter" && (!m.business_street || !m.business_city || !m.business_state || !m.business_country || !m.phone)) return "incomplete";
     if (tier !== "starter" && m.bvn_status === "verified" && (m.selfie_status || "unverified") !== "verified") return "pending";
     return m.verification_status;
   };
@@ -167,6 +170,15 @@ export default function VerificationQueuePage() {
     setReviewError(null); setActionSuccess(null);
   };
 
+  const handleViewDocument = async (pathOrUrl: string) => {
+    const res = await adminGetKycDocumentUrlAction(pathOrUrl);
+    if (res.success && res.url) {
+      window.open(res.url, "_blank");
+    } else {
+      setReviewError("Failed to load document: " + res.error);
+    }
+  };
+
   const pendingCount = merchants.filter(m => m.verification_status === "pending").length;
   const adminReviewCount = merchants.filter(m => m.verification_status === "pending_admin_review").length;
   const incompleteCount = merchants.filter(m => getEffectiveStatus(m) === "incomplete").length;
@@ -179,7 +191,7 @@ export default function VerificationQueuePage() {
     </div>
   );
 
-  const MerchantList = ({ data }: { data: Merchant[] }) => (
+  const renderMerchantList = (data: Merchant[]) => (
     <div className="divide-y divide-neutral-100">
       {data.map(m => {
         const status = getEffectiveStatus(m);
@@ -244,12 +256,27 @@ export default function VerificationQueuePage() {
                       {/* Merchant info grid */}
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-neutral-50 rounded-xl p-3 text-sm">
                         <div><p className="text-neutral-400 text-xs mb-0.5">Email</p><p className="font-medium truncate">{selectedMerchant.email}</p></div>
-                        <div><p className="text-neutral-400 text-xs mb-0.5">Phone</p><p className="font-medium">{selectedMerchant.phone || "—"}</p></div>
+                        <div>
+                          <p className="text-neutral-400 text-xs mb-0.5">Phone</p>
+                          <p className={`font-semibold ${selectedMerchant.phone ? "text-neutral-900" : "text-red-600"}`}>
+                            {selectedMerchant.phone || "⚠ Not provided"}
+                          </p>
+                        </div>
                         <div className="sm:col-span-2">
                           <p className="text-neutral-400 text-xs mb-0.5">Owner / Director (BVN match)</p>
                           <p className={`font-semibold ${selectedMerchant.owner_name ? "text-neutral-900" : "text-red-600"}`}>
                             {selectedMerchant.owner_name || "⚠ Not provided"}
                           </p>
+                        </div>
+                        <div className="sm:col-span-2 border-t pt-2 mt-1">
+                          <p className="text-neutral-400 text-xs mb-0.5">Business Address</p>
+                          {selectedMerchant.business_street || selectedMerchant.business_city || selectedMerchant.business_state || selectedMerchant.business_country ? (
+                            <p className="font-medium text-neutral-900">
+                              {[selectedMerchant.business_street, selectedMerchant.business_city, selectedMerchant.business_state, selectedMerchant.business_country].filter(Boolean).join(", ")}
+                            </p>
+                          ) : (
+                            <p className="font-semibold text-red-600">⚠ Not provided</p>
+                          )}
                         </div>
                       </div>
 
@@ -271,7 +298,7 @@ export default function VerificationQueuePage() {
                         <h4 className="font-semibold text-sm text-neutral-900">Documents</h4>
                         <div className="space-y-2">
                           {([
-                            { label: "CAC Number", value: selectedMerchant.cac_number, field: "cac_status" as const, statusVal: selectedMerchant.cac_status },
+                            { label: "CAC Number (Dojah Verified)", value: selectedMerchant.cac_number, field: "cac_status" as const, statusVal: selectedMerchant.cac_number ? "verified" : "unverified" },
                             { label: "BVN", value: selectedMerchant.bvn, field: "bvn_status" as const, statusVal: selectedMerchant.bvn_status },
                             { label: "Selfie", value: selectedMerchant.selfie_url ? "Submitted" : null, field: "selfie_status" as const, statusVal: selectedMerchant.selfie_status },
                             { label: "CAC Document", value: selectedMerchant.cac_document_url, field: "cac_status" as const, isDoc: true, statusVal: selectedMerchant.cac_status },
@@ -281,9 +308,9 @@ export default function VerificationQueuePage() {
                               <div className="min-w-0">
                                 <p className="text-xs text-neutral-500">{label}</p>
                                 {isDoc && value ? (
-                                  <a href={value as string} target="_blank" rel="noreferrer" className="text-purp-600 hover:underline text-sm flex items-center gap-1">
+                                  <button onClick={() => handleViewDocument(value as string)} className="text-purp-600 hover:underline text-sm flex items-center gap-1 bg-transparent border-0 p-0 cursor-pointer">
                                     View Document <ExternalLink className="h-3 w-3" />
-                                  </a>
+                                  </button>
                                 ) : (
                                   <p className="font-medium text-sm truncate max-w-[180px]">{value as string || "—"}</p>
                                 )}
@@ -328,6 +355,20 @@ export default function VerificationQueuePage() {
                         </div>
                       )}
 
+                      {/* Reset warning */}
+                      {actionMode === "reset" && (
+                        <div className="bg-red-50 border-2 border-red-200 rounded-xl p-4 flex gap-3 items-start">
+                          <ShieldAlert className="h-5 w-5 text-red-600 flex-shrink-0 mt-0.5" />
+                          <div>
+                            <h4 className="text-sm font-bold text-red-900 mb-1">Danger: Full KYC Reset</h4>
+                            <p className="text-xs text-red-700 leading-relaxed">
+                              This action will <strong>permanently delete</strong> all KYC documents, selfies, BVN records, and verification statuses for this merchant. They will be forced to completely re-start the onboarding verification process from scratch.
+                            </p>
+                            <p className="text-xs text-red-800 font-semibold mt-2">Are you absolutely sure you want to proceed?</p>
+                          </div>
+                        </div>
+                      )}
+
                       {reviewError && <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm font-medium border border-red-100">{reviewError}</div>}
                       {actionSuccess && <div className="bg-emerald-50 text-emerald-700 p-3 rounded-lg text-sm font-medium border border-emerald-100">{actionSuccess}</div>}
                     </div>
@@ -337,7 +378,14 @@ export default function VerificationQueuePage() {
                   <div className="border-t pt-4 mt-2">
                     {actionMode === "idle" ? (
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                        <Button className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs h-9" disabled={actionLoading || selectedMerchant?.verification_status === "verified"} onClick={handleApprove}>
+                        <Button className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs h-9" 
+                          disabled={
+                            actionLoading || 
+                            selectedMerchant?.verification_status === "verified" ||
+                            getEffectiveStatus(selectedMerchant) === "incomplete" ||
+                            (selectedMerchant?.subscription_plan === "corporate" && (selectedMerchant?.cac_status !== "verified" || selectedMerchant?.utility_status !== "verified"))
+                          } 
+                          onClick={handleApprove}>
                           <CheckCircle className="h-3.5 w-3.5 mr-1" />{actionLoading ? "..." : "Approve"}
                         </Button>
                         <Button variant="destructive" className="text-xs h-9" disabled={actionLoading || selectedMerchant?.verification_status === "rejected"} onClick={() => { setActionMode("reject"); setActionReason(""); }}>
@@ -346,7 +394,7 @@ export default function VerificationQueuePage() {
                         <Button variant="outline" className="border-orange-300 text-orange-700 hover:bg-orange-50 text-xs h-9" disabled={actionLoading} onClick={() => { setActionMode("reupload"); setActionReason(""); }}>
                           <UploadCloud className="h-3.5 w-3.5 mr-1" />Reupload
                         </Button>
-                        <Button variant="outline" className="border-neutral-300 text-xs h-9" disabled={actionLoading} onClick={handleReset}>
+                        <Button variant="outline" className="border-neutral-300 text-xs h-9" disabled={actionLoading} onClick={() => setActionMode("reset")}>
                           <RotateCcw className="h-3.5 w-3.5 mr-1" />Reset
                         </Button>
                       </div>
@@ -361,6 +409,11 @@ export default function VerificationQueuePage() {
                         {actionMode === "reupload" && (
                           <Button className="bg-orange-600 hover:bg-orange-700 text-white text-xs h-9" disabled={actionLoading || actionReason.trim().length < 5} onClick={handleReupload}>
                             {actionLoading ? "Sending..." : "Request Reupload"}
+                          </Button>
+                        )}
+                        {actionMode === "reset" && (
+                          <Button variant="destructive" className="text-xs h-9" disabled={actionLoading} onClick={handleReset}>
+                            <RotateCcw className="h-3.5 w-3.5 mr-1" /> {actionLoading ? "Resetting..." : "Yes, Force Reset"}
                           </Button>
                         )}
                       </div>
@@ -418,7 +471,7 @@ export default function VerificationQueuePage() {
 
         {["pending_admin_review","pending","requires_reupload","incomplete","verified","rejected","all"].map(tab => (
           <TabsContent key={tab} value={tab}>
-            <Card className="border shadow-none"><CardContent className="p-0"><MerchantList data={getFilteredMerchants(tab)} /></CardContent></Card>
+            <Card className="border shadow-none"><CardContent className="p-0">{renderMerchantList(getFilteredMerchants(tab))}</CardContent></Card>
           </TabsContent>
         ))}
       </Tabs>

@@ -70,6 +70,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   const businessName = merchant?.business_name || "Deraledger";
   const initials = businessName.split(" ").map(n => n[0]).join("").toUpperCase().substring(0, 2);
+  const plan = merchant?.subscription_plan || merchant?.merchant_tier || "starter";
+  const businessAddressMissing = plan !== "starter" && (!merchant?.business_street?.trim() || !merchant?.business_city?.trim() || !merchant?.business_state?.trim() || !merchant?.business_country?.trim());
 
   const allNavItems: NavItem[] = [
     { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -290,7 +292,25 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
         {/* Page Content */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8">
-          {merchant?.is_hard_locked && pathname !== "/settings/billing" ? (
+          {businessAddressMissing && pathname !== "/settings" ? (
+            <div className="flex flex-col items-center justify-center min-h-[60vh] text-center max-w-md mx-auto">
+              <div className="w-16 h-16 rounded-full flex items-center justify-center mb-6 bg-red-100 text-red-600">
+                <AlertCircle className="w-8 h-8" />
+              </div>
+              <h2 className="text-2xl font-bold text-neutral-900 dark:text-neutral-100 mb-2">
+                Action Required
+              </h2>
+              <p className="text-neutral-600 dark:text-neutral-400 mb-8">
+                Your business address is required to continue accessing the platform. Please navigate to settings and update your Business Profile to include your Street, City, and State.
+              </p>
+              <Link
+                href="/settings"
+                className="bg-purp-900 text-white px-8 py-3 rounded-lg font-bold hover:bg-purp-800 transition-colors"
+              >
+                Go to Settings
+              </Link>
+            </div>
+          ) : merchant?.is_hard_locked && pathname !== "/settings/billing" ? (
             <div className="flex flex-col items-center justify-center min-h-[60vh] text-center max-w-md mx-auto">
               <div className={cn("w-16 h-16 rounded-full flex items-center justify-center mb-6", merchant.is_suspended ? "bg-red-100 text-red-600" : "bg-amber-100 text-amber-600")}>
                 <AlertCircle className="w-8 h-8" />

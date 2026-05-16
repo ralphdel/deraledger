@@ -1564,10 +1564,9 @@ export async function updateReferenceAction(data: {
 
 export async function submitDojahKycAction(params: {
   merchantId: string;
-  bvn: string;
-  selfieBase64: string | string[];
-  selfieFileName: string | string[];
-  cacNumber?: string;
+  bvn?: string;
+  selfieBase64?: string | string[];
+  selfieFileName?: string | string[];
   cacDocumentName?: string;
   cacFileBase64?: string;
   utilityDocumentName?: string;
@@ -1578,7 +1577,7 @@ export async function submitDojahKycAction(params: {
   // Rate limiting: max 5 attempts
   const { data: merchant } = await adminClient
     .from("merchants")
-    .select("kyc_attempt_count, kyc_locked_until, subscription_plan, merchant_tier, owner_name, business_name")
+    .select("kyc_attempt_count, kyc_locked_until, subscription_plan, merchant_tier, owner_name, business_name, selfie_url, bvn, bvn_status, selfie_status, dojah_match_score, dojah_reference")
     .eq("id", params.merchantId)
     .single();
 
@@ -1602,79 +1601,91 @@ export async function submitDojahKycAction(params: {
   }
 
   try {
-    let finalSelfieFileName = "";
-    let primaryBase64 = "";
+    let finalSelfieFileName = merchant?.selfie_url || "";
+    let newBvnStatus: string = merchant?.bvn_status || "unverified";
+    let newSelfieStatus: string = merchant?.selfie_status || "unverified";
+    let matchScore = merchant?.dojah_match_score || null;
+    let dojahReference = merchant?.dojah_reference || null;
+    let dojahSuccess = true;
+    let nameMatch = true;
+    let selfieMatch = true;
 
-    // Handle multiple liveness frames or single upload
-    if (Array.isArray(params.selfieBase64) && Array.isArray(params.selfieFileName)) {
-      primaryBase64 = params.selfieBase64[0]; // Dojah gets the "straight face"
-      const filenames = [];
-      for (let i = 0; i < params.selfieBase64.length; i++) {
-        const buffer = Buffer.from(params.selfieBase64[i], "base64");
-        const filename = `${params.merchantId}/${params.selfieFileName[i]}`;
+    // Only run Dojah BVN+Selfie if a new selfie is provided
+    if (params.bvn && params.selfieBase64 && params.selfieFileName) {
+      let primaryBase64 = "";
+
+      // Handle multiple liveness frames or single upload
+      if (Array.isArray(params.selfieBase64) && Array.isArray(params.selfieFileName)) {
+        primaryBase64 = params.selfieBase64[0]; // Dojah gets the "straight face"
+        const filenames = [];
+        for (let i = 0; i < params.selfieBase64.length; i++) {
+          const buffer = Buffer.from(params.selfieBase64[i], "base64");
+          const filename = `${params.merchantId}/${params.selfieFileName[i]}`;
+          await adminClient.storage.from("kyc-documents").upload(filename, buffer, {
+            contentType: "image/jpeg",
+            upsert: true,
+          });
+          filenames.push(filename);
+        }
+        finalSelfieFileName = JSON.stringify(filenames);
+      } else {
+        primaryBase64 = params.selfieBase64 as string;
+        finalSelfieFileName = params.selfieFileName as string;
+        const buffer = Buffer.from(primaryBase64, "base64");
+        const filename = `${params.merchantId}/${finalSelfieFileName}`;
         await adminClient.storage.from("kyc-documents").upload(filename, buffer, {
           contentType: "image/jpeg",
           upsert: true,
         });
-        filenames.push(filename);
       }
-      finalSelfieFileName = JSON.stringify(filenames);
-    } else {
-      primaryBase64 = params.selfieBase64 as string;
-      finalSelfieFileName = params.selfieFileName as string;
-      const buffer = Buffer.from(primaryBase64, "base64");
-      const filename = `${params.merchantId}/${finalSelfieFileName}`;
-      await adminClient.storage.from("kyc-documents").upload(filename, buffer, {
-        contentType: "image/jpeg",
-        upsert: true,
+
+      // Call Dojah BVN + Selfie combined verification
+      const dojah = new DojahProvider();
+      const result = await dojah.verifyBVNWithSelfie({
+        bvn: params.bvn,
+        selfieBase64: primaryBase64,
+        customerReference: params.merchantId,
       });
-    }
 
-    // Call Dojah BVN + Selfie combined verification
-    const dojah = new DojahProvider();
-    const result = await dojah.verifyBVNWithSelfie({
-      bvn: params.bvn,
-      selfieBase64: primaryBase64,
-      customerReference: params.merchantId,
-    });
+      matchScore = extractDojahMatchScore(result) || null;
+      dojahReference = result.reference_id || null;
+      dojahSuccess = result.status === true || result.entity?.bvn === params.bvn;
+      selfieMatch = matchScore !== null && matchScore >= 70;
 
-    const matchScore = extractDojahMatchScore(result);
-    let dojahSuccess = result.status === true || result.entity?.bvn === params.bvn;
-    let selfieMatch = matchScore !== null && matchScore >= 70;
-    let nameMatch = true;
+      const isSandbox = process.env.VERIFICATION_MODE === "sandbox" || process.env.DOJAH_BASE_URL?.includes("sandbox") || process.env.NODE_ENV !== "production";
 
-    const isSandbox = process.env.VERIFICATION_MODE === "sandbox" || process.env.DOJAH_BASE_URL?.includes("sandbox") || process.env.NODE_ENV !== "production";
+      if (isSandbox) {
+        // In Sandbox mode, Dojah returns mocked data and fake identities, so we bypass strict checks
+        dojahSuccess = true;
+        selfieMatch = true;
+        nameMatch = true;
+      } else {
+        // Production Name matching logic
+        if (dojahSuccess && merchant?.owner_name && result.entity) {
+          const ownerNames = merchant.owner_name.toLowerCase().split(/\s+/);
+          const bvnNames = [
+            result.entity.first_name,
+            result.entity.last_name,
+            result.entity.middle_name
+          ].filter(Boolean).map(n => n!.toLowerCase());
 
-    if (isSandbox) {
-      // In Sandbox mode, Dojah returns mocked data and fake identities, so we bypass strict checks
-      dojahSuccess = true;
-      selfieMatch = true;
-      nameMatch = true;
-    } else {
-      // Production Name matching logic
-      if (dojahSuccess && merchant?.owner_name && result.entity) {
-        const ownerNames = merchant.owner_name.toLowerCase().split(/\s+/);
-        const bvnNames = [
-          result.entity.first_name,
-          result.entity.last_name,
-          result.entity.middle_name
-        ].filter(Boolean).map(n => n!.toLowerCase());
-
-        // We require at least one part of the owner name to match a part of the BVN name
-        nameMatch = ownerNames.some((on: string) => bvnNames.includes(on));
+          // We require at least one part of the owner name to match a part of the BVN name
+          nameMatch = ownerNames.some((on: string) => bvnNames.includes(on));
+        }
       }
+
+      newBvnStatus = (dojahSuccess && nameMatch) ? "verified" : "rejected";
+      newSelfieStatus = selfieMatch ? "verified" : "rejected";
     }
 
     const plan = merchant?.subscription_plan || merchant?.merchant_tier || "starter";
-    const newBvnStatus: string = (dojahSuccess && nameMatch) ? "verified" : "rejected";
-    const newSelfieStatus: string = selfieMatch ? "verified" : "rejected";
 
     const updates: Record<string, unknown> = {
-      bvn: params.bvn,
+      bvn: params.bvn || merchant?.bvn,
       bvn_status: newBvnStatus,
       selfie_url: finalSelfieFileName,
       selfie_status: newSelfieStatus,
-      dojah_reference: result.reference_id || null,
+      dojah_reference: dojahReference,
       dojah_match_score: matchScore,
       kyc_attempt_count: attemptCount + 1,
       kyc_last_attempt_at: new Date().toISOString(),
@@ -1694,34 +1705,7 @@ export async function submitDojahKycAction(params: {
 
     updates.verification_status = overallStatus;
 
-    if (params.cacNumber) {
-      updates.cac_number = params.cacNumber;
-      if (isSandbox) {
-        updates.cac_status = "verified";
-      } else {
-        try {
-          const cacResult = await dojah.verifyCAC({
-            rcNumber: params.cacNumber,
-          });
-          if (cacResult.entity && cacResult.entity.company_name) {
-            const dojahName = cacResult.entity.company_name.toLowerCase();
-            const myName = (merchant?.business_name || "").toLowerCase();
-            
-            // Allow if exact match, or one string is contained within the other
-            if (dojahName.includes(myName) || myName.includes(dojahName)) {
-              updates.cac_status = "verified";
-            } else {
-              throw new Error(`RC Number belongs to '${cacResult.entity.company_name}', which does not match your registered Business Name.`);
-            }
-          } else {
-            throw new Error("Invalid RC Number.");
-          }
-        } catch (e: any) {
-          console.error("Dojah CAC error:", e);
-          return { success: false, error: `CAC Verification Failed: ${e.message || "Invalid RC Number"}` };
-        }
-      }
-    }
+
     const getMimeType = (filename: string) => {
       const ext = filename.split('.').pop()?.toLowerCase();
       if (ext === 'png') return 'image/png';
@@ -1733,19 +1717,14 @@ export async function submitDojahKycAction(params: {
       const buffer = Buffer.from(params.cacFileBase64, "base64");
       const filename = `${params.merchantId}/CAC-${Date.now()}-${params.cacDocumentName}`;
       await adminClient.storage.from("kyc-documents").upload(filename, buffer, { contentType: getMimeType(params.cacDocumentName), upsert: true });
-      const { data: { publicUrl } } = adminClient.storage.from("kyc-documents").getPublicUrl(filename);
-      updates.cac_document_url = publicUrl;
-      // Do not overwrite cac_status if it was already verified via Dojah API
-      if (updates.cac_status !== "verified") {
-        updates.cac_status = "pending";
-      }
+      updates.cac_document_url = filename;
+      updates.cac_status = "pending";
     }
     if (params.utilityDocumentName && params.utilityFileBase64) {
       const buffer = Buffer.from(params.utilityFileBase64, "base64");
       const filename = `${params.merchantId}/UTILITY-${Date.now()}-${params.utilityDocumentName}`;
       await adminClient.storage.from("kyc-documents").upload(filename, buffer, { contentType: getMimeType(params.utilityDocumentName), upsert: true });
-      const { data: { publicUrl } } = adminClient.storage.from("kyc-documents").getPublicUrl(filename);
-      updates.utility_document_url = publicUrl;
+      updates.utility_document_url = filename;
       updates.utility_status = "pending";
     }
 
@@ -1944,6 +1923,7 @@ export async function adminResetVerificationAction(merchantId: string) {
       cac_document_url: null,
       utility_document_url: null,
       selfie_url: null,
+      cac_number: null,
       // Clear KYC metadata
       dojah_reference: null,
       dojah_match_score: null,
@@ -2007,4 +1987,61 @@ export async function adminRequestReuploadAction(merchantId: string, reason: str
 
   revalidatePath("/admin/verification");
   return { success: true };
+}
+
+// ── KYC Document Viewing ──────────────────────────────────────────────────────
+
+export async function adminGetKycDocumentUrlAction(pathOrUrl: string) {
+  const adminClient = getServiceClient();
+  let path = pathOrUrl;
+  if (path.includes("/kyc-documents/")) {
+    path = path.split("/kyc-documents/")[1];
+  }
+  const { data, error } = await adminClient.storage.from("kyc-documents").createSignedUrl(path, 60 * 60);
+  if (error || !data) return { success: false, error: error?.message || "Failed to generate secure document URL" };
+  return { success: true, url: data.signedUrl };
+}
+
+// ── Standalone RC Number Verification ──────────────────────────────────────────────────────
+
+export async function verifyRcNumberAction(merchantId: string, rcNumber: string) {
+  const adminClient = getServiceClient();
+
+  const { data: merchant } = await adminClient
+    .from("merchants")
+    .select("business_name")
+    .eq("id", merchantId)
+    .single();
+
+  if (!merchant?.business_name) {
+    return { success: false, error: "Business name not configured. Please complete your Business Profile first." };
+  }
+
+  const isSandbox = process.env.VERIFICATION_MODE === "sandbox" || process.env.DOJAH_BASE_URL?.includes("sandbox") || process.env.NODE_ENV !== "production";
+
+  if (isSandbox) {
+    // Sandbox auto-pass
+    await adminClient.from("merchants").update({ cac_number: rcNumber }).eq("id", merchantId);
+    return { success: true };
+  }
+
+  try {
+    const dojah = new DojahProvider();
+    const cacResult = await dojah.verifyCAC({ rcNumber });
+
+    if (cacResult.entity && cacResult.entity.company_name) {
+      const dojahName = cacResult.entity.company_name.toLowerCase().replace(/[^a-z0-9\s]/g, "");
+      const myName = merchant.business_name.toLowerCase().replace(/[^a-z0-9\s]/g, "");
+      
+      if (dojahName.includes(myName) || myName.includes(dojahName)) {
+        await adminClient.from("merchants").update({ cac_number: rcNumber }).eq("id", merchantId);
+        return { success: true };
+      } else {
+        return { success: false, error: `RC Number belongs to '${cacResult.entity.company_name}', which does not match your registered Business Name.` };
+      }
+    }
+    return { success: false, error: "Failed to verify RC Number. Invalid format or business not found." };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
 }

@@ -10,6 +10,10 @@ export interface Merchant {
   email: string;
   phone: string | null;
   logo_url: string | null;
+  business_street: string | null;
+  business_city: string | null;
+  business_state: string | null;
+  business_country: string | null;
   fee_absorption_default: "business" | "customer";
   verification_status: "unverified" | "pending" | "pending_admin_review" | "requires_reupload" | "verified" | "rejected" | "suspended" | "restricted";
   // v2.1: subscription_plan replaces merchant_tier

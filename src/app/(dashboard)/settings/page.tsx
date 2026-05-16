@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useTransition } from "react";
+import { Country, State } from "country-state-city";
 import Link from "next/link";
 import { Save, Shield, Upload, FileCheck, AlertTriangle, CheckCircle, Clock, ArrowRight, ExternalLink, Lock, Camera } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -17,7 +18,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { getMerchant } from "@/lib/data";
-import { submitDojahKycAction, submitKycAction } from "@/lib/actions";
+import { submitDojahKycAction, verifyRcNumberAction, submitKycAction } from "@/lib/actions";
 import { CreateClientModal } from "@/components/CreateClientModal";
 import { LivenessCamera } from "@/components/kyc/liveness-camera";
 import { createClient } from "@/lib/supabase/client";
@@ -29,6 +30,10 @@ export default function SettingsPage() {
   const [businessName, setBusinessName] = useState("");
   const [tradingName, setTradingName] = useState("");
   const [ownerName, setOwnerName] = useState("");
+  const [businessStreet, setBusinessStreet] = useState("");
+  const [businessCity, setBusinessCity] = useState("");
+  const [businessState, setBusinessState] = useState("");
+  const [businessCountry, setBusinessCountry] = useState("NG");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [feeDefault, setFeeDefault] = useState<"business" | "customer">("business");
@@ -43,6 +48,7 @@ export default function SettingsPage() {
   const [bvnNumber, setBvnNumber] = useState("");
   const [selfieFile, setSelfieFile] = useState<File | null>(null);
   const [kycSubmitting, setKycSubmitting] = useState(false);
+  const [rcSubmitting, setRcSubmitting] = useState(false);
   const [kycSuccess, setKycSuccess] = useState(false);
   const [kycError, setKycError] = useState<string | null>(null);
   const [upgradingPlan, setUpgradingPlan] = useState<string | null>(null);
@@ -143,6 +149,10 @@ export default function SettingsPage() {
         }
         setTradingName(m.trading_name || m.business_name || "");
         setOwnerName(m.owner_name || "");
+        setBusinessStreet(m.business_street || "");
+        setBusinessCity(m.business_city || "");
+        setBusinessState(m.business_state || "");
+        setBusinessCountry(m.business_country || "NG");
         setEmail(m.email);
         setPhone(m.phone || "");
         setFeeDefault(m.fee_absorption_default);
@@ -161,6 +171,10 @@ export default function SettingsPage() {
     const updates: Record<string, unknown> = {
       business_name: effectiveTier === "corporate" ? (businessName || tradingName) : (tradingName || businessName),
       trading_name: tradingName,
+      business_street: businessStreet || null,
+      business_city: businessCity || null,
+      business_state: businessState || null,
+      business_country: businessCountry || null,
       // Only write owner_name if it has NOT been identity-verified — prevents post-verification name changes
       ...(!isOwnerNameLocked && { owner_name: ownerName || null }),
       phone: phone || null,
@@ -172,6 +186,29 @@ export default function SettingsPage() {
     setSaving(false);
   };
 
+  const handleVerifyRcNumber = async () => {
+    if (!cacNumber || cacNumber.length < 5) {
+      setKycError("Please enter a valid RC Number (e.g. RC-123456).");
+      return;
+    }
+    if (!merchant?.id) return;
+    setRcSubmitting(true);
+    setKycError(null);
+    try {
+      const res = await verifyRcNumberAction(merchant.id, cacNumber);
+      if (res.success) {
+        setMerchant({ ...merchant, cac_number: cacNumber } as Merchant);
+        setKycError(null);
+      } else {
+        setKycError(res.error || "Failed to verify RC Number.");
+      }
+    } catch (e: any) {
+      setKycError(e.message || "An unexpected error occurred verifying your RC Number.");
+    } finally {
+      setRcSubmitting(false);
+    }
+  };
+
   const handleKycSubmit = async () => {
     if (!merchant) return;
 
@@ -180,14 +217,24 @@ export default function SettingsPage() {
       return;
     }
 
-    if (!bvnNumber || (livenessImages.length === 0 && !selfieFile)) {
+    const selfieRequired = merchant?.selfie_status !== "verified";
+
+    if (!bvnNumber || (selfieRequired && livenessImages.length === 0 && !selfieFile)) {
       setKycError("Please provide your BVN and complete the selfie verification.");
       return;
     }
 
-    // Corporate accounts must provide CAC evidence to be meaningful
-    if (isCorporate && !cacNumber && !cacFile) {
-      setKycError("Business accounts require a CAC Number or CAC Certificate. Please provide at least one to proceed.");
+    // Corporate accounts must verify RC number first, then upload both evidence files
+    if (isCorporate && !merchant?.cac_number) {
+      setKycError("Please verify your RC Number first before submitting.");
+      return;
+    }
+    if (isCorporate && (!cacFile && !merchant?.cac_document_url)) {
+      setKycError("Business accounts require a CAC Certificate upload.");
+      return;
+    }
+    if (isCorporate && !utilityFile && !merchant?.utility_document_url) {
+      setKycError("Business accounts require a Utility Bill upload.");
       return;
     }
 
@@ -204,15 +251,15 @@ export default function SettingsPage() {
       });
 
     try {
-      let finalSelfieBase64: string | string[];
-      let finalSelfieFileName: string | string[];
+      let finalSelfieBase64: string | string[] | undefined = undefined;
+      let finalSelfieFileName: string | string[] | undefined = undefined;
 
       if (livenessImages.length > 0) {
         finalSelfieBase64 = livenessImages;
         finalSelfieFileName = livenessImages.map((_, i) => `liveness-${i}-${Date.now()}.jpg`);
-      } else {
-        finalSelfieBase64 = await toBase64(selfieFile!);
-        finalSelfieFileName = selfieFile!.name;
+      } else if (selfieFile) {
+        finalSelfieBase64 = await toBase64(selfieFile);
+        finalSelfieFileName = selfieFile.name;
       }
 
       let finalCacBase64: string | undefined;
@@ -226,7 +273,6 @@ export default function SettingsPage() {
         bvn: bvnNumber,
         selfieBase64: finalSelfieBase64,
         selfieFileName: finalSelfieFileName,
-        cacNumber: cacNumber || undefined,
         cacDocumentName: cacFile?.name,
         cacFileBase64: finalCacBase64,
         utilityDocumentName: utilityFile?.name,
@@ -269,7 +315,9 @@ export default function SettingsPage() {
   const ownerNameMissing = !isStarter && !ownerName.trim();
   // If Corporate and business_name (registered name) is missing, also block
   const businessNameMissing = isCorporate && !businessName.trim();
-  const profileIncomplete = ownerNameMissing || businessNameMissing;
+  const businessAddressMissing = !isStarter && (!businessStreet.trim() || !businessCity.trim() || !businessState.trim() || !businessCountry.trim());
+  const phoneMissing = !isStarter && !phone.trim();
+  const profileIncomplete = ownerNameMissing || businessNameMissing || businessAddressMissing || phoneMissing;
   const effectiveVerificationStatus = profileIncomplete ? "unverified" : verificationStatus;
   // Lock owner_name once BVN or selfie has been verified — name is legally bound to identity
   const isOwnerNameLocked = merchant?.bvn_status === "verified" || merchant?.selfie_status === "verified";
@@ -433,6 +481,12 @@ export default function SettingsPage() {
                   {businessNameMissing && (
                     <li>Provide your <strong>Registered Business Name</strong> — required for CAC / RC Number verification.</li>
                   )}
+                  {businessAddressMissing && (
+                    <li>Provide your <strong>Business Address (Street, City, State, Country)</strong>.</li>
+                  )}
+                  {phoneMissing && (
+                    <li>Provide your <strong>Phone Number</strong>.</li>
+                  )}
                 </ul>
                 <p className="text-xs text-amber-600 mt-2">
                   Complete these fields in the Business Profile section below and save to proceed with verification.
@@ -555,17 +609,36 @@ export default function SettingsPage() {
               <div className="space-y-2">
                 <Label className="text-sm font-medium flex items-center gap-2">
                   <FileCheck className="h-4 w-4 text-purp-700" />
-                  CAC Number
-                  {renderStatusBadge(merchant?.cac_status)}
+                  RC Number Verification
                 </Label>
-                <Input
-                  type="text"
-                  placeholder="RC-123456"
-                  value={cacNumber}
-                  onChange={(e) => setCacNumber(e.target.value)}
-                  className="border-2 border-purp-200 bg-white h-11 max-w-xs"
-                  disabled={merchant?.cac_status === "verified" || merchant?.cac_status === "pending"}
-                />
+                <div className="flex items-center gap-3">
+                  <Input
+                    type="text"
+                    placeholder="RC-123456"
+                    value={merchant?.cac_number || cacNumber}
+                    onChange={(e) => setCacNumber(e.target.value)}
+                    className="border-2 border-purp-200 bg-white h-11 max-w-xs font-mono"
+                    disabled={!!merchant?.cac_number}
+                  />
+                  {!merchant?.cac_number ? (
+                    <Button
+                      onClick={handleVerifyRcNumber}
+                      disabled={rcSubmitting || !cacNumber || cacNumber.length < 5}
+                      className="bg-purp-900 hover:bg-purp-800 text-white h-11 px-6"
+                    >
+                      {rcSubmitting ? "Verifying..." : "Verify RC"}
+                    </Button>
+                  ) : (
+                    <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700 text-xs py-1.5 px-3 whitespace-nowrap">
+                      <CheckCircle className="mr-1.5 h-3.5 w-3.5" /> RC Verified
+                    </Badge>
+                  )}
+                </div>
+                {!merchant?.cac_number && (
+                  <p className="text-xs text-neutral-500 max-w-sm">
+                    Your RC number will be instantly verified against Dojah's corporate registry to ensure it matches your business name.
+                  </p>
+                )}
               </div>
             ) : isIndividual ? (
               <div className="relative p-4 bg-neutral-50 border border-neutral-200 rounded-lg opacity-60">
@@ -590,7 +663,7 @@ export default function SettingsPage() {
                     accept=".pdf,.png,.jpg,.jpeg"
                     onChange={(e) => setCacFile(e.target.files?.[0] || null)}
                     className="border-2 border-purp-200 bg-white h-11 file:mr-3 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-purp-100 file:text-purp-700"
-                    disabled={merchant?.cac_status === "verified" || merchant?.cac_status === "pending"}
+                    disabled={!merchant?.cac_number || (merchant?.cac_status === "verified" && !!merchant?.cac_document_url) || merchant?.cac_status === "pending"}
                   />
                   {(cacFile || merchant?.cac_document_url) && (
                     <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700 text-xs whitespace-nowrap">
@@ -622,7 +695,7 @@ export default function SettingsPage() {
                     accept=".pdf,.png,.jpg,.jpeg"
                     onChange={(e) => setUtilityFile(e.target.files?.[0] || null)}
                     className="border-2 border-purp-200 bg-white h-11 file:mr-3 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-purp-100 file:text-purp-700"
-                    disabled={merchant?.utility_status === "verified" || merchant?.utility_status === "pending"}
+                    disabled={(merchant?.utility_status === "verified" && !!merchant?.utility_document_url) || merchant?.utility_status === "pending"}
                   />
                   {(utilityFile || merchant?.utility_document_url) && (
                     <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700 text-xs whitespace-nowrap">
@@ -643,7 +716,15 @@ export default function SettingsPage() {
 
           <Button
             onClick={handleKycSubmit}
-            disabled={profileIncomplete || kycSubmitting || !bvnNumber || (!selfieFile && livenessImages.length === 0)}
+            disabled={
+              profileIncomplete || 
+              kycSubmitting || 
+              !bvnNumber || 
+              (merchant?.selfie_status !== "verified" && !selfieFile && livenessImages.length === 0) ||
+              effectiveVerificationStatus === "verified" ||
+              (isIndividual && merchant?.bvn_status === "verified" && merchant?.selfie_status === "verified") ||
+              (isCorporate && merchant?.bvn_status === "verified" && merchant?.selfie_status === "verified" && merchant?.cac_status === "verified" && merchant?.utility_status === "verified")
+            }
             className="w-full h-11 bg-purp-900 hover:bg-purp-700 text-white font-semibold"
           >
             {kycSubmitting ? (
@@ -716,7 +797,14 @@ export default function SettingsPage() {
           </div>
           {isCorporate && (
             <div className="space-y-2">
-              <Label className="text-sm font-medium">Registered Business Name <span className="text-red-500">*</span></Label>
+              <div className="flex items-center gap-2">
+                <Label className="text-sm font-medium">Registered Business Name <span className="text-red-500">*</span></Label>
+                {!!merchant?.cac_number && (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 rounded px-1.5 py-0.5">
+                    🔒 RC Verified
+                  </span>
+                )}
+              </div>
               <p className="text-xs text-neutral-500">The official name registered with CAC. Used to verify your CAC certificate and RC Number.</p>
               <div className="flex items-center gap-3 p-3 bg-purp-50/50 border border-purp-200 rounded-lg">
                 <input
@@ -729,7 +817,8 @@ export default function SettingsPage() {
                       setBusinessName("");
                     }
                   }}
-                  className="w-4 h-4 accent-purp-700"
+                  disabled={!!merchant?.cac_number}
+                  className="w-4 h-4 accent-purp-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 />
                 <span className="text-sm text-neutral-700">Same as Trading Name</span>
               </div>
@@ -737,8 +826,13 @@ export default function SettingsPage() {
                 <Input
                   value={businessName}
                   onChange={(e) => setBusinessName(e.target.value)}
+                  disabled={!!merchant?.cac_number}
                   placeholder="e.g. Adebayo Consulting Limited"
-                  className="border-2 border-purp-200 bg-purp-50 h-11"
+                  className={`border-2 h-11 ${
+                    !!merchant?.cac_number
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-900 cursor-not-allowed"
+                      : "border-purp-200 bg-purp-50"
+                  }`}
                 />
               )}
               {businessNameMissing && (
@@ -781,6 +875,74 @@ export default function SettingsPage() {
               )}
             </div>
           )}
+          {!isStarter && (
+            <div className="space-y-4 p-4 bg-neutral-50 border border-neutral-200 rounded-lg">
+              <h4 className="text-sm font-semibold text-neutral-900 flex items-center gap-2">
+                Business Address
+                {businessAddressMissing && <span className="text-red-500">*</span>}
+              </h4>
+              <p className="text-xs text-neutral-500">This must match the address on your utility bill.</p>
+              <div className="grid sm:grid-cols-2 gap-4">
+                <div className="space-y-2 sm:col-span-2">
+                  <Label className="text-xs font-medium">Street Address <span className="text-red-500">*</span></Label>
+                  <Input
+                    value={businessStreet}
+                    onChange={(e) => setBusinessStreet(e.target.value)}
+                    placeholder="e.g. 12 Admiralty Way"
+                    className="border-2 border-purp-200 bg-white h-11"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs font-medium">City <span className="text-red-500">*</span></Label>
+                  <Input
+                    value={businessCity}
+                    onChange={(e) => setBusinessCity(e.target.value)}
+                    placeholder="e.g. Lekki"
+                    className="border-2 border-purp-200 bg-white h-11"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs font-medium">Country <span className="text-red-500">*</span></Label>
+                  <Select
+                    value={businessCountry}
+                    onValueChange={(val) => {
+                      if (val) setBusinessCountry(val);
+                      setBusinessState("");
+                    }}
+                  >
+                    <SelectTrigger className="border-2 border-purp-200 bg-white h-11">
+                      <SelectValue placeholder="Select Country" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {Country.getAllCountries().map((country) => (
+                        <SelectItem key={country.isoCode} value={country.isoCode}>
+                          {country.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs font-medium">State / Province <span className="text-red-500">*</span></Label>
+                  <Select
+                    value={businessState}
+                    onValueChange={(val) => { if (val) setBusinessState(val); }}
+                  >
+                    <SelectTrigger className="border-2 border-purp-200 bg-white h-11">
+                      <SelectValue placeholder="Select State" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {State.getStatesOfCountry(businessCountry).map((state) => (
+                        <SelectItem key={state.isoCode} value={state.isoCode}>
+                          {state.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </div>
+          )}
           <div className="grid sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label className="text-sm font-medium">Email</Label>
@@ -792,7 +954,9 @@ export default function SettingsPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label className="text-sm font-medium">Phone</Label>
+              <Label className="text-sm font-medium">
+                Phone {!isStarter && <span className="text-red-500">*</span>}
+              </Label>
               <Input
                 type="tel"
                 value={phone}
