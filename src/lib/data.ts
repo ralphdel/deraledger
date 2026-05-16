@@ -26,15 +26,21 @@ let cachedMerchantId: string | null = null;
 let activeMerchantPromise: Promise<string> | null = null;
 
 async function getActiveMerchantId(): Promise<string> {
-  let workspaceId = null;
-
+  // 1. URL workspace path (e.g. /w/<id>) takes highest priority
   if (typeof window !== "undefined") {
     const match = window.location.pathname.match(/^\/(w|workspace)\/([^\/]+)/);
-    if (match) workspaceId = match[2];
+    if (match) return match[2];
   }
-  
-  if (workspaceId) {
-    return workspaceId;
+
+  // 2. Read the workspace cookie set during team-member login.
+  //    This is the primary mechanism for team members who don't own a merchant row.
+  if (typeof window !== "undefined") {
+    const cookieMatch = document.cookie.match(/(?:^|;\s*)purpledger_workspace_id=([^;]+)/);
+    if (cookieMatch?.[1]) {
+      const cookieId = cookieMatch[1];
+      // Don't cache cookie-sourced IDs globally — they can change between sessions
+      return cookieId;
+    }
   }
 
   if (cachedMerchantId) return cachedMerchantId;
@@ -47,10 +53,26 @@ async function getActiveMerchantId(): Promise<string> {
       const user = session?.user;
       
       if (user) {
+        // 3. Owner: merchant row is linked by user_id
         const { data } = await sb.from("merchants").select("id").eq("user_id", user.id).single();
         if (data?.id) {
           cachedMerchantId = data.id;
           return data.id;
+        }
+
+        // 4. Team member fallback: look up the merchant_team row for this user.
+        //    This handles SSR/server contexts where cookies may be present but not readable via document.cookie.
+        const { data: teamRow } = await sb
+          .from("merchant_team")
+          .select("merchant_id")
+          .eq("user_id", user.id)
+          .eq("is_active", true)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .single();
+        if (teamRow?.merchant_id) {
+          cachedMerchantId = teamRow.merchant_id;
+          return teamRow.merchant_id;
         }
       }
       return "00000000-0000-0000-0000-000000000001"; // Fallback to demo layout
@@ -112,7 +134,8 @@ export async function getMerchant(id?: string): Promise<(Merchant & { currentUse
         change_fee_settings: true, manage_business: true, manage_billing: true, manage_team: true,
         use_purpbot: true, view_settlements: true, manage_advance_settings: true,
         manage_settlement_account: true, manage_item_catalog: true, manage_discount_template: true,
-        view_item_catalog: true, view_discount_template: true
+        view_item_catalog: true, view_discount_template: true,
+        view_references: true, manage_references: true,
       };
     } else {
       const { data: teamData } = await sb
@@ -126,7 +149,34 @@ export async function getMerchant(id?: string): Promise<(Merchant & { currentUse
         // @ts-ignore
         currentUserRole = teamData.roles.name;
         // @ts-ignore
-        permissions = teamData.roles.permissions || {};
+        const rawPerms: Record<string, boolean> = teamData.roles.permissions || {};
+
+        // ── Plan-level permission masking ──────────────────────────────────────
+        // Even if a role grants a permission, strip it if the merchant's plan
+        // does not include that feature. This enforces plan boundaries server-side
+        // so team members can't access features above their merchant's plan.
+        const planKey = data.subscription_plan || data.merchant_tier || "starter";
+
+        // Permissions never available on Starter plan
+        const STARTER_BLOCKED = new Set([
+          "view_settlements", "manage_settlement_account",
+          "view_analytics",
+          "view_references", "manage_references",
+          "view_transactions",
+          "change_fee_settings",
+          "void_invoice",
+        ]);
+        // Permissions not available on Individual plan
+        const INDIVIDUAL_BLOCKED = new Set(["view_analytics"]);
+
+        const planBlocked =
+          planKey === "starter" ? STARTER_BLOCKED
+          : planKey === "individual" ? INDIVIDUAL_BLOCKED
+          : new Set<string>(); // corporate: nothing blocked
+
+        permissions = Object.fromEntries(
+          Object.entries(rawPerms).map(([k, v]) => [k, v && !planBlocked.has(k)])
+        );
       }
     }
   } else if (mId === "00000000-0000-0000-0000-000000000001") {

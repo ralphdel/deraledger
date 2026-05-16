@@ -325,9 +325,9 @@ export default function SettingsPage() {
   if (loading) {
     return (
       <div className="max-w-3xl mx-auto space-y-6">
-        <div><h1 className="text-2xl font-bold text-purp-900">Settings</h1></div>
-        <Card className="border-2 border-purp-200 shadow-none animate-pulse">
-          <CardContent className="p-6"><div className="h-40 bg-purp-50 rounded" /></CardContent>
+        <div><h1 className="text-2xl font-bold text-purp-900 dark:text-white">Settings</h1></div>
+        <Card className="border-2 border-purp-200 dark:border-white/10 shadow-none animate-pulse dark:bg-[#1A0B2E]">
+          <CardContent className="p-6"><div className="h-40 bg-purp-50 dark:bg-white/5 rounded" /></CardContent>
         </Card>
       </div>
     );
@@ -336,8 +336,8 @@ export default function SettingsPage() {
   return (
     <div className="max-w-3xl mx-auto space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-purp-900">Settings</h1>
-        <p className="text-neutral-500 text-sm mt-1">
+        <h1 className="text-2xl font-bold text-purp-900 dark:text-white">Settings</h1>
+        <p className="text-neutral-500 dark:text-white/60 text-sm mt-1">
           Manage your business profile and account preferences
         </p>
       </div>

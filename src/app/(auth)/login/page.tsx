@@ -49,22 +49,22 @@ export default function LoginPage() {
   return (
     <div>
       <div className="lg:hidden flex items-center gap-2 mb-8">
-        <div className="w-8 h-8 bg-purp-900 rounded-lg flex items-center justify-center">
+        <div className="w-8 h-8 bg-[#7B2FF7] rounded-lg flex items-center justify-center shadow-[0_0_10px_rgba(123,47,247,0.4)]">
           <span className="text-white font-bold text-sm">D</span>
         </div>
-        <span className="text-xl font-bold text-purp-900">Deraledger</span>
+        <span className="text-xl font-bold text-white tracking-tight">DeraLedger</span>
       </div>
 
-      <h1 className="text-2xl font-bold text-purp-900">Welcome back</h1>
-      <p className="mt-2 text-neutral-500">Sign in to your Deraledger account</p>
+      <h1 className="text-2xl font-bold text-white">Welcome back</h1>
+      <p className="mt-2 text-white/60">Sign in to your DeraLedger account</p>
 
       {/* Login Mode Toggle */}
-      <div className="flex p-1 mt-6 bg-neutral-100 rounded-lg border border-neutral-200">
+      <div className="flex p-1 mt-6 bg-white/5 rounded-lg border border-white/10 backdrop-blur-sm">
         <button
           type="button"
           onClick={() => setLoginMode("owner")}
           className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-semibold rounded-md transition-all ${
-            loginMode === "owner" ? "bg-white text-purp-900 shadow-sm border border-neutral-200/50" : "text-neutral-500 hover:text-neutral-700 hover:bg-neutral-200/50"
+            loginMode === "owner" ? "bg-[#3D0B66]/50 text-white shadow-sm border border-[#7B2FF7]/30" : "text-white/50 hover:text-white hover:bg-white/5"
           }`}
         >
           <Building2 className="w-4 h-4" />
@@ -74,7 +74,7 @@ export default function LoginPage() {
           type="button"
           onClick={() => setLoginMode("team")}
           className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-semibold rounded-md transition-all ${
-            loginMode === "team" ? "bg-white text-purp-900 shadow-sm border border-neutral-200/50" : "text-neutral-500 hover:text-neutral-700 hover:bg-neutral-200/50"
+            loginMode === "team" ? "bg-[#3D0B66]/50 text-white shadow-sm border border-[#7B2FF7]/30" : "text-white/50 hover:text-white hover:bg-white/5"
           }`}
         >
           <Users className="w-4 h-4" />
@@ -84,17 +84,17 @@ export default function LoginPage() {
 
       <form onSubmit={handleSubmit} className="mt-6 space-y-5">
         <div className="space-y-2">
-          <Label htmlFor="email" className="text-sm font-medium text-neutral-900">
+          <Label htmlFor="email" className="text-sm font-medium text-white/80">
             Email Address
           </Label>
           <div className="relative">
-            <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-500" />
+            <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-white/40" />
             <Input
               name="email"
               id="email"
               type="email"
               placeholder="ade@business.ng"
-              className="pl-10 h-11 border-2 border-purp-200 bg-purp-50 focus:border-purp-700 focus:ring-purp-700"
+              className="pl-10 h-11 border-white/10 bg-[#12061F] text-white focus:border-[#7B2FF7] placeholder:text-white/30"
               required
             />
           </div>
@@ -103,8 +103,8 @@ export default function LoginPage() {
         {loginMode === "team" && (
           <div className="space-y-2 animate-in fade-in slide-in-from-top-2 duration-300">
             <div className="flex items-center justify-between">
-              <Label htmlFor="workspace_code" className="text-sm font-medium text-neutral-900">
-                Business ID <span className="text-red-500">*</span>
+              <Label htmlFor="workspace_code" className="text-sm font-medium text-white/80">
+                Business ID <span className="text-red-400">*</span>
               </Label>
             </div>
             <Input
@@ -113,9 +113,9 @@ export default function LoginPage() {
               type="text"
               placeholder="e.g. PL01234567890"
               required={loginMode === "team"}
-              className="h-11 border-2 border-purp-200 bg-purp-50 focus:border-purp-700 focus:ring-purp-700 uppercase"
+              className="h-11 border-white/10 bg-[#12061F] text-white focus:border-[#7B2FF7] uppercase placeholder:text-white/30"
             />
-            <p className="text-xs text-neutral-500">
+            <p className="text-xs text-white/50">
               Check your invite email for the Business ID.
             </p>
           </div>
@@ -123,27 +123,27 @@ export default function LoginPage() {
 
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <Label htmlFor="password" className="text-sm font-medium text-neutral-900">
+            <Label htmlFor="password" className="text-sm font-medium text-white/80">
               Password
             </Label>
-            <Link href="/forgot-password" className="text-xs text-purp-700 hover:underline font-medium">
+            <Link href="/forgot-password" className="text-xs text-[#B58CFF] hover:text-white transition-colors font-medium">
               Forgot password?
             </Link>
           </div>
           <div className="relative">
-            <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-500" />
+            <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-white/40" />
             <Input
               name="password"
               id="password"
               type={showPassword ? "text" : "password"}
               placeholder="Enter your password"
-              className="pl-10 pr-10 h-11 border-2 border-purp-200 bg-purp-50 focus:border-purp-700 focus:ring-purp-700"
+              className="pl-10 pr-10 h-11 border-white/10 bg-[#12061F] text-white focus:border-[#7B2FF7] placeholder:text-white/30"
               required
             />
             <button
               type="button"
               onClick={() => setShowPassword(!showPassword)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-500 hover:text-purp-700"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white transition-colors"
             >
               {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
             </button>
@@ -151,7 +151,7 @@ export default function LoginPage() {
         </div>
 
         {error && (
-          <div className="bg-red-50 text-red-600 text-sm p-3 rounded-md border border-red-200 font-medium text-center animate-in fade-in">
+          <div className="bg-red-500/10 text-red-400 text-sm p-3 rounded-md border border-red-500/30 font-medium text-center animate-in fade-in">
             {error}
           </div>
         )}
@@ -159,7 +159,7 @@ export default function LoginPage() {
         <Button
           type="submit"
           disabled={isPending}
-          className="w-full h-11 bg-purp-900 hover:bg-purp-700 text-white font-semibold"
+          className="w-full h-11 bg-[#7B2FF7] hover:bg-[#B58CFF] hover:text-[#12061F] transition-all text-white font-semibold border-0"
         >
           {isPending ? (
             <span className="flex items-center gap-2">
@@ -178,9 +178,9 @@ export default function LoginPage() {
         </Button>
       </form>
 
-      <p className="mt-6 text-center text-sm text-neutral-500">
+      <p className="mt-6 text-center text-sm text-white/50">
         Don&apos;t have an account?{" "}
-        <Link href="/onboarding" className="text-purp-700 hover:underline font-semibold">
+        <Link href="/onboarding" className="text-[#B58CFF] hover:text-white transition-colors font-semibold">
           Choose a plan to get started
         </Link>
       </p>

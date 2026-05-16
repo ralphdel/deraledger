@@ -109,8 +109,8 @@ export default function ResetPasswordPage() {
   if (checking) {
     return (
       <div className="w-full flex flex-col items-center justify-center gap-4 py-16">
-        <Loader2 className="w-8 h-8 animate-spin text-purp-700" />
-        <p className="text-neutral-500 text-sm">Verifying your reset link…</p>
+        <Loader2 className="w-8 h-8 animate-spin text-[#B58CFF]" />
+        <p className="text-white/60 text-sm">Verifying your reset link…</p>
       </div>
     );
   }
@@ -119,18 +119,18 @@ export default function ResetPasswordPage() {
   return (
     <div className="w-full">
       <div className="text-center mb-8">
-        <h1 className="text-3xl font-bold text-purp-900 tracking-tight">
+        <h1 className="text-3xl font-bold text-white tracking-tight">
           Create New Password
         </h1>
-        <p className="text-neutral-500 mt-2">
+        <p className="text-white/60 mt-2">
           Your new password must be at least 8 characters.
         </p>
       </div>
 
       <form onSubmit={handleResetPassword} className="space-y-5">
         {error && (
-          <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm font-medium border border-red-100 flex items-center gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-red-600 shrink-0" />
+          <div className="bg-red-500/10 text-red-400 p-3 rounded-lg text-sm font-medium border border-red-500/30 flex items-center gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0" />
             {error}
           </div>
         )}
@@ -138,7 +138,7 @@ export default function ResetPasswordPage() {
         {sessionReady && (
           <>
             <div className="space-y-2">
-              <Label htmlFor="password">New Password</Label>
+              <Label htmlFor="password" className="text-white/80">New Password</Label>
               <Input
                 id="password"
                 type="password"
@@ -146,13 +146,13 @@ export default function ResetPasswordPage() {
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="At least 8 characters"
                 required
-                className="focus:border-purp-700 h-12"
+                className="h-12 border-white/10 bg-[#12061F] text-white focus:border-[#7B2FF7] placeholder:text-white/30"
                 disabled={loading}
               />
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="confirmPassword">Confirm New Password</Label>
+              <Label htmlFor="confirmPassword" className="text-white/80">Confirm New Password</Label>
               <Input
                 id="confirmPassword"
                 type="password"
@@ -160,7 +160,7 @@ export default function ResetPasswordPage() {
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 placeholder="Repeat password"
                 required
-                className="focus:border-purp-700 h-12"
+                className="h-12 border-white/10 bg-[#12061F] text-white focus:border-[#7B2FF7] placeholder:text-white/30"
                 disabled={loading}
               />
             </div>
@@ -168,7 +168,7 @@ export default function ResetPasswordPage() {
             <Button
               type="submit"
               disabled={loading}
-              className="w-full bg-purp-900 hover:bg-purp-800 text-white h-12 text-base font-medium transition-all"
+              className="w-full bg-[#7B2FF7] hover:bg-[#B58CFF] hover:text-[#12061F] text-white h-12 text-base font-semibold transition-all border-0"
             >
               {loading ? (
                 <Loader2 className="w-5 h-5 animate-spin" />

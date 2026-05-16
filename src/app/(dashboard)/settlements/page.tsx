@@ -17,6 +17,7 @@ import { getMerchant } from "@/lib/data";
 import { formatNaira } from "@/lib/calculations";
 import { downloadCSV } from "@/lib/csv";
 import type { Merchant } from "@/lib/types";
+import { PermissionGuard } from "@/components/PermissionGuard";
 
 interface SettlementTx {
   id: string;
@@ -31,7 +32,7 @@ interface SettlementTx {
 }
 
 export default function MerchantSettlementsPage() {
-  const [merchant, setMerchant] = useState<Merchant | null>(null);
+  const [merchant, setMerchant] = useState<(Merchant & { permissions?: Record<string, boolean>; currentUserRole?: string }) | null>(null);
   const [transactions, setTransactions] = useState<SettlementTx[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -128,6 +129,7 @@ export default function MerchantSettlementsPage() {
   const isToday = fromDate === todayStr && toDate === todayStr;
 
   return (
+    <PermissionGuard permission="view_settlements" merchant={merchant} featureLabel="Settlements">
     <div className="space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
@@ -277,5 +279,6 @@ export default function MerchantSettlementsPage() {
         </CardContent>
       </Card>
     </div>
+    </PermissionGuard>
   );
 }

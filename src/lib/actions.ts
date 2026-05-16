@@ -13,6 +13,7 @@ import {
   canAddActiveCollectionInvoice,
   canInviteTeamMember,
   canCreateCustomRole,
+  canAccessFeature,
 } from "@/lib/services/access-control";
 
 // Service role client for admin-level operations
@@ -507,15 +508,37 @@ export async function sendInviteAction(
     userId = newUser.user.id;
   }
 
-  // Get the role — the UI passes the role UUID (r.id), so look up by id first.
-  // Fall back to name lookup for backward compatibility.
+  // Get the role — the UI passes the role name (e.g. "admin"), look it up preferring
+  // merchant-specific roles, then fall back to system roles.
+  // Use .limit(1) instead of .single() to avoid errors when multiple rows match.
   const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(role);
-  const { data: roleData } = await adminClient
-    .from("roles")
-    .select("id")
-    .eq(isUUID ? "id" : "name", role)
-    .single();
-  if (!roleData) return { success: false, error: "Invalid role specified" };
+  const roleQuery = adminClient.from("roles").select("id");
+  let roleData: { id: string } | null = null;
+  
+  if (isUUID) {
+    const { data } = await roleQuery.eq("id", role).maybeSingle();
+    roleData = data;
+  } else {
+    // Prefer merchant-specific role over system role of the same name
+    const { data: merchantRole } = await adminClient
+      .from("roles").select("id")
+      .eq("name", role)
+      .eq("merchant_id", merchantId)
+      .maybeSingle();
+    if (merchantRole) {
+      roleData = merchantRole;
+    } else {
+      // Fall back to system role
+      const { data: systemRole } = await adminClient
+        .from("roles").select("id")
+        .eq("name", role)
+        .eq("is_system_role", true)
+        .maybeSingle();
+      roleData = systemRole;
+    }
+  }
+  
+  if (!roleData) return { success: false, error: `Role "${role}" not found. Please refresh and try again.` };
   const roleId = roleData.id;
 
   // 3. Upsert into merchant_team with must_change_password = true and is_active = false
@@ -1517,6 +1540,25 @@ export async function createReferenceAction(data: {
   project_total_value?: number;
 }) {
   const adminClient = getServiceClient();
+
+  // ── Plan gate: References require Individual plan or above ─────────────────
+  const { data: merchantRow } = await adminClient
+    .from("merchants")
+    .select("subscription_plan, merchant_tier")
+    .eq("id", data.merchant_id)
+    .single();
+
+  if (merchantRow) {
+    const access = canAccessFeature(merchantRow as any, "view_references");
+    if (!access.allowed) {
+      return {
+        success: false,
+        error: "References are not available on the Starter plan. Upgrade to Individual or Business to group invoices under project references.",
+        upgradeRequired: "individual" as const,
+      };
+    }
+  }
+
   const { data: ref, error } = await adminClient
     .from("references")
     .insert({

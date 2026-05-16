@@ -75,16 +75,16 @@ export default function DashboardPage() {
     return (
       <div className="space-y-6">
         <div>
-          <h1 className="text-2xl font-bold text-purp-900">Dashboard</h1>
-          <p className="text-neutral-500 text-sm mt-1">Loading your financial overview...</p>
+          <h1 className="text-2xl font-bold text-purp-900 dark:text-white">Dashboard</h1>
+          <p className="text-neutral-500 dark:text-white/60 text-sm mt-1">Loading your financial overview...</p>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {[1, 2, 3, 4].map((i) => (
-            <Card key={i} className="border-2 border-purp-200 shadow-none animate-pulse">
+            <Card key={i} className="border-2 border-purp-200 dark:border-white/10 dark:bg-white/5 shadow-none animate-pulse">
               <CardContent className="p-5">
-                <div className="h-10 w-10 bg-purp-100 rounded-lg mb-3" />
-                <div className="h-8 bg-purp-100 rounded w-2/3 mb-2" />
-                <div className="h-4 bg-purp-50 rounded w-1/2" />
+                <div className="h-10 w-10 bg-purp-100 dark:bg-white/10 rounded-lg mb-3" />
+                <div className="h-8 bg-purp-100 dark:bg-white/10 rounded w-2/3 mb-2" />
+                <div className="h-4 bg-purp-50 dark:bg-white/5 rounded w-1/2" />
               </CardContent>
             </Card>
           ))}
@@ -154,10 +154,10 @@ export default function DashboardPage() {
 
       {/* Page Header */}
       <div>
-        <h1 className="text-2xl font-bold text-purp-900">
+        <h1 className="text-2xl font-bold text-purp-900 dark:text-white">
           {userName ? `Welcome, ${userName}` : "Dashboard"}
         </h1>
-        <p className="text-neutral-500 text-sm mt-1">
+        <p className="text-neutral-500 dark:text-white/60 text-sm mt-1">
           Here&apos;s your financial overview.
         </p>
       </div>
@@ -193,28 +193,28 @@ export default function DashboardPage() {
       {merchant && merchant.verification_status !== "verified" && merchant.subscription_plan !== "starter" && (
         <Card className={`border-2 shadow-none ${
           merchant.verification_status === "pending"
-            ? "border-amber-300 bg-amber-50/50"
-            : "border-purp-300 bg-gradient-to-r from-purp-50 to-purp-100/50"
+            ? "border-amber-300 bg-amber-50/50 dark:border-amber-500/20 dark:bg-amber-500/10"
+            : "border-purp-300 bg-gradient-to-r from-purp-50 to-purp-100/50 dark:border-[#7B2FF7]/30 dark:from-[#7B2FF7]/10 dark:to-[#3D0B66]/20"
         }`}>
           <CardContent className="p-4 sm:p-5">
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
               <div className="flex items-start gap-3">
                 {merchant.verification_status === "pending" ? (
-                  <div className="w-10 h-10 bg-amber-100 border-2 border-amber-200 rounded-lg flex items-center justify-center flex-shrink-0">
-                    <Clock className="h-5 w-5 text-amber-600" />
+                  <div className="w-10 h-10 bg-amber-100 border-2 border-amber-200 dark:bg-amber-500/20 dark:border-amber-500/30 rounded-lg flex items-center justify-center flex-shrink-0">
+                    <Clock className="h-5 w-5 text-amber-600 dark:text-amber-400" />
                   </div>
                 ) : (
-                  <div className="w-10 h-10 bg-purp-100 border-2 border-purp-200 rounded-lg flex items-center justify-center flex-shrink-0">
-                    <AlertTriangle className="h-5 w-5 text-purp-700" />
+                  <div className="w-10 h-10 bg-purp-100 border-2 border-purp-200 dark:bg-[#7B2FF7]/20 dark:border-[#7B2FF7]/30 rounded-lg flex items-center justify-center flex-shrink-0">
+                    <AlertTriangle className="h-5 w-5 text-purp-700 dark:text-[#B58CFF]" />
                   </div>
                 )}
                 <div>
-                  <p className="font-semibold text-sm text-purp-900">
+                  <p className="font-semibold text-sm text-purp-900 dark:text-white">
                     {merchant.verification_status === "pending"
                       ? "Verification Under Review"
                       : "Complete Your Account Verification"}
                   </p>
-                  <p className="text-xs text-neutral-600 mt-0.5">
+                  <p className="text-xs text-neutral-600 dark:text-white/60 mt-0.5">
                     {merchant.verification_status === "pending"
                       ? "Your documents are being reviewed by a platform admin. You'll be notified when approved."
                       : "Verify your business to unlock higher collection limits and full platform features."}
@@ -223,7 +223,7 @@ export default function DashboardPage() {
               </div>
               {merchant.verification_status !== "pending" && (
                 <Link href="/settings">
-                  <Button size="sm" className="bg-purp-900 hover:bg-purp-700 text-white font-semibold whitespace-nowrap">
+                  <Button size="sm" className="bg-purp-900 hover:bg-purp-700 dark:bg-[#7B2FF7] dark:hover:bg-[#B58CFF] dark:hover:text-[#12061F] text-white font-semibold whitespace-nowrap">
                     Verify Now
                     <ArrowUpRight className="ml-1 h-3.5 w-3.5" />
                   </Button>
@@ -237,20 +237,20 @@ export default function DashboardPage() {
       {/* KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {kpis.map((kpi) => (
-          <Card key={kpi.title} className="border-2 border-purp-200 shadow-none">
+          <Card key={kpi.title} className="border-2 border-purp-200 dark:border-white/10 dark:bg-white/5 shadow-none">
             <CardContent className="p-5">
               <div className="flex items-center justify-between mb-3">
-                <div className="w-10 h-10 bg-purp-100 border-2 border-purp-200 rounded-lg flex items-center justify-center">
-                  <kpi.icon className="h-5 w-5 text-purp-700" />
+                <div className="w-10 h-10 bg-purp-100 border-2 border-purp-200 dark:bg-[#7B2FF7]/20 dark:border-[#7B2FF7]/30 rounded-lg flex items-center justify-center">
+                  <kpi.icon className="h-5 w-5 text-purp-700 dark:text-[#B58CFF]" />
                 </div>
                 <span
                   title={`${kpi.trend === "up" ? "Increased" : "Decreased"} by ${kpi.change} from previous period`}
                   className={`flex items-center justify-center w-6 h-6 rounded-full border cursor-help ${
                     kpi.title === "Overdue Invoices"
-                      ? "text-red-600 bg-red-50 border-red-200"
+                      ? "text-red-600 bg-red-50 border-red-200 dark:bg-red-500/20 dark:border-red-500/30 dark:text-red-400"
                       : kpi.trend === "up"
-                      ? "text-emerald-600 bg-emerald-50 border-emerald-200"
-                      : "text-amber-600 bg-amber-50 border-amber-200"
+                      ? "text-emerald-600 bg-emerald-50 border-emerald-200 dark:bg-emerald-500/20 dark:border-emerald-500/30 dark:text-emerald-400"
+                      : "text-amber-600 bg-amber-50 border-amber-200 dark:bg-amber-500/20 dark:border-amber-500/30 dark:text-amber-400"
                   }`}
                 >
                   {kpi.trend === "up" ? (
@@ -260,9 +260,9 @@ export default function DashboardPage() {
                   )}
                 </span>
               </div>
-              <h3 className="text-sm font-semibold text-neutral-600 mb-1">{kpi.title}</h3>
-              <p className="text-2xl font-bold text-purp-900">{kpi.value}</p>
-              <p className="text-xs text-neutral-500 mt-1">{kpi.description}</p>
+              <h3 className="text-sm font-semibold text-neutral-600 dark:text-white/60 mb-1">{kpi.title}</h3>
+              <p className="text-2xl font-bold text-purp-900 dark:text-white">{kpi.value}</p>
+              <p className="text-xs text-neutral-500 dark:text-white/50 mt-1">{kpi.description}</p>
             </CardContent>
           </Card>
         ))}
@@ -311,7 +311,7 @@ export default function DashboardPage() {
                   <XAxis dataKey="bucket" tick={{ fontSize: 11, fill: "#6B7280" }} axisLine={{ stroke: "#C4B5FD" }} />
                   <YAxis tick={{ fontSize: 11, fill: "#6B7280" }} axisLine={{ stroke: "#C4B5FD" }} tickFormatter={(v) => `₦${(v / 1000000).toFixed(1)}M`} />
                   <Tooltip formatter={(value) => formatNaira(Number(value))} contentStyle={{ border: "2px solid #C4B5FD", borderRadius: "8px", fontSize: "12px" }} />
-                  <Bar dataKey="amount" fill="#2D1B6B" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="amount" fill="#2D1B6B" className="dark:fill-[#7B2FF7]" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -322,22 +322,22 @@ export default function DashboardPage() {
       {/* Bottom Row */}
       <div className="grid lg:grid-cols-3 gap-6">
         {/* Payment Method Breakdown */}
-        <Card className="border-2 border-purp-200 shadow-none">
+        <Card className="border-2 border-purp-200 dark:border-white/10 dark:bg-white/5 shadow-none">
           <CardHeader className="pb-2">
-            <CardTitle className="text-base font-bold text-purp-900">Payment Methods</CardTitle>
-            <p className="text-xs text-neutral-500">Distribution of collections</p>
+            <CardTitle className="text-base font-bold text-purp-900 dark:text-white">Payment Methods</CardTitle>
+            <p className="text-xs text-neutral-500 dark:text-white/60">Distribution of collections</p>
           </CardHeader>
           <CardContent>
             <div className="h-52">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                  <Pie data={stats.paymentMethodData} cx="50%" cy="50%" innerRadius={50} outerRadius={75} dataKey="value" nameKey="method" strokeWidth={2} stroke="#fff">
+                  <Pie data={stats.paymentMethodData} cx="50%" cy="50%" innerRadius={50} outerRadius={75} dataKey="value" nameKey="method" strokeWidth={2} stroke="#fff" className="dark:stroke-[#12061F]">
                     {stats.paymentMethodData.map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={entry.fill} />
                     ))}
                   </Pie>
-                  <Legend wrapperStyle={{ fontSize: "12px" }} formatter={(value) => <span className="text-neutral-900">{value}</span>} />
-                  <Tooltip formatter={(value) => `${value}%`} contentStyle={{ border: "2px solid #C4B5FD", borderRadius: "8px", fontSize: "12px" }} />
+                  <Legend wrapperStyle={{ fontSize: "12px" }} formatter={(value) => <span className="text-neutral-900 dark:text-white/80">{value}</span>} />
+                  <Tooltip formatter={(value) => `${value}%`} contentStyle={{ border: "2px solid #C4B5FD", borderRadius: "8px", fontSize: "12px", backgroundColor: "rgba(18, 6, 31, 0.9)" }} itemStyle={{ color: "#fff" }} />
                 </PieChart>
               </ResponsiveContainer>
             </div>
@@ -345,26 +345,26 @@ export default function DashboardPage() {
         </Card>
 
         {/* Recent Activity */}
-        <Card className="lg:col-span-2 border-2 border-purp-200 shadow-none">
+        <Card className="lg:col-span-2 border-2 border-purp-200 dark:border-white/10 dark:bg-white/5 shadow-none">
           <CardHeader className="pb-2">
-            <CardTitle className="text-base font-bold text-purp-900">Recent Activity</CardTitle>
-            <p className="text-xs text-neutral-500">Latest payment events</p>
+            <CardTitle className="text-base font-bold text-purp-900 dark:text-white">Recent Activity</CardTitle>
+            <p className="text-xs text-neutral-500 dark:text-white/60">Latest payment events</p>
           </CardHeader>
           <CardContent>
             <div className="space-y-3">
               {stats.recentActivity.length === 0 ? (
-                <p className="text-center text-neutral-500 py-8 text-sm">No recent activity yet.</p>
+                <p className="text-center text-neutral-500 dark:text-white/50 py-8 text-sm">No recent activity yet.</p>
               ) : (
                 stats.recentActivity.map((activity) => {
                   const IconComponent = activityIcons[activity.icon] || FileText;
                   return (
-                    <div key={activity.id} className="flex items-start gap-3 p-3 bg-purp-50 border border-purp-200 rounded-lg">
-                      <div className="w-8 h-8 bg-purp-100 border border-purp-200 rounded-md flex items-center justify-center flex-shrink-0 mt-0.5">
-                        <IconComponent className="h-4 w-4 text-purp-700" />
+                    <div key={activity.id} className="flex items-start gap-3 p-3 bg-purp-50 dark:bg-white/5 border border-purp-200 dark:border-white/10 rounded-lg">
+                      <div className="w-8 h-8 bg-purp-100 dark:bg-[#7B2FF7]/20 border border-purp-200 dark:border-[#7B2FF7]/30 rounded-md flex items-center justify-center flex-shrink-0 mt-0.5">
+                        <IconComponent className="h-4 w-4 text-purp-700 dark:text-[#B58CFF]" />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm text-neutral-900">{activity.description}</p>
-                        <p className="text-xs text-neutral-500 mt-0.5">{activity.time}</p>
+                        <p className="text-sm text-neutral-900 dark:text-white">{activity.description}</p>
+                        <p className="text-xs text-neutral-500 dark:text-white/50 mt-0.5">{activity.time}</p>
                       </div>
                     </div>
                   );

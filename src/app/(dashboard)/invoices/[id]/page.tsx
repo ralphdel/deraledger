@@ -123,8 +123,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     return (
       <div className="flex items-center justify-center min-h-[50vh]">
         <div className="text-center">
-          <div className="w-8 h-8 border-2 border-purp-700 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-neutral-500">Loading invoice...</p>
+          <div className="w-8 h-8 border-2 border-purp-700 dark:border-[#7B2FF7] border-t-transparent dark:border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-neutral-500 dark:text-white/60">Loading invoice...</p>
         </div>
       </div>
     );
@@ -134,10 +134,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     return (
       <div className="flex items-center justify-center min-h-[50vh]">
         <div className="text-center">
-          <h2 className="text-xl font-bold text-purp-900">Invoice Not Found</h2>
-          <p className="text-neutral-500 mt-2">The requested invoice doesn&apos;t exist.</p>
+          <h2 className="text-xl font-bold text-purp-900 dark:text-white">Invoice Not Found</h2>
+          <p className="text-neutral-500 dark:text-white/60 mt-2">The requested invoice doesn&apos;t exist.</p>
           <Link href="/invoices">
-            <Button className="mt-4 bg-purp-900 hover:bg-purp-700 text-white">Back to Invoices</Button>
+            <Button className="mt-4 bg-purp-900 hover:bg-purp-700 dark:bg-[#7B2FF7] dark:hover:bg-[#B58CFF] dark:hover:text-[#12061F] text-white">Back to Invoices</Button>
           </Link>
         </div>
       </div>
@@ -286,24 +286,24 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center gap-4">
           <Link href="/invoices">
-            <Button variant="outline" size="icon" className="border-2 border-purp-200">
+            <Button variant="outline" size="icon" className="border-2 border-purp-200 dark:border-white/10 dark:text-white dark:bg-white/5 dark:hover:bg-white/10">
               <ArrowLeft className="h-4 w-4" />
             </Button>
           </Link>
           <div>
             <div className="flex items-center gap-3">
-              <h1 className="text-2xl font-bold text-purp-900">{invoice.invoice_number}</h1>
-              <Badge variant="outline" className={`${getStatusColor(invoice.status)} border-2 font-semibold text-xs`}>
+              <h1 className="text-2xl font-bold text-purp-900 dark:text-white">{invoice.invoice_number}</h1>
+              <Badge variant="outline" className={`${getStatusColor(invoice.status)} border-2 dark:border font-semibold text-xs`}>
                 <StatusIcon className="mr-1 h-3 w-3" />
                 {getStatusLabel(invoice.status)}
               </Badge>
               {isRecordInvoice && (
-                <Badge variant="outline" className="border-2 border-neutral-300 bg-neutral-100 text-neutral-700 text-xs font-semibold">
+                <Badge variant="outline" className="border-2 border-neutral-300 dark:border-white/20 bg-neutral-100 dark:bg-white/10 text-neutral-700 dark:text-white/80 text-xs font-semibold">
                   Record
                 </Badge>
               )}
             </div>
-            <p className="text-neutral-500 text-sm mt-0.5">{clientName} · {clientEmail}</p>
+            <p className="text-neutral-500 dark:text-white/60 text-sm mt-0.5">{clientName} · {clientEmail}</p>
           </div>
         </div>
 
@@ -311,7 +311,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           {/* Edit Button */}
           {canEdit && (
             <Link href={`/invoices/${invoice.id}/edit`} className="print:hidden">
-              <Button variant="outline" className="border-2 border-purp-200 text-purp-700 hover:bg-purp-100">
+              <Button variant="outline" className="border-2 border-purp-200 dark:border-white/10 text-purp-700 dark:text-white hover:bg-purp-100 dark:hover:bg-white/10 dark:bg-white/5">
                 <Pencil className="mr-2 h-4 w-4" /> Edit Invoice
               </Button>
             </Link>
@@ -321,7 +321,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           {isRecordInvoice && (
             <Button
               variant="outline"
-              className="border-2 border-purp-200 text-purp-700 hover:bg-purp-100 print:hidden"
+              className="border-2 border-purp-200 dark:border-white/10 text-purp-700 dark:text-white hover:bg-purp-100 dark:hover:bg-white/10 dark:bg-white/5 print:hidden"
               onClick={() => window.open(`/invoices/${invoice.id}/print`, "_blank")}
             >
               <Printer className="mr-2 h-4 w-4" /> Download PDF
@@ -332,21 +332,21 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           {canReopen && (
             <Dialog open={reopenDialogOpen} onOpenChange={setReopenDialogOpen}>
               <DialogTrigger
-                render={<Button variant="outline" className="border-2 border-blue-200 text-blue-700 hover:bg-blue-50 print:hidden" />}
+                render={<Button variant="outline" className="border-2 border-blue-200 dark:border-blue-500/30 text-blue-700 dark:text-blue-400 dark:bg-blue-500/10 hover:bg-blue-50 dark:hover:bg-blue-500/20 print:hidden" />}
               >
                 <RotateCcw className="mr-2 h-4 w-4" /> Reopen Invoice
               </DialogTrigger>
-              <DialogContent className="border-2 border-purp-200">
+              <DialogContent className="border-2 border-purp-200 dark:border-white/10 dark:bg-[#1A0B2E]">
                 <DialogHeader>
-                  <DialogTitle className="text-purp-900">Reopen Invoice</DialogTitle>
-                  <DialogDescription>
+                  <DialogTitle className="text-purp-900 dark:text-white">Reopen Invoice</DialogTitle>
+                  <DialogDescription className="dark:text-white/60">
                     This will reactivate the invoice and make the payment link active again.
                     {Number(invoice.amount_paid) > 0
                       ? ` The status will be set to "Partially Paid" since ${formatNaira(Number(invoice.amount_paid))} has already been collected.`
                       : ` The status will be set to "Open".`}
                   </DialogDescription>
                 </DialogHeader>
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-800">
+                <div className="bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 rounded-lg p-3 text-sm text-blue-800 dark:text-blue-400">
                   <p className="font-medium">What happens when you reopen:</p>
                   <ul className="list-disc list-inside mt-1 space-y-1 text-xs">
                     <li>Payment link becomes active again</li>
@@ -359,14 +359,14 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                   <Button
                     variant="outline"
                     onClick={() => setReopenDialogOpen(false)}
-                    className="border-2 border-purp-200"
+                    className="border-2 border-purp-200 dark:border-white/10 dark:text-white dark:hover:bg-white/5"
                   >
                     Cancel
                   </Button>
                   <Button
                     onClick={handleReopen}
                     disabled={isPending}
-                    className="bg-blue-600 hover:bg-blue-700 text-white"
+                    className="bg-blue-600 dark:bg-blue-500 hover:bg-blue-700 dark:hover:bg-blue-600 text-white"
                   >
                     {isPending ? "Reopening..." : "Confirm Reopen"}
                   </Button>
@@ -379,24 +379,24 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           {(invoice.status === "open" || invoice.status === "partially_paid") && (
             <Dialog open={closeDialogOpen} onOpenChange={setCloseDialogOpen}>
               <DialogTrigger
-                render={<Button variant="outline" className="border-2 border-red-200 text-red-600 hover:bg-red-50 print:hidden" />}
+                render={<Button variant="outline" className="border-2 border-red-200 dark:border-red-500/30 text-red-600 dark:text-red-400 dark:bg-red-500/10 hover:bg-red-50 dark:hover:bg-red-500/20 print:hidden" />}
               >
                 Close Manually
               </DialogTrigger>
-              <DialogContent className="border-2 border-purp-200">
+              <DialogContent className="border-2 border-purp-200 dark:border-white/10 dark:bg-[#1A0B2E]">
                 <DialogHeader>
-                  <DialogTitle className="text-purp-900">Close Invoice Manually</DialogTitle>
-                  <DialogDescription>
+                  <DialogTitle className="text-purp-900 dark:text-white">Close Invoice Manually</DialogTitle>
+                  <DialogDescription className="dark:text-white/60">
                     Outstanding balance of{" "}
-                    <strong>{formatNaira(trueOutstanding)}</strong> will
+                    <strong className="dark:text-white">{formatNaira(trueOutstanding)}</strong> will
                     remain unpaid. You can reopen this invoice later if needed.
                   </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-4 py-2">
                   <div className="space-y-2">
-                    <Label className="text-sm font-medium">Reason Code *</Label>
+                    <Label className="text-sm font-medium dark:text-white/80">Reason Code *</Label>
                     <Select value={closeReason} onValueChange={(v) => setCloseReason(v ?? "")}>
-                      <SelectTrigger className="border-2 border-purp-200">
+                      <SelectTrigger className="border-2 border-purp-200 dark:border-white/10 dark:bg-white/5 dark:text-white">
                         <SelectValue placeholder="Select a reason" />
                       </SelectTrigger>
                       <SelectContent className="border-2 border-purp-200">
@@ -444,66 +444,66 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         {/* Main Info */}
         <div className="lg:col-span-2">
           <Tabs defaultValue="details" className="w-full">
-            <TabsList variant="line" className="w-full justify-start border-b-2 border-purp-200 mb-6 gap-6">
-              <TabsTrigger value="details" className="text-sm py-2">
+            <TabsList variant="line" className="w-full justify-start border-b-2 border-purp-200 dark:border-white/10 mb-6 gap-6">
+              <TabsTrigger value="details" className="text-sm py-2 dark:text-white/60 dark:data-[state=active]:text-white dark:data-[state=active]:border-white">
                 Invoice Details
               </TabsTrigger>
-              <TabsTrigger value="history" className="text-sm py-2">
+              <TabsTrigger value="history" className="text-sm py-2 dark:text-white/60 dark:data-[state=active]:text-white dark:data-[state=active]:border-white">
                 Payment History
               </TabsTrigger>
-              <TabsTrigger value="activity" className="text-sm py-2">
+              <TabsTrigger value="activity" className="text-sm py-2 dark:text-white/60 dark:data-[state=active]:text-white dark:data-[state=active]:border-white">
                 Activity Log
               </TabsTrigger>
             </TabsList>
 
             <TabsContent value="details" className="space-y-6 mt-0">
               {/* Payment Progress */}
-          <Card className="border-2 border-purp-200 shadow-none">
+          <Card className="border-2 border-purp-200 dark:border-white/10 shadow-none dark:bg-white/5">
             <CardContent className="p-5">
               <div className="flex items-center justify-between mb-3">
-                <span className="text-sm font-medium text-neutral-500">Payment Progress</span>
-                <span className="text-sm font-bold text-purp-900">{paymentProgress}%</span>
+                <span className="text-sm font-medium text-neutral-500 dark:text-white/60">Payment Progress</span>
+                <span className="text-sm font-bold text-purp-900 dark:text-white">{paymentProgress}%</span>
               </div>
-              <div className="w-full h-3 bg-purp-100 rounded-full border border-purp-200 overflow-hidden">
-                <div className="h-full bg-purp-700 rounded-full transition-all duration-500" style={{ width: `${paymentProgress}%` }} />
+              <div className="w-full h-3 bg-purp-100 dark:bg-white/5 rounded-full border border-purp-200 dark:border-white/10 overflow-hidden">
+                <div className="h-full bg-purp-700 dark:bg-[#7B2FF7] rounded-full transition-all duration-500" style={{ width: `${paymentProgress}%` }} />
               </div>
               <div className="flex items-center justify-between mt-3 text-sm">
                 <div>
-                  <span className="text-neutral-500">Paid: </span>
-                  <span className="font-semibold text-emerald-600">{formatNaira(Number(invoice.amount_paid) + depositAllocated)}</span>
+                  <span className="text-neutral-500 dark:text-white/60">Paid: </span>
+                  <span className="font-semibold text-emerald-600 dark:text-emerald-400">{formatNaira(Number(invoice.amount_paid) + depositAllocated)}</span>
                 </div>
                 <div>
-                  <span className="text-neutral-500">Outstanding: </span>
-                  <span className="font-semibold text-amber-600">{formatNaira(trueOutstanding)}</span>
+                  <span className="text-neutral-500 dark:text-white/60">Outstanding: </span>
+                  <span className="font-semibold text-amber-600 dark:text-amber-400">{formatNaira(trueOutstanding)}</span>
                 </div>
               </div>
             </CardContent>
           </Card>
 
           {/* Line Items */}
-          <Card className="border-2 border-purp-200 shadow-none">
+          <Card className="border-2 border-purp-200 dark:border-white/10 shadow-none dark:bg-[#1A0B2E]">
             <CardHeader className="pb-2">
-              <CardTitle className="text-base font-bold text-purp-900">Line Items</CardTitle>
+              <CardTitle className="text-base font-bold text-purp-900 dark:text-white">Line Items</CardTitle>
             </CardHeader>
             <CardContent>
               <Table>
                 <TableHeader>
-                  <TableRow className="bg-purp-50 border-b-2 border-purp-200 hover:bg-purp-50">
-                    <TableHead className="font-bold text-purp-900 text-xs uppercase">#</TableHead>
-                    <TableHead className="font-bold text-purp-900 text-xs uppercase">Description</TableHead>
-                    <TableHead className="font-bold text-purp-900 text-xs uppercase text-right">Qty</TableHead>
-                    <TableHead className="font-bold text-purp-900 text-xs uppercase text-right">Unit Rate</TableHead>
-                    <TableHead className="font-bold text-purp-900 text-xs uppercase text-right">Total</TableHead>
+                  <TableRow className="bg-purp-50 dark:bg-white/5 border-b-2 border-purp-200 dark:border-white/10 hover:bg-purp-50 dark:hover:bg-white/5">
+                    <TableHead className="font-bold text-purp-900 dark:text-white/60 text-xs uppercase">#</TableHead>
+                    <TableHead className="font-bold text-purp-900 dark:text-white/60 text-xs uppercase">Description</TableHead>
+                    <TableHead className="font-bold text-purp-900 dark:text-white/60 text-xs uppercase text-right">Qty</TableHead>
+                    <TableHead className="font-bold text-purp-900 dark:text-white/60 text-xs uppercase text-right">Unit Rate</TableHead>
+                    <TableHead className="font-bold text-purp-900 dark:text-white/60 text-xs uppercase text-right">Total</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {(invoice.line_items || []).map((item, idx) => (
-                    <TableRow key={item.id} className="border-b border-purp-200">
-                      <TableCell className="text-sm text-neutral-500">{idx + 1}</TableCell>
-                      <TableCell className="font-medium text-sm">{item.item_name}</TableCell>
-                      <TableCell className="text-right text-sm">{item.quantity}</TableCell>
-                      <TableCell className="text-right text-sm">{formatNaira(Number(item.unit_rate))}</TableCell>
-                      <TableCell className="text-right font-semibold text-sm">{formatNaira(Number(item.line_total))}</TableCell>
+                    <TableRow key={item.id} className="border-b border-purp-200 dark:border-white/10">
+                      <TableCell className="text-sm text-neutral-500 dark:text-white/50">{idx + 1}</TableCell>
+                      <TableCell className="font-medium text-sm dark:text-white">{item.item_name}</TableCell>
+                      <TableCell className="text-right text-sm dark:text-white">{item.quantity}</TableCell>
+                      <TableCell className="text-right text-sm dark:text-white">{formatNaira(Number(item.unit_rate))}</TableCell>
+                      <TableCell className="text-right font-semibold text-sm dark:text-white">{formatNaira(Number(item.line_total))}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -511,31 +511,31 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
               <div className="mt-4 space-y-2 max-w-xs ml-auto">
                 <div className="flex justify-between text-sm">
-                  <span className="text-neutral-500">Subtotal</span>
-                  <span className="font-medium">{formatNaira(Number(invoice.subtotal))}</span>
+                  <span className="text-neutral-500 dark:text-white/60">Subtotal</span>
+                  <span className="font-medium dark:text-white">{formatNaira(Number(invoice.subtotal))}</span>
                 </div>
                 {Number(invoice.discount_pct) > 0 && (
                   <div className="flex justify-between text-sm">
-                    <span className="text-neutral-500">Discount ({invoice.discount_pct}%)</span>
-                    <span className="text-red-500">-{formatNaira(Number(invoice.discount_value))}</span>
+                    <span className="text-neutral-500 dark:text-white/60">Discount ({invoice.discount_pct}%)</span>
+                    <span className="text-red-500 dark:text-red-400">-{formatNaira(Number(invoice.discount_value))}</span>
                   </div>
                 )}
                 <div className="flex justify-between text-sm">
-                  <span className="text-neutral-500">Tax ({invoice.tax_pct}%)</span>
-                  <span>+{formatNaira(Number(invoice.tax_value))}</span>
+                  <span className="text-neutral-500 dark:text-white/60">Tax ({invoice.tax_pct}%)</span>
+                  <span className="dark:text-white">+{formatNaira(Number(invoice.tax_value))}</span>
                 </div>
-                <Separator className="bg-purp-200" />
+                <Separator className="bg-purp-200 dark:bg-white/10" />
                 <div className="flex justify-between">
-                  <span className="font-bold text-purp-900">Service Total</span>
-                  <span className="font-bold text-purp-900 text-lg">{formatNaira(Number(invoice.grand_total))}</span>
+                  <span className="font-bold text-purp-900 dark:text-white">Service Total</span>
+                  <span className="font-bold text-purp-900 dark:text-white text-lg">{formatNaira(Number(invoice.grand_total))}</span>
                 </div>
                 {depositAllocated > 0 && (
                   <>
-                    <div className="flex justify-between text-blue-600 font-medium">
+                    <div className="flex justify-between text-blue-600 dark:text-blue-400 font-medium">
                       <span>Previously Paid Deposit</span>
                       <span>-{formatNaira(depositAllocated)}</span>
                     </div>
-                    <div className="flex justify-between font-bold text-purp-900 pt-2 border-t border-purp-100">
+                    <div className="flex justify-between font-bold text-purp-900 dark:text-white pt-2 border-t border-purp-100 dark:border-white/10">
                       <span>Outstanding Amount</span>
                       <span>{formatNaira(trueOutstanding)}</span>
                     </div>
@@ -548,44 +548,44 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
             <TabsContent value="history" className="mt-0">
               {/* Payment History */}
-              <Card className="border-2 border-purp-200 shadow-none">
+              <Card className="border-2 border-purp-200 dark:border-white/10 shadow-none dark:bg-[#1A0B2E]">
             <CardHeader className="pb-2">
-              <CardTitle className="text-base font-bold text-purp-900">Payment History</CardTitle>
+              <CardTitle className="text-base font-bold text-purp-900 dark:text-white">Payment History</CardTitle>
             </CardHeader>
             <CardContent>
               {transactions.length > 0 ? (
                 <Table>
                   <TableHeader>
-                    <TableRow className="bg-purp-50 border-b-2 border-purp-200 hover:bg-purp-50">
-                      <TableHead className="font-bold text-purp-900 text-xs uppercase">Date</TableHead>
-                      <TableHead className="font-bold text-purp-900 text-xs uppercase">Reference</TableHead>
-                      <TableHead className="font-bold text-purp-900 text-xs uppercase">Method</TableHead>
-                      <TableHead className="font-bold text-purp-900 text-xs uppercase text-right">Amount</TableHead>
-                      <TableHead className="font-bold text-purp-900 text-xs uppercase">Status</TableHead>
+                    <TableRow className="bg-purp-50 dark:bg-white/5 border-b-2 border-purp-200 dark:border-white/10 hover:bg-purp-50 dark:hover:bg-white/5">
+                      <TableHead className="font-bold text-purp-900 dark:text-white/60 text-xs uppercase">Date</TableHead>
+                      <TableHead className="font-bold text-purp-900 dark:text-white/60 text-xs uppercase">Reference</TableHead>
+                      <TableHead className="font-bold text-purp-900 dark:text-white/60 text-xs uppercase">Method</TableHead>
+                      <TableHead className="font-bold text-purp-900 dark:text-white/60 text-xs uppercase text-right">Amount</TableHead>
+                      <TableHead className="font-bold text-purp-900 dark:text-white/60 text-xs uppercase">Status</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {transactions.map((txn: any) => (
-                      <TableRow key={txn.id} className="border-b border-purp-200">
-                        <TableCell className="text-sm">
+                      <TableRow key={txn.id} className="border-b border-purp-200 dark:border-white/10 hover:bg-purp-50 dark:hover:bg-white/5">
+                        <TableCell className="text-sm dark:text-white">
                           {new Date(txn.date).toLocaleDateString("en-NG", {
                             day: "numeric", month: "short", year: "numeric",
                           })}
                         </TableCell>
-                        <TableCell className="text-sm font-mono text-purp-700">
+                        <TableCell className="text-sm font-mono text-purp-700 dark:text-[#B58CFF]">
                           <div className="flex items-center gap-2">
                             <span className="truncate max-w-[120px] inline-block" title={txn.reference}>{txn.reference}</span>
                             {txn.status === "success (manual)" && txn.reference !== "-" && (
                               <Dialog>
-                                <DialogTrigger render={<Button variant="ghost" size="icon" className="h-6 w-6 text-purp-500 hover:text-purp-700 hover:bg-purp-100 rounded-full" />}>
+                                <DialogTrigger render={<Button variant="ghost" size="icon" className="h-6 w-6 text-purp-500 dark:text-[#7B2FF7] hover:text-purp-700 dark:hover:text-[#B58CFF] hover:bg-purp-100 dark:hover:bg-white/10 rounded-full" />}>
                                   <MessageCircle className="h-3.5 w-3.5" />
                                 </DialogTrigger>
-                                <DialogContent className="border-2 border-purp-200">
+                                <DialogContent className="border-2 border-purp-200 dark:border-white/10 dark:bg-[#1A0B2E]">
                                   <DialogHeader>
-                                    <DialogTitle className="text-purp-900">Payment Note</DialogTitle>
-                                    <DialogDescription>Note added during manual payment</DialogDescription>
+                                    <DialogTitle className="text-purp-900 dark:text-white">Payment Note</DialogTitle>
+                                    <DialogDescription className="dark:text-white/60">Note added during manual payment</DialogDescription>
                                   </DialogHeader>
-                                  <div className="bg-purp-50 p-4 rounded-md border border-purp-100 text-sm whitespace-pre-wrap text-neutral-700">
+                                  <div className="bg-purp-50 dark:bg-white/5 p-4 rounded-md border border-purp-100 dark:border-white/10 text-sm whitespace-pre-wrap text-neutral-700 dark:text-white/80">
                                     {txn.reference}
                                   </div>
                                 </DialogContent>
@@ -593,10 +593,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                             )}
                           </div>
                         </TableCell>
-                        <TableCell className="text-sm capitalize">{txn.method.replace("_", " ")}</TableCell>
-                        <TableCell className="text-right font-semibold text-sm">{formatNaira(Number(txn.amount))}</TableCell>
+                        <TableCell className="text-sm capitalize dark:text-white">{txn.method.replace("_", " ")}</TableCell>
+                        <TableCell className="text-right font-semibold text-sm dark:text-white">{formatNaira(Number(txn.amount))}</TableCell>
                         <TableCell>
-                          <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 border-2 text-xs font-semibold">
+                          <Badge variant="outline" className="bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-500/20 border-2 text-xs font-semibold">
                             {txn.status}
                           </Badge>
                         </TableCell>
@@ -613,9 +613,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
           <TabsContent value="activity" className="mt-0">
             {/* Invoice Activity History */}
-            <Card className="border-2 border-purp-200 shadow-none">
+            <Card className="border-2 border-purp-200 dark:border-white/10 shadow-none dark:bg-[#1A0B2E]">
             <CardHeader className="pb-2">
-              <CardTitle className="text-base font-bold text-purp-900 flex items-center gap-2">
+              <CardTitle className="text-base font-bold text-purp-900 dark:text-white flex items-center gap-2">
                 <History className="h-4 w-4" /> Invoice History
               </CardTitle>
             </CardHeader>
@@ -623,46 +623,46 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               {history.filter(h => h.event_type !== "payment_received").length > 0 ? (
                 <div className="relative">
                   {/* Timeline line */}
-                  <div className="absolute left-[15px] top-2 bottom-2 w-0.5 bg-purp-200" />
+                  <div className="absolute left-[15px] top-2 bottom-2 w-0.5 bg-purp-200 dark:bg-white/10" />
                   <div className="space-y-4">
                     {history.filter(h => h.event_type !== "payment_received").map((event) => {
                       const meta = event.metadata as Record<string, unknown>;
                       return (
                         <div key={event.id} className="flex items-start gap-3 relative">
-                          <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 border-2 z-10 ${getEventColor(event.event_type)}`}>
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 border-2 z-10 ${getEventColor(event.event_type)} dark:border-transparent dark:bg-white/10 dark:text-white`}>
                             {event.event_type === "manual_close" && <XCircle className="h-3.5 w-3.5" />}
                             {event.event_type === "reopen" && <RotateCcw className="h-3.5 w-3.5" />}
                             {event.event_type === "edit" && <Pencil className="h-3.5 w-3.5" />}
                             {!["manual_close", "reopen", "edit"].includes(event.event_type) && <User className="h-3.5 w-3.5" />}
                           </div>
-                          <div className="flex-1 min-w-0 bg-purp-50/50 border border-purp-100 rounded-lg p-3">
+                          <div className="flex-1 min-w-0 bg-purp-50/50 dark:bg-white/5 border border-purp-100 dark:border-white/10 rounded-lg p-3">
                             <div className="flex items-start justify-between gap-2">
                               <div>
-                                <Badge variant="outline" className={`${getEventColor(event.event_type)} border text-xs font-semibold`}>
+                                <Badge variant="outline" className={`${getEventColor(event.event_type)} dark:border-white/10 dark:text-white/80 border text-xs font-semibold`}>
                                   {getEventLabel(event.event_type)}
                                 </Badge>
                                 {typeof meta?.reason === "string" && meta.reason && (
-                                  <p className="text-sm text-neutral-600 mt-1.5">
-                                    Reason: <span className="font-medium">{meta.reason}</span>
+                                  <p className="text-sm text-neutral-600 dark:text-white/60 mt-1.5">
+                                    Reason: <span className="font-medium dark:text-white">{meta.reason}</span>
                                   </p>
                                 )}
                                 {typeof meta?.status === "string" && meta.status && (
-                                  <p className="text-sm text-neutral-600 mt-1.5">
-                                    Status set to: <span className="font-medium capitalize">{meta.status.replace("_", " ")}</span>
+                                  <p className="text-sm text-neutral-600 dark:text-white/60 mt-1.5">
+                                    Status set to: <span className="font-medium capitalize dark:text-white">{meta.status.replace("_", " ")}</span>
                                   </p>
                                 )}
                                 {typeof meta?.changes === "string" && meta.changes && (
-                                  <p className="text-sm text-neutral-600 mt-1.5">{meta.changes}</p>
+                                  <p className="text-sm text-neutral-600 dark:text-white/60 mt-1.5">{meta.changes}</p>
                                 )}
                               </div>
-                              <span className="text-xs text-neutral-400 whitespace-nowrap">
+                              <span className="text-xs text-neutral-400 dark:text-white/40 whitespace-nowrap">
                                 {new Date(event.created_at).toLocaleDateString("en-NG", {
                                   day: "numeric", month: "short", year: "numeric",
                                   hour: "2-digit", minute: "2-digit",
                                 })}
                               </span>
                             </div>
-                            <p className="text-xs text-neutral-400 mt-1.5 flex justify-between">
+                            <p className="text-xs text-neutral-400 dark:text-white/40 mt-1.5 flex justify-between">
                               <span>By: {meta?.actor_name ? (meta.actor_name as string) : (event.actor_role === "merchant" ? "System" : event.actor_role)}</span>
                             </p>
                           </div>
@@ -672,7 +672,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                   </div>
                 </div>
               ) : (
-                <p className="text-center text-neutral-500 py-8 text-sm">No activity recorded yet.</p>
+                <p className="text-center text-neutral-500 dark:text-white/50 py-8 text-sm">No activity recorded yet.</p>
               )}
               </CardContent>
             </Card>
@@ -683,16 +683,16 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       {/* Sidebar */}
         <div className="space-y-6">
           {/* Invoice Type Indicator */}
-          <Card className={`border-2 shadow-none ${isRecordInvoice ? "border-amber-200 bg-amber-50" : "border-blue-200 bg-blue-50"}`}>
+          <Card className={`border-2 shadow-none ${isRecordInvoice ? "border-amber-200 bg-amber-50 dark:border-amber-500/20 dark:bg-amber-500/10" : "border-blue-200 bg-blue-50 dark:border-blue-500/20 dark:bg-blue-500/10"}`}>
             <CardContent className="p-4 flex items-start gap-3">
-              <div className={`mt-0.5 p-2 rounded-lg ${isRecordInvoice ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-700"}`}>
+              <div className={`mt-0.5 p-2 rounded-lg ${isRecordInvoice ? "bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-400" : "bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-400"}`}>
                 {isRecordInvoice ? <BookOpen className="h-5 w-5" /> : <CreditCard className="h-5 w-5" />}
               </div>
               <div>
-                <h3 className={`font-bold ${isRecordInvoice ? "text-amber-900" : "text-blue-900"}`}>
+                <h3 className={`font-bold ${isRecordInvoice ? "text-amber-900 dark:text-amber-400" : "text-blue-900 dark:text-blue-400"}`}>
                   {isRecordInvoice ? "Record Invoice" : "Collection Invoice"}
                 </h3>
-                <p className={`text-xs mt-1 ${isRecordInvoice ? "text-amber-700" : "text-blue-700"}`}>
+                <p className={`text-xs mt-1 ${isRecordInvoice ? "text-amber-700 dark:text-amber-400/80" : "text-blue-700 dark:text-blue-400/80"}`}>
                   {isRecordInvoice 
                     ? "Offline bookkeeping. No payment link." 
                     : "Live invoice. Includes payment portal link."}
@@ -703,18 +703,18 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
           {/* Record Payment (For Record Invoices) */}
           {isRecordInvoice && (
-            <Card className="border-2 border-purp-200 shadow-none bg-purp-50">
+            <Card className="border-2 border-purp-200 dark:border-white/10 shadow-none bg-purp-50 dark:bg-white/5">
               <CardHeader className="pb-2">
-                <CardTitle className="text-base font-bold text-purp-900">Offline Payment</CardTitle>
+                <CardTitle className="text-base font-bold text-purp-900 dark:text-white">Offline Payment</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
-                <p className="text-sm text-neutral-600">
+                <p className="text-sm text-neutral-600 dark:text-white/60">
                   This is a record invoice. Payments must be recorded manually.
                 </p>
                 <Button 
                   onClick={() => setPaymentDrawerOpen(true)}
                   disabled={trueOutstanding <= 0 || !canEdit}
-                  className="w-full bg-purp-900 hover:bg-purp-800 text-white font-semibold"
+                  className="w-full bg-purp-900 hover:bg-purp-800 dark:bg-[#7B2FF7] dark:hover:bg-[#B58CFF] dark:hover:text-[#12061F] text-white font-semibold"
                 >
                   <Wallet className="mr-2 h-4 w-4" />
                   Record Payment
@@ -722,7 +722,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 <Button
                   variant="outline"
                   onClick={() => window.open(`/invoices/${invoice.id}/print`, "_blank")}
-                  className="w-full border-2 border-purp-200 text-purp-700 hover:bg-purp-100"
+                  className="w-full border-2 border-purp-200 dark:border-white/10 text-purp-700 dark:text-white hover:bg-purp-100 dark:hover:bg-white/10 dark:bg-white/5"
                 >
                   <Printer className="mr-2 h-4 w-4" />
                   View / Download Invoice
@@ -739,7 +739,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                     );
                     window.open(`https://wa.me/?text=${msg}`, "_blank");
                   }}
-                  className="w-full border-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                  className="w-full border-2 border-emerald-200 dark:border-emerald-500/30 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 dark:bg-emerald-500/5"
                 >
                   <MessageCircle className="mr-2 h-4 w-4" />
                   Share via WhatsApp
@@ -751,16 +751,16 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           {/* Payment Link & QR (For Collection Invoices) */}
           {!isRecordInvoice && (
             <>
-              <Card className="border-2 border-purp-200 shadow-none">
+              <Card className="border-2 border-purp-200 dark:border-white/10 shadow-none dark:bg-[#1A0B2E]">
                 <CardHeader className="pb-2">
                   <div className="flex items-center justify-between">
-                    <CardTitle className="text-base font-bold text-purp-900">Payment Link</CardTitle>
+                    <CardTitle className="text-base font-bold text-purp-900 dark:text-white">Payment Link</CardTitle>
                     <Badge
                       variant="outline"
                       className={`text-xs font-semibold border ${
                         isLinkActive
-                          ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                          : "bg-gray-100 text-gray-500 border-gray-200"
+                          ? "bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-500/20"
+                          : "bg-gray-100 dark:bg-white/5 text-gray-500 dark:text-white/40 border-gray-200 dark:border-white/10"
                       }`}
                     >
                       {isLinkActive ? "Active" : "Inactive"}
@@ -768,18 +768,19 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className={`flex items-center justify-center p-4 bg-white border-2 rounded-lg ${isLinkActive ? "border-purp-200" : "border-gray-200 opacity-50"}`}>
+                  <div className={`flex items-center justify-center p-4 bg-white dark:bg-[#12061F] border-2 rounded-lg ${isLinkActive ? "border-purp-200 dark:border-white/10" : "border-gray-200 dark:border-white/5 opacity-50"}`}>
                     <QRCodeSVG
                       value={paymentUrl}
                       size={160}
-                      fgColor={isLinkActive ? "#2D1B6B" : "#9CA3AF"}
-                      bgColor="#FFFFFF"
+                      fgColor={isLinkActive ? "#7B2FF7" : "#9CA3AF"}
+                      bgColor="transparent"
                       level="H"
+                      className={isLinkActive ? "dark:text-[#B58CFF]" : ""}
                     />
                   </div>
 
                   {!isLinkActive && (
-                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">
+                    <div className="bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 rounded-lg p-3 text-sm text-amber-800 dark:text-amber-400">
                       <p className="font-semibold flex items-center gap-1.5">
                         <AlertTriangle className="h-4 w-4" />
                         Payment Link is Inactive
@@ -803,16 +804,16 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                   {!limitExceeded && (
                     <>
                       <div className="flex items-center gap-2">
-                        <div className={`flex-1 px-3 py-2 bg-purp-50 border-2 border-purp-200 rounded-lg text-xs font-mono text-purp-700 truncate ${!isLinkActive ? 'opacity-50' : ''}`}>
+                        <div className={`flex-1 px-3 py-2 bg-purp-50 dark:bg-white/5 border-2 border-purp-200 dark:border-white/10 rounded-lg text-xs font-mono text-purp-700 dark:text-[#B58CFF] truncate ${!isLinkActive ? 'opacity-50' : ''}`}>
                           {displayLink}
                         </div>
-                        <Button variant="outline" size="sm" onClick={copyLink} disabled={!isLinkActive} className="border-2 border-purp-200 flex-shrink-0">
-                          {copied ? <CheckCircle className="h-4 w-4 text-emerald-600" /> : <Copy className="h-4 w-4" />}
+                        <Button variant="outline" size="sm" onClick={copyLink} disabled={!isLinkActive} className="border-2 border-purp-200 dark:border-white/10 dark:text-white dark:bg-white/5 dark:hover:bg-white/10 flex-shrink-0">
+                          {copied ? <CheckCircle className="h-4 w-4 text-emerald-600 dark:text-emerald-400" /> : <Copy className="h-4 w-4" />}
                         </Button>
                       </div>
 
                       <Link href={isLinkActive ? `/pay/${invoice.id}` : '#'} target={isLinkActive ? "_blank" : undefined}>
-                        <Button variant="outline" disabled={!isLinkActive} className="w-full border-2 border-purp-200 text-purp-700 hover:bg-purp-100 disabled:opacity-50">
+                        <Button variant="outline" disabled={!isLinkActive} className="w-full border-2 border-purp-200 dark:border-white/10 text-purp-700 dark:text-white dark:bg-white/5 dark:hover:bg-white/10 hover:bg-purp-100 disabled:opacity-50">
                           <ExternalLink className="mr-2 h-4 w-4" /> Open Payment Portal
                         </Button>
                       </Link>
@@ -822,9 +823,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               </Card>
 
               {/* Share Invoice */}
-              <Card className="border-2 border-purp-200 shadow-none">
+              <Card className="border-2 border-purp-200 dark:border-white/10 shadow-none dark:bg-[#1A0B2E]">
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-base font-bold text-purp-900 flex items-center gap-2">
+                  <CardTitle className="text-base font-bold text-purp-900 dark:text-white flex items-center gap-2">
                     <Share2 className="h-4 w-4" /> Share Invoice
                   </CardTitle>
                 </CardHeader>
@@ -834,7 +835,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                     variant="outline"
                     onClick={shareViaWhatsApp}
                     disabled={!isLinkActive}
-                    className="w-full border-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50 font-medium disabled:opacity-50"
+                    className="w-full border-2 border-emerald-200 dark:border-emerald-500/30 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 font-medium disabled:opacity-50"
                   >
                     <MessageCircle className="mr-2 h-4 w-4" />
                     Send via WhatsApp
@@ -844,25 +845,25 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                   <Dialog>
                     <DialogTrigger
                       disabled={!isLinkActive}
-                      render={<Button variant="outline" disabled={!isLinkActive} className="w-full border-2 border-blue-200 text-blue-700 hover:bg-blue-50 font-medium disabled:opacity-50" />}
+                      render={<Button variant="outline" disabled={!isLinkActive} className="w-full border-2 border-blue-200 dark:border-blue-500/30 text-blue-700 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-500/10 font-medium disabled:opacity-50" />}
                     >
                       <Mail className="mr-2 h-4 w-4" />
                       Send via Email
                     </DialogTrigger>
-                    <DialogContent className="border-2 border-purp-200 sm:max-w-md">
+                    <DialogContent className="border-2 border-purp-200 dark:border-white/10 dark:bg-[#1A0B2E] sm:max-w-md">
                       {emailSent ? (
                         /* ── Success State ─────────────────────────────────── */
                         <div className="flex flex-col items-center justify-center py-8 px-4">
                           <div className="w-20 h-20 rounded-full bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center mb-5 shadow-lg shadow-emerald-200 animate-in zoom-in-50 duration-300">
                             <CheckCircle className="h-10 w-10 text-white" />
                           </div>
-                          <h3 className="text-xl font-bold text-neutral-900 mb-2 animate-in fade-in-0 duration-500">Invoice Sent!</h3>
-                          <p className="text-neutral-500 text-sm text-center mb-1 animate-in fade-in-0 duration-700">
+                          <h3 className="text-xl font-bold text-neutral-900 dark:text-white mb-2 animate-in fade-in-0 duration-500">Invoice Sent!</h3>
+                          <p className="text-neutral-500 dark:text-white/60 text-sm text-center mb-1 animate-in fade-in-0 duration-700">
                             {invoice.invoice_number} has been sent to
                           </p>
-                          <p className="text-purp-700 font-semibold text-sm mb-6 animate-in fade-in-0 duration-700">{emailTo}</p>
-                          <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 w-full text-center animate-in fade-in-0 duration-1000">
-                            <p className="text-emerald-800 text-xs font-medium">
+                          <p className="text-purp-700 dark:text-[#B58CFF] font-semibold text-sm mb-6 animate-in fade-in-0 duration-700">{emailTo}</p>
+                          <div className="bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 rounded-lg p-3 w-full text-center animate-in fade-in-0 duration-1000">
+                            <p className="text-emerald-800 dark:text-emerald-400 text-xs font-medium">
                               ✅ The client will receive a professional invoice email with a direct payment link.
                             </p>
                           </div>
@@ -871,36 +872,36 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                         /* ── Pre-Send State ────────────────────────────────── */
                         <>
                           <DialogHeader>
-                            <DialogTitle className="text-purp-900 flex items-center gap-2">
-                              <div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center">
-                                <Mail className="h-4 w-4 text-blue-600" />
+                            <DialogTitle className="text-purp-900 dark:text-white flex items-center gap-2">
+                              <div className="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-500/20 flex items-center justify-center">
+                                <Mail className="h-4 w-4 text-blue-600 dark:text-blue-400" />
                               </div>
                               Send Invoice via Email
                             </DialogTitle>
-                            <DialogDescription>
+                            <DialogDescription className="dark:text-white/60">
                               A professional invoice email will be sent with a secure payment link.
                             </DialogDescription>
                           </DialogHeader>
 
                           {/* Invoice Summary Card */}
-                          <div className="bg-gradient-to-br from-purp-50 to-blue-50 border-2 border-purp-200 rounded-xl p-4 space-y-3">
+                          <div className="bg-gradient-to-br from-purp-50 to-blue-50 dark:from-white/5 dark:to-blue-500/5 border-2 border-purp-200 dark:border-white/10 rounded-xl p-4 space-y-3">
                             <div className="flex items-center justify-between">
-                              <span className="text-xs font-bold text-purp-600 uppercase tracking-wider">Invoice</span>
-                              <span className="text-sm font-bold text-purp-900">{invoice.invoice_number}</span>
+                              <span className="text-xs font-bold text-purp-600 dark:text-[#B58CFF] uppercase tracking-wider">Invoice</span>
+                              <span className="text-sm font-bold text-purp-900 dark:text-white">{invoice.invoice_number}</span>
                             </div>
-                            <Separator className="bg-purp-200" />
+                            <Separator className="bg-purp-200 dark:bg-white/10" />
                             <div className="grid grid-cols-2 gap-3 text-sm">
                               <div>
-                                <span className="text-neutral-500 text-xs">Grand Total</span>
-                                <p className="font-bold text-neutral-900">{formatNaira(Number(invoice.grand_total))}</p>
+                                <span className="text-neutral-500 dark:text-white/60 text-xs">Grand Total</span>
+                                <p className="font-bold text-neutral-900 dark:text-white">{formatNaira(Number(invoice.grand_total))}</p>
                               </div>
                               <div>
-                                <span className="text-neutral-500 text-xs">Outstanding</span>
-                                <p className="font-bold text-amber-600">{formatNaira(Number(invoice.outstanding_balance))}</p>
+                                <span className="text-neutral-500 dark:text-white/60 text-xs">Outstanding</span>
+                                <p className="font-bold text-amber-600 dark:text-amber-400">{formatNaira(Number(invoice.outstanding_balance))}</p>
                               </div>
                             </div>
                             {invoice.pay_by_date && (
-                              <div className="flex items-center gap-2 text-xs text-neutral-500">
+                              <div className="flex items-center gap-2 text-xs text-neutral-500 dark:text-white/50">
                                 <Clock className="h-3 w-3" />
                                 Due: {new Date(invoice.pay_by_date).toLocaleDateString("en-NG", { day: "numeric", month: "long", year: "numeric" })}
                               </div>
@@ -909,12 +910,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
                           {/* Recipient */}
                           <div className="space-y-2">
-                            <Label className="text-sm font-medium">Recipient Email</Label>
+                            <Label className="text-sm font-medium dark:text-white/80">Recipient Email</Label>
                             <Input
                               type="email"
                               value={emailTo}
                               onChange={(e) => setEmailTo(e.target.value)}
-                              className="border-2 border-purp-200 bg-purp-50 h-11"
+                              className="border-2 border-purp-200 dark:border-white/10 bg-purp-50 dark:bg-white/5 dark:text-white h-11"
                               placeholder="client@email.com"
                             />
                           </div>
@@ -947,10 +948,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                   <Button
                     variant="outline"
                     onClick={copyLink}
-                    className="w-full border-2 border-purp-200 text-purp-700 hover:bg-purp-100 font-medium"
+                    className="w-full border-2 border-purp-200 dark:border-white/10 text-purp-700 dark:text-white hover:bg-purp-100 dark:hover:bg-white/10 dark:bg-white/5 font-medium"
                   >
                     {copied ? (
-                      <><CheckCircle className="mr-2 h-4 w-4 text-emerald-600" /> Link Copied!</>
+                      <><CheckCircle className="mr-2 h-4 w-4 text-emerald-600 dark:text-emerald-400" /> Link Copied!</>
                     ) : (
                       <><Copy className="mr-2 h-4 w-4" /> Copy Payment Link</>
                     )}
@@ -961,19 +962,19 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           )}
 
           {/* Invoice Metadata */}
-          <Card className="border-2 border-purp-200 shadow-none">
+          <Card className="border-2 border-purp-200 dark:border-white/10 shadow-none dark:bg-[#1A0B2E]">
             <CardHeader className="pb-2">
-              <CardTitle className="text-base font-bold text-purp-900">Details</CardTitle>
+              <CardTitle className="text-base font-bold text-purp-900 dark:text-white">Details</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
               <div className="flex justify-between">
-                <span className="text-neutral-500">Fee Absorption</span>
-                <span className="font-medium capitalize">{invoice.fee_absorption}</span>
+                <span className="text-neutral-500 dark:text-white/60">Fee Absorption</span>
+                <span className="font-medium capitalize dark:text-white">{invoice.fee_absorption}</span>
               </div>
-              <Separator className="bg-purp-200" />
+              <Separator className="bg-purp-200 dark:bg-white/10" />
               <div className="flex justify-between">
-                <span className="text-neutral-500">Pay-By Date</span>
-                <span className="font-medium">
+                <span className="text-neutral-500 dark:text-white/60">Pay-By Date</span>
+                <span className="font-medium dark:text-white">
                   {invoice.pay_by_date
                     ? new Date(invoice.pay_by_date).toLocaleDateString("en-NG", {
                         day: "numeric", month: "short", year: "numeric",
@@ -981,10 +982,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                     : "—"}
                 </span>
               </div>
-              <Separator className="bg-purp-200" />
+              <Separator className="bg-purp-200 dark:bg-white/10" />
               <div className="flex justify-between">
-                <span className="text-neutral-500">Created</span>
-                <span className="font-medium">
+                <span className="text-neutral-500 dark:text-white/60">Created</span>
+                <span className="font-medium dark:text-white">
                   {new Date(invoice.created_at).toLocaleDateString("en-NG", {
                     day: "numeric", month: "short", year: "numeric",
                   })}
@@ -992,19 +993,19 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               </div>
               {invoice.manual_close_reason && (
                 <>
-                  <Separator className="bg-purp-200" />
+                  <Separator className="bg-purp-200 dark:bg-white/10" />
                   <div className="flex justify-between">
-                    <span className="text-neutral-500">Close Reason</span>
-                    <span className="font-medium text-purple-600">{invoice.manual_close_reason}</span>
+                    <span className="text-neutral-500 dark:text-white/60">Close Reason</span>
+                    <span className="font-medium text-purple-600 dark:text-[#B58CFF]">{invoice.manual_close_reason}</span>
                   </div>
                 </>
               )}
               {invoice.notes && (
                 <>
-                  <Separator className="bg-purp-200" />
+                  <Separator className="bg-purp-200 dark:bg-white/10" />
                   <div>
-                    <span className="text-neutral-500 block mb-1">Notes</span>
-                    <p className="text-neutral-900">{invoice.notes}</p>
+                    <span className="text-neutral-500 dark:text-white/60 block mb-1">Notes</span>
+                    <p className="text-neutral-900 dark:text-white/90">{invoice.notes}</p>
                   </div>
                 </>
               )}

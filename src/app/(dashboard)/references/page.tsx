@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   FolderKanban, Plus, Search, TrendingUp, Wallet, ChevronDown, ChevronUp,
-  User, Edit2, Check, X, AlertCircle,
+  User, Edit2, Check, X, AlertCircle, ArrowRight, Lock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,6 +22,7 @@ import { computeReferenceFinancials } from "@/lib/services/references/reference-
 import type { FinancialAllocation } from "@/lib/services/references/reference-financial-engine";
 import type { InvoiceWithClient, Merchant, Reference } from "@/lib/types";
 import { createClient } from "@/lib/supabase/client";
+import { PermissionGuard } from "@/components/PermissionGuard";
 
 function ProgressBar({ pct, className = "" }: { pct: number; className?: string }) {
   const color =
@@ -40,7 +41,7 @@ function ProgressBar({ pct, className = "" }: { pct: number; className?: string 
 }
 
 export default function ReferencesPage() {
-  const [merchant, setMerchant] = useState<Merchant | null>(null);
+  const [merchant, setMerchant] = useState<(Merchant & { permissions?: Record<string, boolean>; currentUserRole?: string }) | null>(null);
   const [references, setReferences] = useState<Reference[]>([]);
   const [invoices, setInvoices] = useState<InvoiceWithClient[]>([]);
   const [allocations, setAllocations] = useState<FinancialAllocation[]>([]);
@@ -147,37 +148,72 @@ export default function ReferencesPage() {
 
   if (loading) return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-purp-900">References</h1>
-      <Card className="border-2 border-purp-200 shadow-none animate-pulse">
-        <CardContent className="p-6"><div className="h-56 rounded bg-purp-50" /></CardContent>
+      <h1 className="text-2xl font-bold text-purp-900 dark:text-white">References</h1>
+      <Card className="border-2 border-purp-200 dark:border-white/10 shadow-none animate-pulse dark:bg-[#1A0B2E]">
+        <CardContent className="p-6"><div className="h-56 rounded bg-purp-50 dark:bg-white/5" /></CardContent>
       </Card>
     </div>
   );
 
+  // ── Plan gate: Starter plan cannot access References ────────────────────────────
+  const isStarter = (merchant?.subscription_plan || merchant?.merchant_tier || "starter") === "starter";
+  if (isStarter) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold text-purp-900 dark:text-white">References</h1>
+          <p className="mt-1 text-sm text-neutral-500 dark:text-white/60">
+            Group deposits, milestones, and balance invoices under one client project.
+          </p>
+        </div>
+        <Card className="border-2 border-amber-200 dark:border-amber-500/30 shadow-none bg-amber-50 dark:bg-amber-500/10">
+          <CardContent className="p-10 flex flex-col items-center text-center gap-5">
+            <div className="w-16 h-16 rounded-full bg-amber-100 dark:bg-amber-500/20 border-2 border-amber-300 dark:border-amber-500/40 flex items-center justify-center">
+              <Lock className="w-7 h-7 text-amber-700 dark:text-amber-400" />
+            </div>
+            <div>
+              <h2 className="text-xl font-bold text-amber-900 dark:text-amber-300 mb-2">References require Individual plan</h2>
+              <p className="text-amber-800 dark:text-amber-400 max-w-md text-sm leading-relaxed">
+                References let you group deposits, partial payments, and milestone invoices under a single project. Upgrade to the <strong>Individual</strong> or <strong>Business</strong> plan to unlock this feature.
+              </p>
+            </div>
+            <a href="/settings/billing">
+              <button className="inline-flex items-center gap-2 px-5 py-2.5 bg-amber-700 hover:bg-amber-800 text-white text-sm font-bold rounded-lg transition-colors">
+                View Upgrade Options <ArrowRight className="w-4 h-4" />
+              </button>
+            </a>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
+    <PermissionGuard permission="view_references" merchant={merchant} featureLabel="References">
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-purp-900">References</h1>
-        <p className="mt-1 text-sm text-neutral-500">
+        <h1 className="text-2xl font-bold text-purp-900 dark:text-white">References</h1>
+        <p className="mt-1 text-sm text-neutral-500 dark:text-white/60">
           Group deposits, milestones, and balance invoices under one client project.
         </p>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[380px_1fr]">
-        {/* ── Create Form ── */}
-        <Card className="border-2 border-purp-200 shadow-none h-fit">
-          <CardHeader><CardTitle className="text-base text-purp-900">New Reference</CardTitle></CardHeader>
+        {/* ── Create Form — only shown for users with manage_references ── */}
+        {(!merchant?.permissions || merchant.permissions.manage_references) && (
+        <Card className="border-2 border-purp-200 dark:border-white/10 shadow-none h-fit dark:bg-[#1A0B2E]">
+          <CardHeader><CardTitle className="text-base text-purp-900 dark:text-white">New Reference</CardTitle></CardHeader>
           <CardContent className="space-y-3">
             <div className="space-y-1.5">
-              <Label>Name <span className="text-red-500">*</span></Label>
-              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Adaeze Wedding" className="border-2 border-purp-200" />
+              <Label className="dark:text-white/80">Name <span className="text-red-500">*</span></Label>
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Adaeze Wedding" className="border-2 border-purp-200 dark:border-white/10 dark:bg-white/5 dark:text-white" />
             </div>
             <div className="space-y-1.5">
-              <Label>Description</Label>
-              <Textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Optional internal notes" className="border-2 border-purp-200 min-h-[64px]" />
+              <Label className="dark:text-white/80">Description</Label>
+              <Textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Optional internal notes" className="border-2 border-purp-200 dark:border-white/10 dark:bg-white/5 dark:text-white min-h-[64px]" />
             </div>
             <div className="space-y-1.5">
-              <Label>Handled By <span className="text-neutral-400 text-xs font-normal">(optional)</span></Label>
+              <Label className="dark:text-white/80">Handled By <span className="text-neutral-400 dark:text-white/40 text-xs font-normal">(optional)</span></Label>
               {teamMembers.length > 0 && !showCustomHandledBy ? (
                 <Select value={handledBy || "__none"} onValueChange={(v: string | null) => {
                   if (v === "__custom") {
@@ -187,29 +223,29 @@ export default function ReferencesPage() {
                     setHandledBy(v === "__none" || !v ? "" : v);
                   }
                 }}>
-                  <SelectTrigger className="border-2 border-purp-200">
+                  <SelectTrigger className="border-2 border-purp-200 dark:border-white/10 dark:bg-white/5 dark:text-white">
                     <SelectValue placeholder="Select team member" />
                   </SelectTrigger>
-                  <SelectContent className="border-2 border-purp-200">
-                    <SelectItem value="__none">— No one assigned —</SelectItem>
+                  <SelectContent className="border-2 border-purp-200 dark:border-white/10 dark:bg-[#1A0B2E]">
+                    <SelectItem value="__none" className="dark:text-white/60 dark:focus:bg-white/5">— No one assigned —</SelectItem>
                     {teamMembers.map((tm) => (
-                      <SelectItem key={tm.email || tm.name} value={tm.name}>
+                      <SelectItem key={tm.email || tm.name} value={tm.name} className="dark:text-white dark:focus:bg-white/5">
                         <span className="flex items-center gap-2">
-                          <User className="h-3.5 w-3.5 text-neutral-400" />
+                          <User className="h-3.5 w-3.5 text-neutral-400 dark:text-white/40" />
                           {tm.name}
                         </span>
                       </SelectItem>
                     ))}
-                    <SelectItem value="__custom" className="font-semibold text-purp-700">
+                    <SelectItem value="__custom" className="font-semibold text-purp-700 dark:text-[#B58CFF] dark:focus:bg-white/5">
                       + Enter custom name
                     </SelectItem>
                   </SelectContent>
                 </Select>
               ) : (
                 <div className="flex gap-2">
-                  <Input value={handledBy} onChange={(e) => setHandledBy(e.target.value)} placeholder="e.g. Chidi Okafor" className="border-2 border-purp-200" />
+                  <Input value={handledBy} onChange={(e) => setHandledBy(e.target.value)} placeholder="e.g. Chidi Okafor" className="border-2 border-purp-200 dark:border-white/10 dark:bg-white/5 dark:text-white" />
                   {teamMembers.length > 0 && (
-                    <Button type="button" variant="ghost" onClick={() => { setShowCustomHandledBy(false); setHandledBy(""); }} className="border-2 border-purp-200 text-neutral-500 px-3">
+                    <Button type="button" variant="ghost" onClick={() => { setShowCustomHandledBy(false); setHandledBy(""); }} className="border-2 border-purp-200 dark:border-white/10 text-neutral-500 dark:text-white/50 px-3">
                       <X className="h-4 w-4" />
                     </Button>
                   )}
@@ -217,35 +253,36 @@ export default function ReferencesPage() {
               )}
             </div>
             <div className="space-y-1.5">
-              <Label>Total Project Value <span className="text-neutral-400 text-xs font-normal">(optional)</span></Label>
+              <Label className="dark:text-white/80">Total Project Value <span className="text-neutral-400 dark:text-white/40 text-xs font-normal">(optional)</span></Label>
               <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400 font-bold text-sm">₦</span>
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400 dark:text-white/40 font-bold text-sm">₦</span>
                 <Input
                   value={projectTotal}
                   onChange={(e) => setProjectTotal(e.target.value.replace(/[^0-9.]/g, ""))}
                   placeholder="500,000"
-                  className="border-2 border-purp-200 pl-7"
+                  className="border-2 border-purp-200 dark:border-white/10 dark:bg-white/5 dark:text-white pl-7"
                 />
               </div>
-              <p className="text-xs text-neutral-400">Sets the project ceiling. Enables deposit tracking and progress bars.</p>
+              <p className="text-xs text-neutral-400 dark:text-white/40">Sets the project ceiling. Enables deposit tracking and progress bars.</p>
             </div>
-            {error && <p className="text-sm font-medium text-red-600">{error}</p>}
+            {error && <p className="text-sm font-medium text-red-600 dark:text-red-400">{error}</p>}
             <Button
               onClick={handleCreate}
               disabled={saving || !name.trim()}
-              className="w-full bg-purp-900 text-white hover:bg-purp-700"
+              className="w-full bg-purp-900 text-white hover:bg-purp-700 dark:bg-[#7B2FF7] dark:hover:bg-[#7B2FF7]/80"
             >
               <Plus className="mr-2 h-4 w-4" />
               {saving ? "Saving..." : "Create Reference"}
             </Button>
           </CardContent>
         </Card>
+        )}
 
         {/* ── Reference Cards ── */}
         <div className="space-y-4">
           <div className="relative max-w-md">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-500" />
-            <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search references..." className="border-2 border-purp-200 pl-10" />
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-500 dark:text-white/50" />
+            <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search references..." className="border-2 border-purp-200 dark:border-white/10 dark:bg-[#1A0B2E] dark:text-white pl-10" />
           </div>
 
           <div className="grid gap-3">
@@ -257,26 +294,26 @@ export default function ReferencesPage() {
               );
 
               return (
-                <Card key={ref.id} className="border-2 border-purp-200 shadow-none">
+                <Card key={ref.id} className="border-2 border-purp-200 dark:border-white/10 shadow-none dark:bg-[#1A0B2E]">
                   <CardContent className="p-4 space-y-4">
                     {/* Header row */}
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex items-start gap-2">
-                        <FolderKanban className="h-5 w-5 text-purp-700 mt-0.5 flex-shrink-0" />
+                        <FolderKanban className="h-5 w-5 text-purp-700 dark:text-[#B58CFF] mt-0.5 flex-shrink-0" />
                         <div>
                           <div className="flex items-center gap-2 flex-wrap">
-                            <h2 className="font-bold text-purp-900">{ref.name}</h2>
-                            <Badge variant="outline" className="border-purp-200 text-xs">
+                            <h2 className="font-bold text-purp-900 dark:text-white">{ref.name}</h2>
+                            <Badge variant="outline" className="border-purp-200 dark:border-white/20 dark:text-white/80 text-xs">
                               {financials.invoiceCount} invoice{financials.invoiceCount !== 1 ? "s" : ""}
                             </Badge>
                             {ref.handled_by && (
-                              <span className="flex items-center gap-1 text-xs text-neutral-500">
+                              <span className="flex items-center gap-1 text-xs text-neutral-500 dark:text-white/60">
                                 <User className="h-3 w-3" /> {ref.handled_by}
                               </span>
                             )}
                           </div>
                           {ref.description && (
-                            <p className="mt-0.5 text-sm text-neutral-500">{ref.description}</p>
+                            <p className="mt-0.5 text-sm text-neutral-500 dark:text-white/50">{ref.description}</p>
                           )}
                         </div>
                       </div>
@@ -285,15 +322,15 @@ export default function ReferencesPage() {
                       <div className="flex gap-1 flex-shrink-0">
                         {isEditing ? (
                           <>
-                            <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-emerald-600 hover:bg-emerald-50" onClick={() => handleSaveEdit(ref)} disabled={editSaving}>
+                            <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-emerald-600 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-500/10" onClick={() => handleSaveEdit(ref)} disabled={editSaving}>
                               <Check className="h-4 w-4" />
                             </Button>
-                            <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-neutral-500 hover:bg-neutral-100" onClick={() => { setEditingId(null); setShowCustomEditHandledBy(false); }}>
+                            <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-neutral-500 hover:bg-neutral-100 dark:text-white/60 dark:hover:bg-white/10" onClick={() => { setEditingId(null); setShowCustomEditHandledBy(false); }}>
                               <X className="h-4 w-4" />
                             </Button>
                           </>
                         ) : (
-                          <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-neutral-400 hover:text-purp-700 hover:bg-purp-50"
+                          <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-neutral-400 hover:text-purp-700 hover:bg-purp-50 dark:text-white/40 dark:hover:text-[#B58CFF] dark:hover:bg-white/5"
                             onClick={() => {
                               setEditingId(ref.id);
                               setEditProjectTotal(ref.project_total_value ? String(ref.project_total_value) : "");
@@ -313,16 +350,16 @@ export default function ReferencesPage() {
 
                     {/* Inline edit fields */}
                     {isEditing && (
-                      <div className="grid sm:grid-cols-2 gap-3 bg-purp-50 border border-purp-200 rounded-lg p-3">
+                      <div className="grid sm:grid-cols-2 gap-3 bg-purp-50 dark:bg-white/5 border border-purp-200 dark:border-white/10 rounded-lg p-3">
                         <div className="space-y-1">
-                          <Label className="text-xs">Total Project Value</Label>
+                          <Label className="text-xs dark:text-white/80">Total Project Value</Label>
                           <div className="relative">
-                            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-400 text-sm">₦</span>
-                            <Input value={editProjectTotal} onChange={(e) => setEditProjectTotal(e.target.value.replace(/[^0-9.]/g, ""))} className="pl-6 h-9 border-purp-200 bg-white text-sm" placeholder="500000" />
+                            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-400 dark:text-white/40 text-sm">₦</span>
+                            <Input value={editProjectTotal} onChange={(e) => setEditProjectTotal(e.target.value.replace(/[^0-9.]/g, ""))} className="pl-6 h-9 border-purp-200 dark:border-white/10 bg-white dark:bg-[#1A0B2E] dark:text-white text-sm" placeholder="500000" />
                           </div>
                         </div>
                         <div className="space-y-1">
-                          <Label className="text-xs">Handled By</Label>
+                          <Label className="text-xs dark:text-white/80">Handled By</Label>
                           {teamMembers.length > 0 && !showCustomEditHandledBy ? (
                             <Select value={editHandledBy || "__none"} onValueChange={(v: string | null) => {
                               if (v === "__custom") {
@@ -332,29 +369,29 @@ export default function ReferencesPage() {
                                 setEditHandledBy(v === "__none" || !v ? "" : v);
                               }
                             }}>
-                              <SelectTrigger className="h-9 border-purp-200 bg-white text-sm">
+                              <SelectTrigger className="h-9 border-purp-200 dark:border-white/10 bg-white dark:bg-[#1A0B2E] dark:text-white text-sm">
                                 <SelectValue placeholder="Select team member" />
                               </SelectTrigger>
-                              <SelectContent className="border-2 border-purp-200">
-                                <SelectItem value="__none">— No one assigned —</SelectItem>
+                              <SelectContent className="border-2 border-purp-200 dark:border-white/10 dark:bg-[#1A0B2E]">
+                                <SelectItem value="__none" className="dark:text-white/60 dark:focus:bg-white/5">— No one assigned —</SelectItem>
                                 {teamMembers.map((tm) => (
-                                  <SelectItem key={tm.email || tm.name} value={tm.name}>
+                                  <SelectItem key={tm.email || tm.name} value={tm.name} className="dark:text-white dark:focus:bg-white/5">
                                     <span className="flex items-center gap-2">
-                                      <User className="h-3.5 w-3.5 text-neutral-400" />
+                                      <User className="h-3.5 w-3.5 text-neutral-400 dark:text-white/40" />
                                       {tm.name}
                                     </span>
                                   </SelectItem>
                                 ))}
-                                <SelectItem value="__custom" className="font-semibold text-purp-700">
+                                <SelectItem value="__custom" className="font-semibold text-purp-700 dark:text-[#B58CFF] dark:focus:bg-white/5">
                                   + Enter custom name
                                 </SelectItem>
                               </SelectContent>
                             </Select>
                           ) : (
                             <div className="flex gap-1">
-                              <Input value={editHandledBy} onChange={(e) => setEditHandledBy(e.target.value)} className="h-9 border-purp-200 bg-white text-sm" placeholder="Team member name" />
+                              <Input value={editHandledBy} onChange={(e) => setEditHandledBy(e.target.value)} className="h-9 border-purp-200 dark:border-white/10 bg-white dark:bg-[#1A0B2E] dark:text-white text-sm" placeholder="Team member name" />
                               {teamMembers.length > 0 && (
-                                <Button type="button" variant="ghost" onClick={() => { setShowCustomEditHandledBy(false); setEditHandledBy(""); }} className="h-9 px-2 border border-purp-200 bg-white text-neutral-500">
+                                <Button type="button" variant="ghost" onClick={() => { setShowCustomEditHandledBy(false); setEditHandledBy(""); }} className="h-9 px-2 border border-purp-200 dark:border-white/10 bg-white dark:bg-[#1A0B2E] text-neutral-500 dark:text-white/60">
                                   <X className="h-3.5 w-3.5" />
                                 </Button>
                               )}
@@ -370,36 +407,36 @@ export default function ReferencesPage() {
                         {/* Progress bar */}
                         <div className="space-y-1.5">
                           <div className="flex items-center justify-between text-xs">
-                            <span className="text-neutral-500">Collection Progress</span>
+                            <span className="text-neutral-500 dark:text-white/60">Collection Progress</span>
                             <span className={`font-bold ${
-                              financials.collectionProgress >= 100 ? "text-emerald-600" :
-                              financials.collectionProgress >= 50 ? "text-blue-600" : "text-amber-600"
+                              financials.collectionProgress >= 100 ? "text-emerald-600 dark:text-emerald-400" :
+                              financials.collectionProgress >= 50 ? "text-blue-600 dark:text-blue-400" : "text-amber-600 dark:text-amber-400"
                             }`}>{financials.collectionProgress}%</span>
                           </div>
-                          <ProgressBar pct={financials.collectionProgress} />
+                          <ProgressBar pct={financials.collectionProgress} className="dark:bg-white/10" />
                         </div>
                                               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                           <div className="bg-neutral-50 rounded-lg p-2.5 text-center">
-                            <p className="text-[10px] text-neutral-500 font-medium uppercase tracking-wide">Project Total</p>
-                            <p className="font-bold text-purp-900 text-sm mt-0.5">{formatNaira(financials.projectTotalValue)}</p>
+                           <div className="bg-neutral-50 dark:bg-white/5 rounded-lg p-2.5 text-center">
+                            <p className="text-[10px] text-neutral-500 dark:text-white/40 font-medium uppercase tracking-wide">Project Total</p>
+                            <p className="font-bold text-purp-900 dark:text-white text-sm mt-0.5">{formatNaira(financials.projectTotalValue)}</p>
                           </div>
-                          <div className="bg-neutral-50 rounded-lg p-2.5 text-center">
-                            <p className="text-[10px] text-neutral-500 font-medium uppercase tracking-wide">Billed</p>
-                            <p className="font-bold text-neutral-700 text-sm mt-0.5">{formatNaira(financials.totalBilled)}</p>
+                          <div className="bg-neutral-50 dark:bg-white/5 rounded-lg p-2.5 text-center">
+                            <p className="text-[10px] text-neutral-500 dark:text-white/40 font-medium uppercase tracking-wide">Billed</p>
+                            <p className="font-bold text-neutral-700 dark:text-white/80 text-sm mt-0.5">{formatNaira(financials.totalBilled)}</p>
                           </div>
-                          <div className="bg-emerald-50 rounded-lg p-2.5 text-center">
-                            <p className="text-[10px] text-emerald-600 font-medium uppercase tracking-wide">Collected</p>
-                            <p className="font-bold text-emerald-700 text-sm mt-0.5">{formatNaira(financials.totalCollected)}</p>
+                          <div className="bg-emerald-50 dark:bg-emerald-500/10 rounded-lg p-2.5 text-center">
+                            <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium uppercase tracking-wide">Collected</p>
+                            <p className="font-bold text-emerald-700 dark:text-emerald-300 text-sm mt-0.5">{formatNaira(financials.totalCollected)}</p>
                           </div>
                           {financials.depositAllocationsTotal > 0 ? (
-                            <div className="bg-blue-50 rounded-lg p-2.5 text-center">
-                              <p className="text-[10px] text-blue-600 font-medium uppercase tracking-wide">Deposit Applied</p>
-                              <p className="font-bold text-blue-700 text-sm mt-0.5">{formatNaira(financials.depositAllocationsTotal)}</p>
+                            <div className="bg-blue-50 dark:bg-blue-500/10 rounded-lg p-2.5 text-center">
+                              <p className="text-[10px] text-blue-600 dark:text-blue-400 font-medium uppercase tracking-wide">Deposit Applied</p>
+                              <p className="font-bold text-blue-700 dark:text-blue-300 text-sm mt-0.5">{formatNaira(financials.depositAllocationsTotal)}</p>
                             </div>
                           ) : (
-                            <div className={`rounded-lg p-2.5 text-center ${financials.outstandingBalance > 0 ? "bg-amber-50" : "bg-emerald-50"}`}>
-                              <p className={`text-[10px] font-medium uppercase tracking-wide ${financials.outstandingBalance > 0 ? "text-amber-600" : "text-emerald-600"}`}>Outstanding</p>
-                              <p className={`font-bold text-sm mt-0.5 ${financials.outstandingBalance > 0 ? "text-amber-700" : "text-emerald-700"}`}>
+                            <div className={`rounded-lg p-2.5 text-center ${financials.outstandingBalance > 0 ? "bg-amber-50 dark:bg-amber-500/10" : "bg-emerald-50 dark:bg-emerald-500/10"}`}>
+                              <p className={`text-[10px] font-medium uppercase tracking-wide ${financials.outstandingBalance > 0 ? "text-amber-600 dark:text-amber-400" : "text-emerald-600 dark:text-emerald-400"}`}>Outstanding</p>
+                              <p className={`font-bold text-sm mt-0.5 ${financials.outstandingBalance > 0 ? "text-amber-700 dark:text-amber-300" : "text-emerald-700 dark:text-emerald-300"}`}>
                                 {financials.outstandingBalance > 0 ? formatNaira(financials.outstandingBalance) : "Paid ✓"}
                               </p>
                             </div>
@@ -408,27 +445,27 @@ export default function ReferencesPage() {
                       </div>
                     ) : (
                       /* No project total — show simple invoice-based totals */
-                      <div className="grid grid-cols-3 gap-4 text-right text-sm border-t border-neutral-100 pt-3">
+                      <div className="grid grid-cols-3 gap-4 text-right text-sm border-t border-neutral-100 dark:border-white/10 pt-3">
                         <div>
-                          <p className="text-xs text-neutral-500">Invoiced</p>
-                          <p className="font-bold">{formatNaira(financials.totalBilled)}</p>
+                          <p className="text-xs text-neutral-500 dark:text-white/50">Invoiced</p>
+                          <p className="font-bold dark:text-white">{formatNaira(financials.totalBilled)}</p>
                         </div>
                         <div>
-                          <p className="text-xs text-neutral-500">Collected</p>
-                          <p className="font-bold text-emerald-700">{formatNaira(financials.totalCollected)}</p>
+                          <p className="text-xs text-neutral-500 dark:text-white/50">Collected</p>
+                          <p className="font-bold text-emerald-700 dark:text-emerald-400">{formatNaira(financials.totalCollected)}</p>
                         </div>
                         <div>
-                          <p className="text-xs text-neutral-500">Outstanding</p>
-                          <p className="font-bold text-amber-700">{formatNaira(financials.outstandingBalance)}</p>
+                          <p className="text-xs text-neutral-500 dark:text-white/50">Outstanding</p>
+                          <p className="font-bold text-amber-700 dark:text-amber-400">{formatNaira(financials.outstandingBalance)}</p>
                         </div>
                       </div>
                     )}
 
                     {/* Linked invoices — expandable */}
                     {linkedInvoices.length > 0 && (
-                      <div className="border-t border-neutral-100 pt-3">
+                      <div className="border-t border-neutral-100 dark:border-white/10 pt-3">
                         <button
-                          className="flex items-center gap-1.5 text-xs font-semibold text-purp-700 hover:text-purp-900 transition-colors"
+                          className="flex items-center gap-1.5 text-xs font-semibold text-purp-700 dark:text-[#B58CFF] hover:text-purp-900 dark:hover:text-white transition-colors"
                           onClick={() => {
                             setExpandedIds((prev) => {
                               const n = new Set(prev);
@@ -447,11 +484,11 @@ export default function ReferencesPage() {
                               <Link
                                 key={inv.id}
                                 href={`/invoices/${inv.id}`}
-                                className="flex items-center gap-1.5 rounded border border-purp-200 bg-purp-50 px-2.5 py-1 text-xs font-semibold text-purp-800 hover:bg-purp-100 transition-colors"
+                                className="flex items-center gap-1.5 rounded border border-purp-200 dark:border-white/20 bg-purp-50 dark:bg-white/5 px-2.5 py-1 text-xs font-semibold text-purp-800 dark:text-white/80 hover:bg-purp-100 dark:hover:bg-white/10 transition-colors"
                               >
                                 <span>{inv.invoice_number}</span>
                                 {(inv as any).invoice_stage && (inv as any).invoice_stage !== "standard" && (
-                                  <span className="bg-purp-200 text-purp-800 px-1.5 py-0.5 rounded text-[10px] capitalize">
+                                  <span className="bg-purp-200 dark:bg-[#B58CFF]/20 text-purp-800 dark:text-[#B58CFF] px-1.5 py-0.5 rounded text-[10px] capitalize">
                                     {(inv as any).invoice_stage}
                                   </span>
                                 )}
@@ -463,15 +500,15 @@ export default function ReferencesPage() {
                     )}
 
                     {/* CTA */}
-                    <div className="flex items-center justify-between border-t border-neutral-100 pt-3">
+                    <div className="flex items-center justify-between border-t border-neutral-100 dark:border-white/10 pt-3">
                       <Link href={`/invoices/create?reference=${ref.id}&type=collection`}>
-                        <Button size="sm" variant="outline" className="border-purp-200 text-purp-700 hover:bg-purp-50 text-xs h-7">
+                        <Button size="sm" variant="outline" className="border-purp-200 dark:border-white/10 text-purp-700 dark:text-[#B58CFF] hover:bg-purp-50 dark:hover:bg-white/5 dark:bg-transparent text-xs h-7">
                           <Plus className="h-3 w-3 mr-1" /> New Invoice
                         </Button>
                       </Link>
                       {financials.hasProjectTotal && financials.outstandingBalance > 0 && (
-                        <span className="text-xs text-neutral-500">
-                          Suggested next: <strong className="text-purp-900">{formatNaira(financials.suggestedNextInvoiceAmount)}</strong>
+                        <span className="text-xs text-neutral-500 dark:text-white/50">
+                          Suggested next: <strong className="text-purp-900 dark:text-white">{formatNaira(financials.suggestedNextInvoiceAmount)}</strong>
                         </span>
                       )}
                     </div>
@@ -481,8 +518,8 @@ export default function ReferencesPage() {
             })}
 
             {summaries.length === 0 && (
-              <Card className="border-2 border-purp-200 shadow-none">
-                <CardContent className="p-8 text-center text-sm text-neutral-500">
+              <Card className="border-2 border-purp-200 dark:border-white/10 shadow-none dark:bg-[#1A0B2E]">
+                <CardContent className="p-8 text-center text-sm text-neutral-500 dark:text-white/50">
                   {query ? "No references match your search." : "No references yet. Create your first project above."}
                 </CardContent>
               </Card>
@@ -491,5 +528,6 @@ export default function ReferencesPage() {
         </div>
       </div>
     </div>
+    </PermissionGuard>
   );
 }

@@ -12,7 +12,7 @@ import type { Merchant } from "@/lib/types";
 export const PLAN_LIMITS = {
   starter: {
     invoiceLimit: 10,          // Lifetime record invoice cap
-    teamLimit: 2,              // Owner + 1 invited = 2 seats total
+    teamLimit: 2,              // Owner only + 1 predefined role = 2 seats total
     activeCollectionLimit: 0,  // No collection invoices
     monthlyCollectionNgn: 0,
     canCollect: false,
@@ -23,7 +23,7 @@ export const PLAN_LIMITS = {
   },
   individual: {
     invoiceLimit: Infinity,
-    teamLimit: 2,
+    teamLimit: 5,              // Owner + up to 4 predefined role members
     activeCollectionLimit: 20,
     monthlyCollectionNgn: 5_000_000,
     canCollect: true,          // Requires verified KYC
@@ -160,12 +160,20 @@ export function canInviteTeamMember(
   const limits = PLAN_LIMITS[plan];
 
   if (limits.teamLimit !== Infinity && currentActiveSeatCount >= limits.teamLimit) {
-    const planLabel = plan === "starter" ? "Individual" : "Business";
-    return {
-      allowed: false,
-      reason: `Team seat limit reached (${limits.teamLimit} seats on ${plan} plan). Upgrade to ${planLabel} to invite more members.`,
-      upgradeRequired: plan === "starter" ? "individual" : "corporate",
-    };
+    if (plan === "starter") {
+      return {
+        allowed: false,
+        reason: `Starter plan only supports 1 team member (owner only). Upgrade to Individual to invite up to 4 predefined-role members.`,
+        upgradeRequired: "individual",
+      };
+    }
+    if (plan === "individual") {
+      return {
+        allowed: false,
+        reason: `Individual plan supports up to 4 invited members (5 seats total including owner). Upgrade to Business for unlimited team members and custom roles.`,
+        upgradeRequired: "corporate",
+      };
+    }
   }
   return { allowed: true };
 }
@@ -208,7 +216,8 @@ export type FeatureKey =
   | "api_webhooks"
   | "crypto_collections"
   | "advanced_analytics"
-  | "settlement_exports";
+  | "settlement_exports"
+  | "view_references";
 
 const FEATURE_PLAN_MAP: Record<FeatureKey, PlanKey> = {
   collection_invoice: "individual",
@@ -216,8 +225,9 @@ const FEATURE_PLAN_MAP: Record<FeatureKey, PlanKey> = {
   watermark_removal: "corporate",
   api_webhooks: "corporate",
   crypto_collections: "corporate",
-  advanced_analytics: "individual",
-  settlement_exports: "corporate",
+  advanced_analytics: "corporate",  // Business plan only — matches pricing page
+  settlement_exports: "individual",  // Fixed: was corporate, available from Individual
+  view_references: "individual",     // Individual and Business plans only
 };
 
 export function canAccessFeature(

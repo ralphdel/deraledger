@@ -10,6 +10,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { getInvoices, getClients, getAllTransactions, getMerchant, getActiveSubscription } from "@/lib/data";
 import { formatNaira } from "@/lib/calculations";
 import type { InvoiceWithClient, Client, Transaction, Merchant } from "@/lib/types";
+import { PermissionGuard } from "@/components/PermissionGuard";
 
 interface Message {
   id: string;
@@ -21,19 +22,19 @@ interface Message {
 const ROLE_KNOWLEDGE: Record<string, { description: string; permissions: string[] }> = {
   owner: {
     description: "Full unrestricted access to all platform features including settlement account management, billing, team management, and all financial operations.",
-    permissions: ["View & create invoices", "Edit & void invoices", "Record payments", "Manage clients (add/edit/delete)", "View analytics & transactions", "Manage KYC & business settings", "Manage billing & subscription", "Manage team members & roles", "Use DeraBot", "View settlements", "Manage settlement account", "Manage advanced settings", "Manage item catalog", "Manage discount templates", "View item catalog", "View discount templates"]
+    permissions: ["View & create invoices", "Edit & void invoices", "Record payments", "Manage clients (add/edit/delete)", "View analytics & transactions", "Manage KYC & business settings", "Manage billing & subscription", "Manage team members & roles", "Use DeraBot", "View settlements", "Manage settlement account", "Manage advanced settings", "Manage item catalog", "Manage discount templates", "View item catalog", "View discount templates", "View & manage References"]
   },
   admin: {
     description: "Broad operational access. Can manage most business functions but CANNOT manage billing, delete clients, void invoices, or change the settlement account.",
-    permissions: ["View & create invoices", "Edit invoices", "Record payments", "Manual close invoices", "Manage clients (add/edit, NOT delete)", "View analytics & transactions", "Change fee settings", "Manage business settings", "Manage team members", "Use DeraBot", "View settlements", "Manage advanced settings", "Manage item catalog", "Manage discount templates", "View item catalog", "View discount templates"]
+    permissions: ["View & create invoices", "Edit invoices", "Record payments", "Manual close invoices", "Manage clients (add/edit, NOT delete)", "View analytics & transactions", "Change fee settings", "Manage business settings & address", "Manage team members", "Use DeraBot", "View settlements", "Manage advanced settings", "Manage item catalog", "Manage discount templates", "View item catalog", "View discount templates", "View & manage References"]
   },
   accountant: {
     description: "Financial operations access. Can create invoices, record payments, view financial data and analytics, but cannot manage team, delete clients, or change settings.",
-    permissions: ["View & create invoices", "Edit invoices", "Record payments", "Manual close invoices", "View clients", "View analytics & transactions", "Use DeraBot", "View settlements", "View item catalog", "View discount templates"]
+    permissions: ["View & create invoices", "Edit invoices", "Record payments", "Manual close invoices", "View clients", "View analytics & transactions", "Use DeraBot", "View settlements", "View item catalog", "View discount templates", "View References (read-only)"]
   },
   support: {
     description: "Limited client-facing access. Can view invoices and clients, edit client info, but cannot create invoices, view analytics, or access financial settings.",
-    permissions: ["View invoices", "View & edit clients (NOT delete)", "View item catalog"]
+    permissions: ["View invoices (read-only)", "View & edit clients (NOT delete)", "View item catalog", "View References (read-only)"]
   }
 };
 
@@ -57,7 +58,7 @@ export default function PurpBotPage() {
   const [invoices, setInvoices] = useState<InvoiceWithClient[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [merchant, setMerchant] = useState<Merchant | null>(null);
+  const [merchant, setMerchant] = useState<(Merchant & { permissions?: Record<string, boolean>; currentUserRole?: string }) | null>(null);
   const [isSubscriptionExpired, setIsSubscriptionExpired] = useState(false);
 
   useEffect(() => {
@@ -384,6 +385,7 @@ export default function PurpBotPage() {
   }
 
   return (
+    <PermissionGuard permission="use_purpbot" merchant={merchant} featureLabel="DeraBot AI">
     <div className="max-w-4xl mx-auto space-y-4 h-[calc(100vh-8rem)] flex flex-col">
       <div>
         <h1 className="text-2xl font-bold text-purp-900 flex items-center gap-2">
@@ -508,5 +510,6 @@ export default function PurpBotPage() {
         </CardContent>
       </Card>
     </div>
+    </PermissionGuard>
   );
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { formatNaira } from "@/lib/calculations";
 import { getMerchant, getActiveSubscription, getSubscriptionPayments, type SubscriptionPayment } from "@/lib/data";
@@ -17,8 +18,8 @@ export default function BillingSettingsPage() {
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [history, setHistory] = useState<SubscriptionPayment[]>([]);
   const [loading, setLoading] = useState(true);
-  const [renewing, setRenewing] = useState(false);
   const [copiedRef, setCopiedRef] = useState<string | null>(null);
+  const router = useRouter();
 
   useEffect(() => {
     Promise.all([
@@ -35,29 +36,14 @@ export default function BillingSettingsPage() {
     });
   }, []);
 
-  const handleRenew = async () => {
+  const handleRenew = () => {
     if (!merchant || !subscription) return;
-    setRenewing(true);
-    
-    try {
-      const res = await fetch("/api/payment/renew", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ plan: subscription.plan_type })
-      });
-      
-      const data = await res.json();
-      if (data.success && data.authorizationUrl) {
-        window.location.href = data.authorizationUrl;
-      } else {
-        alert(data.error || "Failed to initialize payment");
-        setRenewing(false);
-      }
-    } catch (err: any) {
-      console.error(err);
-      alert("An unexpected error occurred");
-      setRenewing(false);
-    }
+    // Navigate to the premium checkout page in renewal context
+    // The checkout page will load merchant data directly (authenticated)
+    // and route the Paystack callback back to /settings/billing/renew-callback
+    const plan = merchant.subscription_plan || subscription.plan_type || "individual";
+    if (plan === "starter") return; // Starter is free, can't renew
+    router.push(`/checkout/subscription?plan=${plan}&context=renewal`);
   };
 
   const copyToClipboard = (text: string) => {
@@ -175,10 +161,9 @@ export default function BillingSettingsPage() {
               <>
                 <Button 
                   onClick={handleRenew} 
-                  disabled={renewing}
                   className="bg-purp-900 hover:bg-purp-800 text-white w-full md:w-auto font-bold"
                 >
-                  {renewing ? "Initializing..." : `Renew Now - ${planPrice}`}
+                  Renew Now — {planPrice}
                 </Button>
                 {currentPlan === "individual" && (
                   <Link href="/settings/upgrade/corporate" className={cn(buttonVariants({ variant: "outline" }), "border-purp-200 text-purp-900 w-full md:w-auto")}>
