@@ -49,6 +49,10 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
     hasProjectTotal: boolean;
   } | null>(null);
 
+  interface DepositAllocation { id: string; source_invoice_id: string; allocated_amount: number; source_invoice_number: string | null; }
+  const [depositAllocations, setDepositAllocations] = useState<DepositAllocation[]>([]);
+  const [totalDepositAllocated, setTotalDepositAllocated] = useState(0);
+
   const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text);
     setCopied(true);
@@ -97,9 +101,15 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
           setInvoice(result.invoice);
           setMerchant(result.merchant);
           setMonthlyCollected(result.monthlyCollected ?? 0);
-          setInputAmount(Number(result.invoice.outstanding_balance).toString());
+          
+          const depositAllocated = result.totalDepositAllocated ?? 0;
+          setInputAmount(Math.max(0, Number(result.invoice.outstanding_balance)).toString());
           if (result.referenceContext?.hasProjectTotal) {
             setReferenceContext(result.referenceContext);
+          }
+          if (result.depositAllocations?.length) {
+            setDepositAllocations(result.depositAllocations);
+            setTotalDepositAllocated(result.totalDepositAllocated ?? 0);
           }
         }
         setLoading(false);
@@ -247,7 +257,8 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
   }
 
   // ── Payment calculations ──────────────────────────────────────────────────
-  const outstandingBalance = Number(invoice.outstanding_balance);
+  // The true outstanding balance the client owes is exactly what's recorded in the DB (which already factors in applied deposits)
+  const outstandingBalance = Math.max(0, Number(invoice.outstanding_balance));
   const grandTotal = Number(invoice.grand_total);
   const parsedAmount = parseFloat(inputAmount) || 0;
   const minimumPayment = getMinimumPayment(grandTotal, outstandingBalance);
@@ -320,13 +331,13 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
 
   if (success) {
     const displayInvoice = refreshedInvoice || invoice;
-    const updatedOutstanding = Number(displayInvoice?.outstanding_balance ?? 0);
-    const updatedTotalPaid = Number(displayInvoice?.amount_paid ?? 0);
+    const updatedOutstanding = Math.max(0, Number(displayInvoice?.outstanding_balance ?? 0));
+    const updatedTotalPaid = Number(displayInvoice?.amount_paid ?? 0) + totalDepositAllocated;
     // Calculate delta: what was paid IN THIS transaction only
     // `invoice` holds the pre-payment snapshot; `refreshedInvoice` holds post-payment state
     const prePaidAmount = Number(invoice?.amount_paid ?? 0);
     const thisPayment = refreshedInvoice
-      ? Math.max(0, updatedTotalPaid - prePaidAmount)
+      ? Math.max(0, Number(refreshedInvoice.amount_paid ?? 0) - prePaidAmount)
       : 0; // if still loading, we don't know yet
     const isFullyPaid = updatedOutstanding <= 0;
 
@@ -362,7 +373,13 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                   <span className="text-neutral-500">Total Paid to Date</span>
                   <span className="font-medium text-purp-900">{formatNaira(updatedTotalPaid)}</span>
                 </div>
-                <div className="flex justify-between border-t border-purp-100 pt-2">
+                {totalDepositAllocated > 0 && (
+                  <div className="flex justify-between border-t border-purp-50 pt-2 mt-1">
+                    <span className="text-neutral-500 text-xs">Includes Applied Deposit</span>
+                    <span className="font-medium text-blue-600 text-xs">{formatNaira(totalDepositAllocated)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between border-t border-purp-100 pt-2 mt-2">
                   <span className="text-neutral-500">Outstanding Balance</span>
                   <span className={`font-bold ${isFullyPaid ? "text-emerald-600" : "text-amber-600"}`}>
                     {isFullyPaid ? "Fully Paid ✓" : formatNaira(updatedOutstanding)}
@@ -436,8 +453,25 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                   </div>
                 )}
                 <div className="flex justify-between font-bold text-base pt-2">
-                  <span>Grand Total</span><span>{formatNaira(grandTotal)}</span>
+                  <span>Service Total</span><span>{formatNaira(grandTotal)}</span>
                 </div>
+                {totalDepositAllocated > 0 && (
+                  <>
+                    <div className="flex justify-between text-emerald-300 pt-1">
+                      <span>Previously Paid Deposit</span>
+                      <span className="font-bold">-{formatNaira(totalDepositAllocated)}</span>
+                    </div>
+                    <div className="flex justify-between font-bold text-white text-base border-t border-white/20 pt-2 mt-1">
+                      <span>Outstanding Amount</span>
+                      <span>{formatNaira(Math.max(0, grandTotal - totalDepositAllocated))}</span>
+                    </div>
+                  </>
+                )}
+                {totalDepositAllocated <= 0 && (
+                  <div className="flex justify-between font-bold text-base pt-2 border-t border-white/15">
+                    <span>Grand Total</span><span>{formatNaira(grandTotal)}</span>
+                  </div>
+                )}
               </div>
             </div>
           </div>

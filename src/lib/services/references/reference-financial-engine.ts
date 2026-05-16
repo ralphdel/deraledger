@@ -20,6 +20,13 @@ export interface FinancialInvoice {
   status: string;
 }
 
+/** Minimal allocation shape */
+export interface FinancialAllocation {
+  source_invoice_id: string;
+  target_invoice_id: string;
+  allocated_amount: number;
+}
+
 export interface ReferenceFinancials {
   /** The optional project ceiling set by the merchant */
   projectTotalValue: number;
@@ -47,6 +54,8 @@ export interface ReferenceFinancials {
   suggestedNextInvoiceAmount: number;
   /** Count of linked collection invoices */
   invoiceCount: number;
+  /** Sum of all deposit amounts allocated to target invoices under this reference */
+  depositAllocationsTotal: number;
 }
 
 /**
@@ -54,10 +63,12 @@ export interface ReferenceFinancials {
  *
  * @param ref        The reference record (must include project_total_value)
  * @param allInvoices All invoices for the merchant (unfiltered — function filters internally)
+ * @param allAllocations Optional: all invoice_allocations for the merchant (used to sum deposit allocation totals)
  */
 export function computeReferenceFinancials(
   ref: Reference & { project_total_value?: number | null },
-  allInvoices: FinancialInvoice[]
+  allInvoices: FinancialInvoice[],
+  allAllocations?: FinancialAllocation[]
 ): ReferenceFinancials {
   // Only collection invoices that belong to this reference
   const linked = allInvoices.filter(
@@ -66,10 +77,9 @@ export function computeReferenceFinancials(
       inv.invoice_type === "collection"
   );
 
-  const totalBilled = linked.reduce(
-    (sum, inv) => sum + Number(inv.grand_total ?? 0),
-    0
-  );
+  const linkedIds = new Set(linked.map((inv) => inv.id));
+
+
 
   const totalCollected = linked.reduce(
     (sum, inv) => sum + Number(inv.amount_paid ?? 0),
@@ -79,9 +89,20 @@ export function computeReferenceFinancials(
   const projectTotalValue = Number(ref.project_total_value ?? 0);
   const hasProjectTotal = projectTotalValue > 0;
 
+  // Use the actual outstanding balance from the DB, which correctly accounts for applied deposits
+  const invoiceOutstanding = linked.reduce(
+    (sum, inv) => sum + Number((inv as any).outstanding_balance ?? 0),
+    0
+  );
+
   const outstandingBalance = hasProjectTotal
     ? Math.max(0, projectTotalValue - totalCollected)
-    : Math.max(0, totalBilled - totalCollected);
+    : invoiceOutstanding;
+
+  // Derive total billed to prevent double-counting of deposit invoice grand totals
+  const totalBilled = hasProjectTotal 
+    ? projectTotalValue 
+    : totalCollected + invoiceOutstanding;
 
   const collectionProgress = hasProjectTotal
     ? Math.min(100, Math.round((totalCollected / projectTotalValue) * 100))
@@ -90,6 +111,11 @@ export function computeReferenceFinancials(
   const suggestedNextInvoiceAmount = hasProjectTotal
     ? outstandingBalance
     : 0;
+
+  // Sum allocations where target_invoice_id is one of the linked invoices
+  const depositAllocationsTotal = (allAllocations || []).reduce((sum, a) => {
+    return linkedIds.has(a.target_invoice_id) ? sum + Number(a.allocated_amount ?? 0) : sum;
+  }, 0);
 
   return {
     projectTotalValue,
@@ -100,6 +126,7 @@ export function computeReferenceFinancials(
     hasProjectTotal,
     suggestedNextInvoiceAmount,
     invoiceCount: linked.length,
+    depositAllocationsTotal,
   };
 }
 

@@ -89,9 +89,9 @@ export default function ClientsPage() {
 
   const getClientStats = (clientId: string) => {
     const clientInvoices = invoices.filter((i) => i.client_id === clientId);
-    const totalInvoiced = clientInvoices.reduce((s, i) => s + Number(i.grand_total), 0);
-    const totalCollected = clientInvoices.reduce((s, i) => s + Number(i.amount_paid), 0);
-    const outstanding = clientInvoices.reduce((s, i) => s + Number(i.outstanding_balance), 0);
+    const totalInvoiced = clientInvoices.reduce((s, i) => s + Number(i.amount_paid || 0) + Number(i.outstanding_balance || 0), 0);
+    const totalCollected = clientInvoices.reduce((s, i) => s + Number(i.amount_paid || 0), 0);
+    const outstanding = clientInvoices.reduce((s, i) => s + Number(i.outstanding_balance || 0), 0);
     return { totalInvoiced, totalCollected, outstanding, count: clientInvoices.length };
   };
 

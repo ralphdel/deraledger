@@ -49,8 +49,8 @@ export function PlatformUpdateModal() {
   useEffect(() => {
     async function checkVersion() {
       const sb = createClient();
-      const { data: { user } } = await sb.auth.getUser();
-      if (!user) return;
+      const { data: { session } } = await sb.auth.getSession();
+      if (!session?.user) return;
       
       const m = await getMerchant();
       if (m) {

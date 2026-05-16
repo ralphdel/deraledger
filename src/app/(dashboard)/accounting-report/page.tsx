@@ -100,12 +100,14 @@ export default function AccountingReportPage() {
   }, [transactions, manualPayments]);
 
   const getInvoiceMetrics = (inv: InvoiceWithClient) => {
-    const grandTotal = Number(inv.grand_total || 0);
     const recordedPaid = Number(inv.amount_paid || 0);
-    const paymentRecordPaid = paymentsByInvoice.get(inv.id) || 0;
-    const paid = Math.min(grandTotal, Math.max(recordedPaid, paymentRecordPaid));
-    const outstanding = Math.max(0, grandTotal - paid);
-    return { grandTotal, paid, outstanding };
+    const dbOutstanding = Number(inv.outstanding_balance || 0);
+    
+    // Effective grand total = actual paid + actual outstanding.
+    // This naturally subtracts any applied deposits (which don't appear in amount_paid or outstanding).
+    const effectiveGrandTotal = recordedPaid + dbOutstanding;
+
+    return { grandTotal: effectiveGrandTotal, paid: recordedPaid, outstanding: dbOutstanding };
   };
 
   const aggregatedData = useMemo(() => {

@@ -192,6 +192,15 @@ export interface AuditLog {
   created_at: string;
 }
 
+export interface InvoiceAllocation {
+  id: string;
+  merchant_id: string;
+  source_invoice_id: string;
+  target_invoice_id: string;
+  allocated_amount: number;
+  created_at: string;
+}
+
 export interface Role {
   id: string;
   name: string;

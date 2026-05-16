@@ -719,6 +719,14 @@ async function handleInvoicePayment(
     .single();
 
   if (fullInvoice?.clients?.email) {
+    const { data: allocations } = await supabase
+      .from("invoice_allocations")
+      .select("allocated_amount")
+      .eq("target_invoice_id", invoiceId);
+    
+    const totalDeposit = allocations?.reduce((sum: number, a: any) => sum + Number(a.allocated_amount), 0) || 0;
+    const trueOutstanding = Math.max(0, newOutstanding);
+
     const { sendPaymentReceiptEmail } = await import("@/lib/brevo");
     const { formatNaira } = await import("@/lib/calculations");
     const { data: merchantData } = await supabase
@@ -735,7 +743,7 @@ async function handleInvoicePayment(
       merchantData?.business_name || "Deraledger Merchant",
       invoice.invoice_number,
       formatNaira(paymentAmount),
-      formatNaira(newOutstanding),
+      formatNaira(trueOutstanding),
       invoice.pay_by_date
         ? new Date(invoice.pay_by_date).toLocaleDateString("en-GB", {
             day: "numeric",
@@ -743,7 +751,8 @@ async function handleInvoicePayment(
             year: "numeric",
           })
         : null,
-      `${appUrl}/pay/${invoice.id}`
+      `${appUrl}/pay/${invoice.id}`,
+      totalDeposit > 0 ? formatNaira(totalDeposit) : undefined
     ).catch((e) => console.error("Failed to send receipt email:", e));
   }
 

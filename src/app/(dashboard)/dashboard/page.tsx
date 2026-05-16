@@ -59,13 +59,13 @@ export default function DashboardPage() {
       getDashboardStats(), 
       getMerchant(), 
       getMonthlyCollectionTotal(),
-      sb.auth.getUser()
-    ]).then(([dashData, merchantData, collected, { data: { user } }]) => {
+      sb.auth.getSession()
+    ]).then(([dashData, merchantData, collected, { data: { session } }]) => {
       setStats(dashData);
       setMerchant(merchantData);
       setMonthlyCollected(collected);
-      if (user) {
-        setUserName(user.user_metadata?.full_name || null);
+      if (session?.user) {
+        setUserName(session.user.user_metadata?.full_name || null);
       }
       setLoading(false);
     });

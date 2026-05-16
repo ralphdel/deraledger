@@ -22,11 +22,14 @@ function supabase() {
   return createClient();
 }
 
+let cachedMerchantId: string | null = null;
+let activeMerchantPromise: Promise<string> | null = null;
+
 async function getActiveMerchantId(): Promise<string> {
-  let workspaceId: string | undefined;
-  
-  if (typeof document !== "undefined") {
-    const match = document.cookie.match(new RegExp('(^| )purpledger_workspace_id=([^;]+)'));
+  let workspaceId = null;
+
+  if (typeof window !== "undefined") {
+    const match = window.location.pathname.match(/^\/(w|workspace)\/([^\/]+)/);
     if (match) workspaceId = match[2];
   }
   
@@ -34,15 +37,29 @@ async function getActiveMerchantId(): Promise<string> {
     return workspaceId;
   }
 
-  const sb = supabase();
-  const { data: { session } } = await sb.auth.getSession();
-  const user = session?.user;
-  
-  if (user) {
-    const { data } = await sb.from("merchants").select("id").eq("user_id", user.id).single();
-    if (data?.id) return data.id;
-  }
-  return "00000000-0000-0000-0000-000000000001"; // Fallback to demo layout
+  if (cachedMerchantId) return cachedMerchantId;
+  if (activeMerchantPromise) return activeMerchantPromise;
+
+  activeMerchantPromise = (async () => {
+    try {
+      const sb = supabase();
+      const { data: { session } } = await sb.auth.getSession();
+      const user = session?.user;
+      
+      if (user) {
+        const { data } = await sb.from("merchants").select("id").eq("user_id", user.id).single();
+        if (data?.id) {
+          cachedMerchantId = data.id;
+          return data.id;
+        }
+      }
+      return "00000000-0000-0000-0000-000000000001"; // Fallback to demo layout
+    } finally {
+      activeMerchantPromise = null;
+    }
+  })();
+
+  return activeMerchantPromise;
 }
 
 // ── Merchant ────────────────────────────────────────────────────────────────
@@ -182,7 +199,8 @@ export async function getActiveSubscription(id?: string): Promise<Subscription |
   const sb = supabase();
   
   // SuperAdmin Bypass
-  const { data: { user } } = await sb.auth.getUser();
+  const { data: { session } } = await sb.auth.getSession();
+  const user = session?.user;
   if (user?.email === "ralphdel14@yahoo.com") {
     return {
       id: "superadmin-bypass",

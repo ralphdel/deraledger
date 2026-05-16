@@ -2045,3 +2045,166 @@ export async function verifyRcNumberAction(merchantId: string, rcNumber: string)
     return { success: false, error: error.message };
   }
 }
+
+// ── Deposit Allocation ─────────────────────────────────────────────────────────
+
+/**
+ * Creates an allocation linkage between a fully-paid deposit invoice
+ * (source) and a new balance/milestone invoice (target).
+ *
+ * Rules:
+ * - source invoice must be fully paid (status = 'closed') and invoice_stage = 'deposit'
+ * - no duplicate allocation for the same source→target pair
+ * - allocated_amount must be > 0
+ */
+export async function createInvoiceAllocationAction(data: {
+  merchant_id: string;
+  source_invoice_id: string;
+  target_invoice_id: string;
+  allocated_amount: number;
+}) {
+  if (data.allocated_amount <= 0) {
+    return { success: false, error: "Allocated amount must be greater than zero." };
+  }
+
+  const adminClient = getServiceClient();
+
+  // Validate source invoice: must belong to merchant, be fully paid, stage = deposit
+  const { data: sourceInv, error: srcErr } = await adminClient
+    .from("invoices")
+    .select("id, merchant_id, status, invoice_stage, grand_total, amount_paid, invoice_number")
+    .eq("id", data.source_invoice_id)
+    .eq("merchant_id", data.merchant_id)
+    .single();
+
+  if (srcErr || !sourceInv) {
+    return { success: false, error: "Source deposit invoice not found." };
+  }
+  if (sourceInv.invoice_stage !== "deposit") {
+    return { success: false, error: "Source invoice is not a deposit invoice." };
+  }
+  if (sourceInv.status !== "closed") {
+    return { success: false, error: "Only fully paid (closed) deposit invoices can be allocated." };
+  }
+  if (data.allocated_amount > Number(sourceInv.amount_paid)) {
+    return { success: false, error: "Allocated amount exceeds the deposit invoice amount paid." };
+  }
+
+  // Validate target invoice exists and belongs to merchant
+  const { data: targetInv, error: tgtErr } = await adminClient
+    .from("invoices")
+    .select("id, merchant_id, outstanding_balance, grand_total, status")
+    .eq("id", data.target_invoice_id)
+    .eq("merchant_id", data.merchant_id)
+    .single();
+
+  if (tgtErr || !targetInv) {
+    return { success: false, error: "Target invoice not found." };
+  }
+
+  // Check no duplicate allocation for this pair
+  const { data: existing } = await adminClient
+    .from("invoice_allocations")
+    .select("id")
+    .eq("source_invoice_id", data.source_invoice_id)
+    .eq("target_invoice_id", data.target_invoice_id)
+    .maybeSingle();
+
+  if (existing) {
+    return { success: false, error: "This deposit has already been allocated to that invoice." };
+  }
+
+  const { data: allocation, error: insertErr } = await adminClient
+    .from("invoice_allocations")
+    .insert({
+      merchant_id: data.merchant_id,
+      source_invoice_id: data.source_invoice_id,
+      target_invoice_id: data.target_invoice_id,
+      allocated_amount: data.allocated_amount,
+    })
+    .select("id")
+    .single();
+
+  if (insertErr) return { success: false, error: insertErr.message };
+
+  // UPDATE TARGET INVOICE OUTSTANDING BALANCE & STATUS
+  const newOutstanding = Math.max(0, Number(targetInv.outstanding_balance || targetInv.grand_total) - data.allocated_amount);
+  const newStatus = newOutstanding <= 0 ? "closed" : targetInv.status; // Keep it open/partially_paid if not 0
+
+  await adminClient
+    .from("invoices")
+    .update({ 
+      outstanding_balance: newOutstanding,
+      status: newStatus 
+    })
+    .eq("id", data.target_invoice_id);
+
+  await logAudit("deposit_applied", data.target_invoice_id, "invoice", {
+    source_invoice_id: data.source_invoice_id,
+    source_invoice_number: sourceInv.invoice_number,
+    allocated_amount: data.allocated_amount,
+    actor: "merchant",
+  });
+
+  revalidatePath("/invoices");
+  revalidatePath("/references");
+  return { success: true, allocationId: allocation.id };
+}
+
+/**
+ * Returns all fully-paid deposit invoices under a reference that are
+ * eligible to be allocated (not yet allocated to any other invoice).
+ */
+export async function getEligibleDepositInvoicesAction(merchantId: string, referenceId: string) {
+  const adminClient = getServiceClient();
+
+  // Fetch all deposit invoices under this reference that are fully paid
+  const { data: deposits, error } = await adminClient
+    .from("invoices")
+    .select("id, invoice_number, grand_total, amount_paid, status, invoice_stage, created_at")
+    .eq("merchant_id", merchantId)
+    .eq("reference_id", referenceId)
+    .eq("invoice_type", "collection")
+    .eq("invoice_stage", "deposit")
+    .eq("status", "closed");
+
+  if (error) return { success: false, error: error.message, deposits: [] };
+
+  if (!deposits || deposits.length === 0) {
+    return { success: true, deposits: [] };
+  }
+
+  // Fetch all allocations for this merchant to find which deposits are already used
+  const { data: allocations, error: allocErr } = await adminClient
+    .from("invoice_allocations")
+    .select("source_invoice_id")
+    .eq("merchant_id", merchantId);
+
+  if (allocErr) return { success: false, error: allocErr.message, deposits: [] };
+
+  const allocatedDepositIds = new Set((allocations || []).map(a => a.source_invoice_id));
+
+  // Add an is_allocated flag to each deposit
+  const annotatedDeposits = deposits.map(d => ({
+    ...d,
+    is_allocated: allocatedDepositIds.has(d.id)
+  }));
+
+  return { success: true, deposits: annotatedDeposits };
+}
+
+/**
+ * Returns all allocations targeting a specific invoice.
+ * Used on the public payment portal and invoice detail page.
+ */
+export async function getInvoiceAllocationsAction(targetInvoiceId: string) {
+  const adminClient = getServiceClient();
+
+  const { data, error } = await adminClient
+    .from("invoice_allocations")
+    .select("id, source_invoice_id, allocated_amount, created_at, invoices!source_invoice_id(invoice_number, grand_total)")
+    .eq("target_invoice_id", targetInvoiceId);
+
+  if (error) return { success: false, error: error.message, allocations: [] };
+  return { success: true, allocations: data || [] };
+}

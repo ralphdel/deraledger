@@ -27,7 +27,7 @@ import { Separator } from "@/components/ui/separator";
 import { getClients, getItemCatalog, getDiscountTemplates, getActiveSubscription, getReferences } from "@/lib/data";
 import type { Client, Merchant, ItemCatalog, DiscountTemplate, Reference } from "@/lib/types";
 import { calculateInvoiceTotals, formatNaira } from "@/lib/calculations";
-import { createInvoiceAction } from "@/lib/actions";
+import { createInvoiceAction, createInvoiceAllocationAction, getEligibleDepositInvoicesAction } from "@/lib/actions";
 import { createClient } from "@/lib/supabase/client";
 import { CreateClientModal } from "@/components/CreateClientModal";
 
@@ -73,13 +73,20 @@ function CreateInvoiceForm() {
   const [success, setSuccess] = useState(false);
   const [isRestricted, setIsRestricted] = useState(false);
 
+  // Deposit allocation state
+  interface DepositInvoice { id: string; invoice_number: string; grand_total: number; amount_paid: number; is_allocated?: boolean; }
+  const [eligibleDeposits, setEligibleDeposits] = useState<DepositInvoice[]>([]);
+  const [appliedDepositId, setAppliedDepositId] = useState<string | null>(null);
+  const [appliedDepositAmount, setAppliedDepositAmount] = useState<number>(0);
+
   useEffect(() => {
     getClients().then(setClients);
 
     // Load merchant context and their catalog/templates
     const sb = createClient();
-    sb.auth.getUser().then(async ({ data: { user } }) => {
-      if (user) {
+    sb.auth.getSession().then(async ({ data: { session } }) => {
+      if (session?.user) {
+        const user = session.user;
         const { data } = await sb
           .from("merchants")
           .select("*")
@@ -219,6 +226,15 @@ function CreateInvoiceForm() {
     setSaving(false);
 
     if (result.success) {
+      // If a deposit was applied, create the allocation linkage
+      if (appliedDepositId && appliedDepositAmount > 0 && result.invoiceId) {
+        await createInvoiceAllocationAction({
+          merchant_id: merchant.id,
+          source_invoice_id: appliedDepositId,
+          target_invoice_id: result.invoiceId,
+          allocated_amount: appliedDepositAmount,
+        });
+      }
       setSuccess(true);
       setTimeout(() => {
         router.push("/invoices");
@@ -433,21 +449,32 @@ function CreateInvoiceForm() {
                       setReferenceId(newRef);
                       setReferenceGroupSummary(null);
                       setInvoiceStage('standard');
+                      // Reset deposit allocation when reference changes
+                      setEligibleDeposits([]);
+                      setAppliedDepositId(null);
+                      setAppliedDepositAmount(0);
                       if (newRef && merchant) {
                         try {
                           const sb = (await import("@/lib/supabase/client")).createClient();
                           const [{ data: refData }, { data: groupInvs }] = await Promise.all([
                             sb.from("references").select("project_total_value").eq("id", newRef).single(),
-                            sb.from("invoices").select("grand_total, amount_paid, invoice_type").eq("merchant_id", merchant.id).eq("reference_id", newRef),
+                            sb.from("invoices").select("id, grand_total, amount_paid, invoice_type, outstanding_balance").eq("merchant_id", merchant.id).eq("reference_id", newRef),
                           ]);
                           const collectionInvs = (groupInvs || []).filter((i: any) => i.invoice_type === "collection");
-                          const totalBilled = collectionInvs.reduce((s: number, i: any) => s + Number(i.grand_total), 0);
                           const totalPaid = collectionInvs.reduce((s: number, i: any) => s + Number(i.amount_paid), 0);
+                          const invoiceOutstanding = collectionInvs.reduce((s: number, i: any) => s + Number(i.outstanding_balance || 0), 0);
+                          
                           const projectTotalValue = Number(refData?.project_total_value ?? 0);
                           const hasProjectTotal = projectTotalValue > 0;
+                          
                           const outstandingBalance = hasProjectTotal
                             ? Math.max(0, projectTotalValue - totalPaid)
-                            : Math.max(0, totalBilled - totalPaid);
+                            : invoiceOutstanding;
+                            
+                          const totalBilled = hasProjectTotal 
+                            ? projectTotalValue 
+                            : totalPaid + invoiceOutstanding;
+
                           const suggestedAmount = hasProjectTotal ? outstandingBalance : 0;
                           setReferenceGroupSummary({ totalBilled, totalPaid, projectTotalValue, hasProjectTotal, outstandingBalance, suggestedAmount });
                           // Auto-suggest: populate first line item unit rate
@@ -458,6 +485,9 @@ function CreateInvoiceForm() {
                                 : li
                             ));
                           }
+                          // Load eligible deposit invoices
+                          const depRes = await getEligibleDepositInvoicesAction(merchant.id, newRef);
+                          if (depRes.success) setEligibleDeposits(depRes.deposits as DepositInvoice[]);
                         } catch {}
                       }
                     }}
@@ -521,7 +551,14 @@ function CreateInvoiceForm() {
                     <button
                       key={stage}
                       type="button"
-                      onClick={() => setInvoiceStage(stage)}
+                      onClick={() => {
+                        setInvoiceStage(stage);
+                        // Reset deposit allocation when stage changes away from balance
+                        if (stage !== "balance") {
+                          setAppliedDepositId(null);
+                          setAppliedDepositAmount(0);
+                        }
+                      }}
                       className={`py-2 px-1 rounded-lg border-2 text-xs font-semibold capitalize transition-all ${
                         invoiceStage === stage
                           ? "border-purp-700 bg-purp-50 text-purp-900"
@@ -540,23 +577,84 @@ function CreateInvoiceForm() {
               </div>
             )}
 
+            {/* Deposit Allocation — only when stage = balance and eligible deposits exist */}
+            {invoiceType === "collection" && referenceId && invoiceStage === "balance" && eligibleDeposits.length > 0 && (
+              <div className="space-y-2 rounded-xl border-2 border-emerald-200 bg-emerald-50 p-4">
+                <div className="flex items-center justify-between">
+                  <Label className="text-sm font-semibold text-emerald-900">💰 Apply Existing Deposit?</Label>
+                  {appliedDepositId && (
+                    <button
+                      type="button"
+                      onClick={() => { setAppliedDepositId(null); setAppliedDepositAmount(0); }}
+                      className="text-xs text-emerald-700 hover:underline font-medium"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                <p className="text-xs text-emerald-700">Select a fully paid deposit to deduct from this invoice&apos;s payable amount.</p>
+                <div className="space-y-2">
+                  {eligibleDeposits.map((dep) => (
+                    <button
+                      key={dep.id}
+                      type="button"
+                      disabled={dep.is_allocated}
+                      onClick={() => {
+                        if (appliedDepositId === dep.id) {
+                          setAppliedDepositId(null);
+                          setAppliedDepositAmount(0);
+                        } else {
+                          setAppliedDepositId(dep.id);
+                          setAppliedDepositAmount(Number(dep.amount_paid));
+                        }
+                      }}
+                      className={`w-full flex items-center justify-between rounded-lg border-2 px-3 py-2.5 text-sm transition-all ${
+                        dep.is_allocated
+                          ? "border-neutral-200 bg-neutral-50 opacity-60 cursor-not-allowed"
+                          : appliedDepositId === dep.id
+                            ? "border-emerald-600 bg-emerald-100 text-emerald-900"
+                            : "border-emerald-200 bg-white text-neutral-700 hover:border-emerald-400"
+                      }`}
+                    >
+                      <span className="font-semibold">{dep.invoice_number}</span>
+                      <span className="flex items-center gap-2">
+                        <span className="font-mono">{formatNaira(Number(dep.amount_paid))}</span>
+                        {dep.is_allocated ? (
+                          <span className="text-[10px] uppercase font-bold text-neutral-500 bg-neutral-200 border border-neutral-300 rounded px-1.5 py-0.5">Used</span>
+                        ) : (
+                          <span className="text-[10px] uppercase font-bold text-emerald-600 bg-emerald-100 border border-emerald-300 rounded px-1.5 py-0.5">Paid ✓</span>
+                        )}
+                        {appliedDepositId === dep.id && !dep.is_allocated && (
+                          <span className="text-[10px] font-bold text-white bg-emerald-600 rounded px-1.5 py-0.5">Applied</span>
+                        )}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
 
             {invoiceType === "collection" && (
               <div className="grid sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                     <Label className="text-sm font-medium">Allow Partial Payment?</Label>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input 
-                        type="checkbox" 
-                        checked={allowPartialPayment} 
-                        onChange={(e) => setAllowPartialPayment(e.target.checked)}
-                        className="w-4 h-4 accent-purp-600 rounded border-purp-300"
-                      />
-                      <span className="text-xs text-neutral-600">Yes, allow partial</span>
-                    </label>
+                    {invoiceStage === "deposit" ? (
+                      <span className="text-xs text-neutral-400 italic">Disabled for deposit invoices</span>
+                    ) : (
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input 
+                          type="checkbox" 
+                          checked={allowPartialPayment} 
+                          onChange={(e) => setAllowPartialPayment(e.target.checked)}
+                          className="w-4 h-4 accent-purp-600 rounded border-purp-300"
+                        />
+                        <span className="text-xs text-neutral-600">Yes, allow partial</span>
+                      </label>
+                    )}
                   </div>
-                  {allowPartialPayment && (
+                  {allowPartialPayment && invoiceStage !== "deposit" && (
                     <div className="relative mt-2">
                       <Label className="text-xs text-neutral-500 mb-1 block">Required Percentage</Label>
                       <div className="relative">
@@ -843,15 +941,27 @@ function CreateInvoiceForm() {
                     +{formatNaira(totals.taxValue)}
                   </span>
                 </div>
+                {appliedDepositAmount > 0 && (
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-emerald-700 font-medium">Previously Paid Deposit</span>
+                    <span className="font-bold text-emerald-700">-{formatNaira(appliedDepositAmount)}</span>
+                  </div>
+                )}
                 <Separator className="bg-purp-200" />
                 <div className="flex items-center justify-between">
                   <span className="text-lg font-bold text-purp-900">
-                    Grand Total
+                    {appliedDepositAmount > 0 ? "Outstanding Amount" : "Grand Total"}
                   </span>
                   <span className="text-2xl font-bold text-purp-900">
-                    {formatNaira(totals.grandTotal)}
+                    {formatNaira(Math.max(0, totals.grandTotal - appliedDepositAmount))}
                   </span>
                 </div>
+                {appliedDepositAmount > 0 && (
+                  <div className="flex items-center justify-between text-xs text-neutral-400">
+                    <span>Service Total</span>
+                    <span className="font-mono">{formatNaira(totals.grandTotal)}</span>
+                  </div>
+                )}
               </div>
 
               <div className="mt-6 space-y-3">

@@ -247,7 +247,8 @@ export async function sendPaymentReceiptEmail(
   amountPaid: string,
   newOutstanding: string,
   payByDate: string | null,
-  paymentUrl: string
+  paymentUrl: string,
+  appliedDeposit?: string
 ) {
   const subject = `Payment Received - Invoice ${invoiceNumber}`;
   const htmlContent = `
@@ -266,6 +267,7 @@ export async function sendPaymentReceiptEmail(
         
         <div style="background-color: #F3F4F6; padding: 16px; border-radius: 6px; margin-bottom: 24px; text-align: left;">
           <p style="margin: 4px 0; color: #374151;"><strong>Amount Paid Today:</strong> <span style="color: #10B981; font-weight: bold;">${amountPaid}</span></p>
+          ${appliedDeposit ? `<p style="margin: 4px 0; color: #374151;"><strong>Previously Applied Deposit:</strong> <span style="color: #3B82F6; font-weight: bold;">${appliedDeposit}</span></p>` : ''}
           <p style="margin: 4px 0; color: #374151;"><strong>Remaining Balance:</strong> ${newOutstanding}</p>
           ${payByDate && parseFloat(newOutstanding.replace(/[^0-9.]/g, '')) > 0 ? `<p style="margin: 4px 0; color: #D97706;"><strong>Reminder:</strong> Please pay the remaining balance before ${payByDate} to avoid late charges.</p>` : ''}
         </div>

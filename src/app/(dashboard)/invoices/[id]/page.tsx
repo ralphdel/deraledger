@@ -44,7 +44,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { getInvoiceById, getTransactions, getMerchant, getMonthlyCollectionTotal, getManualPayments } from "@/lib/data";
-import { closeInvoiceManually, reopenInvoice, getInvoiceHistory, sendInvoiceEmailAction } from "@/lib/actions";
+import { closeInvoiceManually, reopenInvoice, getInvoiceHistory, sendInvoiceEmailAction, getInvoiceAllocationsAction } from "@/lib/actions";
 import { MANUAL_CLOSE_REASONS } from "@/lib/types";
 import type { InvoiceWithLineItems, Transaction, Merchant, AuditLog } from "@/lib/types";
 import { formatNaira, getStatusColor, getStatusLabel } from "@/lib/calculations";
@@ -57,6 +57,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [merchant, setMerchant] = useState<Merchant | null>(null);
   const [history, setHistory] = useState<AuditLog[]>([]);
   const [monthlyCollected, setMonthlyCollected] = useState(0);
+  const [depositAllocated, setDepositAllocated] = useState(0);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
   const [closeReason, setCloseReason] = useState("");
@@ -70,14 +71,19 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [isPending, startTransition] = useTransition();
 
   const refreshData = async () => {
-    const [inv, txns, manualTxns, merch, collected] = await Promise.all([
+    const [inv, txns, manualTxns, merch, collected, allocationsRes] = await Promise.all([
       getInvoiceById(id),
       getTransactions(id),
       getManualPayments(id),
       getMerchant(),
       getMonthlyCollectionTotal(),
+      getInvoiceAllocationsAction(id)
     ]);
     setInvoice(inv);
+    if (allocationsRes.success) {
+      const totalAllocated = allocationsRes.allocations.reduce((sum: number, a: any) => sum + Number(a.allocated_amount), 0);
+      setDepositAllocated(totalAllocated);
+    }
     
     // Combine online transactions and manual payments into a unified array
     const combinedHistory = [
@@ -138,9 +144,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     );
   }
 
+  const trueOutstanding = Math.max(0, Number(invoice.outstanding_balance));
+
   const paymentProgress =
     Number(invoice.grand_total) > 0
-      ? Math.min(100, Math.round((Number(invoice.amount_paid) / Number(invoice.grand_total)) * 100))
+      ? Math.min(100, Math.round(((Number(invoice.amount_paid) + depositAllocated) / Number(invoice.grand_total)) * 100))
       : 0;
 
   const paymentUrl = `${typeof window !== "undefined" ? window.location.origin : "https://deraledger.app"}/pay/${invoice.id}`;
@@ -159,7 +167,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       `Hi ${clientName},\n\n` +
       `You have an invoice from *${businessName}*:\n\n` +
       `📄 Invoice: ${invoice.invoice_number}\n` +
-      `💰 Amount Due: ${formatNaira(Number(invoice.outstanding_balance))}\n\n` +
+      `💰 Amount Due: ${formatNaira(trueOutstanding)}\n\n` +
       `Pay securely here:\n${paymentUrl}\n\n` +
       `Thank you for your business! 🙏`
     );
@@ -180,8 +188,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         businessName,
         invoiceNumber: invoice.invoice_number,
         grandTotal: formatNaira(Number(invoice.grand_total)),
-        amountPaid: formatNaira(Number(invoice.amount_paid)),
-        outstandingBalance: formatNaira(Number(invoice.outstanding_balance)),
+        amountPaid: formatNaira(Number(invoice.amount_paid) + depositAllocated),
+        outstandingBalance: formatNaira(trueOutstanding),
         payByDate: invoice.pay_by_date ? new Date(invoice.pay_by_date).toLocaleDateString("en-NG", { day: "numeric", month: "long", year: "numeric" }) : "",
         paymentUrl,
       });
@@ -380,7 +388,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                   <DialogTitle className="text-purp-900">Close Invoice Manually</DialogTitle>
                   <DialogDescription>
                     Outstanding balance of{" "}
-                    <strong>{formatNaira(Number(invoice.outstanding_balance))}</strong> will
+                    <strong>{formatNaira(trueOutstanding)}</strong> will
                     remain unpaid. You can reopen this invoice later if needed.
                   </DialogDescription>
                 </DialogHeader>
@@ -462,11 +470,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               <div className="flex items-center justify-between mt-3 text-sm">
                 <div>
                   <span className="text-neutral-500">Paid: </span>
-                  <span className="font-semibold text-emerald-600">{formatNaira(Number(invoice.amount_paid))}</span>
+                  <span className="font-semibold text-emerald-600">{formatNaira(Number(invoice.amount_paid) + depositAllocated)}</span>
                 </div>
                 <div>
                   <span className="text-neutral-500">Outstanding: </span>
-                  <span className="font-semibold text-amber-600">{formatNaira(Number(invoice.outstanding_balance))}</span>
+                  <span className="font-semibold text-amber-600">{formatNaira(trueOutstanding)}</span>
                 </div>
               </div>
             </CardContent>
@@ -518,9 +526,21 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 </div>
                 <Separator className="bg-purp-200" />
                 <div className="flex justify-between">
-                  <span className="font-bold text-purp-900">Grand Total</span>
+                  <span className="font-bold text-purp-900">Service Total</span>
                   <span className="font-bold text-purp-900 text-lg">{formatNaira(Number(invoice.grand_total))}</span>
                 </div>
+                {depositAllocated > 0 && (
+                  <>
+                    <div className="flex justify-between text-blue-600 font-medium">
+                      <span>Previously Paid Deposit</span>
+                      <span>-{formatNaira(depositAllocated)}</span>
+                    </div>
+                    <div className="flex justify-between font-bold text-purp-900 pt-2 border-t border-purp-100">
+                      <span>Outstanding Amount</span>
+                      <span>{formatNaira(trueOutstanding)}</span>
+                    </div>
+                  </>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -693,7 +713,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 </p>
                 <Button 
                   onClick={() => setPaymentDrawerOpen(true)}
-                  disabled={Number(invoice.outstanding_balance) <= 0 || !canEdit}
+                  disabled={trueOutstanding <= 0 || !canEdit}
                   className="w-full bg-purp-900 hover:bg-purp-800 text-white font-semibold"
                 >
                   <Wallet className="mr-2 h-4 w-4" />
@@ -713,7 +733,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                     const msg = encodeURIComponent(
                       `Hi ${clientName},\n\nPlease find your invoice from *${merchant?.business_name || "Deraledger"}*:\n\n` +
                       `📄 Invoice: ${invoice.invoice_number}\n` +
-                      `💰 Amount Due: ${formatNaira(Number(invoice.outstanding_balance))}\n\n` +
+                      `💰 Amount Due: ${formatNaira(trueOutstanding)}\n\n` +
                       `View your invoice here:\n${window.location.origin}/invoices/${invoice.id}/print\n\n` +
                       `Thank you! 🙏`
                     );

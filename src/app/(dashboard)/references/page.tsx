@@ -12,11 +12,16 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 import { createReferenceAction, updateReferenceAction } from "@/lib/actions";
 import { getInvoices, getMerchant, getReferences } from "@/lib/data";
 import { formatNaira } from "@/lib/calculations";
 import { computeReferenceFinancials } from "@/lib/services/references/reference-financial-engine";
+import type { FinancialAllocation } from "@/lib/services/references/reference-financial-engine";
 import type { InvoiceWithClient, Merchant, Reference } from "@/lib/types";
+import { createClient } from "@/lib/supabase/client";
 
 function ProgressBar({ pct, className = "" }: { pct: number; className?: string }) {
   const color =
@@ -38,6 +43,7 @@ export default function ReferencesPage() {
   const [merchant, setMerchant] = useState<Merchant | null>(null);
   const [references, setReferences] = useState<Reference[]>([]);
   const [invoices, setInvoices] = useState<InvoiceWithClient[]>([]);
+  const [allocations, setAllocations] = useState<FinancialAllocation[]>([]);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
 
@@ -55,8 +61,16 @@ export default function ReferencesPage() {
   const [editHandledBy, setEditHandledBy] = useState("");
   const [editSaving, setEditSaving] = useState(false);
 
+  // Custom text toggles for Handled By
+  const [showCustomHandledBy, setShowCustomHandledBy] = useState(false);
+  const [showCustomEditHandledBy, setShowCustomEditHandledBy] = useState(false);
+
   // Expand/collapse linked invoices
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+
+  // Team members for Handled By dropdown
+  interface TeamMember { name: string; email: string; }
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
 
   const load = async () => {
     setLoading(true);
@@ -66,6 +80,24 @@ export default function ReferencesPage() {
       const [refs, invs] = await Promise.all([getReferences(m.id), getInvoices(m.id)]);
       setReferences(refs);
       setInvoices(invs);
+      // Fetch allocations for deposit tracking
+      try {
+        const sb = createClient();
+        const [allocRes, teamRes] = await Promise.all([
+          sb.from("invoice_allocations")
+            .select("source_invoice_id, target_invoice_id, allocated_amount")
+            .eq("merchant_id", m.id),
+          sb.from("merchant_team")
+            .select("name, email")
+            .eq("merchant_id", m.id)
+            .eq("is_active", true),
+        ]);
+        setAllocations((allocRes.data || []) as FinancialAllocation[]);
+        // Also include the owner themselves
+        const ownerEntry: TeamMember = { name: m.owner_name || "Owner", email: "" };
+        const members: TeamMember[] = [ownerEntry, ...(teamRes.data || []).map((t: any) => ({ name: t.name || t.email, email: t.email }))];
+        setTeamMembers(members);
+      } catch { setAllocations([]); }
     }
     setLoading(false);
   };
@@ -77,9 +109,9 @@ export default function ReferencesPage() {
       .filter((r) => r.name.toLowerCase().includes(query.toLowerCase()))
       .map((ref) => ({
         ref,
-        financials: computeReferenceFinancials(ref, invoices as any),
+        financials: computeReferenceFinancials(ref, invoices as any, allocations),
       })),
-    [references, invoices, query]
+    [references, invoices, allocations, query]
   );
 
   const handleCreate = async () => {
@@ -95,6 +127,7 @@ export default function ReferencesPage() {
     setSaving(false);
     if (!result.success) { setError(result.error || "Could not create reference."); return; }
     setName(""); setDescription(""); setHandledBy(""); setProjectTotal("");
+    setShowCustomHandledBy(false);
     await load();
   };
 
@@ -144,8 +177,44 @@ export default function ReferencesPage() {
               <Textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Optional internal notes" className="border-2 border-purp-200 min-h-[64px]" />
             </div>
             <div className="space-y-1.5">
-              <Label>Handled By</Label>
-              <Input value={handledBy} onChange={(e) => setHandledBy(e.target.value)} placeholder="e.g. Chidi Okafor" className="border-2 border-purp-200" />
+              <Label>Handled By <span className="text-neutral-400 text-xs font-normal">(optional)</span></Label>
+              {teamMembers.length > 0 && !showCustomHandledBy ? (
+                <Select value={handledBy || "__none"} onValueChange={(v: string | null) => {
+                  if (v === "__custom") {
+                    setShowCustomHandledBy(true);
+                    setHandledBy("");
+                  } else {
+                    setHandledBy(v === "__none" || !v ? "" : v);
+                  }
+                }}>
+                  <SelectTrigger className="border-2 border-purp-200">
+                    <SelectValue placeholder="Select team member" />
+                  </SelectTrigger>
+                  <SelectContent className="border-2 border-purp-200">
+                    <SelectItem value="__none">— No one assigned —</SelectItem>
+                    {teamMembers.map((tm) => (
+                      <SelectItem key={tm.email || tm.name} value={tm.name}>
+                        <span className="flex items-center gap-2">
+                          <User className="h-3.5 w-3.5 text-neutral-400" />
+                          {tm.name}
+                        </span>
+                      </SelectItem>
+                    ))}
+                    <SelectItem value="__custom" className="font-semibold text-purp-700">
+                      + Enter custom name
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              ) : (
+                <div className="flex gap-2">
+                  <Input value={handledBy} onChange={(e) => setHandledBy(e.target.value)} placeholder="e.g. Chidi Okafor" className="border-2 border-purp-200" />
+                  {teamMembers.length > 0 && (
+                    <Button type="button" variant="ghost" onClick={() => { setShowCustomHandledBy(false); setHandledBy(""); }} className="border-2 border-purp-200 text-neutral-500 px-3">
+                      <X className="h-4 w-4" />
+                    </Button>
+                  )}
+                </div>
+              )}
             </div>
             <div className="space-y-1.5">
               <Label>Total Project Value <span className="text-neutral-400 text-xs font-normal">(optional)</span></Label>
@@ -219,7 +288,7 @@ export default function ReferencesPage() {
                             <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-emerald-600 hover:bg-emerald-50" onClick={() => handleSaveEdit(ref)} disabled={editSaving}>
                               <Check className="h-4 w-4" />
                             </Button>
-                            <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-neutral-500 hover:bg-neutral-100" onClick={() => setEditingId(null)}>
+                            <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-neutral-500 hover:bg-neutral-100" onClick={() => { setEditingId(null); setShowCustomEditHandledBy(false); }}>
                               <X className="h-4 w-4" />
                             </Button>
                           </>
@@ -229,6 +298,12 @@ export default function ReferencesPage() {
                               setEditingId(ref.id);
                               setEditProjectTotal(ref.project_total_value ? String(ref.project_total_value) : "");
                               setEditHandledBy(ref.handled_by || "");
+                              if (ref.handled_by && teamMembers.length > 0) {
+                                const isTeamMember = teamMembers.some(tm => tm.name === ref.handled_by);
+                                setShowCustomEditHandledBy(!isTeamMember);
+                              } else {
+                                setShowCustomEditHandledBy(false);
+                              }
                             }}>
                             <Edit2 className="h-3.5 w-3.5" />
                           </Button>
@@ -248,7 +323,43 @@ export default function ReferencesPage() {
                         </div>
                         <div className="space-y-1">
                           <Label className="text-xs">Handled By</Label>
-                          <Input value={editHandledBy} onChange={(e) => setEditHandledBy(e.target.value)} className="h-9 border-purp-200 bg-white text-sm" placeholder="Team member name" />
+                          {teamMembers.length > 0 && !showCustomEditHandledBy ? (
+                            <Select value={editHandledBy || "__none"} onValueChange={(v: string | null) => {
+                              if (v === "__custom") {
+                                setShowCustomEditHandledBy(true);
+                                setEditHandledBy("");
+                              } else {
+                                setEditHandledBy(v === "__none" || !v ? "" : v);
+                              }
+                            }}>
+                              <SelectTrigger className="h-9 border-purp-200 bg-white text-sm">
+                                <SelectValue placeholder="Select team member" />
+                              </SelectTrigger>
+                              <SelectContent className="border-2 border-purp-200">
+                                <SelectItem value="__none">— No one assigned —</SelectItem>
+                                {teamMembers.map((tm) => (
+                                  <SelectItem key={tm.email || tm.name} value={tm.name}>
+                                    <span className="flex items-center gap-2">
+                                      <User className="h-3.5 w-3.5 text-neutral-400" />
+                                      {tm.name}
+                                    </span>
+                                  </SelectItem>
+                                ))}
+                                <SelectItem value="__custom" className="font-semibold text-purp-700">
+                                  + Enter custom name
+                                </SelectItem>
+                              </SelectContent>
+                            </Select>
+                          ) : (
+                            <div className="flex gap-1">
+                              <Input value={editHandledBy} onChange={(e) => setEditHandledBy(e.target.value)} className="h-9 border-purp-200 bg-white text-sm" placeholder="Team member name" />
+                              {teamMembers.length > 0 && (
+                                <Button type="button" variant="ghost" onClick={() => { setShowCustomEditHandledBy(false); setEditHandledBy(""); }} className="h-9 px-2 border border-purp-200 bg-white text-neutral-500">
+                                  <X className="h-3.5 w-3.5" />
+                                </Button>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </div>
                     )}
@@ -267,9 +378,8 @@ export default function ReferencesPage() {
                           </div>
                           <ProgressBar pct={financials.collectionProgress} />
                         </div>
-                        {/* Stat grid */}
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                          <div className="bg-neutral-50 rounded-lg p-2.5 text-center">
+                                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                           <div className="bg-neutral-50 rounded-lg p-2.5 text-center">
                             <p className="text-[10px] text-neutral-500 font-medium uppercase tracking-wide">Project Total</p>
                             <p className="font-bold text-purp-900 text-sm mt-0.5">{formatNaira(financials.projectTotalValue)}</p>
                           </div>
@@ -281,12 +391,19 @@ export default function ReferencesPage() {
                             <p className="text-[10px] text-emerald-600 font-medium uppercase tracking-wide">Collected</p>
                             <p className="font-bold text-emerald-700 text-sm mt-0.5">{formatNaira(financials.totalCollected)}</p>
                           </div>
-                          <div className={`rounded-lg p-2.5 text-center ${financials.outstandingBalance > 0 ? "bg-amber-50" : "bg-emerald-50"}`}>
-                            <p className={`text-[10px] font-medium uppercase tracking-wide ${financials.outstandingBalance > 0 ? "text-amber-600" : "text-emerald-600"}`}>Outstanding</p>
-                            <p className={`font-bold text-sm mt-0.5 ${financials.outstandingBalance > 0 ? "text-amber-700" : "text-emerald-700"}`}>
-                              {financials.outstandingBalance > 0 ? formatNaira(financials.outstandingBalance) : "Paid ✓"}
-                            </p>
-                          </div>
+                          {financials.depositAllocationsTotal > 0 ? (
+                            <div className="bg-blue-50 rounded-lg p-2.5 text-center">
+                              <p className="text-[10px] text-blue-600 font-medium uppercase tracking-wide">Deposit Applied</p>
+                              <p className="font-bold text-blue-700 text-sm mt-0.5">{formatNaira(financials.depositAllocationsTotal)}</p>
+                            </div>
+                          ) : (
+                            <div className={`rounded-lg p-2.5 text-center ${financials.outstandingBalance > 0 ? "bg-amber-50" : "bg-emerald-50"}`}>
+                              <p className={`text-[10px] font-medium uppercase tracking-wide ${financials.outstandingBalance > 0 ? "text-amber-600" : "text-emerald-600"}`}>Outstanding</p>
+                              <p className={`font-bold text-sm mt-0.5 ${financials.outstandingBalance > 0 ? "text-amber-700" : "text-emerald-700"}`}>
+                                {financials.outstandingBalance > 0 ? formatNaira(financials.outstandingBalance) : "Paid ✓"}
+                              </p>
+                            </div>
+                          )}
                         </div>
                       </div>
                     ) : (

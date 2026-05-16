@@ -145,5 +145,23 @@ export async function GET(
     }
   }
 
-  return NextResponse.json({ invoice, merchant: effectiveMerchant, monthlyCollected, referenceContext });
+  // 7. Fetch deposit allocations applied to this invoice
+  const { data: allocations } = await adminClient
+    .from("invoice_allocations")
+    .select("id, source_invoice_id, allocated_amount, invoices!source_invoice_id(invoice_number, grand_total)")
+    .eq("target_invoice_id", invoice.id);
+
+  const depositAllocations = (allocations || []).map((a: any) => ({
+    id: a.id,
+    source_invoice_id: a.source_invoice_id,
+    allocated_amount: Number(a.allocated_amount),
+    source_invoice_number: a.invoices?.invoice_number ?? null,
+    source_invoice_total: a.invoices?.grand_total ? Number(a.invoices.grand_total) : null,
+  }));
+
+  const totalDepositAllocated = depositAllocations.reduce(
+    (sum: number, a: any) => sum + a.allocated_amount, 0
+  );
+
+  return NextResponse.json({ invoice, merchant: effectiveMerchant, monthlyCollected, referenceContext, depositAllocations, totalDepositAllocated });
 }
