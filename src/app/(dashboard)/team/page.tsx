@@ -33,7 +33,8 @@ import { createClient } from "@/lib/supabase/client";
 import { getMerchant } from "@/lib/data";
 import { 
   createCustomRoleAction, sendInviteAction, fetchTeamMembersAction,
-  deactivateTeamMemberAction, reactivateTeamMemberAction, removeTeamMemberAction
+  deactivateTeamMemberAction, reactivateTeamMemberAction, removeTeamMemberAction,
+  deleteCustomRoleAction
 } from "@/lib/actions";
 import type { Role, Merchant } from "@/lib/types";
 import {
@@ -51,6 +52,11 @@ interface TeamMember {
   joinedAt: string;
   is_active?: boolean;
 }
+
+type MerchantWithAccess = Merchant & {
+  currentUserRole?: string;
+  permissions?: Record<string, boolean>;
+};
 
 const PERMISSION_LABELS: Record<string, string> = {
   // ── Invoices ──────────────────────────────────────────
@@ -127,7 +133,7 @@ const PREDEFINED_ROLE_PERMISSIONS: Record<string, Record<string, boolean>> = {
     view_invoices: true, create_invoice: false, edit_invoice: false,
     record_payment: false, manual_close: false, void_invoice: false,
     view_references: true, manage_references: false,
-    view_clients: true, manage_clients: true, delete_client: false,
+    view_clients: true, manage_clients: false, delete_client: false,
     view_analytics: false, view_transactions: false, view_settlements: false,
     view_item_catalog: true, manage_item_catalog: false,
     view_discount_template: false, manage_discount_template: false,
@@ -143,7 +149,7 @@ export default function TeamPage() {
   const [loading, setLoading] = useState(true);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState("");
-  const [merchant, setMerchant] = useState<Merchant | null>(null);
+  const [merchant, setMerchant] = useState<MerchantWithAccess | null>(null);
   const [workspaceCode, setWorkspaceCode] = useState("");
   const [businessName, setBusinessName] = useState("");
   const [sendingInvite, setSendingInvite] = useState(false);
@@ -153,6 +159,8 @@ export default function TeamPage() {
   const [memberToRemove, setMemberToRemove] = useState<{id: string, email: string} | null>(null);
   const [isRemoving, setIsRemoving] = useState(false);
   const [team, setTeam] = useState<TeamMember[]>([]);
+  const [roleToDelete, setRoleToDelete] = useState<Role | null>(null);
+  const [deletingRole, setDeletingRole] = useState(false);
 
   // Custom role state
   const [newRoleName, setNewRoleName] = useState("");
@@ -174,7 +182,7 @@ export default function TeamPage() {
       const CANONICAL_SYSTEM_ROLES = new Set(["admin", "accountant", "viewer"]);
 
       // Keep: canonical system roles + any custom merchant roles (non-system)
-      const filtered = data.filter((r: any) =>
+      const filtered = (data as Role[]).filter((r) =>
         (!r.is_system_role) || CANONICAL_SYSTEM_ROLES.has(r.name)
       );
       const sorted = [...filtered].sort((a, b) => {
@@ -189,8 +197,8 @@ export default function TeamPage() {
   const loadTeam = async (mId: string, ownerEmail: string, ownerCreatedAt: string) => {
     const { success, team: fetchedTeam } = await fetchTeamMembersAction(mId);
     if (success && fetchedTeam) {
-      const ownerExists = fetchedTeam.some((t: any) => t.email === ownerEmail);
-      let allMembers = [...fetchedTeam];
+      const ownerExists = fetchedTeam.some((t) => t.email === ownerEmail);
+      const allMembers = [...fetchedTeam];
       if (!ownerExists) {
         allMembers.unshift({ 
           id: mId, user_id: mId, email: ownerEmail, role: "owner", 
@@ -266,6 +274,20 @@ export default function TeamPage() {
       setRoleMessage({ type: "error", text: error || "Failed to create role." });
     }
     setCreatingRole(false);
+  };
+
+  const confirmDeleteRole = async () => {
+    if (!roleToDelete || !merchant?.id) return;
+    setDeletingRole(true);
+    const { success, error } = await deleteCustomRoleAction(roleToDelete.id, merchant.id);
+    if (success) {
+      setRoleMessage({ type: "success", text: "Role deleted successfully." });
+      setRoleToDelete(null);
+      await fetchRoles(merchant.id);
+    } else {
+      setRoleMessage({ type: "error", text: error || "Failed to delete role." });
+    }
+    setDeletingRole(false);
   };
 
   if (loading) {
@@ -559,9 +581,22 @@ export default function TeamPage() {
                     <TableHead className="font-bold text-purp-900 dark:text-white min-w-[200px]">Permission</TableHead>
                     {roles.map(r => (
                       <TableHead key={r.id} className="text-center">
-                        <Badge variant="outline" className={`capitalize mx-auto whitespace-nowrap border-2 ${getRoleConfig(r.name).color}`}>
-                          {r.name}
-                        </Badge>
+                        <div className="flex items-center justify-center gap-2">
+                          <Badge variant="outline" className={`capitalize whitespace-nowrap border-2 ${getRoleConfig(r.name).color}`}>
+                            {r.name}
+                          </Badge>
+                          {!r.is_system_role && merchant?.currentUserRole === "owner" && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 text-red-600 hover:bg-red-50 hover:text-red-700"
+                              onClick={() => setRoleToDelete(r)}
+                              title={`Delete ${r.name} role`}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
+                        </div>
                       </TableHead>
                     ))}
                   </TableRow>
@@ -607,6 +642,25 @@ export default function TeamPage() {
             <Button variant="outline" onClick={() => setMemberToRemove(null)} className="border-2 dark:border-white/10 dark:text-white dark:hover:bg-white/5 hover:bg-neutral-50">Cancel</Button>
             <Button variant="destructive" onClick={confirmRemoveMember} disabled={isRemoving} className="bg-red-600 hover:bg-red-700 border-2 border-red-600">
               {isRemoving ? "Removing..." : "Remove Member"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!roleToDelete} onOpenChange={(open) => !open && setRoleToDelete(null)}>
+        <DialogContent className="border-2 border-red-200 dark:border-red-500/20 max-w-md dark:bg-[#1A0B2E]">
+          <DialogHeader>
+            <DialogTitle className="text-red-700 dark:text-red-400 flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5" /> Delete Custom Role
+            </DialogTitle>
+            <DialogDescription className="text-neutral-600 dark:text-white/60 pt-2">
+              Delete <span className="font-semibold text-neutral-900 dark:text-white">{roleToDelete?.name}</span>? This is owner-only and will fail if any team member is still assigned to the role.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="mt-4">
+            <Button variant="outline" onClick={() => setRoleToDelete(null)} className="border-2 dark:border-white/10 dark:text-white dark:hover:bg-white/5 hover:bg-neutral-50">Cancel</Button>
+            <Button variant="destructive" onClick={confirmDeleteRole} disabled={deletingRole} className="bg-red-600 hover:bg-red-700 border-2 border-red-600">
+              {deletingRole ? "Deleting..." : "Delete Role"}
             </Button>
           </DialogFooter>
         </DialogContent>

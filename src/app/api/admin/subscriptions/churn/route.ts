@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { requireSuperAdminSession } from "@/lib/admin-auth";
 
 import { sendSubscriptionCancelledEmail } from "@/lib/brevo";
 
@@ -10,6 +11,9 @@ const supabase = createClient(
 
 export async function POST(request: Request) {
   try {
+    const guard = await requireSuperAdminSession();
+    if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
+
     const { subscriptionId, merchantId, reason } = await request.json();
 
     if (!subscriptionId || !merchantId) {
@@ -41,7 +45,7 @@ export async function POST(request: Request) {
     // Log to audit_logs
     await supabase.from("audit_logs").insert({
       event_type: "subscription_cancelled_admin",
-      actor_id: null,
+      actor_id: guard.userId,
       actor_role: "admin",
       target_id: merchantId,
       target_type: "merchant",

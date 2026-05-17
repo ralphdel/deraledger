@@ -38,12 +38,36 @@ import { SubscriptionExpiryModal } from "@/components/subscription-expiry-modal"
 import { ThemeToggle } from "@/components/theme-toggle";
 import { PlatformUpdateModal } from "@/components/platform-update-modal";
 import { DeraLedgerLogo } from "@/components/ui/deraledger-logo";
+import { PermissionGuard } from "@/components/PermissionGuard";
 
 interface NavItem {
   href: string;
   label: string;
   icon: React.ElementType;
   requiredPermission?: string;
+}
+
+const dashboardRoutePermissions: Array<{ path: string; permission: string; featureLabel: string }> = [
+  { path: "/settings/billing", permission: "manage_billing", featureLabel: "Billing & Subscription" },
+  { path: "/settings/upgrade", permission: "manage_billing", featureLabel: "Plan Upgrades" },
+  { path: "/settings/settlement", permission: "manage_settlement_account", featureLabel: "Settlement Account" },
+  { path: "/settings/catalog", permission: "view_item_catalog", featureLabel: "Item Catalog" },
+  { path: "/settings/discount-templates", permission: "view_discount_template", featureLabel: "Discount Templates" },
+  { path: "/team", permission: "manage_team", featureLabel: "Team Management" },
+  { path: "/purpbot", permission: "use_purpbot", featureLabel: "DeraBot AI" },
+  { path: "/accounting-report", permission: "view_analytics", featureLabel: "Accounting Reports" },
+  { path: "/settlements", permission: "view_settlements", featureLabel: "Settlements" },
+  { path: "/references", permission: "view_references", featureLabel: "References" },
+  { path: "/clients/bulk", permission: "manage_clients", featureLabel: "Bulk Client Upload" },
+  { path: "/clients", permission: "view_clients", featureLabel: "Clients" },
+  { path: "/invoices", permission: "view_invoices", featureLabel: "Invoices" },
+  { path: "/settings", permission: "manage_business", featureLabel: "Settings" },
+];
+
+function getRoutePermission(pathname: string) {
+  return dashboardRoutePermissions.find((route) => (
+    pathname === route.path || pathname.startsWith(`${route.path}/`)
+  ));
 }
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -73,6 +97,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const initials = businessName.split(" ").map(n => n[0]).join("").toUpperCase().substring(0, 2);
   const plan = merchant?.subscription_plan || merchant?.merchant_tier || "starter";
   const businessAddressMissing = plan !== "starter" && (!merchant?.business_street?.trim() || !merchant?.business_city?.trim() || !merchant?.business_state?.trim() || !merchant?.business_country?.trim());
+  const routePermission = getRoutePermission(pathname);
 
   const allNavItems: NavItem[] = [
     { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -341,6 +366,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 </Link>
               )}
             </div>
+          ) : routePermission ? (
+            <PermissionGuard
+              permission={routePermission.permission}
+              merchant={merchant}
+              featureLabel={routePermission.featureLabel}
+            >
+              {children}
+            </PermissionGuard>
           ) : (
             children
           )}

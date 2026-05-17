@@ -41,7 +41,18 @@ export async function proxy(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const isAuthRoute = request.nextUrl.pathname.startsWith('/login') || request.nextUrl.pathname.startsWith('/register');
-  const isDashboardRoute = request.nextUrl.pathname.startsWith('/dashboard') || request.nextUrl.pathname.startsWith('/invoices') || request.nextUrl.pathname.startsWith('/team') || request.nextUrl.pathname.startsWith('/clients') || request.nextUrl.pathname.startsWith('/settings');
+  const protectedDashboardPrefixes = [
+    '/dashboard',
+    '/invoices',
+    '/team',
+    '/clients',
+    '/settings',
+    '/purpbot',
+    '/references',
+    '/settlements',
+    '/accounting-report',
+  ];
+  const isDashboardRoute = protectedDashboardPrefixes.some((prefix) => request.nextUrl.pathname.startsWith(prefix));
   const isAdminRoute = request.nextUrl.pathname.startsWith('/admin') && request.nextUrl.pathname !== '/admin-login';
   const isSuspendedRoute = request.nextUrl.pathname.startsWith('/suspended');
   const isSetPasswordRoute = request.nextUrl.pathname.startsWith('/set-password');

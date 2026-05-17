@@ -24,6 +24,8 @@ import type { Merchant, AuditLog } from "@/lib/types";
 import {
   adminDeactivateMerchantAction, adminReactivateMerchantAction,
   adminChangePlanAction, adminResetPasswordAction,
+  adminFetchTeamMembersAction, adminDeactivateTeamMemberAction,
+  adminReactivateTeamMemberAction,
 } from "@/lib/actions";
 
 export default function MerchantDetailPage() {
@@ -52,14 +54,14 @@ export default function MerchantDetailPage() {
 
     const [mRes, teamRes, invRes, txRes, auditRes] = await Promise.all([
       sb.from("merchants").select("*").eq("id", merchantId).single(),
-      sb.from("merchant_team").select("*").eq("merchant_id", merchantId),
+      adminFetchTeamMembersAction(merchantId),
       sb.from("invoices").select("invoice_type, grand_total, amount_paid, outstanding_balance").eq("merchant_id", merchantId),
       sb.from("transactions").select("amount_paid, created_at").eq("merchant_id", merchantId).eq("status", "success"),
       sb.from("audit_logs").select("*").or(`target_id.eq.${merchantId},metadata->>actor_merchant_id.eq.${merchantId}`).order("created_at", { ascending: false }).limit(50),
     ]);
 
     setMerchant(mRes.data as Merchant | null);
-    setTeamMembers(teamRes.data || []);
+    setTeamMembers(teamRes.success ? teamRes.team : []);
     setAuditLogs((auditRes.data || []) as AuditLog[]);
 
     // Invoice stats
@@ -116,6 +118,16 @@ export default function MerchantDetailPage() {
     setProcessing(true);
     const res = await adminResetPasswordAction(merchantId);
     if (res.success && res.resetLink) setShowResetLink(res.resetLink);
+    setProcessing(false);
+  };
+  const handleTeamMemberStatus = async (teamMemberId: string, activate: boolean) => {
+    setProcessing(true);
+    if (activate) {
+      await adminReactivateTeamMemberAction(teamMemberId, merchantId);
+    } else {
+      await adminDeactivateTeamMemberAction(teamMemberId, merchantId);
+    }
+    await fetchAll();
     setProcessing(false);
   };
 
@@ -310,14 +322,25 @@ export default function MerchantDetailPage() {
             ) : (
               <div className="space-y-2">
                 {teamMembers.map((tm: any) => (
-                  <div key={tm.id} className="flex items-center justify-between bg-neutral-50 p-3 rounded-lg text-sm">
+                  <div key={tm.id} className="flex items-center justify-between gap-3 bg-neutral-50 p-3 rounded-lg text-sm">
                     <div>
-                      <p className="font-medium">{tm.user_id?.slice(0, 8)}...</p>
-                      <p className="text-xs text-neutral-500">Role: {tm.role || "member"}</p>
+                      <p className="font-medium">{tm.email}</p>
+                      <p className="text-xs text-neutral-500">Role: {tm.role || "member"} Â· User: {tm.user_id?.slice(0, 8)}...</p>
                     </div>
-                    <Badge variant="outline" className={`text-xs border-2 ${tm.is_active ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-neutral-50 text-neutral-500 border-neutral-200"}`}>
-                      {tm.is_active ? "Active" : "Inactive"}
-                    </Badge>
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline" className={`text-xs capitalize border-2 ${tm.status === "invited" ? "bg-amber-50 text-amber-700 border-amber-200" : tm.is_active ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-neutral-50 text-neutral-500 border-neutral-200"}`}>
+                        {tm.status}
+                      </Badge>
+                      {tm.is_active ? (
+                        <Button size="sm" variant="outline" disabled={processing} className="h-8 border-2 text-amber-700 border-amber-200 hover:bg-amber-50" onClick={() => handleTeamMemberStatus(tm.id, false)}>
+                          Block
+                        </Button>
+                      ) : (
+                        <Button size="sm" variant="outline" disabled={processing} className="h-8 border-2 text-emerald-700 border-emerald-200 hover:bg-emerald-50" onClick={() => handleTeamMemberStatus(tm.id, true)}>
+                          Reactivate
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>

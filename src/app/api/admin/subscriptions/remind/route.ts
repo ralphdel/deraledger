@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { sendSubscriptionExpiringEmail } from "@/lib/brevo";
+import { requireSuperAdminSession } from "@/lib/admin-auth";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -9,6 +10,9 @@ const supabase = createClient(
 
 export async function POST(request: Request) {
   try {
+    const guard = await requireSuperAdminSession();
+    if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
+
     const { subscriptionId, merchantId } = await request.json();
 
     if (!subscriptionId || !merchantId) {
@@ -55,7 +59,7 @@ export async function POST(request: Request) {
     // Log to audit
     await supabase.from("audit_logs").insert({
       event_type: "manual_subscription_reminder_sent",
-      actor_id: null,
+      actor_id: guard.userId,
       actor_role: "admin",
       target_id: merchantId,
       target_type: "merchant",

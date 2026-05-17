@@ -200,19 +200,20 @@ export async function getMerchant(id?: string): Promise<(Merchant & { currentUse
       if (isSuspended) {
         // Suspended for violations: Zero access
         permissions = {};
-      } else {
-        // Churned/Hard Expired: Only billing access
+      } else if (currentUserRole === "owner") {
+        // Churned/Hard Expired: only the owner can restore billing.
         permissions = {
           manage_billing: true,
           view_billing: true
         };
+      } else {
+        permissions = {};
       }
     } else if (isReadOnly) {
       // Expired but in 24h grace period: Read-only access
-      const readOnlyPermissions: Record<string, boolean> = {
-        manage_billing: true,
-        view_billing: true
-      };
+      const readOnlyPermissions: Record<string, boolean> = currentUserRole === "owner"
+        ? { manage_billing: true, view_billing: true }
+        : {};
       
       // Keep only view permissions
       Object.keys(permissions).forEach(key => {

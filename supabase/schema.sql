@@ -87,7 +87,7 @@ INSERT INTO roles (name, permissions, is_system_role) VALUES
     "view_invoices":true,"create_invoice":false,"edit_invoice":false,
     "record_payment":false,"manual_close":false,"void_invoice":false,
     "view_references":true,"manage_references":false,
-    "view_clients":true,"manage_clients":true,"delete_client":false,
+    "view_clients":true,"manage_clients":false,"delete_client":false,
     "view_analytics":false,"view_transactions":false,"view_settlements":false,
     "view_item_catalog":true,"manage_item_catalog":false,
     "view_discount_template":false,"manage_discount_template":false,

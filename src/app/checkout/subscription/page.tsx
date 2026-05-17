@@ -98,7 +98,7 @@ function SubscriptionCheckoutContent() {
     if (context === "renewal") {
       // Renewal context: load merchant data directly from API (authenticated user)
       getMerchant().then((merchant) => {
-        if (!merchant) {
+        if (!merchant || merchant.id === "00000000-0000-0000-0000-000000000001" || merchant.currentUserRole !== "owner") {
           router.replace("/settings/billing");
           return;
         }

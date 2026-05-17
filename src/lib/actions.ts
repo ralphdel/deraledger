@@ -24,6 +24,20 @@ function getServiceClient() {
   );
 }
 
+type TeamRowWithRole = {
+  id: string;
+  user_id: string;
+  is_active: boolean;
+  must_change_password: boolean;
+  added_at: string;
+  roles?: { name?: string } | { name?: string }[] | null;
+};
+
+function roleNameFromTeamRow(row: TeamRowWithRole) {
+  const role = Array.isArray(row.roles) ? row.roles[0] : row.roles;
+  return role?.name || "Viewer";
+}
+
 /**
  * Verifies the calling user is an authenticated SuperAdmin.
  * Must be called at the start of every admin server action.
@@ -39,6 +53,22 @@ async function requireSuperAdmin(): Promise<{ error?: { success: false; error: s
     user.app_metadata?.is_super_admin === true;
   if (!isSuperAdmin) return { error: { success: false, error: "Unauthorized: SuperAdmin access required." } };
   return {};
+}
+
+async function requireMerchantOwner(merchantId: string): Promise<{ permitted: boolean; userId?: string; error?: string }> {
+  const supabase = await createClient();
+  const { data: { user }, error } = await supabase.auth.getUser();
+  if (error || !user) return { permitted: false, error: "Unauthorized: not authenticated." };
+
+  const { data: merchant, error: merchantError } = await supabase
+    .from("merchants")
+    .select("user_id")
+    .eq("id", merchantId)
+    .single();
+
+  if (merchantError || !merchant) return { permitted: false, error: "Merchant not found." };
+  if (merchant.user_id !== user.id) return { permitted: false, error: "Forbidden: owner access required." };
+  return { permitted: true, userId: user.id };
 }
 
 const DEMO_MERCHANT_ID = "00000000-0000-0000-0000-000000000001";
@@ -462,6 +492,47 @@ export async function createCustomRoleAction(merchantId: string, roleName: strin
   return { success: true };
 }
 
+export async function deleteCustomRoleAction(roleId: string, merchantId: string) {
+  const ownerCheck = await requireMerchantOwner(merchantId);
+  if (!ownerCheck.permitted) return { success: false, error: ownerCheck.error };
+
+  const adminClient = getServiceClient();
+  const { data: role, error: roleError } = await adminClient
+    .from("roles")
+    .select("id, name, is_system_role, merchant_id")
+    .eq("id", roleId)
+    .eq("merchant_id", merchantId)
+    .maybeSingle();
+
+  if (roleError) return { success: false, error: roleError.message };
+  if (!role) return { success: false, error: "Role not found." };
+  if (role.is_system_role) return { success: false, error: "System roles cannot be deleted." };
+
+  const { count, error: memberError } = await adminClient
+    .from("merchant_team")
+    .select("id", { count: "exact", head: true })
+    .eq("merchant_id", merchantId)
+    .eq("role_id", roleId);
+
+  if (memberError) return { success: false, error: memberError.message };
+  if ((count || 0) > 0) {
+    return { success: false, error: "Reassign or remove members using this role before deleting it." };
+  }
+
+  const { error } = await adminClient
+    .from("roles")
+    .delete()
+    .eq("id", roleId)
+    .eq("merchant_id", merchantId)
+    .eq("is_system_role", false);
+
+  if (error) return { success: false, error: error.message };
+
+  await logAudit("role_delete", roleId, "role", { merchantId, roleName: role.name });
+  revalidatePath("/team");
+  return { success: true };
+}
+
 export async function sendInviteAction(
   email: string,
   role: string,
@@ -757,6 +828,8 @@ export async function adminResetPasswordAction(merchantId: string) {
 // ── Team Member Management ───────────────────────────────────────────────────
 
 export async function deactivateTeamMemberAction(teamMemberId: string, merchantId: string) {
+  const permCheck = await requirePermission(merchantId, "manage_team");
+  if (!permCheck.permitted) return { success: false, error: permCheck.error };
   const adminClient = getServiceClient();
   const { error } = await adminClient
     .from("merchant_team")
@@ -764,11 +837,14 @@ export async function deactivateTeamMemberAction(teamMemberId: string, merchantI
     .eq("id", teamMemberId)
     .eq("merchant_id", merchantId); // Ensure merchant owns this row
   if (error) return { success: false, error: error.message };
+  await logAudit("team_member_deactivate", teamMemberId, "merchant_team", { merchantId });
   revalidatePath("/team");
   return { success: true };
 }
 
 export async function reactivateTeamMemberAction(teamMemberId: string, merchantId: string) {
+  const permCheck = await requirePermission(merchantId, "manage_team");
+  if (!permCheck.permitted) return { success: false, error: permCheck.error };
   const adminClient = getServiceClient();
   const { error } = await adminClient
     .from("merchant_team")
@@ -776,6 +852,7 @@ export async function reactivateTeamMemberAction(teamMemberId: string, merchantI
     .eq("id", teamMemberId)
     .eq("merchant_id", merchantId);
   if (error) return { success: false, error: error.message };
+  await logAudit("team_member_reactivate", teamMemberId, "merchant_team", { merchantId });
   revalidatePath("/team");
   return { success: true };
 }
@@ -790,11 +867,14 @@ export async function removeTeamMemberAction(teamMemberId: string, merchantId: s
     .eq("id", teamMemberId)
     .eq("merchant_id", merchantId);
   if (error) return { success: false, error: error.message };
+  await logAudit("team_member_remove", teamMemberId, "merchant_team", { merchantId });
   revalidatePath("/team");
   return { success: true };
 }
 
 export async function fetchTeamMembersAction(merchantId: string) {
+  const permCheck = await requirePermission(merchantId, "manage_team");
+  if (!permCheck.permitted) return { success: false, team: [], error: permCheck.error };
   const adminClient = getServiceClient();
   
   // 1. Get all team rows for this merchant
@@ -809,22 +889,106 @@ export async function fetchTeamMembersAction(merchantId: string) {
   
   // 2. Get all user emails using admin api
   const { data: usersData } = await adminClient.auth.admin.listUsers();
-  const userMap = new Map();
+  const userMap = new Map<string, string | undefined>();
   if (usersData?.users) {
     usersData.users.forEach(u => userMap.set(u.id, u.email));
   }
   
-  const formattedTeam = teamRows.map(row => ({
+  const formattedTeam = (teamRows as TeamRowWithRole[]).map(row => ({
     id: row.id,
     user_id: row.user_id,
     email: userMap.get(row.user_id) || "Unknown User",
-    role: row.roles?.name || "Viewer",
+    role: roleNameFromTeamRow(row),
     status: (row.must_change_password ? "invited" : (row.is_active ? "active" : "inactive")) as "active" | "inactive" | "invited",
     joinedAt: row.added_at,
     is_active: row.is_active
   }));
   
   return { success: true, team: formattedTeam };
+}
+
+export async function adminFetchTeamMembersAction(merchantId: string) {
+  const guard = await requireSuperAdmin();
+  if (guard.error) return { ...guard.error, team: [] };
+
+  const adminClient = getServiceClient();
+  const { data: teamRows, error: teamError } = await adminClient
+    .from("merchant_team")
+    .select("*, roles(name)")
+    .eq("merchant_id", merchantId)
+    .order("added_at", { ascending: false });
+
+  if (teamError || !teamRows) {
+    return { success: false, team: [], error: teamError?.message || "Failed to load team." };
+  }
+
+  const { data: usersData } = await adminClient.auth.admin.listUsers();
+  const userMap = new Map<string, string>();
+  usersData?.users?.forEach((u) => userMap.set(u.id, u.email || "Unknown User"));
+
+  const formattedTeam = (teamRows as TeamRowWithRole[]).map((row) => ({
+    id: row.id,
+    user_id: row.user_id,
+    email: userMap.get(row.user_id) || "Unknown User",
+    role: roleNameFromTeamRow(row),
+    status: (row.must_change_password ? "invited" : (row.is_active ? "active" : "inactive")) as "active" | "inactive" | "invited",
+    joinedAt: row.added_at,
+    is_active: row.is_active,
+  }));
+
+  return { success: true, team: formattedTeam };
+}
+
+export async function adminDeactivateTeamMemberAction(teamMemberId: string, merchantId: string) {
+  const guard = await requireSuperAdmin();
+  if (guard.error) return guard.error;
+
+  const adminClient = getServiceClient();
+  const { error } = await adminClient
+    .from("merchant_team")
+    .update({ is_active: false })
+    .eq("id", teamMemberId)
+    .eq("merchant_id", merchantId);
+
+  if (error) return { success: false, error: error.message };
+
+  await adminClient.from("audit_logs").insert({
+    event_type: "admin_team_member_deactivated",
+    actor_id: null,
+    actor_role: "admin",
+    target_id: teamMemberId,
+    target_type: "merchant_team",
+    metadata: { actor_name: "SuperAdmin", merchantId },
+  });
+
+  revalidatePath(`/admin/merchants/${merchantId}`);
+  return { success: true };
+}
+
+export async function adminReactivateTeamMemberAction(teamMemberId: string, merchantId: string) {
+  const guard = await requireSuperAdmin();
+  if (guard.error) return guard.error;
+
+  const adminClient = getServiceClient();
+  const { error } = await adminClient
+    .from("merchant_team")
+    .update({ is_active: true })
+    .eq("id", teamMemberId)
+    .eq("merchant_id", merchantId);
+
+  if (error) return { success: false, error: error.message };
+
+  await adminClient.from("audit_logs").insert({
+    event_type: "admin_team_member_reactivated",
+    actor_id: null,
+    actor_role: "admin",
+    target_id: teamMemberId,
+    target_type: "merchant_team",
+    metadata: { actor_name: "SuperAdmin", merchantId },
+  });
+
+  revalidatePath(`/admin/merchants/${merchantId}`);
+  return { success: true };
 }
 
 export async function createClientAction(clientData: {
@@ -838,6 +1002,9 @@ export async function createClientAction(clientData: {
   reminder_channels?: ("email" | "whatsapp")[];
   merchant_id: string;
 }) {
+  const permCheck = await requirePermission(clientData.merchant_id, "manage_clients");
+  if (!permCheck.permitted) return { success: false, error: permCheck.error };
+
   const adminClient = getServiceClient();
 
   // Normalise whatsapp_number to international format before storing
@@ -866,6 +1033,7 @@ export async function createClientAction(clientData: {
     .single();
 
   if (error) return { success: false, error: error.message };
+  await logAudit("client_create", data.id, "client", { merchantId: clientData.merchant_id });
   revalidatePath("/clients");
   return { success: true, data: data };
 }
@@ -881,6 +1049,19 @@ export async function updateClientAction(clientId: string, clientData: {
   reminder_channels?: ("email" | "whatsapp")[];
 }) {
   const adminClient = getServiceClient();
+
+  const { data: existingClient, error: existingError } = await adminClient
+    .from("clients")
+    .select("merchant_id")
+    .eq("id", clientId)
+    .single();
+
+  if (existingError || !existingClient?.merchant_id) {
+    return { success: false, error: existingError?.message || "Client not found" };
+  }
+
+  const permCheck = await requirePermission(existingClient.merchant_id, "manage_clients");
+  if (!permCheck.permitted) return { success: false, error: permCheck.error };
 
   // Normalise whatsapp_number to international format before storing
   let normalisedWhatsApp: string | undefined;
@@ -908,6 +1089,7 @@ export async function updateClientAction(clientId: string, clientData: {
     .single();
 
   if (error) return { success: false, error: error.message };
+  await logAudit("client_update", clientId, "client", { merchantId: existingClient.merchant_id });
   revalidatePath("/clients");
   return { success: true, data: data };
 }
@@ -1326,6 +1508,9 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
 
 
 export async function bulkCreateClientsAction(merchantId: string, clientsData: any[]) {
+  const permCheck = await requirePermission(merchantId, "manage_clients");
+  if (!permCheck.permitted) return { success: false, error: permCheck.error };
+
   const adminClient = getServiceClient();
 
   const formattedClients = clientsData.map(c => {
@@ -1356,6 +1541,7 @@ export async function bulkCreateClientsAction(merchantId: string, clientsData: a
     .select();
 
   if (error) return { success: false, error: error.message };
+  await logAudit("client_bulk_create", merchantId, "client", { merchantId, count: data.length });
   revalidatePath("/clients");
   return { success: true, count: data.length };
 }

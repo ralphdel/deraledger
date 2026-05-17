@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
+import { requireSuperAdminSession } from "@/lib/admin-auth";
 
 const supabase = createSupabaseClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -19,6 +20,9 @@ const supabase = createSupabaseClient(
  * Returns a summary of what was fixed.
  */
 export async function POST(request: Request) {
+  const guard = await requireSuperAdminSession();
+  if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
+
   const body = await request.json().catch(() => ({}));
   const targetEmail: string | undefined = body.email;
 
@@ -98,8 +102,8 @@ export async function POST(request: Request) {
       // Log the repair to audit
       await supabase.from("audit_logs").insert({
         event_type: "subscription_repaired",
-        actor_id: null,
-        actor_role: "system",
+        actor_id: guard.userId,
+        actor_role: "admin",
         target_id: merchantId,
         target_type: "merchant",
         metadata: {

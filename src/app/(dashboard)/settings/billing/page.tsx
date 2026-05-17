@@ -12,9 +12,15 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { AlertCircle, CheckCircle, Clock, Copy, Download, Info } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { PermissionGuard } from "@/components/PermissionGuard";
+
+type MerchantWithAccess = Merchant & {
+  permissions?: Record<string, boolean>;
+  currentUserRole?: string;
+};
 
 export default function BillingSettingsPage() {
-  const [merchant, setMerchant] = useState<Merchant | null>(null);
+  const [merchant, setMerchant] = useState<MerchantWithAccess | null>(null);
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [history, setHistory] = useState<SubscriptionPayment[]>([]);
   const [loading, setLoading] = useState(true);
@@ -38,6 +44,7 @@ export default function BillingSettingsPage() {
 
   const handleRenew = () => {
     if (!merchant || !subscription) return;
+    if (merchant.currentUserRole !== "owner") return;
     // Navigate to the premium checkout page in renewal context
     // The checkout page will load merchant data directly (authenticated)
     // and route the Paystack callback back to /settings/billing/renew-callback
@@ -128,6 +135,7 @@ export default function BillingSettingsPage() {
   }
 
   return (
+    <PermissionGuard permission="manage_billing" merchant={merchant} featureLabel="Billing & Subscription">
     <div className="max-w-4xl space-y-6 pb-20">
       <div>
         <h1 className="text-2xl font-bold text-purp-900">Billing &amp; Subscription</h1>
@@ -157,6 +165,10 @@ export default function BillingSettingsPage() {
               <Link href="/settings/upgrade/individual" className={cn(buttonVariants({ variant: "default" }), "bg-purp-900 hover:bg-purp-800 text-white w-full md:w-auto")}>
                 Upgrade to Individual / Collections
               </Link>
+            ) : merchant.currentUserRole !== "owner" ? (
+              <Button disabled className="bg-neutral-200 text-neutral-500 w-full md:w-auto font-bold">
+                Owner Only
+              </Button>
             ) : (
               <>
                 <Button 
@@ -276,5 +288,6 @@ export default function BillingSettingsPage() {
         </Card>
       )}
     </div>
+    </PermissionGuard>
   );
 }

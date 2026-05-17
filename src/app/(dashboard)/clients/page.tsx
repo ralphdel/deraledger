@@ -67,6 +67,7 @@ export default function ClientsPage() {
   const [merchant, setMerchant] = useState<(Merchant & { permissions?: Record<string, boolean>; currentUserRole?: string }) | null>(null);
   const [merchantId, setMerchantId] = useState("");
   const [currentUserRole, setCurrentUserRole] = useState("viewer");
+  const canManageClients = currentUserRole === "owner" || merchant?.permissions?.manage_clients === true;
 
   const fetchData = () => {
     setLoading(true);
@@ -128,15 +129,19 @@ export default function ClientsPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          <Link href="/clients/bulk">
-            <Button variant="outline" className="border-2 border-purp-200 dark:border-white/10 text-purp-700 dark:text-[#B58CFF] font-semibold bg-white dark:bg-transparent hover:bg-purp-50 dark:hover:bg-white/5">
-              Bulk Upload
-            </Button>
-          </Link>
-          <Button onClick={() => { setClientToEdit(null); setDialogOpen(true); }} className="bg-purp-900 hover:bg-purp-700 dark:bg-[#7B2FF7] dark:hover:bg-[#7B2FF7]/80 text-white font-semibold">
-            <Plus className="mr-2 h-4 w-4" />
-            Add Client
-          </Button>
+          {canManageClients && (
+            <>
+              <Link href="/clients/bulk">
+                <Button variant="outline" className="border-2 border-purp-200 dark:border-white/10 text-purp-700 dark:text-[#B58CFF] font-semibold bg-white dark:bg-transparent hover:bg-purp-50 dark:hover:bg-white/5">
+                  Bulk Upload
+                </Button>
+              </Link>
+              <Button onClick={() => { setClientToEdit(null); setDialogOpen(true); }} className="bg-purp-900 hover:bg-purp-700 dark:bg-[#7B2FF7] dark:hover:bg-[#7B2FF7]/80 text-white font-semibold">
+                <Plus className="mr-2 h-4 w-4" />
+                Add Client
+              </Button>
+            </>
+          )}
         </div>
 
         {/* Edit Client Modal */}
@@ -251,13 +256,15 @@ export default function ClientsPage() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="font-bold text-purp-900 dark:text-white truncate">{client.full_name}</h3>
-                      <button
-                        onClick={() => setClientToEdit(client)}
-                        className="text-neutral-400 hover:text-purp-700 dark:hover:text-white transition-colors"
-                        title="Edit client"
-                      >
-                        <Edit2 className="w-3.5 h-3.5" />
-                      </button>
+                      {canManageClients && (
+                        <button
+                          onClick={() => setClientToEdit(client)}
+                          className="text-neutral-400 hover:text-purp-700 dark:hover:text-white transition-colors"
+                          title="Edit client"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                       {currentUserRole === "owner" && (
                         <button
                           onClick={() => setClientToDelete(client)}

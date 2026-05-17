@@ -37,7 +37,7 @@ export function PermissionGuard({
   if (!merchant) return null;
 
   // Owners always have all permissions — guard is transparent for them
-  if (merchant.currentUserRole === "owner") return <>{children}</>;
+  if (merchant.currentUserRole === "owner" || merchant.currentUserRole === "superadmin") return <>{children}</>;
 
   // If permissions exist and the required one is not granted → deny
   if (merchant.permissions && merchant.permissions[permission] !== true) {
