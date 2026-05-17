@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   Users, Search, AlertTriangle, MoreHorizontal, Ban, Trash2,
-  CheckCircle2, ExternalLink, Filter,
+  CheckCircle2, ExternalLink, KeyRound, Copy, Check,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -27,12 +27,13 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import { formatNaira } from "@/lib/calculations";
 import type { Merchant } from "@/lib/types";
-import { adminDeactivateMerchantAction, adminDeleteMerchantAction, adminReactivateMerchantAction } from "@/lib/actions";
+import { adminDeactivateMerchantAction, adminDeleteMerchantAction, adminReactivateMerchantAction, adminResetPasswordAction } from "@/lib/actions";
 
 type ModalState =
   | { type: "deactivate"; merchant: Merchant }
   | { type: "reactivate"; merchant: Merchant }
   | { type: "delete"; merchant: Merchant; confirmName: string; error: string | null }
+  | { type: "resetLink"; merchant: Merchant; link: string }
   | null;
 
 interface MerchantStats {
@@ -55,6 +56,7 @@ export default function AdminMerchantsPage() {
   const [sortBy, setSortBy] = useState("newest");
   const [modal, setModal] = useState<ModalState>(null);
   const [processing, setProcessing] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const fetchData = async () => {
     setLoading(true);
@@ -150,6 +152,24 @@ export default function AdminMerchantsPage() {
     await fetchData();
     setModal(null);
     setProcessing(false);
+  };
+
+  const handleResetPassword = async (merchant: Merchant) => {
+    setProcessing(true);
+    const res = await adminResetPasswordAction(merchant.id);
+    setProcessing(false);
+    if (res.success && res.resetLink) {
+      setModal({ type: "resetLink", merchant, link: res.resetLink });
+    } else {
+      alert("Failed to generate reset link: " + (res.error || "Unknown error"));
+    }
+  };
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
   };
 
   const effectiveTier = (m: Merchant) => m.subscription_plan || m.merchant_tier || "starter";
@@ -442,6 +462,10 @@ export default function AdminMerchantsPage() {
                               <ExternalLink className="mr-2 h-4 w-4" /> View Detail
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
+                          <DropdownMenuItem className="cursor-pointer text-blue-600" disabled={processing} onClick={() => handleResetPassword(m)}>
+                            <KeyRound className="mr-2 h-4 w-4" /> Reset Password
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
                           {m.verification_status === "suspended" ? (
                             <DropdownMenuItem className="cursor-pointer text-emerald-600" onClick={() => setModal({ type: "reactivate", merchant: m })}>
                               <CheckCircle2 className="mr-2 h-4 w-4" /> Reactivate Access
@@ -556,6 +580,44 @@ export default function AdminMerchantsPage() {
             >
               {processing ? "Deleting..." : "Delete Permanently"}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reset Password Link Modal */}
+      <Dialog open={modal?.type === "resetLink"} onOpenChange={(open) => !open && setModal(null)}>
+        <DialogContent className="border-2 border-blue-200 max-w-lg">
+          <DialogHeader>
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-full bg-blue-100 flex items-center justify-center">
+                <KeyRound className="h-5 w-5 text-blue-600" />
+              </div>
+              <DialogTitle className="text-blue-700">Password Reset Link Generated</DialogTitle>
+            </div>
+            <DialogDescription className="pt-3">
+              A password recovery link has been generated for <strong>{modal?.type === "resetLink" ? modal.merchant.business_name : ""}</strong>. Copy and send it to the merchant — it will expire after 1 hour.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="mt-3 space-y-3">
+            <div className="bg-neutral-50 border border-neutral-200 rounded-lg p-3 flex items-start gap-2">
+              <code className="text-xs text-neutral-700 break-all flex-1 leading-relaxed">
+                {modal?.type === "resetLink" ? modal.link : ""}
+              </code>
+              <Button
+                size="sm"
+                variant="outline"
+                className="flex-shrink-0 border-2"
+                onClick={() => modal?.type === "resetLink" && copyToClipboard(modal.link)}
+              >
+                {copied ? <Check className="h-4 w-4 text-emerald-600" /> : <Copy className="h-4 w-4" />}
+              </Button>
+            </div>
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">
+              ⚠ This link allows the merchant to reset their password. Do not share it publicly. It expires in 1 hour.
+            </p>
+          </div>
+          <DialogFooter className="mt-4">
+            <Button onClick={() => setModal(null)} className="bg-blue-600 hover:bg-blue-700 text-white font-semibold">Done</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

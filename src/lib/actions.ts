@@ -24,6 +24,23 @@ function getServiceClient() {
   );
 }
 
+/**
+ * Verifies the calling user is an authenticated SuperAdmin.
+ * Must be called at the start of every admin server action.
+ * Throws an error object (not an exception) if auth fails.
+ */
+async function requireSuperAdmin(): Promise<{ error?: { success: false; error: string } }> {
+  const supabase = await createClient();
+  const { data: { user }, error } = await supabase.auth.getUser();
+  if (error || !user) return { error: { success: false, error: "Unauthorized: not authenticated." } };
+  // Check is_super_admin flag in user metadata (set during admin account provisioning)
+  const isSuperAdmin =
+    user.user_metadata?.is_super_admin === true ||
+    user.app_metadata?.is_super_admin === true;
+  if (!isSuperAdmin) return { error: { success: false, error: "Unauthorized: SuperAdmin access required." } };
+  return {};
+}
+
 const DEMO_MERCHANT_ID = "00000000-0000-0000-0000-000000000001";
 
 async function logAudit(
@@ -571,6 +588,8 @@ export async function sendInviteAction(
 // ── Admin Actions ────────────────────────────────────────────────────────────
 
 export async function adminDeactivateMerchantAction(merchantId: string) {
+  const guard = await requireSuperAdmin();
+  if (guard.error) return guard.error;
   const adminClient = getServiceClient();
   const { error } = await adminClient
     .from("merchants")
@@ -582,6 +601,8 @@ export async function adminDeactivateMerchantAction(merchantId: string) {
 }
 
 export async function adminReactivateMerchantAction(merchantId: string) {
+  const guard = await requireSuperAdmin();
+  if (guard.error) return guard.error;
   const adminClient = getServiceClient();
   const { error } = await adminClient
     .from("merchants")
@@ -593,6 +614,8 @@ export async function adminReactivateMerchantAction(merchantId: string) {
 }
 
 export async function adminDeleteMerchantAction(merchantId: string) {
+  const guard = await requireSuperAdmin();
+  if (guard.error) return guard.error;
   const adminClient = getServiceClient();
 
   // First fetch the user_id before deleting so we can remove the auth user too
@@ -656,6 +679,8 @@ export async function adminChangePlanAction(
   merchantId: string,
   newPlan: "starter" | "individual" | "corporate"
 ) {
+  const guard = await requireSuperAdmin();
+  if (guard.error) return guard.error;
   const adminClient = getServiceClient();
 
   const limits: Record<string, number> = {
@@ -690,6 +715,8 @@ export async function adminChangePlanAction(
 }
 
 export async function adminResetPasswordAction(merchantId: string) {
+  const guard = await requireSuperAdmin();
+  if (guard.error) return guard.error;
   const adminClient = getServiceClient();
 
   const { data: merchant } = await adminClient
@@ -700,8 +727,9 @@ export async function adminResetPasswordAction(merchantId: string) {
 
   if (!merchant?.email) return { success: false, error: "Merchant not found" };
 
+  // Use 'recovery' type to generate a proper password-reset link (not a magic login link)
   const { data, error } = await adminClient.auth.admin.generateLink({
-    type: "magiclink",
+    type: "recovery",
     email: merchant.email,
   });
 
@@ -710,17 +738,8 @@ export async function adminResetPasswordAction(merchantId: string) {
   const configuredUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
   const appUrl = configuredUrl || (process.env.NODE_ENV === "development" ? "http://localhost:3000" : "https://purpledger.vercel.app");
 
-  let resetLink = `${appUrl}/onboarding/resend`;
-  const actionLink = data?.properties?.action_link;
-  if (actionLink) {
-    try {
-      const url = new URL(actionLink);
-      url.searchParams.set("redirect_to", `${appUrl}/reset-password`);
-      resetLink = url.toString();
-    } catch {
-      resetLink = actionLink;
-    }
-  }
+  // The recovery link from Supabase already supports redirect_to via the action_link
+  const resetLink = data?.properties?.action_link || `${appUrl}/reset-password`;
 
   await adminClient.from("audit_logs").insert({
     event_type: "admin_password_reset",
@@ -1814,6 +1833,8 @@ export async function adminUpdateKycDocumentStatusAction(
   status: "verified" | "rejected",
   notes?: string
 ) {
+  const guard = await requireSuperAdmin();
+  if (guard.error) return guard.error;
   const adminClient = getServiceClient();
 
   const updates: Record<string, unknown> = {
@@ -1875,6 +1896,8 @@ export async function adminUpdateKycDocumentStatusAction(
  * Unlocks: collection invoices, payment links, settlement workflows.
  */
 export async function adminApproveVerificationAction(merchantId: string) {
+  const guard = await requireSuperAdmin();
+  if (guard.error) return guard.error;
   const adminClient = getServiceClient();
 
   const { error } = await adminClient
@@ -1905,6 +1928,8 @@ export async function adminApproveVerificationAction(merchantId: string) {
  * Stored in kyc_rejection_reason for merchant visibility.
  */
 export async function adminRejectVerificationAction(merchantId: string, reason: string) {
+  const guard = await requireSuperAdmin();
+  if (guard.error) return guard.error;
   if (!reason || reason.trim().length < 10) {
     return { success: false, error: "Rejection reason must be at least 10 characters." };
   }
@@ -1941,12 +1966,14 @@ export async function adminRejectVerificationAction(merchantId: string, reason: 
  * Merchant must re-upload all documents to restart verification.
  */
 export async function adminResetVerificationAction(merchantId: string) {
+  const guard = await requireSuperAdmin();
+  if (guard.error) return guard.error;
   const adminClient = getServiceClient();
 
   // Archive previous document references (prefix with archived_ timestamp)
   const { data: merchant } = await adminClient
     .from("merchants")
-    .select("cac_document_url, utility_document_url, selfie_url, cac_number")
+    .select("cac_document_url, utility_document_url, selfie_url, cac_number, bvn, owner_name")
     .eq("id", merchantId)
     .single();
 
@@ -1961,11 +1988,15 @@ export async function adminResetVerificationAction(merchantId: string) {
       bvn_status: "unverified",
       utility_status: "unverified",
       selfie_status: "unverified",
-      // Clear document URLs (archived in audit log)
+      // Clear document URLs (archived in audit log below)
       cac_document_url: null,
       utility_document_url: null,
       selfie_url: null,
       cac_number: null,
+      // CRITICAL: also clear BVN and owner_name so merchant can genuinely re-verify
+      // Without this, Individual plan merchants stay stuck (bvn set but bvn_status=unverified)
+      bvn: null,
+      owner_name: null,
       // Clear KYC metadata
       dojah_reference: null,
       dojah_match_score: null,
@@ -1989,6 +2020,8 @@ export async function adminResetVerificationAction(merchantId: string) {
     archived_utility_document: merchant?.utility_document_url ?? null,
     archived_selfie: merchant?.selfie_url ?? null,
     archived_cac_number: merchant?.cac_number ?? null,
+    archived_bvn: merchant?.bvn ? "[redacted]" : null,
+    archived_owner_name: merchant?.owner_name ?? null,
   });
 
   revalidatePath("/admin/verification");
@@ -2002,6 +2035,8 @@ export async function adminResetVerificationAction(merchantId: string) {
  * Friendlier alternative to hard Reject.
  */
 export async function adminRequestReuploadAction(merchantId: string, reason: string) {
+  const guard = await requireSuperAdmin();
+  if (guard.error) return guard.error;
   if (!reason || reason.trim().length < 5) {
     return { success: false, error: "Please specify which documents need to be re-uploaded." };
   }
@@ -2034,6 +2069,8 @@ export async function adminRequestReuploadAction(merchantId: string, reason: str
 // ── KYC Document Viewing ──────────────────────────────────────────────────────
 
 export async function adminGetKycDocumentUrlAction(pathOrUrl: string) {
+  const guard = await requireSuperAdmin();
+  if (guard.error) return guard.error;
   const adminClient = getServiceClient();
   let path = pathOrUrl;
   if (path.includes("/kyc-documents/")) {

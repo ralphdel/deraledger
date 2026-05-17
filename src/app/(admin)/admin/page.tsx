@@ -19,25 +19,35 @@ import type { Merchant, Invoice } from "@/lib/types";
 
 export default function AdminOverviewPage() {
   const [merchants, setMerchants] = useState<Merchant[]>([]);
-  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [transactions, setTransactions] = useState<{ amount_paid: number }[]>([]);
+  const [activeCount, setActiveCount] = useState(0);
+  const [recentInvoices, setRecentInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const sb = createClient();
     Promise.all([
       sb.from("merchants").select("*").order("created_at", { ascending: false }),
-      sb.from("invoices").select("*").order("created_at", { ascending: false }).limit(10),
-    ]).then(([merchantRes, invoiceRes]) => {
+      // GMV = sum of all successful transaction amounts across the platform
+      sb.from("transactions").select("amount_paid").eq("status", "success"),
+      // Active invoices = open or partially paid across all merchants
+      sb.from("invoices").select("id, status").in("status", ["open", "partially_paid"]),
+      // Recent activity (last 8 for display)
+      sb.from("invoices").select("*").order("created_at", { ascending: false }).limit(8),
+    ]).then(([merchantRes, txRes, activeRes, recentRes]) => {
       setMerchants((merchantRes.data || []) as Merchant[]);
-      setInvoices((invoiceRes.data || []) as Invoice[]);
+      setTransactions((txRes.data || []) as { amount_paid: number }[]);
+      setActiveCount((activeRes.data || []).length);
+      setRecentInvoices((recentRes.data || []) as Invoice[]);
       setLoading(false);
     });
   }, []);
 
   const pendingVerifications = merchants.filter((m) => m.verification_status === "pending").length;
   const totalMerchants = merchants.length;
-  const totalGMV = invoices.reduce((s, i) => s + Number(i.amount_paid), 0);
-  const activeInvoices = invoices.filter((i) => i.status === "open" || i.status === "partially_paid").length;
+  // GMV = net amount collected via successful transactions (excludes Paystack fees)
+  const totalGMV = transactions.reduce((s, t) => s + Number(t.amount_paid), 0);
+  const activeInvoices = activeCount;
 
   const kpis = [
     { title: "Total Merchants", value: totalMerchants.toString(), icon: Users, color: "bg-blue-100 text-blue-700 border-blue-200" },
@@ -161,7 +171,7 @@ export default function AdminOverviewPage() {
         </CardHeader>
         <CardContent>
           <div className="space-y-2">
-            {invoices.slice(0, 8).map((inv) => (
+            {recentInvoices.slice(0, 8).map((inv) => (
               <div key={inv.id} className="flex items-center justify-between p-3 border border-neutral-200 rounded-lg hover:bg-neutral-50 transition-colors">
                 <div className="flex items-center gap-3">
                   <div className="w-8 h-8 bg-purple-100 border border-purple-200 rounded-md flex items-center justify-center">
