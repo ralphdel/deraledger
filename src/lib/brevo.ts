@@ -40,8 +40,8 @@ export async function sendTeamInviteEmail(
   businessName: string,
   tempPassword: string
 ) {
-  const configuredUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
-  const appUrl = configuredUrl || (process.env.NODE_ENV === "development" ? "http://localhost:3000" : "https://purpledger.vercel.app");
+  const configuredUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : "") || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
+  const appUrl = configuredUrl || "https://deraledger.vercel.app";
   const loginLink = `${appUrl}/login`;
 
   const htmlContent = `
@@ -308,8 +308,8 @@ export async function sendOnboardingWelcomeEmail(
 ) {
   const planLabel = plan === "starter" ? "Starter" : plan === "individual" ? "Individual" : "Corporate";
   const planPrice = plan === "starter" ? "Free" : plan === "individual" ? "₦5,000/month" : "₦20,000/month";
-  const configuredUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
-  const appUrl = configuredUrl || (process.env.NODE_ENV === "development" ? "http://localhost:3000" : "https://purpledger.vercel.app");
+  const configuredUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : "") || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
+  const appUrl = configuredUrl || "https://deraledger.vercel.app";
 
   const htmlContent = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #111827; border: 1px solid #E5E7EB; border-radius: 8px; overflow: hidden;">
@@ -425,8 +425,8 @@ export async function sendSubscriptionExpiringEmail(
   expiryDate: string,
   daysRemaining: number
 ) {
-  const configuredUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
-  const appUrl = configuredUrl || (process.env.NODE_ENV === "development" ? "http://localhost:3000" : "https://purpledger.vercel.app");
+  const configuredUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : "") || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
+  const appUrl = configuredUrl || "https://deraledger.vercel.app";
   const settingsLink = `${appUrl}/settings/billing`;
   const amount = planType === "individual" ? "₦5,000" : "₦20,000";
   const formattedDate = new Date(expiryDate).toLocaleDateString("en-NG", { year: 'numeric', month: 'long', day: 'numeric' });
@@ -519,8 +519,8 @@ export async function sendSubscriptionExpiredEmail(
   businessName: string,
   planType: string
 ) {
-  const configuredUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
-  const appUrl = configuredUrl || (process.env.NODE_ENV === "development" ? "http://localhost:3000" : "https://purpledger.vercel.app");
+  const configuredUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : "") || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
+  const appUrl = configuredUrl || "https://deraledger.vercel.app";
   const settingsLink = `${appUrl}/settings/billing`;
   const amount = planType === "individual" ? "₦5,000" : "₦20,000";
 
@@ -570,8 +570,8 @@ export async function sendSubscriptionGraceEmail(
   businessName: string,
   daysRemainingBeforeLock: number
 ) {
-  const configuredUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
-  const appUrl = configuredUrl || (process.env.NODE_ENV === "development" ? "http://localhost:3000" : "https://purpledger.vercel.app");
+  const configuredUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : "") || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
+  const appUrl = configuredUrl || "https://deraledger.vercel.app";
   const settingsLink = `${appUrl}/settings/billing`;
 
   const htmlContent = `
@@ -612,8 +612,8 @@ export async function sendSubscriptionCancelledEmail(
   businessName: string,
   reason: string
 ) {
-  const configuredUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
-  const appUrl = configuredUrl || (process.env.NODE_ENV === "development" ? "http://localhost:3000" : "https://purpledger.vercel.app");
+  const configuredUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : "") || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
+  const appUrl = configuredUrl || "https://deraledger.vercel.app";
   const settingsLink = `${appUrl}/settings/billing`;
 
   const htmlContent = `
