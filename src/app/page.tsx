@@ -10,6 +10,7 @@ import { FinalCTA } from "@/components/homepage/FinalCTA";
 import { Footer } from "@/components/homepage/Footer";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { DeraLedgerLogo } from "@/components/ui/deraledger-logo";
 
 function Header() {
   return (
@@ -18,8 +19,8 @@ function Header() {
         
         {/* Logo */}
         <Link href="/" className="flex items-center gap-2" aria-label="DeraLedger home">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#7B2FF7] text-sm font-bold text-white shadow-[0_0_10px_rgba(123,47,247,0.4)]">
-            D
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-white shadow-[0_0_10px_rgba(255,255,255,0.2)]">
+            <DeraLedgerLogo className="h-6 w-6" />
           </div>
           <span className="text-lg font-bold text-white tracking-tight">DeraLedger</span>
         </Link>
