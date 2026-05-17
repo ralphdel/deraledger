@@ -54,10 +54,65 @@ CREATE TABLE IF NOT EXISTS roles (
 );
 
 INSERT INTO roles (name, permissions, is_system_role) VALUES
-  ('owner', '{"create_invoice":true,"edit_invoice":true,"void_invoice":true,"manual_close":true,"view_invoices":true,"view_analytics":true,"use_purpbot":true,"manage_clients":true,"view_transactions":true,"manage_team":true,"change_fee_settings":true,"manage_kyc":true}', true),
-  ('accountant', '{"create_invoice":true,"edit_invoice":true,"void_invoice":false,"manual_close":false,"view_invoices":true,"view_analytics":true,"use_purpbot":true,"manage_clients":true,"view_transactions":true,"manage_team":false,"change_fee_settings":false,"manage_kyc":false}', true),
-  ('viewer', '{"create_invoice":false,"edit_invoice":false,"void_invoice":false,"manual_close":false,"view_invoices":true,"view_analytics":true,"use_purpbot":true,"manage_clients":false,"view_transactions":true,"manage_team":false,"change_fee_settings":false,"manage_kyc":false}', true)
-ON CONFLICT (name) DO NOTHING;
+  -- Admin: Full operational access, no destructive/financial settings
+  ('admin', '{
+    "view_invoices":true,"create_invoice":true,"edit_invoice":true,
+    "record_payment":true,"manual_close":true,"void_invoice":false,
+    "view_references":true,"manage_references":true,
+    "view_clients":true,"manage_clients":true,"delete_client":false,
+    "view_analytics":true,"view_transactions":true,"view_settlements":true,
+    "view_item_catalog":true,"manage_item_catalog":true,
+    "view_discount_template":true,"manage_discount_template":true,
+    "manage_kyc":false,"manage_business":true,"change_fee_settings":true,
+    "manage_billing":false,"manage_team":true,
+    "manage_advance_settings":true,"manage_settlement_account":false,
+    "use_purpbot":true
+  }', true),
+  -- Accountant: Invoice/financial read+write, no team or settings management
+  ('accountant', '{
+    "view_invoices":true,"create_invoice":true,"edit_invoice":true,
+    "record_payment":true,"manual_close":true,"void_invoice":false,
+    "view_references":true,"manage_references":false,
+    "view_clients":true,"manage_clients":false,"delete_client":false,
+    "view_analytics":true,"view_transactions":true,"view_settlements":true,
+    "view_item_catalog":true,"manage_item_catalog":false,
+    "view_discount_template":true,"manage_discount_template":false,
+    "manage_kyc":false,"manage_business":false,"change_fee_settings":false,
+    "manage_billing":false,"manage_team":false,
+    "manage_advance_settings":false,"manage_settlement_account":false,
+    "use_purpbot":true
+  }', true),
+  -- Support: Client-facing, view invoices/clients, no financial operations
+  ('support', '{
+    "view_invoices":true,"create_invoice":false,"edit_invoice":false,
+    "record_payment":false,"manual_close":false,"void_invoice":false,
+    "view_references":true,"manage_references":false,
+    "view_clients":true,"manage_clients":true,"delete_client":false,
+    "view_analytics":false,"view_transactions":false,"view_settlements":false,
+    "view_item_catalog":true,"manage_item_catalog":false,
+    "view_discount_template":false,"manage_discount_template":false,
+    "manage_kyc":false,"manage_business":false,"change_fee_settings":false,
+    "manage_billing":false,"manage_team":false,
+    "manage_advance_settings":false,"manage_settlement_account":false,
+    "use_purpbot":false
+  }', true),
+  -- Admin Support: Invoice+references+analytics+client management, no settings
+  ('admin_support', '{
+    "view_invoices":true,"create_invoice":true,"edit_invoice":true,
+    "record_payment":true,"manual_close":false,"void_invoice":false,
+    "view_references":true,"manage_references":true,
+    "view_clients":true,"manage_clients":true,"delete_client":false,
+    "view_analytics":true,"view_transactions":true,"view_settlements":true,
+    "view_item_catalog":true,"manage_item_catalog":true,
+    "view_discount_template":true,"manage_discount_template":false,
+    "manage_kyc":false,"manage_business":false,"change_fee_settings":false,
+    "manage_billing":false,"manage_team":false,
+    "manage_advance_settings":false,"manage_settlement_account":false,
+    "use_purpbot":true
+  }', true)
+ON CONFLICT (name) DO UPDATE SET
+  permissions = EXCLUDED.permissions,
+  is_system_role = true;
 
 -- ── 4. Merchant Team (Addendum Section 14.3) ────────────────────────────────
 CREATE TABLE IF NOT EXISTS merchant_team (

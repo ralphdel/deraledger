@@ -64,7 +64,7 @@ const plans = [
       "Partial payment controls",
       "₦5M monthly collection limit",
       "20 active collection invoices",
-      "Up to 4 invited team members (5 total)",
+      "Up to 3 invited team members (4 total)",
       "Predefined roles only",
       "Watermark enabled",
     ],

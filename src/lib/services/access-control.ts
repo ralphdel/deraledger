@@ -23,7 +23,7 @@ export const PLAN_LIMITS = {
   },
   individual: {
     invoiceLimit: Infinity,
-    teamLimit: 5,              // Owner + up to 4 predefined role members
+    teamLimit: 4,              // Owner + up to 3 predefined role members
     activeCollectionLimit: 20,
     monthlyCollectionNgn: 5_000_000,
     canCollect: true,          // Requires verified KYC
@@ -163,14 +163,14 @@ export function canInviteTeamMember(
     if (plan === "starter") {
       return {
         allowed: false,
-        reason: `Starter plan only supports 1 team member (owner only). Upgrade to Individual to invite up to 4 predefined-role members.`,
+        reason: `Starter plan only supports 1 team member (owner + 1 invited). Upgrade to Individual to invite up to 3 predefined-role members.`,
         upgradeRequired: "individual",
       };
     }
     if (plan === "individual") {
       return {
         allowed: false,
-        reason: `Individual plan supports up to 4 invited members (5 seats total including owner). Upgrade to Business for unlimited team members and custom roles.`,
+        reason: `Individual plan supports up to 3 invited members (4 seats total including owner). Upgrade to Business for unlimited team members and custom roles.`,
         upgradeRequired: "corporate",
       };
     }

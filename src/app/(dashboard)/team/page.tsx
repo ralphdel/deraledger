@@ -122,7 +122,8 @@ const PREDEFINED_ROLE_PERMISSIONS: Record<string, Record<string, boolean>> = {
     manage_advance_settings: false, manage_settlement_account: false,
     use_purpbot: true,
   },
-  support: {
+  // Viewer: Read-only on invoices/clients, no financial operations
+  viewer: {
     view_invoices: true, create_invoice: false, edit_invoice: false,
     record_payment: false, manual_close: false, void_invoice: false,
     view_references: true, manage_references: false,
@@ -168,8 +169,14 @@ export default function TeamPage() {
       .or(`is_system_role.eq.true,merchant_id.eq.${mId}`)
       .order("name");
     if (data) {
-      // Exclude "owner" — it's not a valid assignable role for team members
-      const filtered = data.filter((r: any) => r.name !== "owner");
+      // Canonical predefined assignable roles — only 3 predefined roles are shown.
+      // owner is owner-only; admin_support and legacy roles are excluded.
+      const CANONICAL_SYSTEM_ROLES = new Set(["admin", "accountant", "viewer"]);
+
+      // Keep: canonical system roles + any custom merchant roles (non-system)
+      const filtered = data.filter((r: any) =>
+        (!r.is_system_role) || CANONICAL_SYSTEM_ROLES.has(r.name)
+      );
       const sorted = [...filtered].sort((a, b) => {
         if (a.is_system_role && !b.is_system_role) return -1;
         if (!a.is_system_role && b.is_system_role) return 1;
@@ -215,7 +222,7 @@ export default function TeamPage() {
       case "owner": return { icon: Crown, color: "bg-purple-100 text-purple-700 border-purple-200" };
       case "admin": return { icon: ShieldCheck, color: "bg-amber-100 text-amber-700 border-amber-200" };
       case "accountant": return { icon: Calculator, color: "bg-blue-100 text-blue-700 border-blue-200" };
-      case "support": return { icon: Headset, color: "bg-emerald-100 text-emerald-700 border-emerald-200" };
+      case "viewer": return { icon: Headset, color: "bg-emerald-100 text-emerald-700 border-emerald-200" };
       default: return { icon: Settings2, color: "bg-neutral-100 text-neutral-700 border-neutral-200" };
     }
   };
