@@ -37,6 +37,7 @@ import { SubscriptionBanner } from "@/components/subscription-banner";
 import { SubscriptionExpiryModal } from "@/components/subscription-expiry-modal";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { PlatformUpdateModal } from "@/components/platform-update-modal";
+import { DeraLedgerLogo } from "@/components/ui/deraledger-logo";
 
 interface NavItem {
   href: string;
@@ -91,9 +92,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <aside className="hidden lg:flex flex-col w-64 bg-purp-900 dark:bg-[#12061F] border-r border-purp-800 dark:border-white/5 fixed inset-y-0 z-30">
         <div className="p-6">
           <Link href="/" className="flex items-center gap-2 text-white">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-white dark:bg-[#7B2FF7] dark:shadow-[0_0_10px_rgba(123,47,247,0.4)] text-sm font-bold text-purp-600 dark:text-white">
-              <div className="w-4 h-4 bg-purp-600 rounded-sm dark:hidden" />
-              <span className="hidden dark:block">D</span>
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-white shadow-sm">
+              <DeraLedgerLogo className="h-6 w-6" />
             </div>
             <span className="text-xl font-bold tracking-tight">DeraLedger</span>
           </Link>
@@ -136,9 +136,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <aside className="fixed inset-y-0 left-0 w-72 bg-purp-900 dark:bg-[#12061F] dark:border-r dark:border-white/5 z-50 animate-in slide-in-from-left duration-300">
             <div className="p-6 flex items-center justify-between">
               <Link href="/" className="flex items-center gap-2 text-white">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-white dark:bg-[#7B2FF7] dark:shadow-[0_0_10px_rgba(123,47,247,0.4)] text-sm font-bold text-purp-600 dark:text-white">
-                  <div className="w-4 h-4 bg-purp-600 rounded-sm dark:hidden" />
-                  <span className="hidden dark:block">D</span>
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-white shadow-sm">
+                  <DeraLedgerLogo className="h-6 w-6" />
                 </div>
                 <span className="text-xl font-bold tracking-tight">DeraLedger</span>
               </Link>

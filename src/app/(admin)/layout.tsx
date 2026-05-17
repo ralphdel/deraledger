@@ -19,6 +19,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { logoutUser } from "@/app/(auth)/actions";
+import { DeraLedgerLogo } from "@/components/ui/deraledger-logo";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -45,15 +46,15 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   return (
     <div className="flex-1 w-full flex bg-neutral-50">
       {/* Sidebar - Desktop */}
-      <aside className="hidden lg:flex lg:w-64 bg-neutral-900 flex-col fixed inset-y-0 z-30">
+      <aside className="hidden lg:flex lg:w-64 bg-[#0B1020] flex-col fixed inset-y-0 z-30">
         <div className="p-6">
           <Link href="/admin" className="flex items-center gap-2">
-            <div className="w-9 h-9 bg-red-500 rounded-lg flex items-center justify-center">
-              <ShieldCheck className="h-5 w-5 text-white" />
+            <div className="w-9 h-9 bg-white rounded-lg flex items-center justify-center shadow-sm">
+              <DeraLedgerLogo className="h-6 w-6" />
             </div>
             <div>
-              <span className="text-lg font-bold text-white">Deraledger</span>
-              <span className="text-[10px] font-semibold bg-red-500 text-white px-1.5 py-0.5 rounded ml-2 uppercase tracking-wider">Admin</span>
+              <span className="text-lg font-bold text-white tracking-wide">DeraLedger</span>
+              <span className="text-[10px] font-bold bg-[#8A55F7] text-white px-1.5 py-0.5 rounded ml-2 uppercase tracking-wider">Admin</span>
             </div>
           </Link>
         </div>
@@ -77,10 +78,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           })}
         </nav>
 
-        <div className="p-4 border-t border-white/15">
+        <div className="p-4 border-t border-white/10">
           <div className="flex items-center gap-3 px-3 py-2">
-            <Avatar className="h-8 w-8 border-2 border-red-500">
-              <AvatarFallback className="bg-red-500 text-white text-xs font-bold">SA</AvatarFallback>
+            <Avatar className="h-8 w-8 border-2 border-[#8A55F7]">
+              <AvatarFallback className="bg-[#6F2CFF] text-white text-xs font-bold">SA</AvatarFallback>
             </Avatar>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium text-white truncate">SuperAdmin</p>
@@ -94,13 +95,13 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       {sidebarOpen && (
         <div className="lg:hidden fixed inset-0 z-40">
           <div className="fixed inset-0 bg-black/50" onClick={() => setSidebarOpen(false)} />
-          <aside className="fixed inset-y-0 left-0 w-64 bg-neutral-900 flex flex-col z-50">
+          <aside className="fixed inset-y-0 left-0 w-64 bg-[#0B1020] flex flex-col z-50">
             <div className="p-6 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <div className="w-9 h-9 bg-red-500 rounded-lg flex items-center justify-center">
-                  <ShieldCheck className="h-5 w-5 text-white" />
+                <div className="w-9 h-9 bg-white rounded-lg flex items-center justify-center shadow-sm">
+                  <DeraLedgerLogo className="h-6 w-6" />
                 </div>
-                <span className="text-lg font-bold text-white">Admin</span>
+                <span className="text-lg font-bold text-white tracking-wide">DeraLedger</span>
               </div>
               <button onClick={() => setSidebarOpen(false)} className="text-white">
                 <X className="h-5 w-5" />
@@ -139,7 +140,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
           <div className="flex items-center gap-2">
             <span className="text-sm font-semibold text-neutral-900">SuperAdmin Console</span>
-            <span className="text-[10px] font-semibold bg-red-100 text-red-700 px-1.5 py-0.5 rounded uppercase tracking-wider">Production</span>
+            <span className="text-[10px] font-semibold bg-[#E9D5FF] text-[#6F2CFF] px-1.5 py-0.5 rounded uppercase tracking-wider">Production</span>
           </div>
 
           <div className="flex-1" />
@@ -148,8 +149,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             <DropdownMenuTrigger
               render={<button className="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-neutral-100 transition-colors" />}
             >
-              <Avatar className="h-8 w-8 border-2 border-red-200">
-                <AvatarFallback className="bg-red-100 text-red-700 text-xs font-bold">SA</AvatarFallback>
+              <Avatar className="h-8 w-8 border-2 border-[#E9D5FF]">
+                <AvatarFallback className="bg-[#E9D5FF] text-[#6F2CFF] text-xs font-bold">SA</AvatarFallback>
               </Avatar>
               <span className="text-sm font-medium text-neutral-900 hidden sm:block">SuperAdmin</span>
               <ChevronDown className="h-4 w-4 text-neutral-500" />
@@ -160,7 +161,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
-                className="cursor-pointer text-red-600"
+                className="cursor-pointer text-[#DC2626]"
                 onClick={async () => {
                   await logoutUser();
                   window.location.href = "/login";
