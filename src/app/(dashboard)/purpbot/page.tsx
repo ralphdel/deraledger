@@ -20,19 +20,15 @@ interface Message {
 }
 
 const ROLE_KNOWLEDGE: Record<string, { description: string; permissions: string[] }> = {
-  owner: {
-    description: "Full unrestricted access to all platform features including settlement account management, billing, team management, and all financial operations.",
-    permissions: ["View & create invoices", "Edit & void invoices", "Record payments", "Manage clients (add/edit/delete)", "View analytics & transactions", "Manage KYC & business settings", "Manage billing & subscription", "Manage team members & roles", "Use DeraBot", "View settlements", "Manage settlement account", "Manage advanced settings", "Manage item catalog", "Manage discount templates", "View item catalog", "View discount templates", "View & manage References"]
-  },
   admin: {
-    description: "Broad operational access. Can manage most business functions but CANNOT manage billing, delete clients, void invoices, or change the settlement account.",
-    permissions: ["View & create invoices", "Edit invoices", "Record payments", "Manual close invoices", "Manage clients (add/edit, NOT delete)", "View analytics & transactions", "Change fee settings", "Manage business settings & address", "Manage team members", "Use DeraBot", "View settlements", "Manage advanced settings", "Manage item catalog", "Manage discount templates", "View item catalog", "View discount templates", "View & manage References"]
+    description: "Broad operational access. Can manage most business functions including invoices, clients, and team members.",
+    permissions: ["View & create invoices", "Edit invoices", "Record payments", "Manual close invoices", "Manage clients", "View analytics & transactions", "Change fee settings", "Manage business settings & address", "Manage team members", "Use DeraBot", "View settlements", "Manage advanced settings", "Manage item catalog", "Manage discount templates", "View item catalog", "View discount templates", "View & manage References"]
   },
   accountant: {
-    description: "Financial operations access. Can create invoices, record payments, view financial data and analytics, but cannot manage team, delete clients, or change settings.",
+    description: "Financial operations access. Can create invoices, record payments, view financial data and analytics, but cannot manage team or general settings.",
     permissions: ["View & create invoices", "Edit invoices", "Record payments", "Manual close invoices", "View clients", "View analytics & transactions", "Use DeraBot", "View settlements", "View item catalog", "View discount templates", "View References (read-only)"]
   },
-  support: {
+  viewer: {
     description: "Limited client-facing access. Can view invoices and clients, edit client info, but cannot create invoices, view analytics, or access financial settings.",
     permissions: ["View invoices (read-only)", "View & edit clients (NOT delete)", "View item catalog", "View References (read-only)"]
   }
@@ -62,41 +58,57 @@ export default function PurpBotPage() {
   const [isSubscriptionExpired, setIsSubscriptionExpired] = useState(false);
 
   useEffect(() => {
-    Promise.all([getInvoices(), getClients(), getAllTransactions(), getMerchant()]).then(
-      ([inv, cli, txn, merch]) => {
-        setInvoices(inv);
-        setClients(cli);
-        setTransactions(txn);
-        setMerchant(merch);
-        
-        if (merch) {
-          getActiveSubscription(merch.id).then((sub) => {
-            if (sub && sub.status === "expired") {
-              setIsSubscriptionExpired(true);
-            }
-          });
-        }
-        
-        setDataReady(true);
+    getMerchant().then((merch) => {
+      setMerchant(merch);
+      
+      if (merch) {
+        getActiveSubscription(merch.id).then((sub) => {
+          if (sub && sub.status === "expired") {
+            setIsSubscriptionExpired(true);
+          }
+        });
 
-        // Welcome message with real data
-        const todayMs = new Date().setHours(0,0,0,0);
-        const openCount = inv.filter((i) => i.status === "open" || i.status === "partially_paid").length;
-        const overdueCount = inv.filter((i) => {
-          if (i.status === "expired" || i.status === "overdue") return true;
-          if ((i.status === "open" || i.status === "partially_paid") && i.pay_by_date) return new Date(i.pay_by_date).getTime() < todayMs;
-          return false;
-        }).length;
-        const totalOutstanding = inv.reduce((s, i) => s + Number(i.outstanding_balance), 0);
-        setMessages([
-          {
-            id: "welcome",
-            role: "assistant",
-            content: `Hi${merch ? ` ${merch.business_name.split(" ")[0]}` : ""}! I'm DeraBot, your read-only financial analyst. I've loaded your ledger — you have **${inv.length} invoices** (${openCount} active${overdueCount > 0 ? `, **${overdueCount} overdue ⚠**` : ""}) with **${formatNaira(totalOutstanding)}** outstanding. Ask me anything about your collections, clients, roles, or payment trends.`,
-          },
-        ]);
+        // Evaluate permissions (Owner has full access, otherwise check permissions dict)
+        const isOwner = merch.currentUserRole === "owner" || merch.currentUserRole === "superadmin";
+        const canViewInvoices = isOwner || merch.permissions?.view_invoices;
+        const canViewClients = isOwner || merch.permissions?.view_clients;
+        const canViewAnalytics = isOwner || merch.permissions?.view_analytics;
+
+        // Securely fetch only what the user is allowed to see
+        Promise.all([
+          canViewInvoices ? getInvoices() : Promise.resolve([]),
+          canViewClients ? getClients() : Promise.resolve([]),
+          canViewAnalytics ? getAllTransactions() : Promise.resolve([]),
+        ]).then(([inv, cli, txn]) => {
+          setInvoices(inv);
+          setClients(cli);
+          setTransactions(txn);
+          setDataReady(true);
+
+          // Welcome message with real data (masked if permissions missing)
+          const todayMs = new Date().setHours(0,0,0,0);
+          const openCount = inv.filter((i) => i.status === "open" || i.status === "partially_paid").length;
+          const overdueCount = inv.filter((i) => {
+            if (i.status === "expired" || i.status === "overdue") return true;
+            if ((i.status === "open" || i.status === "partially_paid") && i.pay_by_date) return new Date(i.pay_by_date).getTime() < todayMs;
+            return false;
+          }).length;
+          const totalOutstanding = inv.reduce((s, i) => s + Number(i.outstanding_balance), 0);
+          
+          let welcomeMsg = `Hi${merch ? ` ${merch.business_name.split(" ")[0]}` : ""}! I'm DeraBot, your financial analyst.`;
+          if (canViewInvoices) {
+            welcomeMsg += ` I've loaded your ledger — you have **${inv.length} invoices** (${openCount} active${overdueCount > 0 ? `, **${overdueCount} overdue ⚠**` : ""}) with **${formatNaira(totalOutstanding)}** outstanding.`;
+          } else {
+            welcomeMsg += ` I can answer questions about your platform features and settings, but note that your current role lacks permission to view invoice data.`;
+          }
+          welcomeMsg += ` Ask me anything!`;
+
+          setMessages([{ id: "welcome", role: "assistant", content: welcomeMsg }]);
+        });
+      } else {
+        setDataReady(true);
       }
-    );
+    });
   }, []);
 
   // Scroll to bottom on new messages
@@ -124,27 +136,49 @@ export default function PurpBotPage() {
     const q = query.toLowerCase();
     const citations: string[] = [];
 
+    // Catch general help/capabilities questions early so they don't trip specific keywords
+    if (q === "help" || q.includes("what can i ask") || q.includes("what can you do") || q.includes("how can you help")) {
+      return {
+        content: `I can help with questions like:\n\n**Financial & Analytics:**\n• *"What are my total billing receivables?"*\n• *"Which client has the highest outstanding balance?"*\n• *"How much have I collected in total?"*\n• *"What are my payment method breakdowns?"*\n\n**Team & Roles:**\n• *"What can an accountant do?"*\n• *"What are the differences between admin and viewer roles?"*\n\n**Platform Features:**\n• *"How do References and Projects work?"*\n• *"What is my current KYC verification status?"*\n• *"Tell me about settlement accounts"*\n\nTry one of these, or use the quick actions below!`,
+        citations: [],
+      };
+    }
+    const isOwner = merchant?.currentUserRole === "owner" || merchant?.currentUserRole === "superadmin";
+    const canViewAnalytics = isOwner || merchant?.permissions?.view_analytics;
+
     // KYC / Verification queries
     if (q.includes("verify") || q.includes("verification") || q.includes("kyc") || q.includes("onboarding") || q.includes("tier")) {
       let statusDetails = "";
       if (merchant?.verification_status === "verified") {
-        statusDetails = `Your account is fully **Verified** and currently on **Tier: ${merchant.merchant_tier.toUpperCase()}**. You have full access to Deraledger's features and your payment limits correspond to your tier.`;
+        statusDetails = `Your account is fully **Verified** via our instant **KYC Check** and currently on **Tier: ${merchant.merchant_tier.toUpperCase()}**. You have full access to Deraledger's features and your payment limits correspond to your tier.`;
       } else {
         const cacStatus = merchant?.cac_status || "Unverified";
         const bvnStatus = merchant?.bvn_status || "Unverified";
         const utilStatus = merchant?.utility_status || "Unverified";
         
-        statusDetails = `Your account is currently on **Tier: ${merchant?.merchant_tier?.toUpperCase() || 'STARTER'}** and your overall verification status is **${merchant?.verification_status?.toUpperCase() || 'UNVERIFIED'}**.\n\nHere is your specific document status:\n• CAC: **${cacStatus}**\n• BVN: **${bvnStatus}**\n• Utility Bill: **${utilStatus}**\n\nTo upgrade to Tier 1 (₦500k limit) or Tier 2 (Unlimited), please go to **Settings > Account Verification** and submit any unverified documents. Admin review typically takes 24 hours.`;
+        statusDetails = `Your account is currently on **Tier: ${merchant?.merchant_tier?.toUpperCase() || 'STARTER'}** and your overall verification status is **${merchant?.verification_status?.toUpperCase() || 'UNVERIFIED'}**.\n\nHere is your specific document status:\n• CAC: **${cacStatus}**\n• BVN: **${bvnStatus}**\n• Utility Bill: **${utilStatus}**\n\nTo upgrade to Tier 1 (₦500k limit) or Tier 2 (Unlimited), please go to **Settings > Account Verification** and submit any unverified documents. Thanks to the automated KYC check, verification is often instant or takes up to 24 hours.`;
       }
       
       return {
         content: statusDetails,
-        citations: ["Account Settings", "Verification Status"],
+        citations: ["Account Settings", "Verification Status", "Automated KYC"],
       };
     }
 
-    // Outstanding balance queries
-    if (q.includes("outstanding") || q.includes("owe") || q.includes("balance") || q.includes("unpaid")) {
+    // References / Projects queries
+    if (q.includes("reference") || q.includes("project")) {
+      return {
+        content: `**References & Projects**\n\nOn Deraledger, a **Reference** is used to group related invoices together, much like a project folder. When you create an invoice, you can link it to an existing Reference or create a new one.\n\n• Use References to track total billings, collections, and outstanding balances for a specific project or engagement.\n• Access them via the **References** menu in the sidebar.\n• You can quickly see which projects are most profitable and track overall progress.`,
+        citations: ["References", "Project Management"],
+      };
+    }
+
+    // Outstanding balance & Billing Receivables queries
+    if (q.includes("outstanding") || q.includes("owe") || q.includes("balance") || q.includes("unpaid") || q.includes("receivable") || q.includes("billing")) {
+      if (!canViewAnalytics) {
+        return { content: "I'm sorry, but your current role does not grant you permission to view financial analytics or receivable data.", citations: [] };
+      }
+
       const openInvoices = invoices.filter((i) => i.status === "open" || i.status === "partially_paid");
       const totalOutstanding = openInvoices.reduce((s, i) => s + Number(i.outstanding_balance), 0);
 
@@ -170,22 +204,26 @@ export default function PurpBotPage() {
         }
       }
 
-      // General outstanding summary
+      // General outstanding/receivables summary
       return {
-        content: `You have **${openInvoices.length} active invoice(s)** with a total outstanding balance of **${formatNaira(totalOutstanding)}**.${openInvoices.length > 0 ? `\n\nBreakdown:\n${openInvoices.map((i) => `• ${i.invoice_number} (${i.clients?.full_name || "Unknown"}): **${formatNaira(Number(i.outstanding_balance))}**`).join("\n")}` : ""}`,
-        citations: openInvoices.map((i) => i.invoice_number),
+        content: `**Billing Receivables** represents the total money owed to your business by clients across all open and partially paid invoices.\n\nYou currently have **${openInvoices.length} active invoice(s)** with a total receivable balance of **${formatNaira(totalOutstanding)}**.${openInvoices.length > 0 ? `\n\nBreakdown:\n${openInvoices.map((i) => `• ${i.invoice_number} (${i.clients?.full_name || "Unknown"}): **${formatNaira(Number(i.outstanding_balance))}**`).join("\n")}` : ""}`,
+        citations: ["Billing Receivables", ...openInvoices.map((i) => i.invoice_number)],
       };
     }
 
     // Collection / revenue queries
     if (q.includes("collect") || q.includes("revenue") || q.includes("total") || q.includes("earned") || q.includes("how much")) {
+      if (!canViewAnalytics) {
+        return { content: "I'm sorry, but your current role does not grant you permission to view financial analytics or revenue data.", citations: [] };
+      }
+
       const totalCollected = invoices.reduce((s, i) => s + Number(i.amount_paid), 0);
       const totalInvoiced = invoices.reduce((s, i) => s + Number(i.grand_total), 0);
       const collectionRate = totalInvoiced > 0 ? Math.round((totalCollected / totalInvoiced) * 100) : 0;
 
       return {
-        content: `Here's your collection summary:\n\n• **Total Invoiced:** ${formatNaira(totalInvoiced)}\n• **Total Collected:** ${formatNaira(totalCollected)}\n• **Collection Rate:** ${collectionRate}%\n• **Outstanding:** ${formatNaira(totalInvoiced - totalCollected)}\n\nYou've processed **${transactions.filter((t) => t.status === "success").length} successful payments** via Paystack.`,
-        citations: ["Revenue Summary"],
+        content: `Here's your collection summary:\n\n• **Total Invoiced:** ${formatNaira(totalInvoiced)}\n• **Total Collected:** ${formatNaira(totalCollected)}\n• **Collection Rate:** ${collectionRate}%\n• **Billing Receivables (Outstanding):** ${formatNaira(totalInvoiced - totalCollected)}\n\nYou've processed **${transactions.filter((t) => t.status === "success").length} successful payments** across all methods.`,
+        citations: ["Revenue Summary", "Analytics"],
       };
     }
 
@@ -242,7 +280,7 @@ export default function PurpBotPage() {
     }
 
     // Role / permission queries
-    if (q.includes("role") || q.includes("permission") || q.includes("access") || q.includes("what can") || q.includes("who can") || q.includes("team member") || q.includes("invite")) {
+    if (q.includes("role") || q.includes("permission") || q.includes("access") || q.includes("who can") || q.includes("team member") || q.includes("invite") || q.includes("what can a")) {
       const roleNames = Object.keys(ROLE_KNOWLEDGE);
       const matchedRole = roleNames.find(r => q.includes(r));
       if (matchedRole) {
@@ -254,7 +292,7 @@ export default function PurpBotPage() {
       }
       // General role overview
       return {
-        content: `Deraledger has **4 built-in roles**:\n\n**👑 Owner** — Full access to everything, including settlement account management and billing. Only one per workspace.\n\n**🛡️ Admin** — Broad operational access. Can manage invoices, clients, and team. Cannot void invoices, delete clients, or change the settlement account.\n\n**🧮 Accountant** — Financial operations only. Can create & edit invoices, record payments, view analytics. Cannot manage team or settings.\n\n**🎧 Support** — View-only access to invoices and clients. Can edit client info but cannot create invoices or view financial data.\n\nYou can also create **Custom Roles** with hand-picked permissions from Settings > Team.\n\nAsk me about a specific role, e.g. *"What can an accountant do?"*`,
+        content: `Deraledger has **3 built-in roles**:\n\n**🛡️ Admin** — Broad operational access. Can manage most business functions including invoices, clients, and team members.\n\n**🧮 Accountant** — Financial operations only. Can create & edit invoices, record payments, view analytics. Cannot manage team or general settings.\n\n**👁️ Viewer** — View-only access to invoices and clients. Can edit client info but cannot create invoices or view financial data.\n\nYou can also create **Custom Roles** with hand-picked permissions from Settings > Team.\n\nAsk me about a specific role, e.g. *"What can an accountant do?"*`,
         citations: ["Team & RBAC"],
       };
     }
@@ -306,12 +344,18 @@ export default function PurpBotPage() {
     }
 
     // Payment method queries
-    if (q.includes("payment method") || q.includes("how did") || q.includes("card") || q.includes("bank")) {
+    if (q.includes("payment method") || q.includes("how did") || q.includes("card") || q.includes("bank") || q.includes("ussd") || q.includes("cash") || q.includes("cheque") || q.includes("manual payment")) {
+      if (!canViewAnalytics) {
+        return { content: "I'm sorry, but your current role does not grant you permission to view payment method analytics.", citations: [] };
+      }
+
       const successTxns = transactions.filter((t) => t.status === "success");
-      const methods = { card: 0, bank_transfer: 0, ussd: 0 };
-      successTxns.forEach((t) => { methods[t.payment_method] = (methods[t.payment_method] || 0) + 1; });
+      const methods: Record<string, number> = { card: 0, bank_transfer: 0, ussd: 0 };
+      successTxns.forEach((t) => { 
+        methods[t.payment_method] = (methods[t.payment_method] || 0) + 1; 
+      });
       return {
-        content: `Payment method breakdown (${successTxns.length} successful transactions):\n\n• Card: **${methods.card}** payments\n• Bank Transfer: **${methods.bank_transfer}** payments\n• USSD: **${methods.ussd}** payments`,
+        content: `Deraledger supports multiple payment methods. Here is your online payment breakdown across ${successTxns.length} successful transactions:\n\n• **Online Card Payments:** ${methods.card}\n• **Direct Bank Transfers:** ${methods.bank_transfer}\n• **USSD:** ${methods.ussd}\n\n*(Note: This excludes any manual payments like cash or cheque that you've recorded offline.)*\n\nHaving multiple payment methods improves your collection rate.`,
         citations: ["Payment Analytics"],
       };
     }
@@ -327,7 +371,7 @@ export default function PurpBotPage() {
 
     // Fallback — general help
     return {
-      content: `I can help with questions like:\n\n**Financial:**\n• *"Which client has the highest outstanding balance?"*\n• *"How much have I collected in total?"*\n• *"Which invoices are overdue?"*\n• *"Tell me about INV-2025-001"*\n• *"What are my payment method breakdowns?"*\n\n**Team & Roles:**\n• *"What can an accountant do?"*\n• *"What are the differences between admin and support roles?"*\n• *"Who can manage the settlement account?"*\n\n**Platform:**\n• *"How does the item catalog work?"*\n• *"Tell me about settlement accounts"*\n• *"What is my current KYC status?"*\n\nTry one of these, or use the quick actions below!`,
+      content: `I can help with questions like:\n\n**Financial & Analytics:**\n• *"What are my total billing receivables?"*\n• *"Which client has the highest outstanding balance?"*\n• *"How much have I collected in total?"*\n• *"What are my payment method breakdowns?"*\n\n**Team & Roles:**\n• *"What can an accountant do?"*\n• *"What are the differences between admin and support roles?"*\n\n**Platform Features:**\n• *"How do References and Projects work?"*\n• *"What is my current KYC verification status?"*\n• *"Tell me about settlement accounts"*\n\nTry one of these, or use the quick actions below!`,
       citations: [],
     };
   };
