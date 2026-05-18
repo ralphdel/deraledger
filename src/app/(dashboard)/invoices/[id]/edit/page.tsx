@@ -124,10 +124,11 @@ export default function EditInvoicePage({ params }: { params: Promise<{ id: stri
     setError("");
 
     const amountPaid = Number(invoice.amount_paid);
-    const newOutstanding = totals.grandTotal - amountPaid;
+    const appliedDeposit = invoice.grand_total - amountPaid - invoice.outstanding_balance;
+    const newOutstanding = totals.grandTotal - amountPaid - appliedDeposit;
 
     if (newOutstanding < 0) {
-      setError("Grand total cannot be less than the amount already paid.");
+      setError("Grand total cannot be less than the amount already paid and applied deposits.");
       return;
     }
 
@@ -185,7 +186,8 @@ export default function EditInvoicePage({ params }: { params: Promise<{ id: stri
   }
 
   const amountPaid = Number(invoice.amount_paid);
-  const newOutstanding = totals.grandTotal - amountPaid;
+  const appliedDeposit = invoice.grand_total - amountPaid - invoice.outstanding_balance;
+  const newOutstanding = totals.grandTotal - amountPaid - appliedDeposit;
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -240,6 +242,18 @@ export default function EditInvoicePage({ params }: { params: Promise<{ id: stri
             <p className="text-amber-700 mt-1">
               <strong>{formatNaira(amountPaid)}</strong> has already been collected.
               The new grand total must be at least this amount. The outstanding balance will be recalculated automatically.
+            </p>
+          </div>
+        </div>
+      )}
+      
+      {appliedDeposit > 0 && (
+        <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-4 flex items-start gap-3">
+          <AlertTriangle className="h-5 w-5 text-blue-600 flex-shrink-0 mt-0.5" />
+          <div className="text-sm">
+            <p className="font-semibold text-blue-800">This invoice has an applied deposit</p>
+            <p className="text-blue-700 mt-1">
+              <strong>{formatNaira(appliedDeposit)}</strong> from a previous deposit has been allocated to this invoice.
             </p>
           </div>
         </div>
@@ -543,6 +557,12 @@ export default function EditInvoicePage({ params }: { params: Promise<{ id: stri
                   <span className="text-neutral-500">Already Paid</span>
                   <span className="font-semibold text-emerald-600">{formatNaira(amountPaid)}</span>
                 </div>
+                {appliedDeposit > 0 && (
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-neutral-500">Applied Deposit</span>
+                    <span className="font-semibold text-blue-600">{formatNaira(appliedDeposit)}</span>
+                  </div>
+                )}
                 <div className="flex items-center justify-between">
                   <span className="font-bold text-purp-900">New Outstanding</span>
                   <span className={`font-bold text-lg ${newOutstanding < 0 ? "text-red-600" : "text-amber-600"}`}>

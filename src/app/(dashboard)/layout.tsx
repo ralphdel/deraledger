@@ -47,7 +47,7 @@ interface NavItem {
   requiredPermission?: string;
 }
 
-const dashboardRoutePermissions: Array<{ path: string; permission: string; featureLabel: string }> = [
+const dashboardRoutePermissions: Array<{ path: string; permission: string | string[]; featureLabel: string }> = [
   { path: "/settings/billing", permission: "manage_billing", featureLabel: "Billing & Subscription" },
   { path: "/settings/upgrade", permission: "manage_billing", featureLabel: "Plan Upgrades" },
   { path: "/settings/settlement", permission: "manage_settlement_account", featureLabel: "Settlement Account" },
@@ -61,8 +61,24 @@ const dashboardRoutePermissions: Array<{ path: string; permission: string; featu
   { path: "/clients/bulk", permission: "manage_clients", featureLabel: "Bulk Client Upload" },
   { path: "/clients", permission: "view_clients", featureLabel: "Clients" },
   { path: "/invoices", permission: "view_invoices", featureLabel: "Invoices" },
-  { path: "/settings", permission: "manage_business", featureLabel: "Settings" },
+  // Fallback for the main /settings page. Users must have at least ONE settings-related permission to view it.
+  { 
+    path: "/settings", 
+    permission: [
+      "manage_business", 
+      "manage_advance_settings", 
+      "manage_settlement_account", 
+      "manage_item_catalog", 
+      "view_item_catalog", 
+      "manage_discount_template", 
+      "view_discount_template",
+      "manage_billing",
+      "manage_kyc"
+    ], 
+    featureLabel: "Settings" 
+  },
 ];
+
 
 function getRoutePermission(pathname: string) {
   return dashboardRoutePermissions.find((route) => (

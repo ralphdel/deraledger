@@ -258,7 +258,7 @@ export default function ClientsPage() {
                       <h3 className="font-bold text-purp-900 dark:text-white truncate">{client.full_name}</h3>
                       {canManageClients && (
                         <button
-                          onClick={() => setClientToEdit(client)}
+                          onClick={() => { setClientToEdit(client); setDialogOpen(true); }}
                           className="text-neutral-400 hover:text-purp-700 dark:hover:text-white transition-colors"
                           title="Edit client"
                         >

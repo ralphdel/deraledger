@@ -41,6 +41,8 @@ export default function SettlementSettingsPage() {
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  const [isEditing, setIsEditing] = useState(false);
+
   useEffect(() => {
     // Load merchant
     getMerchant().then((m) => {
@@ -51,6 +53,11 @@ export default function SettlementSettingsPage() {
           setAccountNumber(m.settlement_account_number || "");
           setAccountName(m.settlement_account_name || "");
         }
+        if (!m.subaccount_verified) {
+          setIsEditing(true);
+        }
+      } else {
+        setIsEditing(true);
       }
       setLoading(false);
     });
@@ -69,7 +76,7 @@ export default function SettlementSettingsPage() {
 
   // Attempt to resolve account number when both bank and 10-digit account are present
   useEffect(() => {
-    if (selectedBankCode && accountNumber.length === 10 && merchant?.subaccount_verified !== true) {
+    if (isEditing && selectedBankCode && accountNumber.length === 10) {
       const resolveAccount = async () => {
         setResolving(true);
         setResolveError(null);
@@ -129,6 +136,7 @@ export default function SettlementSettingsPage() {
         settlement_account_name: accountName,
         subaccount_verified: true,
       });
+      setIsEditing(false);
     } else {
       setSaveError(result.error || "Failed to save settlement account.");
     }
@@ -179,31 +187,56 @@ export default function SettlementSettingsPage() {
         </p>
       </div>
 
-      {isVerified && (
-        <div className="bg-emerald-50 border-2 border-emerald-200 rounded-lg p-4 flex items-start gap-3">
-          <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
-          <div>
-            <h3 className="font-bold text-emerald-900">Settlement Account Active</h3>
-            <p className="text-emerald-700 text-sm mt-1">
-              Your account is successfully connected. Payments collected via your invoices will be automatically routed here.
-            </p>
+      {isVerified && !isEditing && (
+        <div className="bg-emerald-50 border-2 border-emerald-200 rounded-lg p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <CheckCircle2 className="w-6 h-6 text-emerald-600 shrink-0 mt-0.5" />
+            <div>
+              <h3 className="font-bold text-emerald-900 text-lg">Settlement Account Active</h3>
+              <p className="text-emerald-700 text-sm mt-1 max-w-lg">
+                Payments collected via your invoices will be automatically routed to this account.
+              </p>
+              <div className="mt-4 bg-white/60 border border-emerald-200 rounded-lg p-3">
+                <p className="text-sm font-semibold text-emerald-900">{merchant?.settlement_bank_name}</p>
+                <p className="font-mono font-bold text-lg text-emerald-800">{merchant?.settlement_account_number}</p>
+                <p className="text-xs text-emerald-700 uppercase tracking-wide mt-1">{merchant?.settlement_account_name}</p>
+              </div>
+            </div>
           </div>
+          <Button 
+            variant="outline" 
+            onClick={() => setIsEditing(true)}
+            className="border-emerald-300 text-emerald-700 hover:bg-emerald-100 shrink-0"
+          >
+            Update Account
+          </Button>
         </div>
       )}
 
-      <Card className="border-2 border-purp-200 shadow-none">
-        <CardHeader className="pb-4">
-          <div className="flex items-center gap-2">
-            <Banknote className="w-5 h-5 text-purp-700" />
-            <CardTitle className="text-lg font-bold text-purp-900">Bank Details</CardTitle>
-          </div>
-          <CardDescription>
-            {isVerified
-              ? "Your current payout destination. Contact support to change."
-              : "Enter your Nigerian bank account details to enable online payments."}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-5">
+      {(!isVerified || isEditing) && (
+        <Card className="border-2 border-purp-200 shadow-none">
+          <CardHeader className="pb-4">
+            <div className="flex items-center gap-2">
+              <Banknote className="w-5 h-5 text-purp-700" />
+              <CardTitle className="text-lg font-bold text-purp-900">
+                {isVerified ? "Update Bank Details" : "Bank Details"}
+              </CardTitle>
+            </div>
+            <CardDescription>
+              {isVerified
+                ? "Enter your new Nigerian bank account details. Future payments will be routed here."
+                : "Enter your Nigerian bank account details to enable online payments."}
+            </CardDescription>
+            {isVerified && (
+              <div className="bg-amber-50 border border-amber-200 rounded p-3 mt-2 flex gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <p className="text-xs text-amber-800 leading-relaxed">
+                  <strong>Warning:</strong> Changing your settlement account will immediately reroute all future invoice collections. Make sure these details are absolutely correct.
+                </p>
+              </div>
+            )}
+          </CardHeader>
+          <CardContent className="space-y-5">
           <div className="space-y-1.5">
             <Label>Select Bank</Label>
             <Select
@@ -283,27 +316,50 @@ export default function SettlementSettingsPage() {
         </CardContent>
 
         <CardFooter className="flex flex-col gap-3 pt-2">
-          {saveError && (
-            <div className="w-full bg-red-50 text-red-600 p-3 rounded-lg text-sm font-medium border border-red-100 flex items-start gap-2">
-              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-red-500" />
-              {saveError}
+            {saveError && (
+              <div className="w-full bg-red-50 text-red-600 p-3 rounded-lg text-sm font-medium border border-red-100 flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-red-500" />
+                {saveError}
+              </div>
+            )}
+            {saveSuccess && (
+              <div className="w-full bg-emerald-50 text-emerald-700 p-3 rounded-lg text-sm font-medium border border-emerald-200 flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                Settlement account {isVerified ? "updated" : "activated"} successfully!
+              </div>
+            )}
+            <div className="flex gap-3">
+              {isVerified && (
+                <Button
+                  variant="outline"
+                  className="h-11 border-2 border-purp-200 w-full"
+                  onClick={() => {
+                    setIsEditing(false);
+                    setSaveError(null);
+                    setSaveSuccess(false);
+                    // Reset to original values
+                    if (merchant) {
+                      setSelectedBankCode(merchant.settlement_bank_code || "");
+                      setAccountNumber(merchant.settlement_account_number || "");
+                      setAccountName(merchant.settlement_account_name || "");
+                    }
+                  }}
+                  disabled={saving}
+                >
+                  Cancel
+                </Button>
+              )}
+              <Button
+                className="w-full h-11 bg-purp-900 hover:bg-purp-700 text-white font-semibold"
+                disabled={!accountName || saving}
+                onClick={handleSave}
+              >
+                {saving ? (isVerified ? "Updating..." : "Activating Account...") : (isVerified ? "Update Settlement Account" : "Confirm & Activate")}
+              </Button>
             </div>
-          )}
-          {saveSuccess && (
-            <div className="w-full bg-emerald-50 text-emerald-700 p-3 rounded-lg text-sm font-medium border border-emerald-200 flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 shrink-0" />
-              Settlement account {isVerified ? "updated" : "activated"} successfully!
-            </div>
-          )}
-          <Button
-            className="w-full h-11 bg-purp-900 hover:bg-purp-700 text-white font-semibold"
-            disabled={!accountName || saving}
-            onClick={handleSave}
-          >
-            {saving ? (isVerified ? "Updating..." : "Activating Account...") : (isVerified ? "Update Settlement Account" : "Confirm & Activate")}
-          </Button>
-        </CardFooter>
-      </Card>
+          </CardFooter>
+        </Card>
+      )}
     </div>
   );
 }

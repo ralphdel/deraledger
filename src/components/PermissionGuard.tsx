@@ -17,8 +17,8 @@ import Link from "next/link";
 import type { Merchant } from "@/lib/types";
 
 interface PermissionGuardProps {
-  /** The permission key from the merchant.permissions map */
-  permission: string;
+  /** The permission key(s) from the merchant.permissions map. If an array is provided, ANY true permission grants access. */
+  permission: string | string[];
   /** The merchant object returned from getMerchant() — may be null while loading */
   merchant: (Merchant & { permissions?: Record<string, boolean>; currentUserRole?: string }) | null;
   /** Content to render when access is granted */
@@ -39,8 +39,18 @@ export function PermissionGuard({
   // Owners always have all permissions — guard is transparent for them
   if (merchant.currentUserRole === "owner" || merchant.currentUserRole === "superadmin") return <>{children}</>;
 
-  // If permissions exist and the required one is not granted → deny
-  if (merchant.permissions && merchant.permissions[permission] !== true) {
+  // If permissions exist, check if at least one required permission is granted
+  let hasAccess = false;
+  if (merchant.permissions) {
+    if (Array.isArray(permission)) {
+      hasAccess = permission.some((p) => merchant.permissions![p] === true);
+    } else {
+      hasAccess = merchant.permissions[permission] === true;
+    }
+  }
+
+  // If not granted → deny
+  if (!hasAccess) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] text-center max-w-sm mx-auto gap-5">
         <div className="w-16 h-16 rounded-full bg-red-100 dark:bg-red-500/10 border-2 border-red-200 dark:border-red-500/20 flex items-center justify-center">
