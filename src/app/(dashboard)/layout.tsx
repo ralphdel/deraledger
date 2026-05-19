@@ -60,6 +60,7 @@ const dashboardRoutePermissions: Array<{ path: string; permission: string | stri
   { path: "/references", permission: "view_references", featureLabel: "References" },
   { path: "/clients/bulk", permission: "manage_clients", featureLabel: "Bulk Client Upload" },
   { path: "/clients", permission: "view_clients", featureLabel: "Clients" },
+  { path: "/invoices/create", permission: "create_invoice", featureLabel: "Create Invoice" },
   { path: "/invoices", permission: "view_invoices", featureLabel: "Invoices" },
   // Fallback for the main /settings page. Users must have at least ONE settings-related permission to view it.
   { 
@@ -351,6 +352,27 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               >
                 Go to Settings
               </Link>
+            </div>
+          ) : merchant?.is_team_deactivated ? (
+            <div className="flex flex-col items-center justify-center min-h-[60vh] text-center max-w-md mx-auto">
+              <div className="w-16 h-16 rounded-full flex items-center justify-center mb-6 bg-red-100 text-red-600 dark:bg-red-500/10 dark:text-red-400 dark:border dark:border-red-500/20">
+                <AlertCircle className="w-8 h-8" />
+              </div>
+              <h2 className="text-2xl font-bold text-neutral-900 dark:text-white mb-2">
+                Access Deactivated
+              </h2>
+              <p className="text-neutral-600 dark:text-white/60 mb-8 font-medium">
+                Your access to this workspace has been deactivated by the administrator. Please contact your workspace owner to reactivate your account.
+              </p>
+              <Button
+                onClick={async () => {
+                  await logoutUser();
+                  window.location.href = "/login";
+                }}
+                className="bg-purp-900 text-white dark:bg-[#7B2FF7] hover:bg-purp-800 dark:hover:bg-[#7B2FF7]/80 px-8 py-3 rounded-lg font-bold transition-all"
+              >
+                Sign Out
+              </Button>
             </div>
           ) : merchant?.is_hard_locked && pathname !== "/settings/billing" ? (
             <div className="flex flex-col items-center justify-center min-h-[60vh] text-center max-w-md mx-auto">

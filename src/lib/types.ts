@@ -62,6 +62,7 @@ export interface Merchant {
   is_read_only?: boolean;
   is_suspended?: boolean;
   is_super_admin?: boolean;
+  is_team_deactivated?: boolean;
 }
 
 export interface Subscription {

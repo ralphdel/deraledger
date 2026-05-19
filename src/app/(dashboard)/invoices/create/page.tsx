@@ -24,7 +24,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
-import { getClients, getItemCatalog, getDiscountTemplates, getActiveSubscription, getReferences } from "@/lib/data";
+import { getClients, getItemCatalog, getDiscountTemplates, getActiveSubscription, getReferences, getMerchant } from "@/lib/data";
 import type { Client, Merchant, ItemCatalog, DiscountTemplate, Reference } from "@/lib/types";
 import { calculateInvoiceTotals, formatNaira } from "@/lib/calculations";
 import { createInvoiceAction, createInvoiceAllocationAction, getEligibleDepositInvoicesAction } from "@/lib/actions";
@@ -82,37 +82,32 @@ function CreateInvoiceForm() {
   useEffect(() => {
     getClients().then(setClients);
 
-    // Load merchant context and their catalog/templates
-    const sb = createClient();
-    sb.auth.getSession().then(async ({ data: { session } }) => {
-      if (session?.user) {
-        const user = session.user;
-        const { data } = await sb
-          .from("merchants")
-          .select("*")
-          .eq("user_id", user.id)
-          .single();
-        if (data) {
-          setMerchant(data as Merchant);
-          // Fetch catalog and discount templates
-          getItemCatalog(data.id).then(setCatalog);
-          getDiscountTemplates(data.id).then(setDiscountTemplates);
-          getReferences(data.id).then(setReferences);
+    // Load merchant context and their catalog/templates using getMerchant() to support team members too
+    getMerchant().then((m) => {
+      if (m) {
+        setMerchant(m);
+        // Fetch catalog and discount templates
+        getItemCatalog(m.id).then(setCatalog);
+        getDiscountTemplates(m.id).then(setDiscountTemplates);
+        getReferences(m.id).then(setReferences);
 
-          // CRITICAL: Force starter plan merchants to record type only.
-          // This prevents the form from accidentally submitting a collection invoice
-          // if the page loaded without a ?type=record query param.
-          const plan = data.subscription_plan || data.merchant_tier || "starter";
-          if (plan === "starter") {
-            setInvoiceType("record");
+        // CRITICAL: Force starter plan or unverified merchants to record type only.
+        // This prevents direct URL bypass where unverified or starter plan users
+        // load the collection invoice form by putting ?type=collection in their URL query param.
+        const plan = m.subscription_plan || m.merchant_tier || "starter";
+        const isUnverified = m.verification_status !== "verified";
+        if (plan === "starter" || isUnverified) {
+          setInvoiceType("record");
+          if (searchParams.get("type") === "collection") {
+            router.replace("/invoices/create?type=record", { scroll: false });
           }
-          
-          getActiveSubscription(data.id).then((sub) => {
-            if (sub && sub.status === "expired") {
-              setIsRestricted(true);
-            }
-          });
         }
+        
+        getActiveSubscription(m.id).then((sub) => {
+          if (sub && sub.status === "expired") {
+            setIsRestricted(true);
+          }
+        });
       }
     });
   }, []);
@@ -175,6 +170,20 @@ function CreateInvoiceForm() {
     if (lineItems.every((li) => !li.itemName.trim())) {
       setError("Please add at least one line item with a description.");
       return;
+    }
+
+    // Strict KYC and plan gate for collection invoices to block URL bypasses
+    if (invoiceType === "collection") {
+      const plan = merchant.subscription_plan || merchant.merchant_tier || "starter";
+      const isUnverified = merchant.verification_status !== "verified";
+      if (plan === "starter") {
+        setError("Collection Invoices are not available on the Starter plan. Please upgrade.");
+        return;
+      }
+      if (isUnverified) {
+        setError("Your account KYC must be verified before you can create collection invoices.");
+        return;
+      }
     }
 
     // Bug 6: Validate initial payment does not exceed grand total

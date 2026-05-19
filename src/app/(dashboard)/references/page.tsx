@@ -23,6 +23,7 @@ import type { FinancialAllocation } from "@/lib/services/references/reference-fi
 import type { InvoiceWithClient, Merchant, Reference } from "@/lib/types";
 import { createClient } from "@/lib/supabase/client";
 import { PermissionGuard } from "@/components/PermissionGuard";
+import { hasPermission } from "@/lib/rbac-matrix";
 
 function ProgressBar({ pct, className = "" }: { pct: number; className?: string }) {
   const color =
@@ -330,20 +331,22 @@ export default function ReferencesPage() {
                             </Button>
                           </>
                         ) : (
-                          <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-neutral-400 hover:text-purp-700 hover:bg-purp-50 dark:text-white/40 dark:hover:text-[#B58CFF] dark:hover:bg-white/5"
-                            onClick={() => {
-                              setEditingId(ref.id);
-                              setEditProjectTotal(ref.project_total_value ? String(ref.project_total_value) : "");
-                              setEditHandledBy(ref.handled_by || "");
-                              if (ref.handled_by && teamMembers.length > 0) {
-                                const isTeamMember = teamMembers.some(tm => tm.name === ref.handled_by);
-                                setShowCustomEditHandledBy(!isTeamMember);
-                              } else {
-                                setShowCustomEditHandledBy(false);
-                              }
-                            }}>
-                            <Edit2 className="h-3.5 w-3.5" />
-                          </Button>
+                          (!merchant?.permissions || merchant.permissions.manage_references) && (
+                            <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-neutral-400 hover:text-purp-700 hover:bg-purp-50 dark:text-white/40 dark:hover:text-[#B58CFF] dark:hover:bg-white/5"
+                              onClick={() => {
+                                setEditingId(ref.id);
+                                setEditProjectTotal(ref.project_total_value ? String(ref.project_total_value) : "");
+                                setEditHandledBy(ref.handled_by || "");
+                                if (ref.handled_by && teamMembers.length > 0) {
+                                  const isTeamMember = teamMembers.some(tm => tm.name === ref.handled_by);
+                                  setShowCustomEditHandledBy(!isTeamMember);
+                                } else {
+                                  setShowCustomEditHandledBy(false);
+                                }
+                              }}>
+                              <Edit2 className="h-3.5 w-3.5" />
+                            </Button>
+                          )
                         )}
                       </div>
                     </div>
@@ -501,11 +504,15 @@ export default function ReferencesPage() {
 
                     {/* CTA */}
                     <div className="flex items-center justify-between border-t border-neutral-100 dark:border-white/10 pt-3">
-                      <Link href={`/invoices/create?reference=${ref.id}&type=collection`}>
-                        <Button size="sm" variant="outline" className="border-purp-200 dark:border-white/10 text-purp-700 dark:text-[#B58CFF] hover:bg-purp-50 dark:hover:bg-white/5 dark:bg-transparent text-xs h-7">
-                          <Plus className="h-3 w-3 mr-1" /> New Invoice
-                        </Button>
-                      </Link>
+                      {hasPermission(merchant?.permissions, "create_invoice", merchant?.currentUserRole as any) ? (
+                        <Link href={`/invoices/create?reference=${ref.id}&type=collection`}>
+                          <Button size="sm" variant="outline" className="border-purp-200 dark:border-white/10 text-purp-700 dark:text-[#B58CFF] hover:bg-purp-50 dark:hover:bg-white/5 dark:bg-transparent text-xs h-7">
+                            <Plus className="h-3 w-3 mr-1" /> New Invoice
+                          </Button>
+                        </Link>
+                      ) : (
+                        <div />
+                      )}
                       {financials.hasProjectTotal && financials.outstandingBalance > 0 && (
                         <span className="text-xs text-neutral-500 dark:text-white/50">
                           Suggested next: <strong className="text-purp-900 dark:text-white">{formatNaira(financials.suggestedNextInvoiceAmount)}</strong>

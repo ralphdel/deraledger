@@ -119,6 +119,7 @@ export async function getMerchant(id?: string): Promise<(Merchant & { currentUse
   // Determine current user role and permissions
   let currentUserRole = "viewer"; // default safe fallback
   let permissions: Record<string, boolean> = {};
+  let isTeamDeactivated = false;
   
   const { data: { session } } = await sb.auth.getSession();
   const user = session?.user;
@@ -140,43 +141,49 @@ export async function getMerchant(id?: string): Promise<(Merchant & { currentUse
     } else {
       const { data: teamData } = await sb
         .from("merchant_team")
-        .select("roles(name, permissions)")
+        .select("is_active, roles(name, permissions)")
         .eq("merchant_id", mId)
         .eq("user_id", user.id)
         .single();
         
-      if (teamData?.roles) {
-        // @ts-ignore
-        currentUserRole = teamData.roles.name;
-        // @ts-ignore
-        const rawPerms: Record<string, boolean> = teamData.roles.permissions || {};
+      if (teamData) {
+        if (teamData.is_active === false) {
+          isTeamDeactivated = true;
+          currentUserRole = "viewer";
+          permissions = {};
+        } else if (teamData.roles) {
+          // @ts-ignore
+          currentUserRole = teamData.roles.name;
+          // @ts-ignore
+          const rawPerms: Record<string, boolean> = teamData.roles.permissions || {};
 
-        // ── Plan-level permission masking ──────────────────────────────────────
-        // Even if a role grants a permission, strip it if the merchant's plan
-        // does not include that feature. This enforces plan boundaries server-side
-        // so team members can't access features above their merchant's plan.
-        const planKey = data.subscription_plan || data.merchant_tier || "starter";
+          // ── Plan-level permission masking ──────────────────────────────────────
+          // Even if a role grants a permission, strip it if the merchant's plan
+          // does not include that feature. This enforces plan boundaries server-side
+          // so team members can't access features above their merchant's plan.
+          const planKey = data.subscription_plan || data.merchant_tier || "starter";
 
-        // Permissions never available on Starter plan
-        const STARTER_BLOCKED = new Set([
-          "view_settlements", "manage_settlement_account",
-          "view_analytics",
-          "view_references", "manage_references",
-          "view_transactions",
-          "change_fee_settings",
-          "void_invoice",
-        ]);
-        // Permissions not available on Individual plan
-        const INDIVIDUAL_BLOCKED = new Set(["view_analytics"]);
+          // Permissions never available on Starter plan
+          const STARTER_BLOCKED = new Set([
+            "view_settlements", "manage_settlement_account",
+            "view_analytics",
+            "view_references", "manage_references",
+            "view_transactions",
+            "change_fee_settings",
+            "void_invoice",
+          ]);
+          // Permissions not available on Individual plan
+          const INDIVIDUAL_BLOCKED = new Set(["view_analytics"]);
 
-        const planBlocked =
-          planKey === "starter" ? STARTER_BLOCKED
-          : planKey === "individual" ? INDIVIDUAL_BLOCKED
-          : new Set<string>(); // corporate: nothing blocked
+          const planBlocked =
+            planKey === "starter" ? STARTER_BLOCKED
+            : planKey === "individual" ? INDIVIDUAL_BLOCKED
+            : new Set<string>(); // corporate: nothing blocked
 
-        permissions = Object.fromEntries(
-          Object.entries(rawPerms).map(([k, v]) => [k, v && !planBlocked.has(k)])
-        );
+          permissions = Object.fromEntries(
+            Object.entries(rawPerms).map(([k, v]) => [k, v && !planBlocked.has(k)])
+          );
+        }
       }
     }
   } else if (mId === "00000000-0000-0000-0000-000000000001") {
@@ -233,14 +240,16 @@ export async function getMerchant(id?: string): Promise<(Merchant & { currentUse
     subscription_status: subData?.status || "none",
     is_hard_locked: isHardLocked,
     is_suspended: isSuspended,
-    is_read_only: isReadOnly
+    is_read_only: isReadOnly,
+    is_team_deactivated: isTeamDeactivated
   } as Merchant & { 
     currentUserRole?: string, 
     permissions?: Record<string, boolean>,
     subscription_status: string,
     is_hard_locked: boolean,
     is_suspended: boolean,
-    is_read_only: boolean
+    is_read_only: boolean,
+    is_team_deactivated?: boolean
   };
 }
 

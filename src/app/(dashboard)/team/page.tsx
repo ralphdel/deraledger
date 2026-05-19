@@ -118,7 +118,7 @@ const PREDEFINED_ROLE_PERMISSIONS: Record<string, Record<string, boolean>> = {
   accountant: {
     view_invoices: true, create_invoice: true, edit_invoice: true,
     record_payment: true, manual_close: true, void_invoice: false,
-    view_references: true, manage_references: false,
+    view_references: true, manage_references: true,
     view_clients: true, manage_clients: false, delete_client: false,
     view_analytics: true, view_transactions: true, view_settlements: true,
     view_item_catalog: true, manage_item_catalog: false,
