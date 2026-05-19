@@ -5,7 +5,7 @@ import Link from "next/link";
 import { 
   ChevronLeft, ChevronRight, Printer, Sparkles, CheckCircle2, 
   ShieldCheck, Layers, Users, Wallet, ArrowRight, Clock, FileText,
-  Mail, Globe, Phone, ExternalLink
+  Mail, Globe, Phone, ExternalLink, Award, ShieldAlert
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -70,7 +70,7 @@ const slides = [
         <div>
           <div className="flex items-center justify-between mb-8">
             <span className="text-xs font-bold uppercase tracking-widest text-[#6D28FF]">The Operational Challenge</span>
-            <span className="text-xs text-neutral-400">02 / 07</span>
+            <span className="text-xs text-neutral-400">02 / 08</span>
           </div>
           <h2 className="text-3xl font-bold text-neutral-900 tracking-tight mb-4">
             Business payments rarely happen in one step.
@@ -114,12 +114,12 @@ const slides = [
       </div>
     )
   },
-  // Slide 3: Why Choose Us (The Core Advantage)
+  // Slide 3: The Partial Payment Advantage
   {
     id: 3,
     type: "dark",
     title: "The first infrastructure built natively for partial payments.",
-    subtitle: "Why Choose Us: Staged Collections & Automated Reminders",
+    subtitle: "Staged Collections & Automated Reminders",
     description: "Standard invoicing platforms force users to pay the entire bill at once. DeraLedger is built from the ground up to allow milestone-based collections.",
     content: (
       <div className="relative w-full h-full flex flex-col justify-between p-8 sm:p-12 overflow-hidden">
@@ -129,7 +129,7 @@ const slides = [
         <div className="z-10">
           <div className="flex items-center justify-between mb-8">
             <span className="text-xs font-bold uppercase tracking-widest text-[#A78BFA]">Strategic Advantage</span>
-            <span className="text-xs text-neutral-500">03 / 07</span>
+            <span className="text-xs text-neutral-500">03 / 08</span>
           </div>
           <h2 className="text-3xl font-extrabold text-white tracking-tight mb-4">
             The first infrastructure built natively for partial payments.
@@ -178,9 +178,70 @@ const slides = [
       </div>
     )
   },
-  // Slide 4: Capabilities
+  // Slide 4: Why Choose Us & Trust KYC (New dedicated trust slide)
   {
     id: 4,
+    type: "light",
+    title: "Why Choose Us: Complete Operational Trust",
+    subtitle: "DeraLedger — Built Around Security, KYC & Reliability",
+    description: "Enterprise safety meets SME agility. We enforce robust compliance checks to secure every collection milestone.",
+    content: (
+      <div className="w-full h-full flex flex-col justify-between p-8 sm:p-12 text-neutral-900">
+        <div>
+          <div className="flex items-center justify-between mb-8">
+            <span className="text-xs font-bold uppercase tracking-widest text-[#6D28FF]">Trust & Verification</span>
+            <span className="text-xs text-neutral-400">04 / 08</span>
+          </div>
+          <h2 className="text-3xl font-bold text-neutral-900 tracking-tight mb-4">
+            Why Choose Us: Complete Operational Trust
+          </h2>
+          <p className="text-neutral-600 max-w-2xl text-sm mb-6">
+            Invoicing is about reputation. DeraLedger pairs its unique staged payments engine with institutional-grade KYC verification and secure escrow processing.
+          </p>
+        </div>
+
+        {/* Trust pillars */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 my-auto">
+          <div className="bg-neutral-50 border border-neutral-200/60 p-5 rounded-2xl">
+            <div className="h-8 w-8 rounded-lg bg-[#6D28FF]/10 flex items-center justify-center text-[#6D28FF] mb-3">
+              <ShieldCheck className="w-4 h-4" />
+            </div>
+            <h3 className="font-bold text-sm text-neutral-950">Sequential KYC Verification</h3>
+            <p className="text-xs text-neutral-600 leading-relaxed mt-1">
+              Rigid BVN verification, CAC registry checking, and selfie identity matching powered by Dojah API to prevent spam billing.
+            </p>
+          </div>
+
+          <div className="bg-neutral-50 border border-neutral-200/60 p-5 rounded-2xl">
+            <div className="h-8 w-8 rounded-lg bg-[#6D28FF]/10 flex items-center justify-center text-[#6D28FF] mb-3">
+              <Award className="w-4 h-4" />
+            </div>
+            <h3 className="font-bold text-sm text-neutral-950">Secure Settlements</h3>
+            <p className="text-xs text-neutral-600 leading-relaxed mt-1">
+              Automated Paystack subaccount routing ensures collections are directly deposited to your verified business settlements account.
+            </p>
+          </div>
+
+          <div className="bg-neutral-50 border border-neutral-200/60 p-5 rounded-2xl">
+            <div className="h-8 w-8 rounded-lg bg-[#6D28FF]/10 flex items-center justify-center text-[#6D28FF] mb-3">
+              <Layers className="w-4 h-4" />
+            </div>
+            <h3 className="font-bold text-sm text-neutral-950">Tamper-Proof Audit Trail</h3>
+            <p className="text-xs text-neutral-600 leading-relaxed mt-1">
+              Every deposit entry, invoice creation, and offline adjustment is permanently logged with metadata to protect your business logs.
+            </p>
+          </div>
+        </div>
+
+        <div className="border-t border-neutral-100 pt-6 text-xs text-neutral-400">
+          99.99% operational uptime and regulatory-compliant payment infrastructure.
+        </div>
+      </div>
+    )
+  },
+  // Slide 5: Capabilities
+  {
+    id: 5,
     type: "light",
     title: "An intelligent operational workspace.",
     subtitle: "Core Capabilities Built for Business Growth",
@@ -190,7 +251,7 @@ const slides = [
         <div>
           <div className="flex items-center justify-between mb-8">
             <span className="text-xs font-bold uppercase tracking-widest text-[#6D28FF]">Core Capabilities</span>
-            <span className="text-xs text-neutral-400">04 / 07</span>
+            <span className="text-xs text-neutral-400">05 / 08</span>
           </div>
           <h2 className="text-3xl font-bold text-neutral-900 tracking-tight mb-4">
             An intelligent operational workspace.
@@ -258,9 +319,9 @@ const slides = [
       </div>
     )
   },
-  // Slide 5: Workspace Showcase
+  // Slide 6: Workspace Showcase
   {
-    id: 5,
+    id: 6,
     type: "dark",
     title: "See everything. Track everything.",
     subtitle: "High-Fidelity Dashboard Workspace Preview",
@@ -273,7 +334,7 @@ const slides = [
         <div className="z-10">
           <div className="flex items-center justify-between mb-6">
             <span className="text-xs font-bold uppercase tracking-widest text-[#A78BFA]">Product Interface</span>
-            <span className="text-xs text-neutral-500">05 / 07</span>
+            <span className="text-xs text-neutral-500">06 / 08</span>
           </div>
           <h2 className="text-3xl font-extrabold text-white tracking-tight mb-2">
             See everything. Track everything.
@@ -329,9 +390,9 @@ const slides = [
       </div>
     )
   },
-  // Slide 6: Team Operations
+  // Slide 7: Team Operations
   {
-    id: 6,
+    id: 7,
     type: "light",
     title: "Scale your finance operations securely.",
     subtitle: "Enterprise-Grade Role-Based Access Control (RBAC)",
@@ -341,7 +402,7 @@ const slides = [
         <div>
           <div className="flex items-center justify-between mb-8">
             <span className="text-xs font-bold uppercase tracking-widest text-[#6D28FF]">Team Operations</span>
-            <span className="text-xs text-neutral-400">06 / 07</span>
+            <span className="text-xs text-neutral-400">07 / 08</span>
           </div>
           <h2 className="text-3xl font-bold text-neutral-900 tracking-tight mb-4">
             Scale your finance operations securely.
@@ -390,9 +451,9 @@ const slides = [
       </div>
     )
   },
-  // Slide 7: Built for Growth, Backed by Trust
+  // Slide 8: Built for Growth, Backed by Trust
   {
-    id: 7,
+    id: 8,
     type: "dark",
     title: "Built for growth. Designed for trust.",
     subtitle: "Audience, Security & Call To Action",
@@ -400,12 +461,12 @@ const slides = [
     content: (
       <div className="relative w-full h-full flex flex-col justify-between p-8 sm:p-12 overflow-hidden">
         {/* Glow */}
-        <div className="absolute bottom-[-10%] left-[-10%] w-[50%] h-[50%] rounded-full bg-[#6D28FF]/10 blur-[120px] pointer-events-none" />
+        <div className="absolute bottom-[-10%] left-[-10%] w-[50%] h-[50%] rounded-full bg-[#6D28FF]/10 blur-[120px] pointer-events-none z-10" />
 
         <div className="z-10">
           <div className="flex items-center justify-between mb-8">
             <span className="text-xs font-bold uppercase tracking-widest text-[#A78BFA]">Growth & Trust</span>
-            <span className="text-xs text-neutral-500">07 / 07</span>
+            <span className="text-xs text-neutral-500">08 / 08</span>
           </div>
         </div>
 
