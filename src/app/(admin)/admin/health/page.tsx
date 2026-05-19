@@ -35,8 +35,12 @@ export default function PlatformHealthPage() {
       sb.from("merchants").select("id", { count: "exact", head: true }),
       sb.from("invoices").select("id", { count: "exact", head: true }),
       sb.from("transactions").select("id", { count: "exact", head: true }),
-    ]).then(([merchantRes, invoiceRes, txnRes]) => {
+      sb.from("treasury_webhook_logs").select("id, status", { count: "exact" }).limit(20),
+      sb.from("settlement_batches").select("id, status", { count: "exact" }).limit(20),
+    ]).then(([merchantRes, invoiceRes, txnRes, webhookRes, batchRes]) => {
       const latency = Date.now() - start;
+      const recentWebhookFailures = (webhookRes.data || []).filter((row) => row.status === "failed").length;
+      const activeQueueCount = (batchRes.data || []).filter((row) => ["queued", "processing", "held"].includes(row.status)).length;
 
       setMetrics([
         {
@@ -66,6 +70,20 @@ export default function PlatformHealthPage() {
           value: "Connected",
           description: "Paystack gateway integration",
           icon: Zap,
+        },
+        {
+          name: "Breet Treasury Rail",
+          status: recentWebhookFailures > 0 ? "warning" : "healthy",
+          value: recentWebhookFailures > 0 ? `${recentWebhookFailures} webhook issues` : "Ready",
+          description: "Crypto treasury webhook and reconciliation rail",
+          icon: Shield,
+        },
+        {
+          name: "Settlement Queue",
+          status: activeQueueCount > 10 ? "warning" : "healthy",
+          value: `${activeQueueCount} active`,
+          description: "Queued, processing, or held payout batches",
+          icon: Activity,
         },
         {
           name: "Merchants",
@@ -140,7 +158,7 @@ export default function PlatformHealthPage() {
         </Badge>
       </div>
 
-      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-4">
         {metrics.map((metric) => {
           const config = statusConfig[metric.status];
           const StatusIcon = config.icon;
@@ -182,7 +200,7 @@ export default function PlatformHealthPage() {
             </div>
             <div className="p-3 bg-neutral-50 rounded-lg border">
               <p className="text-neutral-500 text-xs">Payments</p>
-              <p className="font-medium">Paystack (NG)</p>
+              <p className="font-medium">Paystack + Breet Treasury</p>
             </div>
             <div className="p-3 bg-neutral-50 rounded-lg border">
               <p className="text-neutral-500 text-xs">Region</p>

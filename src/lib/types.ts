@@ -163,8 +163,105 @@ export interface Transaction {
   paystack_fee: number;
   fee_absorbed_by: "business" | "customer";
   paystack_reference: string | null;
-  payment_method: "card" | "bank_transfer" | "ussd";
+  payment_method: "card" | "bank_transfer" | "ussd" | "crypto" | "usdt" | "usdc" | "btc" | "eth";
   status: "success" | "failed" | "pending" | "held_pending_review";
+  payment_rail?: string | null;
+  settlement_status?: string | null;
+  processor_reference?: string | null;
+  source_currency?: string | null;
+  source_amount?: number | null;
+  fx_rate?: number | null;
+  merchant_net_amount?: number | null;
+  created_at: string;
+}
+
+export interface PaymentSession {
+  id: string;
+  invoice_id: string;
+  merchant_id: string;
+  payment_rail: string;
+  source_currency: string;
+  destination_currency: string;
+  amount_ngn: number;
+  amount_crypto: number;
+  exchange_rate: number;
+  wallet_address: string;
+  wallet_provider_id: string | null;
+  network: string | null;
+  status: string;
+  confirmation_count: number;
+  expected_confirmations: number;
+  reference: string;
+  provider_reference: string | null;
+  tx_hash: string | null;
+  metadata: Record<string, unknown> | null;
+  expires_at: string;
+  paid_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MerchantWallet {
+  id: string;
+  merchant_id: string;
+  currency: string;
+  available_balance: number;
+  pending_balance: number;
+  locked_balance: number;
+  total_settled: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TreasuryTransaction {
+  id: string;
+  merchant_id: string;
+  invoice_id: string;
+  payment_session_id: string;
+  payment_rail: string | null;
+  source_currency: string | null;
+  source_amount: number | null;
+  exchange_rate: number | null;
+  gross_ngn: number | null;
+  platform_fee: number;
+  network_fee: number;
+  merchant_net_ngn: number | null;
+  blockchain_tx_hash: string | null;
+  breet_reference: string | null;
+  settlement_reference: string | null;
+  status: string;
+  raw_payload: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SettlementBatch {
+  id: string;
+  merchant_id: string;
+  total_amount: number;
+  currency: string;
+  payout_provider: string | null;
+  payout_reference: string | null;
+  status: string;
+  processed_at: string | null;
+  failure_reason: string | null;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TreasuryWebhookLog {
+  id: string;
+  provider: string;
+  event_type: string;
+  status: string;
+  processor_reference: string | null;
+  merchant_id: string | null;
+  invoice_id: string | null;
+  payment_session_id: string | null;
+  response_code: number | null;
+  error_message: string | null;
+  raw_payload: Record<string, unknown> | null;
   created_at: string;
 }
 

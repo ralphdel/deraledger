@@ -16,7 +16,7 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => null);
     if (!body) return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
 
-    const { invoiceId, paymentAmount } = body;
+    const { invoiceId, paymentAmount, paymentMethod } = body;
 
     if (!invoiceId || !paymentAmount || paymentAmount <= 0) {
       return NextResponse.json({ error: "Missing invoiceId or paymentAmount" }, { status: 400 });
@@ -61,7 +61,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Merchant is not verified or has no settlement account set up" }, { status: 403 });
     }
 
-    if (invoice.payment_provider === "monnify") {
+    if (paymentMethod !== "crypto" && invoice.payment_provider === "monnify") {
       return NextResponse.json({ 
         error: "Monnify is currently undergoing maintenance. Please contact the merchant for an alternative payment link." 
       }, { status: 400 });
@@ -90,22 +90,27 @@ export async function POST(request: Request) {
       k_factor: kFactor,
     };
 
-    if (invoice.payment_provider === "breet") {
-      // Crypto Checkout
-      const result = await PaymentService.generateCryptoDepositAddress({
-        assetId: "BTC", // Defaulting to BTC for Breet scaffold
-        label: reference,
+    if (paymentMethod === "crypto") {
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+      const cryptoResponse = await fetch(`${appUrl}/api/checkout/crypto-invoice`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          invoiceId: invoice.id,
+          paymentAmount: cappedPayment,
+          rail: body.rail || invoice.crypto_asset || "USDT",
+        }),
       });
 
-      return NextResponse.json({
-        success: true,
-        isCrypto: true,
-        cryptoAddress: result.address,
-        cryptoNetwork: result.asset || "BTC",
-        cryptoCoin: result.asset || "BTC",
-        fiatAmount: chargeAmount,
-        reference,
-      });
+      const cryptoResult = await cryptoResponse.json().catch(() => ({}));
+      if (!cryptoResponse.ok) {
+        return NextResponse.json(
+          { error: cryptoResult?.error || "Crypto checkout initialization failed." },
+          { status: cryptoResponse.status }
+        );
+      }
+
+      return NextResponse.json(cryptoResult);
     }
 
     // Default: Fiat Checkout (Paystack)
@@ -126,8 +131,9 @@ export async function POST(request: Request) {
       reference: result.reference,
     });
 
-  } catch (error: any) {
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to initialize payment";
     console.error("Payment initialization failed:", error);
-    return NextResponse.json({ error: error.message || "Failed to initialize payment" }, { status: 500 });
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

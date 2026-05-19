@@ -499,7 +499,7 @@ export async function getDashboardStats(merchantId?: string) {
 
   // Payment method breakdown
   const successTxns = transactions.filter((t) => t.status === "success");
-  const methodCounts = { card: 0, bank_transfer: 0, ussd: 0 };
+  const methodCounts: Record<string, number> = { card: 0, bank_transfer: 0, ussd: 0 };
   successTxns.forEach((t) => {
     methodCounts[t.payment_method] = (methodCounts[t.payment_method] || 0) + 1;
   });

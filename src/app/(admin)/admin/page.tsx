@@ -6,10 +6,9 @@ import {
   ShieldCheck,
   Users,
   DollarSign,
-  AlertTriangle,
   TrendingUp,
-  ArrowUpRight,
   Clock,
+  Landmark,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -22,6 +21,7 @@ export default function AdminOverviewPage() {
   const [transactions, setTransactions] = useState<{ amount_paid: number }[]>([]);
   const [activeCount, setActiveCount] = useState(0);
   const [recentInvoices, setRecentInvoices] = useState<Invoice[]>([]);
+  const [pendingTreasury, setPendingTreasury] = useState(0);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -34,11 +34,13 @@ export default function AdminOverviewPage() {
       sb.from("invoices").select("id, status").in("status", ["open", "partially_paid"]),
       // Recent activity (last 8 for display)
       sb.from("invoices").select("*").order("created_at", { ascending: false }).limit(8),
-    ]).then(([merchantRes, txRes, activeRes, recentRes]) => {
+      sb.from("merchant_wallets").select("pending_balance"),
+    ]).then(([merchantRes, txRes, activeRes, recentRes, walletRes]) => {
       setMerchants((merchantRes.data || []) as Merchant[]);
       setTransactions((txRes.data || []) as { amount_paid: number }[]);
       setActiveCount((activeRes.data || []).length);
       setRecentInvoices((recentRes.data || []) as Invoice[]);
+      setPendingTreasury((walletRes.data || []).reduce((sum, wallet) => sum + Number(wallet.pending_balance || 0), 0));
       setLoading(false);
     });
   }, []);
@@ -54,14 +56,15 @@ export default function AdminOverviewPage() {
     { title: "Pending Verifications", value: pendingVerifications.toString(), icon: ShieldCheck, color: "bg-amber-100 text-amber-700 border-amber-200" },
     { title: "Platform GMV", value: formatNaira(totalGMV), icon: DollarSign, color: "bg-emerald-100 text-emerald-700 border-emerald-200" },
     { title: "Active Invoices", value: activeInvoices.toString(), icon: TrendingUp, color: "bg-purple-100 text-purple-700 border-purple-200" },
+    { title: "Treasury Pending", value: formatNaira(pendingTreasury), icon: Landmark, color: "bg-amber-100 text-amber-700 border-amber-200" },
   ];
 
   if (loading) {
     return (
       <div className="space-y-6">
         <h1 className="text-2xl font-bold text-neutral-900">Admin Overview</h1>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {[1, 2, 3, 4].map((i) => (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+          {[1, 2, 3, 4, 5].map((i) => (
             <Card key={i} className="border shadow-none animate-pulse">
               <CardContent className="p-5"><div className="h-16 bg-neutral-100 rounded" /></CardContent>
             </Card>
@@ -79,7 +82,7 @@ export default function AdminOverviewPage() {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         {kpis.map((kpi) => (
           <Card key={kpi.title} className="border shadow-none">
             <CardContent className="p-5">
@@ -95,7 +98,7 @@ export default function AdminOverviewPage() {
         ))}
       </div>
 
-      <div className="grid lg:grid-cols-2 gap-6">
+      <div className="grid lg:grid-cols-3 gap-6">
         {/* Verification Queue Preview */}
         <Card className="border shadow-none">
           <CardHeader className="pb-3">
@@ -158,6 +161,26 @@ export default function AdminOverviewPage() {
                   </div>
                 );
               })}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border shadow-none">
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base font-bold text-neutral-900">Treasury Queue</CardTitle>
+              <Link href="/admin/treasury" className="text-xs font-semibold text-purple-700 hover:underline">Open Console →</Link>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                <p className="text-xs text-amber-700 uppercase font-semibold">Pending Merchant Settlement</p>
+                <p className="text-2xl font-bold text-amber-800 mt-2">{formatNaira(pendingTreasury)}</p>
+              </div>
+              <p className="text-sm text-neutral-500">
+                Review crypto-backed invoice collections, queue NGN payouts, and inspect webhook exceptions from the treasury console.
+              </p>
             </div>
           </CardContent>
         </Card>

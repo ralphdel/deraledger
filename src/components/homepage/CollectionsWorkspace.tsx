@@ -1,131 +1,149 @@
 "use client";
 
-import { FolderTree, ArrowDownToLine, Receipt, Layers } from "lucide-react";
+import { FolderTree, ArrowDownToLine, Receipt, Layers, Sparkles, CheckCircle2, AlertCircle } from "lucide-react";
 
 export function CollectionsWorkspace() {
   return (
-    <section className="bg-[#12061F] py-20 md:py-32 border-t border-white/5 relative overflow-hidden">
+    <section className="bg-[#0B0615] py-20 md:py-28 border-t border-white/[0.06] relative overflow-hidden">
       
-      {/* Decorative Background */}
-      <div className="absolute right-0 top-1/2 -translate-y-1/2 h-[600px] w-[400px] bg-[#3D0B66]/30 blur-[150px] pointer-events-none" />
+      {/* Decorative Background Glows */}
+      <div className="absolute right-0 top-1/2 -translate-y-1/2 h-[500px] w-[350px] bg-[#6D28FF]/5 blur-[120px] pointer-events-none" />
+      <div className="absolute left-0 bottom-0 h-[400px] w-[300px] bg-[#C4B5FD]/5 blur-[100px] pointer-events-none" />
 
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 relative z-10">
         
-        <div className="grid lg:grid-cols-[0.8fr_1.2fr] gap-12 lg:gap-20 items-center">
+        <div className="grid lg:grid-cols-[0.85fr_1.15fr] gap-12 lg:gap-20 items-center">
           
           {/* Left: Copy */}
           <div>
-            <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 mb-6">
-              <Layers className="h-4 w-4 text-[#B58CFF]" />
-              <span className="text-xs font-semibold text-white/80">The Signature Feature</span>
+            <div className="inline-flex items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.02] px-3.5 py-1.5 mb-6">
+              <Layers className="h-4 w-4 text-[#A78BFA]" />
+              <span className="text-[10px] font-bold text-white/80 tracking-wide uppercase">Operational receivables</span>
             </div>
             
-            <h2 className="text-3xl md:text-5xl font-bold text-white tracking-tight leading-tight mb-6">
+            <h2 className="text-3xl md:text-5xl font-black text-white tracking-tight leading-[1.1] mb-6">
               Grouped Receivables. <br/>
-              <span className="text-[#7B2FF7]">Organized Collections.</span>
+              <span className="text-[#A78BFA]">Organized Collections.</span>
             </h2>
             
-            <p className="text-lg text-white/60 mb-8 leading-relaxed">
-              Stop treating every invoice like an isolated event. DeraLedger groups all payments tied to a specific project, client, or event into a single collection reference. 
+            <p className="text-base md:text-lg text-white/60 mb-8 leading-relaxed">
+              Stop treating every invoice like an isolated event. DeraLedger groups all payments tied to a specific project, client, or event into a single collection reference.
             </p>
 
-            <ul className="space-y-4">
-              <li className="flex items-start gap-3">
-                <div className="mt-1 h-5 w-5 rounded-full bg-[#3D0B66] flex items-center justify-center flex-shrink-0">
-                  <FolderTree className="h-3 w-3 text-[#B58CFF]" />
+            <ul className="space-y-6">
+              <li className="flex items-start gap-4">
+                <div className="mt-1 h-6 w-6 rounded-lg bg-[#6D28FF]/20 flex items-center justify-center flex-shrink-0 border border-[#6D28FF]/30 text-[#A78BFA]">
+                  <FolderTree className="h-3.5 w-3.5" />
                 </div>
                 <div>
-                  <h4 className="text-sm font-bold text-white">Collection References</h4>
-                  <p className="text-sm text-white/50 mt-1">Group deposits, milestones, and balances together.</p>
+                  <h4 className="text-sm font-bold text-white tracking-tight">Collection References</h4>
+                  <p className="text-xs text-white/50 mt-1 leading-relaxed">Group deposits, milestones, and balances together so your clients see the full picture.</p>
                 </div>
               </li>
-              <li className="flex items-start gap-3">
-                <div className="mt-1 h-5 w-5 rounded-full bg-[#3D0B66] flex items-center justify-center flex-shrink-0">
-                  <ArrowDownToLine className="h-3 w-3 text-[#B58CFF]" />
+              <li className="flex items-start gap-4">
+                <div className="mt-1 h-6 w-6 rounded-lg bg-[#6D28FF]/20 flex items-center justify-center flex-shrink-0 border border-[#6D28FF]/30 text-[#A78BFA]">
+                  <ArrowDownToLine className="h-3.5 w-3.5" />
                 </div>
                 <div>
-                  <h4 className="text-sm font-bold text-white">Deposit Allocation</h4>
-                  <p className="text-sm text-white/50 mt-1">Apply previously paid deposits directly to final balances to prevent double counting.</p>
+                  <h4 className="text-sm font-bold text-white tracking-tight">Deposit Allocation</h4>
+                  <p className="text-xs text-white/50 mt-1 leading-relaxed">Apply previously paid deposits directly to final balances to prevent double counting and invoicing errors.</p>
                 </div>
               </li>
-              <li className="flex items-start gap-3">
-                <div className="mt-1 h-5 w-5 rounded-full bg-[#3D0B66] flex items-center justify-center flex-shrink-0">
-                  <Receipt className="h-3 w-3 text-[#B58CFF]" />
+              <li className="flex items-start gap-4">
+                <div className="mt-1 h-6 w-6 rounded-lg bg-[#6D28FF]/20 flex items-center justify-center flex-shrink-0 border border-[#6D28FF]/30 text-[#A78BFA]">
+                  <Receipt className="h-3.5 w-3.5" />
                 </div>
                 <div>
-                  <h4 className="text-sm font-bold text-white">Installment Workflows</h4>
-                  <p className="text-sm text-white/50 mt-1">Accept partial payments against large invoices with minimum thresholds.</p>
+                  <h4 className="text-sm font-bold text-white tracking-tight">Operational timeline</h4>
+                  <p className="text-xs text-white/50 mt-1 leading-relaxed">Accept partial payments against large contracts while maintaining a clean, automated timeline.</p>
                 </div>
               </li>
             </ul>
           </div>
 
-          {/* Right: Signature UI Mockup */}
-          <div className="relative rounded-2xl border border-white/10 bg-[#12061F] shadow-2xl p-4 sm:p-6 lg:p-8">
-            <div className="absolute inset-0 bg-gradient-to-br from-[#7B2FF7]/5 to-transparent rounded-2xl pointer-events-none" />
+          {/* Right: Immersive Dashboard Showcase */}
+          <div className="relative rounded-2xl border border-white/[0.08] bg-[#12061F]/60 shadow-2xl p-6 sm:p-8 backdrop-blur-sm">
+            <div className="absolute inset-0 bg-gradient-to-br from-[#6D28FF]/5 to-transparent rounded-2xl pointer-events-none" />
             
-            {/* Header */}
-            <div className="flex items-center justify-between border-b border-white/10 pb-4 mb-6">
+            {/* Folder Header */}
+            <div className="flex items-center justify-between border-b border-white/[0.06] pb-4 mb-6">
               <div className="flex items-center gap-3">
-                <div className="h-10 w-10 rounded-lg bg-[#3D0B66] flex items-center justify-center">
-                  <Layers className="h-5 w-5 text-[#B58CFF]" />
+                <div className="h-10 w-10 rounded-lg bg-[#6D28FF]/15 flex items-center justify-center border border-[#6D28FF]/30 text-[#A78BFA]">
+                  <Layers className="h-5 w-5" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-white">Marketing Campaign Q3</h3>
-                  <p className="text-xs text-white/50">Reference ID: REF-9281</p>
+                  <h3 className="font-bold text-white tracking-tight text-base">Marketing Campaign Q3</h3>
+                  <p className="text-[10px] text-white/40 font-mono mt-0.5">REF-9281 • Group reference</p>
                 </div>
               </div>
               <div className="text-right">
-                <p className="text-xs text-white/50 uppercase tracking-wider font-semibold">Total Value</p>
-                <p className="text-lg font-bold text-white font-mono">{"\u20A6"}2,500,000</p>
+                <p className="text-[9px] text-white/40 uppercase tracking-widest font-bold">Total Contract Value</p>
+                <p className="text-lg font-black text-white font-mono mt-0.5">₦2,500,000</p>
               </div>
             </div>
 
-            {/* Invoices List */}
-            <div className="space-y-3">
-              {/* Deposit Invoice */}
-              <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4 flex items-center justify-between">
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-xs font-bold uppercase text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded">Paid</span>
-                    <span className="text-sm font-semibold text-white">Initial Deposit</span>
+            {/* Timelines Showcase */}
+            <div className="space-y-4">
+              
+              {/* Item 1 - Deposit */}
+              <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/[0.03] p-4 flex flex-col min-[480px]:flex-row min-[480px]:items-center justify-between gap-3 hover:border-emerald-500/40 transition-colors duration-300">
+                <div className="flex items-center gap-3">
+                  <div className="h-5 w-5 rounded-full bg-emerald-500/10 flex items-center justify-center border border-emerald-500/30 text-emerald-400">
+                    <CheckCircle2 className="h-3 w-3" />
                   </div>
-                  <p className="text-xs text-white/50">INV-8372 • Aug 14</p>
-                </div>
-                <p className="font-mono text-base font-bold text-emerald-400">{"\u20A6"}500,000</p>
-              </div>
-
-              {/* Milestone Invoice */}
-              <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4 flex items-center justify-between">
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-xs font-bold uppercase text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded">Paid</span>
-                    <span className="text-sm font-semibold text-white">Mid-Campaign Milestone</span>
-                  </div>
-                  <p className="text-xs text-white/50">INV-8399 • Sep 02</p>
-                </div>
-                <p className="font-mono text-base font-bold text-emerald-400">{"\u20A6"}1,000,000</p>
-              </div>
-
-              {/* Balance Invoice with Deposit applied */}
-              <div className="rounded-xl border border-[#7B2FF7]/30 bg-[#7B2FF7]/5 p-4 relative overflow-hidden">
-                <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#7B2FF7]" />
-                <div className="flex items-start justify-between">
                   <div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-xs font-bold uppercase text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded">Pending</span>
-                      <span className="text-sm font-semibold text-white">Final Balance</span>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-semibold text-white">Initial Deposit</span>
+                      <span className="text-[9px] font-bold uppercase text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/25">Paid</span>
                     </div>
-                    <p className="text-xs text-white/50">INV-8410 • Due Oct 01</p>
-                    
-                    <div className="mt-3 flex items-center gap-2 text-xs font-medium text-emerald-400">
-                      <ArrowDownToLine className="h-3 w-3" />
-                      Deposit Applied: -{"\u20A6"}500,000
+                    <p className="text-[10px] text-white/40 mt-0.5 font-mono">INV-8372 • Aug 14</p>
+                  </div>
+                </div>
+                <p className="font-mono text-sm font-bold text-emerald-400 text-left min-[480px]:text-right">₦500,000</p>
+              </div>
+
+              {/* Item 2 - Milestone */}
+              <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/[0.03] p-4 flex flex-col min-[480px]:flex-row min-[480px]:items-center justify-between gap-3 hover:border-emerald-500/40 transition-colors duration-300">
+                <div className="flex items-center gap-3">
+                  <div className="h-5 w-5 rounded-full bg-emerald-500/10 flex items-center justify-center border border-emerald-500/30 text-emerald-400">
+                    <CheckCircle2 className="h-3 w-3" />
+                  </div>
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-semibold text-white">Mid-Campaign Milestone</span>
+                      <span className="text-[9px] font-bold uppercase text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/25">Paid</span>
+                    </div>
+                    <p className="text-[10px] text-white/40 mt-0.5 font-mono">INV-8399 • Sep 02</p>
+                  </div>
+                </div>
+                <p className="font-mono text-sm font-bold text-emerald-400 text-left min-[480px]:text-right">₦1,000,000</p>
+              </div>
+
+              {/* Item 3 - Outstanding with deposit allocation */}
+              <div className="rounded-xl border border-[#6D28FF]/40 bg-[#6D28FF]/5 p-4 relative overflow-hidden hover:border-[#6D28FF]/60 transition-colors duration-300">
+                <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#6D28FF]" />
+                <div className="flex flex-col min-[500px]:flex-row justify-between gap-4">
+                  <div className="flex items-start gap-3">
+                    <div className="h-5 w-5 rounded-full bg-amber-500/10 flex items-center justify-center border border-amber-500/30 text-amber-400 mt-0.5 flex-shrink-0">
+                      <AlertCircle className="h-3 w-3" />
+                    </div>
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-semibold text-white">Final Balance Invoice</span>
+                        <span className="text-[9px] font-bold uppercase text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/25">Pending</span>
+                      </div>
+                      <p className="text-[10px] text-white/40 mt-0.5 font-mono">INV-8410 • Due Oct 01</p>
+                      
+                      {/* Deposit applied badge */}
+                      <div className="mt-3 flex items-center gap-1.5 text-[11px] font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full w-fit">
+                        <ArrowDownToLine className="h-3 w-3" />
+                        <span>Paid Deposit Applied: -₦500,000</span>
+                      </div>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <p className="text-xs text-white/50 mb-0.5">Outstanding</p>
-                    <p className="font-mono text-xl font-bold text-[#B58CFF]">{"\u20A6"}1,000,000</p>
+                  <div className="text-left min-[500px]:text-right flex-shrink-0 pl-8 min-[500px]:pl-0">
+                    <p className="text-[9px] text-white/40 uppercase tracking-widest font-bold">Outstanding</p>
+                    <p className="font-mono text-base font-bold text-[#A78BFA] mt-0.5">₦1,000,000</p>
                   </div>
                 </div>
               </div>

@@ -9,7 +9,7 @@ import crypto from "crypto";
  * Feature-flagged: returns a "coming_soon" response until Breet credentials are configured.
  */
 export async function POST(request: Request) {
-  const BREET_ENABLED = process.env.BREET_API_KEY && process.env.BREET_API_KEY.length > 0;
+  const BREET_ENABLED = Boolean(process.env.BREET_APP_ID && process.env.BREET_APP_SECRET);
 
   if (!BREET_ENABLED) {
     return NextResponse.json(

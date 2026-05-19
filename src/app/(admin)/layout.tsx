@@ -14,9 +14,9 @@ import {
   X,
   Banknote,
   CalendarClock,
+  Landmark,
 } from "lucide-react";
 import { useState } from "react";
-import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { logoutUser } from "@/app/(auth)/actions";
 import { DeraLedgerLogo } from "@/components/ui/deraledger-logo";
@@ -34,6 +34,7 @@ const adminNavItems = [
   { href: "/admin/verification", label: "Verification Queue", icon: ShieldCheck },
   { href: "/admin/merchants", label: "Merchants", icon: Users },
   { href: "/admin/accounting", label: "Accounting", icon: Banknote },
+  { href: "/admin/treasury", label: "Treasury", icon: Landmark },
   { href: "/admin/subscriptions", label: "Subscriptions", icon: CalendarClock },
   { href: "/admin/audit", label: "Audit Trail", icon: ScrollText },
   { href: "/admin/health", label: "Platform Health", icon: Activity },

@@ -14,7 +14,7 @@ import { ShieldCheck, Receipt, Clock, CheckCircle2, Lock, AlertTriangle, Info, A
 const PROVIDER_FLAGS = {
   paystack: true,   // Card + Bank Transfer via Paystack
   monnify: false,   // Dynamic bank accounts via Monnify (coming soon)
-  breet: false,     // Crypto OTC via Breet (coming soon)
+  breet: true,      // Crypto treasury settlement via Breet
 };
 
 export default function PublicPaymentPortal({ params }: { params: Promise<{ invoiceId: string }> }) {
@@ -36,6 +36,9 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
     network: string;
     coin: string;
     fiatAmount: number;
+    cryptoAmount?: number;
+    exchangeRate?: number;
+    expiresAt?: string;
     reference: string;
   } | null>(null);
 
@@ -287,6 +290,8 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
     setInputAmount(finalAmount.toString());
   };
 
+  const cryptoEnabled = PROVIDER_FLAGS.breet && (invoice?.payment_provider === "breet" || invoice?.payment_provider === "paystack");
+
   const handlePayment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isValidAmount || !invoice) return;
@@ -301,6 +306,8 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
         body: JSON.stringify({
           invoiceId: invoice.id,
           paymentAmount: parsedAmount,
+          paymentMethod,
+          rail: invoice.crypto_asset || "USDT",
         }),
       });
       
@@ -312,6 +319,9 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
           network: result.cryptoNetwork,
           coin: result.cryptoCoin,
           fiatAmount: result.fiatAmount,
+          cryptoAmount: result.cryptoAmount,
+          exchangeRate: result.exchangeRate,
+          expiresAt: result.expiresAt,
           reference: result.reference,
         });
         setIsProcessing(false);
@@ -594,19 +604,24 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                   <ArrowRightLeft className="h-5 w-5" />
                   <span>Transfer</span>
                 </button>
-                {/* Crypto — Coming Soon */}
+                {/* Crypto */}
                 <button
                   type="button"
                   onClick={() => setPaymentMethod("crypto")}
+                  disabled={!cryptoEnabled}
                   className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-lg text-xs font-semibold transition-all duration-200 relative ${
                     paymentMethod === "crypto"
                       ? "bg-white shadow text-purp-900 ring-1 ring-purp-200"
-                      : "text-neutral-400 hover:text-neutral-500"
+                      : cryptoEnabled
+                      ? "text-neutral-500 hover:text-neutral-700"
+                      : "text-neutral-400"
                   }`}
                 >
                   <Sparkles className="h-5 w-5" />
                   <span>Crypto</span>
-                  <span className="absolute -top-1 -right-1 bg-amber-400 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full leading-none">SOON</span>
+                  <span className={`absolute -top-1 -right-1 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full leading-none ${cryptoEnabled ? "bg-emerald-500" : "bg-amber-400"}`}>
+                    {cryptoEnabled ? "LIVE" : "SOON"}
+                  </span>
                 </button>
               </div>
             )}
@@ -620,10 +635,10 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                   <div>
                     <p className="text-neutral-400 text-sm">Send Exact Amount</p>
                     <p className="text-3xl font-bold font-mono tracking-tight text-emerald-400">
-                      {formatNaira(cryptoDetails.fiatAmount)}
+                      {cryptoDetails.cryptoAmount?.toFixed(8) || formatNaira(cryptoDetails.fiatAmount)}
                     </p>
                     <p className="text-neutral-500 text-xs mt-1">
-                      Equivalent in {cryptoDetails.coin.toUpperCase()} ({cryptoDetails.network})
+                      {formatNaira(cryptoDetails.fiatAmount)} at {cryptoDetails.coin.toUpperCase()} ({cryptoDetails.network})
                     </p>
                   </div>
                 </div>
@@ -638,28 +653,44 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                 </div>
                 <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-amber-800 text-sm flex items-start gap-3">
                   <Info className="h-5 w-5 flex-shrink-0 mt-0.5" />
-                  <p>Ensure you send the exact equivalent of <strong>{formatNaira(cryptoDetails.fiatAmount)}</strong> on the <strong>{cryptoDetails.network}</strong> network.</p>
+                  <p>
+                    Send <strong>{cryptoDetails.cryptoAmount?.toFixed(8) || "the quoted amount"} {cryptoDetails.coin.toUpperCase()}</strong>
+                    {" "}on <strong>{cryptoDetails.network}</strong>.
+                    {cryptoDetails.exchangeRate ? ` Rate locked at ${formatNaira(cryptoDetails.exchangeRate)} per ${cryptoDetails.coin.toUpperCase()}.` : ""}
+                    {cryptoDetails.expiresAt ? ` Expires ${new Date(cryptoDetails.expiresAt).toLocaleString("en-NG")}.` : ""}
+                  </p>
                 </div>
               </div>
             ) : paymentMethod === "crypto" ? (
-              /* Coming Soon state for Crypto */
+              /* Crypto payment rail */
               <div className="py-8 text-center space-y-4 animate-in fade-in duration-300">
-                <div className="w-16 h-16 bg-amber-50 rounded-full flex items-center justify-center mx-auto border-2 border-amber-100">
-                  <Sparkles className="w-8 h-8 text-amber-500" />
+                <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto border-2 ${cryptoEnabled ? "bg-emerald-50 border-emerald-100" : "bg-amber-50 border-amber-100"}`}>
+                  <Sparkles className={`w-8 h-8 ${cryptoEnabled ? "text-emerald-500" : "text-amber-500"}`} />
                 </div>
                 <div>
-                  <h3 className="font-bold text-purp-900 text-lg">Coming Soon</h3>
+                  <h3 className="font-bold text-purp-900 text-lg">{cryptoEnabled ? "Settle via Stablecoins" : "Coming Soon"}</h3>
                   <p className="text-neutral-500 text-sm mt-1 max-w-xs mx-auto">
-                    Crypto payments will be available soon. This payment option is part of our MVP rollout.
+                    {cryptoEnabled
+                      ? "Your merchant still settles in Naira while the customer pays on-chain. We will generate a wallet address and quote before you send funds."
+                      : "Crypto payments will be available soon. This payment option is part of our MVP rollout."}
                   </p>
                 </div>
-                <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-amber-800 text-sm">
-                  <p className="font-medium">This payment method is currently unavailable during MVP rollout.</p>
-                  <p className="text-xs mt-1 text-amber-700">Please use Card/Bank or Transfer to complete your payment.</p>
-                </div>
-                <Button type="button" variant="outline" className="border-purp-200" onClick={() => setPaymentMethod("card")}>
-                  Use Card / Bank Transfer Instead
-                </Button>
+                {cryptoEnabled ? (
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-emerald-800 text-sm">
+                    <p className="font-medium">Checkout quote will be generated in USDT for this invoice.</p>
+                    <p className="text-xs mt-1 text-emerald-700">The merchant receives NGN settlement after confirmation and treasury processing.</p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-amber-800 text-sm">
+                      <p className="font-medium">This payment method is currently unavailable during MVP rollout.</p>
+                      <p className="text-xs mt-1 text-amber-700">Please use Card/Bank or Transfer to complete your payment.</p>
+                    </div>
+                    <Button type="button" variant="outline" className="border-purp-200" onClick={() => setPaymentMethod("card")}>
+                      Use Card / Bank Transfer Instead
+                    </Button>
+                  </>
+                )}
               </div>
             ) : (
             <form onSubmit={handlePayment} className="space-y-6">
