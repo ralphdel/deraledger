@@ -59,8 +59,9 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
   } | null>(null);
   const [copied, setCopied] = useState(false);
   const paystackLoaded = useRef(false);
-  // ownerName is read from sessionStorage (set by upgrade page)
+  // ownerName + businessType are read from sessionStorage (set by upgrade settings page)
   const [ownerName, setOwnerName] = useState("");
+  const [businessType, setBusinessType] = useState<string | null>(null);
 
   useEffect(() => {
     if (paystackLoaded.current) return;
@@ -74,7 +75,11 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
   useEffect(() => {
     const stored = sessionStorage.getItem("upgradeCheckout");
     if (stored) {
-      try { setOwnerName(JSON.parse(stored).ownerName || ""); } catch { /* ignore */ }
+      try {
+        const parsed = JSON.parse(stored);
+        setOwnerName(parsed.ownerName || "");
+        setBusinessType(parsed.businessType || null);
+      } catch { /* ignore */ }
     }
     getMerchant()
       .then(m => setMerchant(m))
@@ -102,7 +107,7 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
       const res = await fetch("/api/payment/upgrade", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ newPlan: plan, ownerName }),
+        body: JSON.stringify({ newPlan: plan, ownerName, businessType }),
       });
       const data = await res.json();
       if (!data.accessCode) throw new Error(data.error || "Failed to initialize payment.");
@@ -122,6 +127,7 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
           merchant_id: merchant?.id,
           new_plan: plan,
           owner_name: ownerName || null,
+          business_type: businessType || null,
         },
         callback: (response: { reference: string }) => {
           sessionStorage.removeItem("upgradeCheckout");
@@ -143,7 +149,7 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
       const res = await fetch("/api/checkout/crypto-upgrade", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ newPlan: plan, ownerName }),
+        body: JSON.stringify({ newPlan: plan, ownerName, businessType }),
       });
       const data = await res.json();
       if (!data.cryptoAddress) throw new Error(data.error || "Failed to generate address.");

@@ -191,7 +191,7 @@ async function handleSubscriptionUpgrade(
   // Verify merchant exists
   const { data: merchant } = await supabase
     .from("merchants")
-    .select("id, owner_name")
+    .select("id, owner_name, business_type")
     .eq("id", merchantId)
     .single();
 
@@ -202,12 +202,20 @@ async function handleSubscriptionUpgrade(
 
   // Update merchant plan and limits
   const ownerName = metadata?.owner_name as string | undefined;
+  const businessType = metadata?.business_type as string | undefined;
   const updates: Record<string, any> = {
     subscription_plan: newPlan,
     merchant_tier: newPlan,
     monthly_collection_limit: newPlan === "individual" ? 5000000 : 0,
     subscription_notifications_sent: {},
   };
+
+  // Persist business_type — corporate gets whatever was selected, individual defaults to sole_proprietorship
+  if (businessType) {
+    updates.business_type = businessType;
+  } else if (newPlan === "individual" && !merchant.business_type) {
+    updates.business_type = "sole_proprietorship";
+  }
 
   if (ownerName) {
     updates.owner_name = ownerName;

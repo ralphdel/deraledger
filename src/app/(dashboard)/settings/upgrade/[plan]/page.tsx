@@ -22,6 +22,22 @@ import type { Merchant } from "@/lib/types";
 
 type UpgradePlanId = "individual" | "corporate";
 
+// CAMA 2020 Nigeria — 7 official business registration structures
+const CAMA_TYPES = [
+  { value: "sole_proprietorship", label: "Sole Proprietorship / Business Name (BN)", ownerLabel: "Sole Proprietor / Business Owner Full Name" },
+  { value: "ltd",                 label: "Private Limited Company (LTD)",             ownerLabel: "Director or Shareholder Full Name" },
+  { value: "plc",                 label: "Public Limited Company (PLC)",              ownerLabel: "Director or Shareholder Full Name" },
+  { value: "llp",                 label: "Limited Liability Partnership (LLP)",        ownerLabel: "Designated Partner or Partner Full Name" },
+  { value: "lp",                  label: "Limited Partnership (LP)",                  ownerLabel: "Designated Partner or Partner Full Name" },
+  { value: "incorporated_trustees", label: "Incorporated Trustees (IT)",             ownerLabel: "Trustee or Chairperson Full Name" },
+  { value: "cooperative",         label: "Cooperative Society",                       ownerLabel: "President or Trustee Full Name" },
+];
+
+function getOwnerLabel(businessType: string, plan: string): string {
+  if (plan !== "corporate") return "Business Owner Full Name";
+  return CAMA_TYPES.find(t => t.value === businessType)?.ownerLabel ?? "Director or Shareholder Full Name";
+}
+
 type UpgradePlanConfig = {
   label: string;
   routeLabel: string;
@@ -103,8 +119,14 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
   const [merchant, setMerchant] = useState<Merchant | null>(null);
   const [ownerName, setOwnerName] = useState("");
   const [sameOwner, setSameOwner] = useState(true);
-  // Lock owner_name once BVN or selfie has been identity-verified
-  const isOwnerNameLocked = merchant?.bvn_status === "verified" || merchant?.selfie_status === "verified";
+  // Business type — relevant for corporate plan, defaults to sole_proprietorship
+  const [businessType, setBusinessType] = useState("sole_proprietorship");
+
+  // NOTE: owner_name is NOT locked during any upgrade flow.
+  // When upgrading (starter→individual, individual→corporate, starter→corporate),
+  // the operator may need to enter a different director/shareholder name which
+  // will be verified against the new plan's KYC requirements AFTER upgrade.
+  // Locking here would cause a deadlock for legitimate corporate director changes.
 
   useEffect(() => {
     let active = true;
@@ -113,7 +135,10 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
       .then((m) => {
         if (!active) return;
         setMerchant(m);
+        // Pre-fill owner name from existing merchant data
         setOwnerName(m?.owner_name || "");
+        // Pre-fill business type if already set on merchant
+        if (m?.business_type) setBusinessType(m.business_type);
       })
       .finally(() => {
         if (active) setLoadingMerchant(false);
@@ -153,11 +178,21 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
 
   const handleUpgrade = async () => {
     if (!ownerName.trim()) {
-      setError("Please provide the owner or shareholder name before upgrading.");
+      setError("Please provide the owner or representative name before upgrading.");
       return;
     }
-    // Save owner name then navigate to the checkout page
-    sessionStorage.setItem("upgradeCheckout", JSON.stringify({ ownerName: ownerName.trim() }));
+    if (plan === "corporate" && !businessType) {
+      setError("Please select your business registration type before upgrading.");
+      return;
+    }
+    // Save owner name + business type then navigate to the checkout page
+    sessionStorage.setItem(
+      "upgradeCheckout",
+      JSON.stringify({
+        ownerName: ownerName.trim(),
+        businessType: plan === "corporate" ? businessType : null,
+      })
+    );
     router.push(`/checkout/upgrade/${plan}`);
   };
 
@@ -240,88 +275,94 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
                   <Loader2 className="h-4 w-4 animate-spin text-[#B58CFF]" />
                   Loading workspace details...
                 </div>
-              ) : merchant?.subscription_plan === "individual" && plan === "corporate" ? (
-                <div className="space-y-4">
-                  <Label className="text-sm font-medium text-white">
-                    Director or Highest Shareholder Full Name
-                  </Label>
-                  <label className="flex items-center gap-3 rounded-xl border border-white/10 bg-[#12061F]/50 p-4">
-                    <input
-                      type="checkbox"
-                      checked={sameOwner}
+              ) : (
+                <>
+                  {/* ── Business Type Selector (Corporate only) ── */}
+                  {plan === "corporate" && (
+                    <div className="space-y-2">
+                      <Label className="text-sm font-medium text-white">
+                        Business Registration Type <span className="text-red-400">*</span>
+                      </Label>
+                      <p className="text-xs text-white/50">
+                        Select your CAC registration structure. This determines the verification documents required.
+                      </p>
+                      <select
+                        value={businessType}
+                        onChange={(e) => setBusinessType(e.target.value)}
+                        className="w-full h-11 rounded-lg border border-white/10 bg-[#12061F] px-3 text-sm text-white focus:border-[#7B2FF7] focus:outline-none cursor-pointer"
+                      >
+                        {CAMA_TYPES.map((t) => (
+                          <option key={t.value} value={t.value}>{t.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {/* ── Owner / Director Name — ALWAYS editable during upgrade ── */}
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <Label className="text-sm font-medium text-white">
+                        {getOwnerLabel(businessType, plan)} <span className="text-red-400">*</span>
+                      </Label>
+                      {(merchant?.bvn_status === "verified" || merchant?.selfie_status === "verified") && (
+                        <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded-full px-2.5 py-0.5">
+                          ⚠ Re-verification may be required
+                        </span>
+                      )}
+                    </div>
+
+                    {/* For individual→corporate: quick checkbox to reuse existing owner */}
+                    {merchant?.subscription_plan === "individual" && plan === "corporate" && merchant.owner_name && (
+                      <label className="flex items-center gap-3 rounded-xl border border-white/10 bg-[#12061F]/50 px-4 py-3 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={sameOwner}
+                          onChange={(e) => {
+                            setSameOwner(e.target.checked);
+                            setOwnerName(e.target.checked ? (merchant?.owner_name || "") : "");
+                          }}
+                          className="h-4 w-4 accent-[#7B2FF7]"
+                        />
+                        <span className="text-sm text-white/80">
+                          Same as current owner — <strong className="text-white">{merchant.owner_name}</strong>
+                        </span>
+                      </label>
+                    )}
+
+                    <Input
+                      value={ownerName}
                       onChange={(e) => {
-                        setSameOwner(e.target.checked);
-                        if (e.target.checked) {
-                          setOwnerName(merchant?.owner_name || "");
-                        } else {
-                          setOwnerName("");
+                        setOwnerName(e.target.value);
+                        // Uncheck "same owner" if user starts typing a different name
+                        if (merchant?.subscription_plan === "individual" && plan === "corporate") {
+                          setSameOwner(e.target.value === (merchant?.owner_name || ""));
                         }
                       }}
-                      className="h-4 w-4 accent-[#7B2FF7]"
+                      placeholder={`e.g. ${plan === "corporate" ? "Adebayo Olanrewaju (Director)" : "Adebayo Olanrewaju"}`}
+                      className="h-11 border-white/10 bg-[#12061F] text-white focus:border-[#7B2FF7] placeholder:text-white/30"
                     />
-                    <span className="text-sm text-white/80">
-                      Same as current owner ({merchant?.owner_name || "not set"})
-                    </span>
-                  </label>
-                  {!sameOwner && (
-                    <div className="space-y-2">
+                    <p className="text-xs text-white/50">
+                      {plan === "corporate"
+                        ? `This name will be used for ${getOwnerLabel(businessType, plan).toLowerCase()} verification against CAC and BVN records.`
+                        : "This name should match your BVN details. Verification will be completed in your account settings after upgrade."}
+                    </p>
+                  </div>
+
+                  {/* ── Registered Business Name (display only for corporate) ── */}
+                  {plan === "corporate" && (
+                    <div className="space-y-2 pt-2">
+                      <Label className="text-sm font-medium text-white">Registered Business Name</Label>
                       <Input
-                        value={ownerName}
-                        onChange={(e) => setOwnerName(e.target.value)}
-                        placeholder="Enter director or shareholder name"
-                        className="h-11 border-white/10 bg-[#12061F] text-white focus:border-[#7B2FF7] placeholder:text-white/30"
+                        value={merchant?.business_name || ""}
+                        disabled
+                        className="h-11 border-white/10 bg-[#12061F] text-white/70 opacity-80 cursor-not-allowed"
                       />
-                      <p className="text-xs text-amber-400">
-                        A new verification check will be required for this name.
+                      <p className="text-xs text-white/50">
+                        Your CAC-registered business name can be updated from Settings after upgrade.
                       </p>
                     </div>
                   )}
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  <div className="flex items-center gap-3">
-                    <Label className="text-sm font-medium text-white">
-                      {plan === "corporate" ? "Director or Highest Shareholder Full Name" : "Owner Full Name"}
-                    </Label>
-                    {isOwnerNameLocked && (
-                      <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-full px-2.5 py-0.5">
-                        🔒 Identity Verified
-                      </span>
-                    )}
-                  </div>
-                  <Input
-                    value={ownerName}
-                    onChange={(e) => !isOwnerNameLocked && setOwnerName(e.target.value)}
-                    placeholder="e.g. Adebayo Olanrewaju"
-                    disabled={isOwnerNameLocked}
-                    className={`h-11 border ${
-                      isOwnerNameLocked
-                        ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300 cursor-not-allowed opacity-80"
-                        : "border-white/10 bg-[#12061F] text-white focus:border-[#7B2FF7] placeholder:text-white/30"
-                    }`}
-                  />
-                  <p className="text-xs text-white/50">
-                    {isOwnerNameLocked
-                      ? "Name is locked — matched and verified against your BVN identity."
-                      : plan === "corporate"
-                      ? "This name supports director or shareholder verification."
-                      : "This name should match your BVN verification details."}
-                  </p>
-                </div>
-              )}
-
-              {plan === "corporate" && (
-                <div className="space-y-2 pt-2">
-                  <Label className="text-sm font-medium text-white">Registered Business Name</Label>
-                  <Input
-                    value={merchant?.business_name || ""}
-                    disabled
-                    className="h-11 border-white/10 bg-[#12061F] text-white/70 opacity-80 cursor-not-allowed"
-                  />
-                  <p className="text-xs text-white/50">
-                    Your CAC-registered business name can be updated from Settings after upgrade.
-                  </p>
-                </div>
+                </>
               )}
 
               {error && (

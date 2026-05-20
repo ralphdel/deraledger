@@ -418,7 +418,7 @@ export default function ReferencesPage() {
                           </div>
                           <ProgressBar pct={financials.collectionProgress} className="dark:bg-white/10" />
                         </div>
-                                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                                              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                            <div className="bg-neutral-50 dark:bg-white/5 rounded-lg p-2.5 text-center">
                             <p className="text-[10px] text-neutral-500 dark:text-white/40 font-medium uppercase tracking-wide">Project Total</p>
                             <p className="font-bold text-purp-900 dark:text-white text-sm mt-0.5">{formatNaira(financials.projectTotalValue)}</p>

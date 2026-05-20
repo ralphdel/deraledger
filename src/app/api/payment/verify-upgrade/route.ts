@@ -30,6 +30,7 @@ export async function POST(request: Request) {
     const merchantId = metadata.merchant_id;
     const newPlan = metadata.new_plan;
     const ownerName = metadata.owner_name || null;
+    const businessType = metadata.business_type || null;
 
     if (!merchantId || !newPlan) {
       return NextResponse.json({ error: "Missing metadata" }, { status: 400 });
@@ -38,7 +39,7 @@ export async function POST(request: Request) {
     // Check if already updated (idempotency) and get current owner name
     const { data: merchant } = await supabaseAdmin
       .from("merchants")
-      .select("subscription_plan, owner_name")
+      .select("subscription_plan, owner_name, business_type")
       .eq("id", merchantId)
       .single();
 
@@ -53,9 +54,17 @@ export async function POST(request: Request) {
       monthly_collection_limit: newPlan === "individual" ? 5000000 : 0,
     };
 
+    // Persist business_type for corporate upgrades (set to sole_proprietorship as default for individual)
+    if (businessType) {
+      updates.business_type = businessType;
+    } else if (newPlan === "individual" && !merchant?.business_type) {
+      // Individual plan defaults to sole_proprietorship if not previously set
+      updates.business_type = "sole_proprietorship";
+    }
+
     if (ownerName) {
       updates.owner_name = ownerName;
-      // If the owner name has changed, reset the identity verification so the new director can verify
+      // If the owner name has changed, reset identity verification so the new director can re-verify
       if (merchant?.owner_name && merchant.owner_name !== ownerName) {
         updates.bvn = null;
         updates.bvn_status = "unverified";

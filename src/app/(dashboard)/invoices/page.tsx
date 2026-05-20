@@ -289,13 +289,13 @@ export default function InvoicesPage() {
             <TableHeader>
               <TableRow className="bg-purp-50 dark:bg-white/5 border-b-2 border-purp-200 dark:border-white/10 hover:bg-purp-50 dark:hover:bg-white/5">
                 <TableHead className="font-bold text-purp-900 dark:text-white/60 text-xs uppercase">Invoice #</TableHead>
-                <TableHead className="font-bold text-purp-900 dark:text-white/60 text-xs uppercase">Type</TableHead>
+                <TableHead className="font-bold text-purp-900 dark:text-white/60 text-xs uppercase hidden lg:table-cell">Type</TableHead>
                 <TableHead className="font-bold text-purp-900 dark:text-white/60 text-xs uppercase">Client</TableHead>
                 <TableHead className="font-bold text-purp-900 dark:text-white/60 text-xs uppercase">Status</TableHead>
                 <TableHead className="font-bold text-purp-900 dark:text-white/60 text-xs uppercase text-right">Grand Total</TableHead>
                 <TableHead className="font-bold text-purp-900 dark:text-white/60 text-xs uppercase text-right">Paid</TableHead>
                 <TableHead className="font-bold text-purp-900 dark:text-white/60 text-xs uppercase text-right">Outstanding</TableHead>
-                <TableHead className="font-bold text-purp-900 dark:text-white/60 text-xs uppercase">Due Date</TableHead>
+                <TableHead className="font-bold text-purp-900 dark:text-white/60 text-xs uppercase hidden lg:table-cell">Due Date</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -309,7 +309,7 @@ export default function InvoicesPage() {
                         {inv.invoice_number}
                       </Link>
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="hidden lg:table-cell">
                       <Badge variant="outline" className={`border text-[10px] font-bold ${isRecord ? 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20' : 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-500/10 dark:text-blue-400 dark:border-blue-500/20'}`}>
                         {isRecord ? <BookOpen className="mr-1 h-3 w-3 inline-block" /> : <CreditCard className="mr-1 h-3 w-3 inline-block" />}
                         {isRecord ? "Record" : "Collection"}
@@ -329,7 +329,7 @@ export default function InvoicesPage() {
                     <TableCell className="text-right font-semibold text-sm dark:text-white">{formatNaira(metrics.grandTotal)}</TableCell>
                     <TableCell className="text-right text-sm text-emerald-600 dark:text-emerald-400 font-medium">{formatNaira(metrics.paid)}</TableCell>
                     <TableCell className="text-right text-sm text-amber-600 dark:text-amber-400 font-medium">{formatNaira(metrics.outstanding)}</TableCell>
-                    <TableCell className="text-sm text-neutral-500 dark:text-white/50">
+                    <TableCell className="text-sm text-neutral-500 dark:text-white/50 hidden lg:table-cell">
                       {inv.pay_by_date ? new Date(inv.pay_by_date).toLocaleDateString("en-NG", { day: "numeric", month: "short", year: "numeric" }) : "—"}
                     </TableCell>
                   </TableRow>

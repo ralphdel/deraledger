@@ -419,7 +419,7 @@ export default function TeamPage() {
             <CardHeader className="bg-purp-50/50 dark:bg-white/5 border-b-2 border-purp-100 dark:border-white/10 pb-4">
               <CardTitle className="text-lg text-purp-900 dark:text-white">Active Team</CardTitle>
             </CardHeader>
-            <CardContent className="p-0">
+            <CardContent className="p-0 overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow className="hover:bg-transparent border-purp-100 dark:border-white/10">
