@@ -823,8 +823,8 @@ export default function SettingsPage() {
               <p className="text-xs text-neutral-500">Select your registered business type according to CAC standards.</p>
               <select
                 value={businessType}
-                onChange={(e) => !isOwnerNameLocked && setBusinessType(e.target.value)}
-                disabled={isOwnerNameLocked}
+                onChange={(e) => (!isOwnerNameLocked || !merchant?.business_type) && setBusinessType(e.target.value)}
+                disabled={isOwnerNameLocked && !!merchant?.business_type}
                 className="w-full h-11 rounded-md border-2 border-purp-200 bg-purp-50 px-3 py-2 text-sm text-neutral-900 focus:border-purp-500 focus:ring-purp-500 outline-none disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <option value="sole_proprietorship">Sole Proprietorship / Business Name (BN)</option>
