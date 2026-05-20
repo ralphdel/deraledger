@@ -3,7 +3,7 @@ import { PaymentService } from "@/lib/payment";
 import crypto from "crypto";
 
 export async function POST(request: Request) {
-  const { email, tradingName, registeredName, ownerName, plan, sessionId, amountKobo } = await request.json();
+  const { email, tradingName, registeredName, ownerName, businessType, plan, sessionId, amountKobo } = await request.json();
 
   if (!email || !tradingName || !registeredName || !plan || !sessionId || !amountKobo) {
     return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
@@ -27,6 +27,7 @@ export async function POST(request: Request) {
         business_name: registeredName,
         trading_name: tradingName,
         owner_name: ownerName || null,
+        business_type: businessType || null,
         session_id: sessionId,
       },
     });

@@ -142,6 +142,7 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
   const [businessName, setBusinessName] = useState("");
   const [registeredName, setRegisteredName] = useState("");
   const [ownerName, setOwnerName] = useState("");
+  const [businessType, setBusinessType] = useState("sole_proprietorship");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isSuccess, setIsSuccess] = useState(false);
@@ -236,6 +237,7 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
         businessName,
         registeredName: registeredName || businessName,
         ownerName,
+        businessType,
         plan: planId,
         sessionId: sessionData.sessionId,
         amountKobo: config.priceKobo,
@@ -390,26 +392,70 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
                 </div>
               )}
 
-              {planId !== "starter" && (
+              {planId === "corporate" && (
                 <div className="space-y-1.5">
-                  <Label htmlFor="ownerName" className="text-white">
-                    {planId === "corporate" ? "Director or Highest Shareholder Full Name" : "Owner Full Name"}
-                  </Label>
-                  <Input
-                    id="ownerName"
-                    value={ownerName}
-                    onChange={(e) => setOwnerName(e.target.value)}
-                    placeholder="e.g. Adebayo Olanrewaju"
-                    required
-                    className="h-11 border-white/10 bg-[#12061F] text-white focus:border-[#7B2FF7] placeholder:text-white/30"
-                  />
-                  <p className="text-xs text-white/50">
-                    {planId === "corporate"
-                      ? "This name supports director or shareholder verification."
-                      : "This name should match your BVN verification details."}
-                  </p>
+                  <Label htmlFor="businessType" className="text-white">Business Type</Label>
+                  <select
+                    id="businessType"
+                    value={businessType}
+                    onChange={(e) => setBusinessType(e.target.value)}
+                    className="h-11 w-full rounded-md border border-white/10 bg-[#12061F] px-3 py-2 text-sm text-white focus:border-[#7B2FF7] focus:ring-1 focus:ring-[#7B2FF7] outline-none"
+                  >
+                    <option value="sole_proprietorship">Sole Proprietorship / Business Name (BN)</option>
+                    <option value="ltd">Private Limited Company (LTD)</option>
+                    <option value="plc">Public Limited Company (PLC)</option>
+                    <option value="llp">Limited Liability Partnership (LLP)</option>
+                    <option value="lp">Limited Partnership (LP)</option>
+                    <option value="incorporated_trustees">Incorporated Trustees (IT)</option>
+                    <option value="cooperative">Cooperative Society</option>
+                  </select>
                 </div>
               )}
+
+              {planId !== "starter" && (() => {
+                let ownerLabel = "Owner Full Name";
+                let ownerPlaceholder = "e.g. Adebayo Olanrewaju";
+                let ownerHelp = "This name should match your BVN verification details.";
+
+                if (planId === "corporate") {
+                  ownerHelp = "This name must match the CAC registry details for verification.";
+                  if (businessType === "sole_proprietorship") {
+                    ownerLabel = "Sole Proprietor / Business Owner Full Name";
+                    ownerPlaceholder = "e.g. Adebayo Olanrewaju";
+                  } else if (businessType === "ltd" || businessType === "plc") {
+                    ownerLabel = "Director or Shareholder Full Name";
+                    ownerPlaceholder = "e.g. Adebayo Olanrewaju";
+                  } else if (businessType === "llp" || businessType === "lp") {
+                    ownerLabel = "Designated Partner or Partner Full Name";
+                    ownerPlaceholder = "e.g. Adebayo Olanrewaju";
+                  } else if (businessType === "incorporated_trustees") {
+                    ownerLabel = "Trustee or Chairperson Full Name";
+                    ownerPlaceholder = "e.g. Adebayo Olanrewaju";
+                  } else if (businessType === "cooperative") {
+                    ownerLabel = "President or Trustee Full Name";
+                    ownerPlaceholder = "e.g. Adebayo Olanrewaju";
+                  }
+                }
+
+                return (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="ownerName" className="text-white">
+                      {ownerLabel}
+                    </Label>
+                    <Input
+                       id="ownerName"
+                       value={ownerName}
+                       onChange={(e) => setOwnerName(e.target.value)}
+                       placeholder={ownerPlaceholder}
+                       required
+                       className="h-11 border-white/10 bg-[#12061F] text-white focus:border-[#7B2FF7] placeholder:text-white/30"
+                    />
+                    <p className="text-xs text-white/50">
+                      {ownerHelp}
+                    </p>
+                  </div>
+                );
+              })()}
 
               <div className="space-y-1.5">
                 <Label htmlFor="email" className="text-white">Email Address</Label>

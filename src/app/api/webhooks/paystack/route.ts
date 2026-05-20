@@ -316,6 +316,7 @@ async function handleSubscriptionPayment(
   const plan = metadata?.plan as "individual" | "corporate" | undefined;
   const email = metadata?.email as string | undefined;
   const businessName = metadata?.business_name as string | undefined;
+  const businessType = metadata?.business_type as string | undefined;
 
   if (!sessionId || !plan || !email || !businessName) {
     console.error("Subscription webhook missing required metadata:", metadata);
@@ -422,6 +423,7 @@ async function handleSubscriptionPayment(
         email: email,
         subscription_plan: activePlan,
         merchant_tier: activePlan,
+        business_type: businessType || "sole_proprietorship",
         monthly_collection_limit: activePlan === "individual" ? 5000000 : 0,
         subscription_notifications_sent: {},
       })
@@ -459,6 +461,7 @@ async function handleSubscriptionPayment(
         user_id: userId,
         email,
         business_name: businessName,
+        business_type: businessType || "sole_proprietorship",
         subscription_plan: activePlan,
         merchant_tier: activePlan,
         verification_status: "unverified",

@@ -47,6 +47,7 @@ export async function POST(request: Request) {
   const businessName = (metadata?.business_name as string) || "My Business"; // The registered name
   const tradingName = (metadata?.trading_name as string) || businessName;
   const ownerName = (metadata?.owner_name as string) || null;
+  const businessType = (metadata?.business_type as string) || "sole_proprietorship";
 
   if (!sessionId || !email) {
     console.error("Missing session_id or email in Paystack metadata:", metadata);
@@ -140,6 +141,7 @@ export async function POST(request: Request) {
         business_name: businessName,
         trading_name: tradingName,
         owner_name: ownerName,
+        business_type: businessType,
         email: email,
         subscription_plan: activePlan,
         merchant_tier: activePlan,
@@ -176,6 +178,7 @@ export async function POST(request: Request) {
         business_name: businessName,
         trading_name: tradingName,
         owner_name: ownerName,
+        business_type: businessType,
         subscription_plan: activePlan,
         merchant_tier: activePlan,
         verification_status: "unverified",

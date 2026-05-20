@@ -20,6 +20,7 @@ export interface Merchant {
   subscription_plan: "starter" | "individual" | "corporate";
   // Keep merchant_tier during migration — both columns exist in DB
   merchant_tier: "starter" | "individual" | "corporate";
+  business_type?: string | null;
   kyc_submitted_at: string | null;
   kyc_notes: string | null;
   cac_number: string | null;

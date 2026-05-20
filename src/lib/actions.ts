@@ -2274,12 +2274,16 @@ export async function verifyRcNumberAction(merchantId: string, rcNumber: string)
 
   const { data: merchant } = await adminClient
     .from("merchants")
-    .select("business_name")
+    .select("business_name, owner_name, business_type")
     .eq("id", merchantId)
     .single();
 
   if (!merchant?.business_name) {
     return { success: false, error: "Business name not configured. Please complete your Business Profile first." };
+  }
+
+  if (!merchant?.owner_name) {
+    return { success: false, error: "Legal owner or shareholder name not configured. Please complete your Business Profile first." };
   }
 
   const isSandbox = process.env.VERIFICATION_MODE === "sandbox" || process.env.DOJAH_BASE_URL?.includes("sandbox") || process.env.NODE_ENV !== "production";
@@ -2298,12 +2302,90 @@ export async function verifyRcNumberAction(merchantId: string, rcNumber: string)
       const dojahName = cacResult.entity.company_name.toLowerCase().replace(/[^a-z0-9\s]/g, "");
       const myName = merchant.business_name.toLowerCase().replace(/[^a-z0-9\s]/g, "");
       
-      if (dojahName.includes(myName) || myName.includes(dojahName)) {
-        await adminClient.from("merchants").update({ cac_number: rcNumber }).eq("id", merchantId);
-        return { success: true };
-      } else {
+      if (!dojahName.includes(myName) && !myName.includes(dojahName)) {
         return { success: false, error: `RC Number belongs to '${cacResult.entity.company_name}', which does not match your registered Business Name.` };
       }
+
+      // Check that owner_name exists in company proprietors/directors/shareholders/partners/trustees/members/officers
+      const ownerLower = merchant.owner_name.toLowerCase().trim();
+      const ownerParts = ownerLower.split(/\s+/).filter(Boolean);
+
+      // Extract all name strings from Dojah entity
+      const cacNames: string[] = [];
+      const addVal = (val: any) => {
+        if (typeof val === "string" && val.trim().length > 2) {
+          cacNames.push(val.trim().toLowerCase());
+        }
+      };
+
+      const arraysToCheck = [
+        cacResult.entity.shareholders,
+        cacResult.entity.directors,
+        cacResult.entity.proprietors,
+        cacResult.entity.partners,
+        cacResult.entity.trustees,
+        cacResult.entity.officers,
+        cacResult.entity.members
+      ];
+
+      for (const arr of arraysToCheck) {
+        if (Array.isArray(arr)) {
+          for (const obj of arr) {
+            if (obj) {
+              addVal(obj.name);
+              addVal(obj.full_name);
+              addVal(obj.firstname || obj.first_name);
+              addVal(obj.surname || obj.last_name || obj.lastname);
+              addVal(obj.middlename || obj.middle_name);
+              if (obj.first_name && obj.last_name) {
+                addVal(`${obj.first_name} ${obj.last_name}`);
+              }
+            }
+          }
+        }
+      }
+
+      addVal(cacResult.entity.proprietor_name);
+      addVal(cacResult.entity.director_name);
+      addVal(cacResult.entity.owner_name);
+
+      // Also do a wildcard search on any string value in entity that could be a name
+      // (to handle arbitrary Dojah format changes)
+      const checkObjectKeys = (obj: any) => {
+        if (!obj || typeof obj !== "object") return;
+        for (const key in obj) {
+          if (typeof obj[key] === "string" && (
+            key.includes("name") || 
+            key.includes("director") || 
+            key.includes("proprietor") || 
+            key.includes("shareholder") || 
+            key.includes("partner") || 
+            key.includes("trustee") || 
+            key.includes("president")
+          )) {
+            addVal(obj[key]);
+          } else if (typeof obj[key] === "object") {
+            checkObjectKeys(obj[key]);
+          }
+        }
+      };
+      checkObjectKeys(cacResult.entity);
+
+      // Match owner parts with CAC names
+      const matchesAny = cacNames.some((cacName) => {
+        const matchCount = ownerParts.filter((part: string) => cacName.includes(part)).length;
+        return matchCount >= Math.min(2, ownerParts.length);
+      });
+
+      if (!matchesAny && cacNames.length > 0) {
+        return { 
+          success: false, 
+          error: `Name matching failed: '${merchant.owner_name}' was not found in the official registry of directors, shareholders, or owners for this company.` 
+        };
+      }
+
+      await adminClient.from("merchants").update({ cac_number: rcNumber }).eq("id", merchantId);
+      return { success: true };
     }
     return { success: false, error: "Failed to verify RC Number. Invalid format or business not found." };
   } catch (error: any) {

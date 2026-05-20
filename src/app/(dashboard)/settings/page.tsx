@@ -40,6 +40,7 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [merchant, setMerchant] = useState<Merchant | null>(null);
+  const [businessType, setBusinessType] = useState("sole_proprietorship");
 
   // KYC state
   const [cacFile, setCacFile] = useState<File | null>(null);
@@ -159,6 +160,7 @@ export default function SettingsPage() {
         setBvnNumber(/^\d{11}$/.test(m.bvn || "") ? (m.bvn || "") : "");
         setCacNumber(m.cac_number || "");
         setLogoUrl(m.logo_url || null);
+        setBusinessType(m.business_type || "sole_proprietorship");
       }
       setLoading(false);
     });
@@ -177,6 +179,7 @@ export default function SettingsPage() {
       business_country: businessCountry || null,
       // Only write owner_name if it has NOT been identity-verified — prevents post-verification name changes
       ...(!isOwnerNameLocked && { owner_name: ownerName || null }),
+      business_type: businessType,
       phone: phone || null,
       fee_absorption_default: feeDefault,
       platform_version: CURRENT_PLATFORM_VERSION,
@@ -310,7 +313,26 @@ export default function SettingsPage() {
   const isStarter = effectiveTier === "starter";
   const isIndividual = effectiveTier === "individual";
   const isCorporate = effectiveTier === "corporate";
-  const ownerLabel = isCorporate ? "Highest Shareholder's Full Name" : "Owner's Full Name";
+
+  let ownerLabel = "Owner's Full Name";
+  if (isCorporate) {
+    if (businessType === "sole_proprietorship") {
+      ownerLabel = "Sole Proprietor / Business Owner Full Name";
+    } else if (businessType === "ltd" || businessType === "plc") {
+      ownerLabel = "Director or Shareholder Full Name";
+    } else if (businessType === "llp" || businessType === "lp") {
+      ownerLabel = "Designated Partner or Partner Full Name";
+    } else if (businessType === "incorporated_trustees") {
+      ownerLabel = "Trustee or Chairperson Full Name";
+    } else if (businessType === "cooperative") {
+      ownerLabel = "President or Trustee Full Name";
+    } else {
+      ownerLabel = "Highest Shareholder's Full Name";
+    }
+  } else {
+    ownerLabel = "Owner's Full Name (matches BVN)";
+  }
+
   // If Individual/Corporate and owner_name is missing, treat as unverified
   const ownerNameMissing = !isStarter && !ownerName.trim();
   // If Corporate and business_name (registered name) is missing, also block
@@ -795,6 +817,26 @@ export default function SettingsPage() {
               className="border-2 border-purp-200 bg-purp-50 h-11"
             />
           </div>
+          {isCorporate && (
+            <div className="space-y-2">
+              <Label className="text-sm font-medium">Business Type <span className="text-red-500">*</span></Label>
+              <p className="text-xs text-neutral-500">Select your registered business type according to CAC standards.</p>
+              <select
+                value={businessType}
+                onChange={(e) => !isOwnerNameLocked && setBusinessType(e.target.value)}
+                disabled={isOwnerNameLocked}
+                className="w-full h-11 rounded-md border-2 border-purp-200 bg-purp-50 px-3 py-2 text-sm text-neutral-900 focus:border-purp-500 focus:ring-purp-500 outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <option value="sole_proprietorship">Sole Proprietorship / Business Name (BN)</option>
+                <option value="ltd">Private Limited Company (LTD)</option>
+                <option value="plc">Public Limited Company (PLC)</option>
+                <option value="llp">Limited Liability Partnership (LLP)</option>
+                <option value="lp">Limited Partnership (LP)</option>
+                <option value="incorporated_trustees">Incorporated Trustees (IT)</option>
+                <option value="cooperative">Cooperative Society</option>
+              </select>
+            </div>
+          )}
           {isCorporate && (
             <div className="space-y-2">
               <div className="flex items-center gap-2">

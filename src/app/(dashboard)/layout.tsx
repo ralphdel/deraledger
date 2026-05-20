@@ -114,6 +114,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const initials = businessName.split(" ").map(n => n[0]).join("").toUpperCase().substring(0, 2);
   const plan = merchant?.subscription_plan || merchant?.merchant_tier || "starter";
   const businessAddressMissing = plan !== "starter" && (!merchant?.business_street?.trim() || !merchant?.business_city?.trim() || !merchant?.business_state?.trim() || !merchant?.business_country?.trim());
+  const businessTypeMissing = plan === "corporate" && !merchant?.business_type;
   const routePermission = getRoutePermission(pathname);
 
   const allNavItems: NavItem[] = [
@@ -335,7 +336,25 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
         {/* Page Content */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8">
-          {businessAddressMissing && pathname !== "/settings" ? (
+          {businessTypeMissing && pathname !== "/settings" ? (
+            <div className="flex flex-col items-center justify-center min-h-[60vh] text-center max-w-md mx-auto">
+              <div className="w-16 h-16 rounded-full flex items-center justify-center mb-6 bg-amber-100 text-amber-600 dark:bg-amber-500/10 dark:text-amber-400 dark:border dark:border-amber-500/20">
+                <AlertCircle className="w-8 h-8" />
+              </div>
+              <h2 className="text-2xl font-bold text-neutral-900 dark:text-white mb-2">
+                Business Type Required
+              </h2>
+              <p className="text-neutral-600 dark:text-white/60 mb-8 leading-relaxed">
+                As a registered Business plan subscriber, you must specify your official business registration type (e.g., Sole Proprietorship, LTD, PLC) under CAMA 2020 guidelines to continue accessing dashboard operations.
+              </p>
+              <Link
+                href="/settings"
+                className="bg-purp-900 text-white dark:bg-[#7B2FF7] px-8 py-3 rounded-lg font-bold hover:bg-purp-800 dark:hover:bg-[#B58CFF] dark:hover:text-[#12061F] transition-all"
+              >
+                Update Business Profile
+              </Link>
+            </div>
+          ) : businessAddressMissing && pathname !== "/settings" ? (
             <div className="flex flex-col items-center justify-center min-h-[60vh] text-center max-w-md mx-auto">
               <div className="w-16 h-16 rounded-full flex items-center justify-center mb-6 bg-red-100 text-red-600 dark:bg-red-500/10 dark:text-red-400 dark:border dark:border-red-500/20">
                 <AlertCircle className="w-8 h-8" />
