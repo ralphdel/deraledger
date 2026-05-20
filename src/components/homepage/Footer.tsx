@@ -52,7 +52,7 @@ export function Footer() {
                   <Mail className="h-3.5 w-3.5" /> Contact
                 </a>
               </li>
-              <li><a href="#" className="text-xs text-white/50 hover:text-[#A78BFA] transition-colors">Careers</a></li>
+              <li><Link href="/dispute-resolution" className="text-xs text-white/50 hover:text-[#A78BFA] transition-colors">Disputes &amp; Protection</Link></li>
               <li><a href="#" className="text-xs text-white/50 hover:text-[#A78BFA] transition-colors">Privacy Policy</a></li>
               <li><a href="#" className="text-xs text-white/50 hover:text-[#A78BFA] transition-colors">Terms</a></li>
             </ul>
@@ -77,6 +77,7 @@ export function Footer() {
           <div className="flex gap-6 mt-4 md:mt-0">
             <a href="#" className="hover:text-white transition-colors">Privacy</a>
             <a href="#" className="hover:text-white transition-colors">Terms</a>
+            <Link href="/dispute-resolution" className="hover:text-white transition-colors">Disputes Resolution</Link>
           </div>
         </div>
 

@@ -31,6 +31,7 @@ function Header() {
           <a href="#workflow" className="text-xs font-bold uppercase tracking-wider text-white/60 hover:text-white transition-colors">How it works</a>
           <a href="#features" className="text-xs font-bold uppercase tracking-wider text-white/60 hover:text-white transition-colors">Features</a>
           <a href="#pricing" className="text-xs font-bold uppercase tracking-wider text-white/60 hover:text-white transition-colors">Pricing</a>
+          <Link href="/dispute-resolution" className="text-xs font-bold uppercase tracking-wider text-white/60 hover:text-[#A78BFA] transition-colors">Disputes</Link>
         </nav>
 
         {/* Auth Actions */}

@@ -18,6 +18,8 @@ import {
   BarChart,
   AlertCircle,
   FolderKanban,
+  ShieldAlert,
+  RefreshCw,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
@@ -62,6 +64,8 @@ const dashboardRoutePermissions: Array<{ path: string; permission: string | stri
   { path: "/clients", permission: "view_clients", featureLabel: "Clients" },
   { path: "/invoices/create", permission: "create_invoice", featureLabel: "Create Invoice" },
   { path: "/invoices", permission: "view_invoices", featureLabel: "Invoices" },
+  { path: "/dashboard/disputes", permission: "view_invoices", featureLabel: "Disputes" },
+  { path: "/dashboard/refunds", permission: "manage_billing", featureLabel: "Refund Center" },
   // Fallback for the main /settings page. Users must have at least ONE settings-related permission to view it.
   { 
     path: "/settings", 
@@ -126,6 +130,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     { href: "/accounting-report", label: "Reports", icon: BarChart, requiredPermission: "view_analytics" },
     { href: "/team", label: "Team", icon: UsersRound, requiredPermission: "manage_team" },
     { href: "/purpbot", label: "DeraBot AI", icon: Bot, requiredPermission: "use_purpbot" },
+    { href: "/dashboard/disputes", label: "Disputes", icon: ShieldAlert, requiredPermission: "view_invoices" },
+    { href: "/dashboard/refunds", label: "Refund Requests", icon: RefreshCw, requiredPermission: "manage_billing" },
     { href: "/settings", label: "Settings", icon: Settings },
   ];
 

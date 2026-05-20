@@ -1,6 +1,7 @@
 "use client";
 
 import { use, useState, useEffect } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { formatNaira, calculateProportionalPayment, getMinimumPayment } from "@/lib/calculations";
 import type { InvoiceWithLineItems, Merchant } from "@/lib/types";
@@ -8,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
-import { ShieldCheck, Receipt, Clock, CheckCircle2, Lock, AlertTriangle, Info, AlertCircle, Copy, Wallet, CreditCard, ArrowRightLeft, Sparkles } from "lucide-react";
+import { ShieldCheck, Receipt, Clock, CheckCircle2, Lock, AlertTriangle, Info, AlertCircle, Copy, Wallet, CreditCard, ArrowRightLeft, Sparkles, ExternalLink } from "lucide-react";
 
 // Feature flags — controls which payment rails are active
 const PROVIDER_FLAGS = {
@@ -836,6 +837,13 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
             )}
           </CardContent>
         </Card>
+        
+        <div className="text-center text-xs text-neutral-400 mt-4 flex items-center justify-center gap-2">
+          <span>Having payment issues?</span>
+          <Link href="/support/dispute/new" target="_blank" className="font-semibold text-purp-700 hover:text-purp-900 underline flex items-center gap-0.5 transition-colors">
+            Report Payment Issue <ExternalLink className="w-3 h-3" />
+          </Link>
+        </div>
       </div>
     </div>
   );

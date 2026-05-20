@@ -15,6 +15,9 @@ import {
   Banknote,
   CalendarClock,
   Landmark,
+  ShieldAlert,
+  Coins,
+  RefreshCw,
 } from "lucide-react";
 import { useState } from "react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -33,6 +36,10 @@ const adminNavItems = [
   { href: "/admin", label: "Overview", icon: LayoutDashboard },
   { href: "/admin/verification", label: "Verification Queue", icon: ShieldCheck },
   { href: "/admin/merchants", label: "Merchants", icon: Users },
+  { href: "/admin/disputes", label: "Disputes Queue", icon: ShieldAlert },
+  { href: "/admin/crypto", label: "Crypto Ops Center", icon: Coins },
+  { href: "/admin/refunds", label: "Refund Requests Queue", icon: RefreshCw },
+  { href: "/admin/risk", label: "Risk & Fraud Panel", icon: Activity },
   { href: "/admin/accounting", label: "Accounting", icon: Banknote },
   { href: "/admin/treasury", label: "Treasury", icon: Landmark },
   { href: "/admin/subscriptions", label: "Subscriptions", icon: CalendarClock },
