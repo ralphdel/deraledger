@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DeraLedgerLogo } from "@/components/ui/deraledger-logo";
+import { submitCustomerDisputeAction } from "@/lib/actions";
 
 export default function CustomerDisputeLodging() {
   const [email, setEmail] = useState("");
@@ -18,20 +19,39 @@ export default function CustomerDisputeLodging() {
   const [disputeType, setDisputeType] = useState("Failed Payment");
   const [rail, setRail] = useState("BANK_TRANSFER");
   const [ref, setRef] = useState("");
+  const [amount, setAmount] = useState("");
   const [txHash, setTxHash] = useState("");
   const [description, setDescription] = useState("");
   
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [caseId, setCaseId] = useState("");
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
 
-    setTimeout(() => {
-      setSubmitted(true);
+    try {
+      const res = await submitCustomerDisputeAction({
+        email,
+        phone,
+        category: disputeType,
+        rail,
+        reference: ref,
+        amount: amount ? Number(amount) : undefined,
+        txHash: txHash || undefined,
+        description,
+      });
+
+      if (res.success) {
+        setCaseId(res.caseId);
+        setSubmitted(true);
+      }
+    } catch (err) {
+      console.error("Dispute filing failed:", err);
+    } finally {
       setSubmitting(false);
-    }, 1500);
+    }
   };
 
   return (
@@ -63,7 +83,7 @@ export default function CustomerDisputeLodging() {
               Your issue reference has been logged. Our integrity reconciliation system and merchant desk have been notified automatically.
             </p>
             <div className="bg-neutral-50 dark:bg-white/5 border rounded-xl p-4 text-xs font-mono text-left max-w-md mx-auto space-y-1">
-              <div className="flex justify-between"><span className="text-neutral-400">Case ID:</span><strong>DSP_NEW_{Math.floor(Math.random() * 9000000 + 1000000)}</strong></div>
+              <div className="flex justify-between"><span className="text-neutral-400">Case ID:</span><strong>{caseId}</strong></div>
               <div className="flex justify-between"><span className="text-neutral-400">Category:</span><strong>{disputeType}</strong></div>
               <div className="flex justify-between"><span className="text-neutral-400">Email:</span><strong>{email}</strong></div>
               <div className="flex justify-between"><span className="text-neutral-400">Status:</span><strong className="text-amber-600">OPEN (SLA Auto-ACK)</strong></div>
@@ -148,17 +168,37 @@ export default function CustomerDisputeLodging() {
                   </div>
                 </div>
 
-                <div className="space-y-1.5">
-                  <Label htmlFor="ref" className="text-neutral-400 text-xs font-bold uppercase tracking-wider">Payment Reference / Invoice ID</Label>
-                  <Input 
-                    id="ref"
-                    type="text" 
-                    placeholder="e.g. INV-2026-081 or REF-BANK..."
-                    value={ref}
-                    onChange={(e) => setRef(e.target.value)}
-                    required
-                    className="bg-neutral-50 dark:bg-white/5 border-purp-200 dark:border-white/10 text-xs"
-                  />
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="ref" className="text-neutral-400 text-xs font-bold uppercase tracking-wider">Payment Reference / Invoice ID</Label>
+                    <Input 
+                      id="ref"
+                      type="text" 
+                      placeholder="e.g. INV-2026-081 or REF-BANK..."
+                      value={ref}
+                      onChange={(e) => setRef(e.target.value)}
+                      required
+                      className="bg-neutral-50 dark:bg-white/5 border-purp-200 dark:border-white/10 text-xs"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="amount" className="text-neutral-400 text-xs font-bold uppercase tracking-wider">Amount Paid (NGN)</Label>
+                    <Input 
+                      id="amount"
+                      type="number" 
+                      placeholder="e.g. 150000"
+                      value={amount}
+                      onChange={(e) => setAmount(e.target.value)}
+                      className="bg-neutral-50 dark:bg-white/5 border-purp-200 dark:border-white/10 text-xs"
+                    />
+                  </div>
+                </div>
+
+                <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-3 flex gap-2 text-[11px] text-amber-800 leading-relaxed items-start dark:bg-amber-500/10 dark:border-amber-500/20 dark:text-amber-300">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                  <span>
+                    <strong>Important:</strong> Please ensure you enter a valid <strong>Invoice ID</strong> or <strong>Payment Reference</strong>. Using a correct reference allows our system to instantly match your complaint to the respective merchant, avoiding manual verification delays.
+                  </span>
                 </div>
 
                 {rail === "BREET_CRYPTO" && (

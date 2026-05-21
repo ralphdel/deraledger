@@ -1,89 +1,61 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import Link from "next/link";
 import { 
   ShieldAlert, ShieldCheck, Clock, Search, Filter, ArrowRight,
-  Bitcoin, CreditCard, Landmark, Wallet, AlertOctagon, UserCheck, ShieldClose
+  Bitcoin, CreditCard, Landmark, Wallet, AlertOctagon, UserCheck, RefreshCw
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-
-// Global dispute seeds with Admin metadata (risk score, assigned agent, SLA timers)
-const MOCK_ADMIN_DISPUTES = [
-  {
-    id: "dsp-4091-a83",
-    reference: "DSP_9018274",
-    merchant_name: "Tech-Forge Ltd",
-    customer_email: "tunde@company.ng",
-    payment_rail: "BANK_TRANSFER",
-    category: "Failed Payment",
-    amount: 150000,
-    status: "OPEN",
-    priority: "HIGH",
-    sla_time: "4h remaining",
-    sla_breach: false,
-    risk_score: 32, // out of 100
-    assigned_admin: "Agent Fatima",
-    created_at: "2026-05-20T10:30:00Z"
-  },
-  {
-    id: "dsp-1120-x92",
-    reference: "DSP_8810231",
-    merchant_name: "Apex Retailers Ltd",
-    customer_email: "chioma.ezekiel@gmail.com",
-    payment_rail: "BREET_CRYPTO",
-    category: "Crypto Payment Not Credited",
-    amount: 850000,
-    status: "REVIEWING",
-    priority: "CRITICAL",
-    sla_time: "12m remaining",
-    sla_breach: false,
-    risk_score: 68,
-    assigned_admin: "Agent Jude",
-    created_at: "2026-05-20T14:45:00Z"
-  },
-  {
-    id: "dsp-9081-k33",
-    reference: "DSP_5671029",
-    merchant_name: "Deca Builders",
-    customer_email: "accounts@vanguard-tech.io",
-    payment_rail: "CARD",
-    category: "Duplicate Charge",
-    amount: 45000,
-    status: "RESOLVED",
-    priority: "MEDIUM",
-    sla_time: "Resolved",
-    sla_breach: false,
-    risk_score: 12,
-    assigned_admin: "Agent Fatima",
-    created_at: "2026-05-18T09:15:00Z"
-  },
-  {
-    id: "dsp-5541-p08",
-    reference: "DSP_4410928",
-    merchant_name: "Nexa Innovations",
-    customer_email: "collins.j@ventures.co",
-    payment_rail: "WALLET",
-    category: "Delayed Confirmation",
-    amount: 120000,
-    status: "ESCALATED",
-    priority: "HIGH",
-    sla_time: "Overdue 12h",
-    sla_breach: true,
-    risk_score: 85, // High risk
-    assigned_admin: "Unassigned",
-    created_at: "2026-05-19T11:00:00Z"
-  }
-];
+import { adminFetchAllDisputesAction } from "@/lib/actions";
 
 export default function AdminDisputeQueue() {
   const [search, setSearch] = useState("");
   const [selectedFilter, setSelectedFilter] = useState("ALL");
+  const [disputesList, setDisputesList] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  async function loadAllDisputes() {
+    setLoading(true);
+    try {
+      const res = await adminFetchAllDisputesAction();
+      if (res.success && res.migrated) {
+        const mapped = (res.disputes || []).map((d: any) => ({
+          id: d.id,
+          reference: d.case_id,
+          merchant_name: d.merchants?.business_name || "Merchant Partner",
+          customer_email: d.customer_email,
+          payment_rail: d.payment_rail,
+          category: d.category,
+          amount: Number(d.amount),
+          status: d.status,
+          priority: d.risk_score >= 60 ? "CRITICAL" : d.risk_score >= 40 ? "HIGH" : "MEDIUM",
+          sla_time: d.status === "RESOLVED" || d.status === "COMPLETED" ? "Resolved" : "SLA Active (12h)",
+          sla_breach: d.risk_score >= 80,
+          risk_score: d.risk_score,
+          created_at: d.created_at
+        }));
+        setDisputesList(mapped);
+      } else {
+        // DB tables not yet provisioned — show empty state
+        setDisputesList([]);
+      }
+    } catch (err) {
+      console.error("Failed loading global disputes:", err);
+      setDisputesList([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadAllDisputes();
+  }, []);
 
   const filteredDisputes = useMemo(() => {
-    return MOCK_ADMIN_DISPUTES.filter(d => {
+    return disputesList.filter(d => {
       const matchesSearch = d.reference.toLowerCase().includes(search.toLowerCase()) ||
                             d.merchant_name.toLowerCase().includes(search.toLowerCase()) ||
                             d.customer_email.toLowerCase().includes(search.toLowerCase()) ||
@@ -96,15 +68,15 @@ export default function AdminDisputeQueue() {
       if (selectedFilter === "ESCALATED") return matchesSearch && d.status === "ESCALATED";
       return matchesSearch && d.status === selectedFilter;
     });
-  }, [search, selectedFilter]);
+  }, [search, selectedFilter, disputesList]);
 
   const stats = useMemo(() => {
-    const total = MOCK_ADMIN_DISPUTES.length;
-    const open = MOCK_ADMIN_DISPUTES.filter(d => d.status !== "RESOLVED").length;
-    const overdue = MOCK_ADMIN_DISPUTES.filter(d => d.sla_breach).length;
-    const highRisk = MOCK_ADMIN_DISPUTES.filter(d => d.risk_score >= 60).length;
+    const total = disputesList.length;
+    const open = disputesList.filter(d => d.status !== "RESOLVED" && d.status !== "COMPLETED" && d.status !== "REJECTED").length;
+    const overdue = disputesList.filter(d => d.sla_breach).length;
+    const highRisk = disputesList.filter(d => d.risk_score >= 60).length;
     return { total, open, overdue, highRisk };
-  }, []);
+  }, [disputesList]);
 
   const formatNaira = (amt: number) => {
     return new Intl.NumberFormat("en-NG", { style: "currency", currency: "NGN", maximumFractionDigits: 0 }).format(amt);
@@ -112,11 +84,17 @@ export default function AdminDisputeQueue() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold text-neutral-900 tracking-tight">Risk &amp; Dispute Operations Center</h1>
-        <p className="text-neutral-500 text-sm mt-1">
-          Global administrative terminal for DeraLedger invoice disputes, Breet API monitoring, and fraud scoring logs.
-        </p>
+      <div className="flex justify-between items-center">
+        <div>
+          <h1 className="text-3xl font-bold text-neutral-900 tracking-tight">Risk &amp; Dispute Operations Center</h1>
+          <p className="text-neutral-500 text-sm mt-1">
+            Global administrative terminal for DeraLedger invoice disputes, Breet API monitoring, and fraud scoring logs.
+          </p>
+        </div>
+        <Button onClick={loadAllDisputes} disabled={loading} variant="outline" className="border-neutral-200 text-neutral-700 bg-white hover:bg-neutral-50">
+          <RefreshCw className={`w-4 h-4 mr-2 ${loading ? "animate-spin" : ""}`} />
+          Refresh Queue
+        </Button>
       </div>
 
       {/* Admin stats */}
@@ -214,15 +192,25 @@ export default function AdminDisputeQueue() {
                   <th className="px-6 py-4 text-right">Amount</th>
                   <th className="px-6 py-4">Risk Index</th>
                   <th className="px-6 py-4">SLA Count</th>
-                  <th className="px-6 py-4">Agent</th>
+                  <th className="px-6 py-4">Status</th>
                   <th className="px-6 py-4"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-neutral-100">
-                {filteredDisputes.length === 0 ? (
+                {loading ? (
                   <tr>
                     <td colSpan={8} className="px-6 py-12 text-center text-neutral-400">
-                      No active global disputes match the criteria.
+                      Loading dispute queue from ledger...
+                    </td>
+                  </tr>
+                ) : filteredDisputes.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="px-6 py-12 text-center">
+                      <div className="flex flex-col items-center gap-2">
+                        <ShieldCheck className="w-10 h-10 text-neutral-300" />
+                        <p className="font-semibold text-neutral-500">No disputes in the queue</p>
+                        <p className="text-xs text-neutral-400">All payment dispute submissions from customers will appear here for review.</p>
+                      </div>
                     </td>
                   </tr>
                 ) : (
@@ -238,6 +226,15 @@ export default function AdminDisputeQueue() {
                         case "CRITICAL": return "text-red-700 font-bold bg-red-100";
                         case "HIGH": return "text-amber-700 font-semibold bg-amber-100";
                         default: return "text-neutral-600 bg-neutral-100";
+                      }
+                    };
+
+                    const getStatusStyles = (status: string) => {
+                      switch (status) {
+                        case "RESOLVED": case "COMPLETED": return "bg-emerald-50 text-emerald-700 border-emerald-200";
+                        case "REJECTED": return "bg-red-50 text-red-700 border-red-200";
+                        case "REVIEWING": return "bg-amber-50 text-amber-700 border-amber-200";
+                        default: return "bg-blue-50 text-blue-700 border-blue-200";
                       }
                     };
 
@@ -274,8 +271,10 @@ export default function AdminDisputeQueue() {
                             {dis.sla_time}
                           </span>
                         </td>
-                        <td className="px-6 py-4 text-xs font-semibold text-neutral-600">
-                          {dis.assigned_admin}
+                        <td className="px-6 py-4">
+                          <span className={`inline-block px-2 py-0.5 border rounded-full text-xs font-semibold uppercase ${getStatusStyles(dis.status)}`}>
+                            {dis.status}
+                          </span>
                         </td>
                         <td className="px-6 py-4 text-right">
                           <Link href={`/admin/disputes/${dis.id}`}>

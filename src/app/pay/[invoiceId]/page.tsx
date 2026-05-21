@@ -400,8 +400,16 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
             )}
           </CardContent>
         </Card>
-        <div className="mt-8 flex items-center gap-2 text-neutral-400 text-sm">
-          <Lock className="w-4 h-4" /> SECURED BY DERALEDGER
+        <div className="mt-8 flex flex-col items-center gap-2 text-neutral-400 text-sm">
+          <div className="flex items-center gap-2">
+            <Lock className="w-4 h-4" /> SECURED BY DERALEDGER
+          </div>
+          <div className="text-center text-xs text-neutral-400 mt-2 flex items-center justify-center gap-2">
+            <span>Having payment issues?</span>
+            <Link href="/support/dispute/new" target="_blank" className="font-semibold text-purp-700 hover:text-purp-900 underline flex items-center gap-0.5 transition-colors">
+              Report Payment Issue <ExternalLink className="w-3 h-3" />
+            </Link>
+          </div>
         </div>
       </div>
     );
@@ -503,6 +511,9 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
 
         <div className="mt-8 text-xs text-purp-200 flex items-center gap-1 opacity-75">
           <ShieldCheck className="w-4 h-4" /> Secure payment powered by Paystack
+        </div>
+        <div className="mt-3 text-[10px] text-purp-300 opacity-60 leading-relaxed">
+          Deraledger facilitates billing and payment infrastructure but is not party to agreements between merchants and customers.
         </div>
       </div>
 
@@ -660,6 +671,10 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                     {cryptoDetails.exchangeRate ? ` Rate locked at ${formatNaira(cryptoDetails.exchangeRate)} per ${cryptoDetails.coin.toUpperCase()}.` : ""}
                     {cryptoDetails.expiresAt ? ` Expires ${new Date(cryptoDetails.expiresAt).toLocaleString("en-NG")}.` : ""}
                   </p>
+                </div>
+                <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-red-800 text-xs flex items-start gap-2">
+                  <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                  <p><strong>Important:</strong> Cryptocurrency transactions may be irreversible once confirmed on-chain. Verify the address and network before sending.</p>
                 </div>
               </div>
             ) : paymentMethod === "crypto" ? (

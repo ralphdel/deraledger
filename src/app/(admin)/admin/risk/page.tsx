@@ -1,58 +1,131 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { 
   ShieldAlert, ShieldCheck, AlertOctagon, Users, BarChart3, 
-  HelpCircle, CheckCircle2, TrendingUp, AlertCircle
+  HelpCircle, CheckCircle2, TrendingUp, AlertCircle, RefreshCw
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-
-const MOCK_RISK_MERCHANTS = [
-  {
-    id: "m-1",
-    name: "Tech-Forge Ltd",
-    disputes: 2,
-    total_txs: 240,
-    dispute_ratio: "0.83%",
-    risk_score: 32,
-    status: "HEALTHY"
-  },
-  {
-    id: "m-2",
-    name: "Apex Retailers Ltd",
-    disputes: 5,
-    total_txs: 78,
-    dispute_ratio: "6.41%", // High ratio!
-    risk_score: 68,
-    status: "SUSPICIOUS"
-  },
-  {
-    id: "m-3",
-    name: "Nexa Innovations",
-    disputes: 4,
-    total_txs: 380,
-    dispute_ratio: "1.05%",
-    risk_score: 45,
-    status: "HEALTHY"
-  },
-  {
-    id: "m-4",
-    name: "Deca Builders",
-    disputes: 1,
-    total_txs: 15,
-    dispute_ratio: "6.67%",
-    risk_score: 55,
-    status: "MONITORING"
-  }
-];
+import { createClient } from "@/lib/supabase/client";
 
 export default function AdminRiskDashboard() {
-  const [merchants, setMerchants] = useState(MOCK_RISK_MERCHANTS);
+  const [merchants, setMerchants] = useState<any[]>([]);
+  const [globalStats, setGlobalStats] = useState({
+    avgDisputeRatio: "0.00%",
+    suspiciousMerchants: 0,
+    duplicateInvoiceFlags: 0,
+    cryptoAnomalyIndex: "Low",
+    cbnCompliance: "Compliant"
+  });
+  const [loading, setLoading] = useState(true);
+
+  async function loadRiskAnalytics() {
+    setLoading(true);
+    try {
+      const sb = createClient();
+      
+      // 1. Fetch live merchants
+      const { data: merchantsData } = await sb
+        .from("merchants")
+        .select("id, business_name, verification_status");
+      
+      // 2. Fetch live disputes
+      const { data: disputesData } = await sb
+        .from("payment_disputes")
+        .select("id, merchant_id, status, risk_score, payment_rail");
+
+      // 3. Fetch live invoices
+      const { data: invoicesData } = await sb
+        .from("invoices")
+        .select("id, merchant_id, grand_total, customer_email, created_at");
+
+      const mList = merchantsData || [];
+      const dList = disputesData || [];
+      const iList = invoicesData || [];
+
+      // Calculate duplicate invoices (same email, same grand_total, within 5 minutes)
+      let duplicateFlags = 0;
+      const sortedInvoices = [...iList].sort((a, b) => {
+        if (a.customer_email !== b.customer_email) return (a.customer_email || "").localeCompare(b.customer_email || "");
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      });
+
+      for (let idx = 0; idx < sortedInvoices.length - 1; idx++) {
+        const cur = sortedInvoices[idx];
+        const next = sortedInvoices[idx + 1];
+        if (
+          cur.customer_email && 
+          cur.customer_email === next.customer_email && 
+          Number(cur.grand_total) === Number(next.grand_total) &&
+          Math.abs(new Date(cur.created_at).getTime() - new Date(next.created_at).getTime()) <= 300000
+        ) {
+          duplicateFlags++;
+        }
+      }
+
+      // Calculate merchant specific ratios
+      let suspiciousCount = 0;
+      const processedMerchants = mList.map((m: any) => {
+        const mDisputes = dList.filter(d => d.merchant_id === m.id);
+        const mInvoices = iList.filter(inv => inv.merchant_id === m.id);
+        
+        const disputesCount = mDisputes.length;
+        const totalTxs = mInvoices.length;
+        
+        // Calculate ratio
+        const ratioNum = totalTxs > 0 ? (disputesCount / totalTxs) * 100 : 0;
+        const dispute_ratio = `${ratioNum.toFixed(2)}%`;
+        
+        // Dynamic Risk score
+        const risk_score = disputesCount > 0 
+          ? Math.min(100, Math.round(mDisputes.reduce((sum, d) => sum + (d.risk_score || 0), 0) / disputesCount)) 
+          : 0;
+
+        // Status threshold mapping
+        const status = ratioNum > 2.0 ? "SUSPICIOUS" : ratioNum > 1.0 ? "MONITORING" : "HEALTHY";
+        if (status === "SUSPICIOUS") suspiciousCount++;
+
+        return {
+          id: m.id,
+          name: m.business_name || "Unnamed Merchant",
+          disputes: disputesCount,
+          total_txs: totalTxs,
+          dispute_ratio,
+          risk_score,
+          status
+        };
+      });
+
+      // Calculate overall platform dispute ratio
+      const platformRatio = iList.length > 0 ? (dList.length / iList.length) * 100 : 0;
+      
+      // Crypto anomaly evaluation
+      const cryptoAlerts = dList.filter(d => d.payment_rail === "BREET_CRYPTO" && d.risk_score > 60);
+      const cryptoAnomalyIndex = cryptoAlerts.length > 2 ? "High" : cryptoAlerts.length > 0 ? "Medium" : "Low";
+
+      setMerchants(processedMerchants);
+      setGlobalStats({
+        avgDisputeRatio: `${platformRatio.toFixed(2)}%`,
+        suspiciousMerchants: suspiciousCount,
+        duplicateInvoiceFlags: duplicateFlags,
+        cryptoAnomalyIndex,
+        cbnCompliance: platformRatio <= 2.00 ? "Compliant" : "Breached"
+      });
+    } catch (err) {
+      console.error("Failed loading risk metrics:", err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadRiskAnalytics();
+  }, []);
 
   const handleUpdateScore = (id: string, newScore: number) => {
-    setMerchants(merchants.map(m => {
+    setMerchants(prev => prev.map(m => {
       if (m.id === id) {
         const status = newScore >= 65 ? "SUSPICIOUS" : newScore >= 45 ? "MONITORING" : "HEALTHY";
         return { ...m, risk_score: newScore, status };
@@ -63,11 +136,22 @@ export default function AdminRiskDashboard() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold text-neutral-900 tracking-tight">Risk &amp; Fraud Dashboard</h1>
-        <p className="text-neutral-500 text-sm mt-1">
-          Perform analytical reviews on chargeback ratios, duplicate invoice detection, and flag suspicious merchants.
-        </p>
+      <div className="flex justify-between items-center">
+        <div>
+          <h1 className="text-3xl font-bold text-neutral-900 tracking-tight">Risk &amp; Fraud Dashboard</h1>
+          <p className="text-neutral-500 text-sm mt-1">
+            Perform analytical reviews on chargeback ratios, duplicate invoice detection, and flag suspicious merchants.
+          </p>
+        </div>
+        <Button 
+          onClick={loadRiskAnalytics} 
+          disabled={loading} 
+          variant="outline" 
+          className="border-neutral-200 text-neutral-700 bg-white hover:bg-neutral-50"
+        >
+          <RefreshCw className={`w-4 h-4 mr-2 ${loading ? "animate-spin" : ""}`} />
+          Refresh Audit
+        </Button>
       </div>
 
       {/* Grid of stats panels */}
@@ -78,8 +162,12 @@ export default function AdminRiskDashboard() {
           </CardHeader>
           <CardContent>
             <div className="flex justify-between items-baseline">
-              <span className="text-3xl font-extrabold text-neutral-900">1.24%</span>
-              <span className="text-xs text-emerald-500 font-semibold">well below CBN threshold</span>
+              <span className="text-3xl font-extrabold text-neutral-900">
+                {loading ? "..." : globalStats.avgDisputeRatio}
+              </span>
+              <span className={`text-xs font-semibold ${globalStats.cbnCompliance === "Compliant" ? "text-emerald-500" : "text-red-500"}`}>
+                {globalStats.cbnCompliance === "Compliant" ? "well below CBN threshold" : "cbn compliance warning"}
+              </span>
             </div>
           </CardContent>
         </Card>
@@ -90,8 +178,10 @@ export default function AdminRiskDashboard() {
           </CardHeader>
           <CardContent>
             <div className="flex justify-between items-baseline">
-              <span className="text-3xl font-extrabold text-red-600">1</span>
-              <span className="text-xs text-red-500 font-semibold">requires audit freeze</span>
+              <span className={`text-3xl font-extrabold ${globalStats.suspiciousMerchants > 0 ? "text-red-600" : "text-neutral-900"}`}>
+                {loading ? "..." : globalStats.suspiciousMerchants}
+              </span>
+              <span className="text-xs text-neutral-400 font-semibold">requires audit freeze</span>
             </div>
           </CardContent>
         </Card>
@@ -102,8 +192,12 @@ export default function AdminRiskDashboard() {
           </CardHeader>
           <CardContent>
             <div className="flex justify-between items-baseline">
-              <span className="text-3xl font-extrabold text-amber-600">0</span>
-              <span className="text-xs text-emerald-500 font-semibold">0 flags matched</span>
+              <span className={`text-3xl font-extrabold ${globalStats.duplicateInvoiceFlags > 0 ? "text-amber-600" : "text-neutral-900"}`}>
+                {loading ? "..." : globalStats.duplicateInvoiceFlags}
+              </span>
+              <span className="text-xs text-neutral-400 font-semibold">
+                {globalStats.duplicateInvoiceFlags} flags matched
+              </span>
             </div>
           </CardContent>
         </Card>
@@ -114,7 +208,9 @@ export default function AdminRiskDashboard() {
           </CardHeader>
           <CardContent>
             <div className="flex justify-between items-baseline">
-              <span className="text-3xl font-extrabold text-emerald-600">Low</span>
+              <span className="text-3xl font-extrabold text-emerald-600">
+                {loading ? "..." : globalStats.cryptoAnomalyIndex}
+              </span>
               <span className="text-xs text-emerald-500 font-semibold">multi-signature operational</span>
             </div>
           </CardContent>
@@ -142,45 +238,64 @@ export default function AdminRiskDashboard() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-neutral-100">
-                    {merchants.map((m) => {
-                      const getStatusStyles = (status: string) => {
-                        switch (status) {
-                          case "HEALTHY": return "bg-emerald-50 text-emerald-700 border-emerald-200";
-                          case "SUSPICIOUS": return "bg-red-50 text-red-700 border-red-200";
-                          default: return "bg-amber-50 text-amber-700 border-amber-200";
-                        }
-                      };
+                    {loading ? (
+                      <tr>
+                        <td colSpan={5} className="text-center py-8 text-neutral-400">
+                          Fetching live transaction risk analytics...
+                        </td>
+                      </tr>
+                    ) : merchants.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="text-center py-8 text-neutral-400">
+                          No active merchant records registered in system.
+                        </td>
+                      </tr>
+                    ) : (
+                      merchants.map((m) => {
+                        const getStatusStyles = (status: string) => {
+                          switch (status) {
+                            case "HEALTHY": return "bg-emerald-50 text-emerald-700 border-emerald-200";
+                            case "SUSPICIOUS": return "bg-red-50 text-red-700 border-red-200";
+                            default: return "bg-amber-50 text-amber-700 border-amber-200";
+                          }
+                        };
 
-                      return (
-                        <tr key={m.id} className="hover:bg-neutral-50/50">
-                          <td className="px-6 py-4 font-bold text-neutral-900">
-                            {m.name}
-                          </td>
-                          <td className="px-6 py-4 font-medium text-neutral-600">
-                            {m.disputes} disputes / {m.total_txs} transactions
-                          </td>
-                          <td className="px-6 py-4 font-bold text-neutral-700">
-                            {m.dispute_ratio}
-                          </td>
-                          <td className="px-6 py-4 space-y-1">
-                            <span className="font-semibold text-neutral-600 mr-2">{m.risk_score}/100</span>
-                            <input 
-                              type="range" 
-                              min="0" 
-                              max="100" 
-                              value={m.risk_score} 
-                              onChange={(e) => handleUpdateScore(m.id, Number(e.target.value))}
-                              className="w-24 accent-[#6F2CFF] align-middle"
-                            />
-                          </td>
-                          <td className="px-6 py-4">
-                            <span className={`inline-block px-2.5 py-0.5 border rounded-full text-xs font-semibold ${getStatusStyles(m.status)}`}>
-                              {m.status}
-                            </span>
-                          </td>
-                        </tr>
-                      );
-                    })}
+                        return (
+                          <tr key={m.id} className="hover:bg-neutral-50/50">
+                            <td className="px-6 py-4 font-bold text-neutral-900">
+                              {m.name}
+                            </td>
+                            <td className="px-6 py-4 font-medium text-neutral-600">
+                              {m.disputes} disputes / {m.total_txs} invoices
+                            </td>
+                            <td className="px-6 py-4 font-bold text-neutral-700">
+                              {m.dispute_ratio}
+                            </td>
+                            <td className="px-6 py-4 space-y-1.5">
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-neutral-800">{m.risk_score}/100</span>
+                                <span className="text-[9px] text-neutral-400 font-bold tracking-wider uppercase bg-neutral-100 dark:bg-white/5 px-1.5 py-0.5 rounded">Auto</span>
+                              </div>
+                              <div className="w-28 h-1.5 bg-neutral-100 dark:bg-white/10 rounded-full overflow-hidden">
+                                <div 
+                                  className={`h-full rounded-full transition-all duration-500 ${
+                                    m.risk_score >= 65 ? "bg-red-500" : 
+                                    m.risk_score >= 45 ? "bg-amber-500" : 
+                                    "bg-emerald-500"
+                                  }`}
+                                  style={{ width: `${m.risk_score}%` }}
+                                />
+                              </div>
+                            </td>
+                            <td className="px-6 py-4">
+                              <span className={`inline-block px-2.5 py-0.5 border rounded-full text-xs font-semibold ${getStatusStyles(m.status)}`}>
+                                {m.status}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
                   </tbody>
                 </table>
               </div>
