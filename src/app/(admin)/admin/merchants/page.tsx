@@ -148,7 +148,12 @@ export default function AdminMerchantsPage() {
       return;
     }
     setProcessing(true);
-    await adminDeleteMerchantAction(modal.merchant.id);
+    const res = await adminDeleteMerchantAction(modal.merchant.id);
+    if (res && !res.success) {
+      setModal({ ...modal, error: res.error || "Failed to permanently delete merchant." });
+      setProcessing(false);
+      return;
+    }
     await fetchData();
     setModal(null);
     setProcessing(false);
