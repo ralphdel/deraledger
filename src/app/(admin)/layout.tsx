@@ -18,6 +18,7 @@ import {
   ShieldAlert,
   Coins,
   RefreshCw,
+  Settings2,
 } from "lucide-react";
 import { useState } from "react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -35,6 +36,7 @@ import { PlatformUpdateModal } from "@/components/platform-update-modal";
 const adminNavItems = [
   { href: "/admin", label: "Overview", icon: LayoutDashboard },
   { href: "/admin/verification", label: "Verification Queue", icon: ShieldCheck },
+  { href: "/admin/verification-settings", label: "Verification Settings", icon: Settings2 },
   { href: "/admin/merchants", label: "Merchants", icon: Users },
   { href: "/admin/disputes", label: "Disputes Queue", icon: ShieldAlert },
   { href: "/admin/crypto", label: "Crypto Ops Center", icon: Coins },

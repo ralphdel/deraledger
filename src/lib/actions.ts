@@ -7,6 +7,7 @@ import { requirePermission } from "./rbac";
 import { sendTeamInviteEmail, sendPasswordResetEmail, sendInvoiceEmail } from "./brevo";
 import { PaymentService } from "@/lib/payment";
 import { DojahProvider, extractDojahMatchScore } from "@/lib/kyc/dojah.provider";
+import { verifyMerchantIdentity, verifyMerchantBusiness } from "@/lib/services/verification.service";
 import {
   canCreateInvoice,
   canCreateCollectionInvoice,
@@ -1857,13 +1858,15 @@ export async function submitDojahKycAction(params: {
     let nameMatch = true;
     let selfieMatch = true;
 
-    // Only run Dojah BVN+Selfie if a new selfie is provided
+    // Only run BVN+Selfie verification if a new selfie is provided
     if (params.bvn && params.selfieBase64 && params.selfieFileName) {
       let primaryBase64 = "";
+      let primaryStoragePath = "";
 
       // Handle multiple liveness frames or single upload
       if (Array.isArray(params.selfieBase64) && Array.isArray(params.selfieFileName)) {
-        primaryBase64 = params.selfieBase64[0]; // Dojah gets the "straight face"
+        primaryBase64 = params.selfieBase64[0]; // "straight face" frame used for verification
+        // Store all liveness frames (unchanged from original logic)
         const filenames = [];
         for (let i = 0; i < params.selfieBase64.length; i++) {
           const buffer = Buffer.from(params.selfieBase64[i], "base64");
@@ -1875,53 +1878,32 @@ export async function submitDojahKycAction(params: {
           filenames.push(filename);
         }
         finalSelfieFileName = JSON.stringify(filenames);
+        primaryStoragePath = `${params.merchantId}/${params.selfieFileName[0]}`;
       } else {
         primaryBase64 = params.selfieBase64 as string;
         finalSelfieFileName = params.selfieFileName as string;
-        const buffer = Buffer.from(primaryBase64, "base64");
-        const filename = `${params.merchantId}/${finalSelfieFileName}`;
-        await adminClient.storage.from("kyc-documents").upload(filename, buffer, {
-          contentType: "image/jpeg",
-          upsert: true,
-        });
+        primaryStoragePath = `${params.merchantId}/${finalSelfieFileName}`;
+        // Single frame upload — VerificationService will also upload, but upsert is safe
       }
 
-      // Call Dojah BVN + Selfie combined verification
-      const dojah = new DojahProvider();
-      const result = await dojah.verifyBVNWithSelfie({
+      // ── Route through VerificationService (provider-agnostic) ──────────────
+      // VerificationService handles: storage-first upload for Youverify URL,
+      // provider selection, name matching, sandbox bypass, and audit logging.
+      const svcResult = await verifyMerchantIdentity({
+        merchantId: params.merchantId,
         bvn: params.bvn,
         selfieBase64: primaryBase64,
-        customerReference: params.merchantId,
+        selfieStoragePath: primaryStoragePath,
+        ownerName: merchant?.owner_name || undefined,
       });
 
-      matchScore = extractDojahMatchScore(result) || null;
-      dojahReference = result.reference_id || null;
-      dojahSuccess = result.status === true || result.entity?.bvn === params.bvn;
-      selfieMatch = matchScore !== null && matchScore >= 70;
+      matchScore = svcResult.matchScore;
+      dojahReference = svcResult.providerReference;
+      dojahSuccess = svcResult.bvnExists;
+      selfieMatch = svcResult.faceMatch;
+      nameMatch = svcResult.errorCode !== "NAME_MISMATCH";
 
-      const isSandbox = process.env.VERIFICATION_MODE === "sandbox" || process.env.DOJAH_BASE_URL?.includes("sandbox") || process.env.NODE_ENV !== "production";
-
-      if (isSandbox) {
-        // In Sandbox mode, Dojah returns mocked data and fake identities, so we bypass strict checks
-        dojahSuccess = true;
-        selfieMatch = true;
-        nameMatch = true;
-      } else {
-        // Production Name matching logic
-        if (dojahSuccess && merchant?.owner_name && result.entity) {
-          const ownerNames = merchant.owner_name.toLowerCase().split(/\s+/);
-          const bvnNames = [
-            result.entity.first_name,
-            result.entity.last_name,
-            result.entity.middle_name
-          ].filter(Boolean).map(n => n!.toLowerCase());
-
-          // We require at least one part of the owner name to match a part of the BVN name
-          nameMatch = ownerNames.some((on: string) => bvnNames.includes(on));
-        }
-      }
-
-      newBvnStatus = (dojahSuccess && nameMatch) ? "verified" : "rejected";
+      newBvnStatus = (svcResult.bvnExists && nameMatch) ? "verified" : "rejected";
       newSelfieStatus = selfieMatch ? "verified" : "rejected";
     }
 
@@ -2286,108 +2268,46 @@ export async function verifyRcNumberAction(merchantId: string, rcNumber: string)
     return { success: false, error: "Legal owner or shareholder name not configured. Please complete your Business Profile first." };
   }
 
-  const isSandbox = process.env.VERIFICATION_MODE === "sandbox" || process.env.DOJAH_BASE_URL?.includes("sandbox") || process.env.NODE_ENV !== "production";
+  const isSandbox = await (async () => {
+    try {
+      const { isVerificationSandboxMode } = await import("@/lib/kyc/index");
+      return await isVerificationSandboxMode();
+    } catch {
+      return process.env.VERIFICATION_MODE === "sandbox" ||
+        process.env.DOJAH_BASE_URL?.includes("sandbox") ||
+        process.env.NODE_ENV !== "production";
+    }
+  })();
 
   if (isSandbox) {
-    // Sandbox auto-pass
+    // Sandbox auto-pass — no provider call needed
     await adminClient.from("merchants").update({ cac_number: rcNumber }).eq("id", merchantId);
     return { success: true };
   }
 
   try {
-    const dojah = new DojahProvider();
-    const cacResult = await dojah.verifyCAC({ rcNumber });
+    // ── Route through VerificationService (provider-agnostic) ────────────────
+    const svcResult = await verifyMerchantBusiness({
+      merchantId,
+      registrationNumber: rcNumber,
+      businessName: merchant.business_name,
+      ownerName: merchant.owner_name!,
+    });
 
-    if (cacResult.entity && cacResult.entity.company_name) {
-      const dojahName = cacResult.entity.company_name.toLowerCase().replace(/[^a-z0-9\s]/g, "");
-      const myName = merchant.business_name.toLowerCase().replace(/[^a-z0-9\s]/g, "");
-      
-      if (!dojahName.includes(myName) && !myName.includes(dojahName)) {
-        return { success: false, error: `RC Number belongs to '${cacResult.entity.company_name}', which does not match your registered Business Name.` };
-      }
-
-      // Check that owner_name exists in company proprietors/directors/shareholders/partners/trustees/members/officers
-      const ownerLower = merchant.owner_name.toLowerCase().trim();
-      const ownerParts = ownerLower.split(/\s+/).filter(Boolean);
-
-      // Extract all name strings from Dojah entity
-      const cacNames: string[] = [];
-      const addVal = (val: any) => {
-        if (typeof val === "string" && val.trim().length > 2) {
-          cacNames.push(val.trim().toLowerCase());
-        }
-      };
-
-      const arraysToCheck = [
-        cacResult.entity.shareholders,
-        cacResult.entity.directors,
-        cacResult.entity.proprietors,
-        cacResult.entity.partners,
-        cacResult.entity.trustees,
-        cacResult.entity.officers,
-        cacResult.entity.members
-      ];
-
-      for (const arr of arraysToCheck) {
-        if (Array.isArray(arr)) {
-          for (const obj of arr) {
-            if (obj) {
-              addVal(obj.name);
-              addVal(obj.full_name);
-              addVal(obj.firstname || obj.first_name);
-              addVal(obj.surname || obj.last_name || obj.lastname);
-              addVal(obj.middlename || obj.middle_name);
-              if (obj.first_name && obj.last_name) {
-                addVal(`${obj.first_name} ${obj.last_name}`);
-              }
-            }
-          }
-        }
-      }
-
-      addVal(cacResult.entity.proprietor_name);
-      addVal(cacResult.entity.director_name);
-      addVal(cacResult.entity.owner_name);
-
-      // Also do a wildcard search on any string value in entity that could be a name
-      // (to handle arbitrary Dojah format changes)
-      const checkObjectKeys = (obj: any) => {
-        if (!obj || typeof obj !== "object") return;
-        for (const key in obj) {
-          if (typeof obj[key] === "string" && (
-            key.includes("name") || 
-            key.includes("director") || 
-            key.includes("proprietor") || 
-            key.includes("shareholder") || 
-            key.includes("partner") || 
-            key.includes("trustee") || 
-            key.includes("president")
-          )) {
-            addVal(obj[key]);
-          } else if (typeof obj[key] === "object") {
-            checkObjectKeys(obj[key]);
-          }
-        }
-      };
-      checkObjectKeys(cacResult.entity);
-
-      // Match owner parts with CAC names
-      const matchesAny = cacNames.some((cacName) => {
-        const matchCount = ownerParts.filter((part: string) => cacName.includes(part)).length;
-        return matchCount >= Math.min(2, ownerParts.length);
-      });
-
-      if (!matchesAny && cacNames.length > 0) {
-        return { 
-          success: false, 
-          error: `Name matching failed: '${merchant.owner_name}' was not found in the official registry of directors, shareholders, or owners for this company.` 
-        };
-      }
-
-      await adminClient.from("merchants").update({ cac_number: rcNumber }).eq("id", merchantId);
-      return { success: true };
+    if (!svcResult.success) {
+      return { success: false, error: svcResult.error || "Business verification failed." };
     }
-    return { success: false, error: "Failed to verify RC Number. Invalid format or business not found." };
+
+    if (!svcResult.companyNameMatches) {
+      return {
+        success: false,
+        error: `RC Number belongs to '${svcResult.companyName}', which does not match your registered Business Name.`,
+      };
+    }
+
+    // Representative mismatch is non-fatal — admin reviews during approval
+    await adminClient.from("merchants").update({ cac_number: rcNumber }).eq("id", merchantId);
+    return { success: true };
   } catch (error: any) {
     return { success: false, error: error.message };
   }

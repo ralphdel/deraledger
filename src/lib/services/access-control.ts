@@ -250,3 +250,52 @@ export function canAccessFeature(
   }
   return { allowed: true };
 }
+
+// ── NEW: Identity-verified capability gate ────────────────────────────────────
+/**
+ * Checks if a merchant can collect payments based on identity verification alone.
+ *
+ * This is the PROGRESSIVE unlock gate:
+ * - Individual/Corporate merchants with identity_verified = true can collect
+ *   without waiting for full business CAC verification.
+ *
+ * This runs ALONGSIDE the existing canCreateCollectionInvoice() check.
+ * Existing verified merchants (verification_status = "verified") are unaffected.
+ *
+ * Usage: Call this when canCreateCollectionInvoice() returns false due to
+ * verification_status, to check if the merchant qualifies via progressive unlock.
+ */
+export function canCollectAfterIdentityVerification(
+  merchant: Pick<Merchant, "subscription_plan" | "merchant_tier" | "identity_verified">
+): AccessResult {
+  const plan = getPlan(merchant);
+
+  if (plan === "starter") {
+    return {
+      allowed: false,
+      reason: "Collection invoices are not available on the Starter plan. Upgrade to Individual or Business.",
+      upgradeRequired: "individual",
+    };
+  }
+
+  if (!merchant.identity_verified) {
+    return {
+      allowed: false,
+      reason: "Complete BVN and selfie verification first to enable individual payment collection.",
+    };
+  }
+
+  return { allowed: true };
+}
+
+// ── NEW: Check if merchant has identity verified ───────────────────────────────
+/**
+ * Simple helper to check if identity verification is complete.
+ * Does NOT check plan — only verifies the identity_verified flag.
+ */
+export function isIdentityVerified(
+  merchant: Pick<Merchant, "identity_verified">
+): boolean {
+  return merchant.identity_verified === true;
+}
+

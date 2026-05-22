@@ -40,6 +40,13 @@ export interface Merchant {
   kyc_rejection_reason?: string | null;
   kyc_reviewed_at?: string | null;
   kyc_reset_at?: string | null;
+  // ── Verification engine v2 fields (additive — may be null until migration applied) ──
+  /** True when BVN + selfie have been verified AND admin has approved identity */
+  identity_verified?: boolean;
+  /** Timestamp when identity_verified was set to true */
+  identity_verified_at?: string | null;
+  /** Which provider was used for this merchant's last verification */
+  active_verification_provider?: "DOJAH" | "YOUVERIFY" | null;
   // Settlement fields (v2.1)
   settlement_bank_name: string | null;
   settlement_bank_code: string | null;
