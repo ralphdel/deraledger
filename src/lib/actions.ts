@@ -707,6 +707,8 @@ export async function adminDeleteMerchantAction(merchantId: string) {
 
   try {
     // Delete in order to respect FK constraints
+    await adminClient.from("payment_events").delete().eq("merchant_id", merchantId);
+    await adminClient.from("invoice_allocations").delete().eq("merchant_id", merchantId);
     await adminClient.from("audit_logs").delete().eq("target_id", merchantId);
     await adminClient.from("audit_logs").delete().eq("actor_id", merchantId);
     await adminClient.from("onboarding_sessions").delete().eq("merchant_id", merchantId).throwOnError();
