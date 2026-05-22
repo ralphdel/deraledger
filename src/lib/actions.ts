@@ -707,7 +707,8 @@ export async function adminDeleteMerchantAction(merchantId: string) {
 
   try {
     // Delete in order to respect FK constraints
-    await adminClient.from("audit_logs").delete().eq("merchant_id", merchantId).throwOnError();
+    await adminClient.from("audit_logs").delete().eq("target_id", merchantId);
+    await adminClient.from("audit_logs").delete().eq("actor_id", merchantId);
     await adminClient.from("onboarding_sessions").delete().eq("merchant_id", merchantId).throwOnError();
     
     // Some of these might fail if columns don't exist, so we don't throw on error for ones we aren't 100% sure about

@@ -415,7 +415,8 @@ async function handleSubscriptionPayment(
 
     // Delete ALL duplicates (regardless of user_id)
     for (const dup of toDelete) {
-      await supabase.from("audit_logs").delete().eq("merchant_id", dup.id);
+      await supabase.from("audit_logs").delete().eq("target_id", dup.id);
+      await supabase.from("audit_logs").delete().eq("actor_id", dup.id);
       await supabase.from("onboarding_sessions").delete().eq("merchant_id", dup.id);
       await supabase.from("merchant_team").delete().eq("merchant_id", dup.id);
       await supabase.from("merchants").delete().eq("id", dup.id);
