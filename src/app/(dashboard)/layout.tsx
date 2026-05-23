@@ -99,19 +99,55 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const pathname = usePathname();
 
   useEffect(() => {
-    getMerchant().then((m) => {
+    async function loadMerchant() {
+      const { createClient } = await import("@/lib/supabase/client");
+      const sb = createClient();
+      const { data: { session } } = await sb.auth.getSession();
+      const user = session?.user;
+
+      const m = await getMerchant();
+
       if (m === null) {
         window.location.href = "/onboarding";
-      } else {
-        setMerchant(m);
-        getActiveSubscription(m.id).then((sub) => {
-          setSubscription(sub);
-        });
-        getNotifications(m.id).then((notes) => {
-          setNotifications(notes);
-        });
+        return;
       }
-    });
+
+      // Ghost-session guard:
+      // If the resolved merchant is not owned by the current user AND the user is not
+      // an active team member of it, they are a deleted owner whose auth account survived.
+      // Sign them out immediately to prevent them from browsing another workspace's data.
+      if (user) {
+        const isOwner = m.user_id === user.id;
+        if (!isOwner) {
+          const { data: teamRow } = await sb
+            .from("merchant_team")
+            .select("id")
+            .eq("merchant_id", m.id)
+            .eq("user_id", user.id)
+            .eq("is_active", true)
+            .limit(1)
+            .single();
+
+          if (!teamRow) {
+            // No valid relationship found — ghost session. Sign out.
+            console.warn("[Dashboard] Ghost session detected — signing out user with no valid merchant link.");
+            await logoutUser();
+            window.location.href = "/login?reason=account_removed";
+            return;
+          }
+        }
+      }
+
+      setMerchant(m);
+      getActiveSubscription(m.id).then((sub) => {
+        setSubscription(sub);
+      });
+      getNotifications(m.id).then((notes) => {
+        setNotifications(notes);
+      });
+    }
+
+    loadMerchant();
   }, []);
 
   const businessName = merchant?.business_name || "Deraledger";

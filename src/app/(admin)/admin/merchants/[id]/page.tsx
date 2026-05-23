@@ -6,7 +6,7 @@ import Link from "next/link";
 import {
   ArrowLeft, Shield, CheckCircle, XCircle, Clock, Users, FileText,
   DollarSign, Building2, Mail, Phone, Hash, Copy, Ban, CheckCircle2,
-  KeyRound, RefreshCw, CreditCard,
+  KeyRound, RefreshCw, CreditCard, Send,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -25,7 +25,7 @@ import {
   adminDeactivateMerchantAction, adminReactivateMerchantAction,
   adminChangePlanAction, adminResetPasswordAction,
   adminFetchTeamMembersAction, adminDeactivateTeamMemberAction,
-  adminReactivateTeamMemberAction,
+  adminReactivateTeamMemberAction, adminResendActivationLinkAction,
 } from "@/lib/actions";
 
 export default function MerchantDetailPage() {
@@ -47,6 +47,7 @@ export default function MerchantDetailPage() {
   const [showChangePlan, setShowChangePlan] = useState(false);
   const [newPlan, setNewPlan] = useState<"starter" | "individual" | "corporate">("individual");
   const [showResetLink, setShowResetLink] = useState<string | null>(null);
+  const [showActivationLink, setShowActivationLink] = useState<string | null>(null);
 
   const fetchAll = async () => {
     setLoading(true);
@@ -120,6 +121,12 @@ export default function MerchantDetailPage() {
     if (res.success && res.resetLink) setShowResetLink(res.resetLink);
     setProcessing(false);
   };
+  const handleResendActivation = async () => {
+    setProcessing(true);
+    const res = await adminResendActivationLinkAction(merchantId);
+    if (res.success && res.activationLink) setShowActivationLink(res.activationLink);
+    setProcessing(false);
+  };
   const handleTeamMemberStatus = async (teamMemberId: string, activate: boolean) => {
     setProcessing(true);
     if (activate) {
@@ -185,6 +192,9 @@ export default function MerchantDetailPage() {
           <Button size="sm" variant="outline" className="border-2 gap-1" onClick={handleResetPassword} disabled={processing}>
             <KeyRound className="h-4 w-4" /> {processing ? "Generating..." : "Reset Password"}
           </Button>
+          <Button size="sm" variant="outline" className="border-2 gap-1 text-blue-700 border-blue-200 hover:bg-blue-50" onClick={handleResendActivation} disabled={processing}>
+            <Send className="h-4 w-4" /> Resend Activation Link
+          </Button>
         </CardContent>
       </Card>
 
@@ -200,6 +210,23 @@ export default function MerchantDetailPage() {
               </Button>
             </div>
             <p className="text-xs text-neutral-500 mt-2">Send this link to the merchant. It expires in 1 hour.</p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Activation Link Display */}
+      {showActivationLink && (
+        <Card className="border-2 border-blue-200 shadow-none">
+          <CardContent className="p-4">
+            <p className="text-sm font-semibold text-blue-800 mb-1">Activation Link Resent ✓</p>
+            <p className="text-xs text-blue-600 mb-2">A welcome email with the fresh link was sent to the merchant. Copy the link below if needed.</p>
+            <div className="flex items-center gap-2">
+              <code className="text-xs bg-neutral-100 p-2 rounded flex-1 break-all">{showActivationLink}</code>
+              <Button size="sm" variant="outline" className="shrink-0" onClick={() => { navigator.clipboard.writeText(showActivationLink); }}>
+                <Copy className="h-4 w-4" />
+              </Button>
+            </div>
+            <p className="text-xs text-neutral-500 mt-2">This link expires in 1 hour.</p>
           </CardContent>
         </Card>
       )}

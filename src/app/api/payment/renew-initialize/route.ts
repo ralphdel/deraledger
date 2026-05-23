@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { PaymentService } from "@/lib/payment";
+import { getAppUrl } from "@/lib/server-utils";
 
 /**
  * POST /api/payment/renew-initialize
@@ -52,7 +53,7 @@ export async function POST(request: Request) {
     const reference = `rnw_${merchant.id.substring(0, 8)}_${Date.now()}`;
 
     const resolvedEmail = email || user.email || merchant.email || "billing@deraledger.app";
-    const resolvedCallback = callbackUrl || `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/settings/billing/renew-callback`;
+    const resolvedCallback = callbackUrl || `${getAppUrl()}/settings/billing/renew-callback`;
 
     // Initialize with Paystack — returns accessCode for inline popup
     const result = await PaymentService.initializeTransaction({

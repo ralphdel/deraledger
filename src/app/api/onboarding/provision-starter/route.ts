@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { sendOnboardingWelcomeEmail } from "@/lib/brevo";
+import { getAppUrl } from "@/lib/server-utils";
 
 const supabase = createSupabaseClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -31,8 +32,7 @@ export async function POST(request: Request) {
     }
 
     // Generate magic link
-    const configuredUrl = process.env.NEXT_PUBLIC_APP_URL || "";
-    const appUrl = configuredUrl || (process.env.NODE_ENV === "production" ? "https://purpledger.vercel.app" : "http://localhost:3000");
+    const appUrl = getAppUrl();
 
     const { data: magicLinkData, error: magicError } = await supabase.auth.admin.generateLink({
       type: "magiclink",

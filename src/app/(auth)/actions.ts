@@ -3,7 +3,8 @@
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
-import { sendPasswordResetEmail } from "@/lib/brevo";
+import { sendPasswordResetEmail, sendOnboardingWelcomeEmail } from "@/lib/brevo";
+import { getAppUrl } from "@/lib/server-utils";
 
 export async function loginUser(formData: FormData) {
   try {
@@ -137,8 +138,7 @@ export async function logoutUser() {
 export async function forgotPasswordAction(email: string) {
   if (!email) return { success: false, error: "Email is required" };
 
-  const configuredUrl = process.env.NEXT_PUBLIC_APP_URL || "";
-  const appUrl = configuredUrl || (process.env.NODE_ENV === "production" ? "https://purpledger.vercel.app" : "http://localhost:3000");
+  const appUrl = getAppUrl();
   
   // Use service role client to securely generate the reset link without triggering Supabase's rate-limited email
   const { createClient: createSupabaseClient } = await import("@supabase/supabase-js");
@@ -223,5 +223,78 @@ export async function completePasswordResetAction(password: string, fullName: st
   }
 
   revalidatePath("/", "layout");
+  return { success: true };
+}
+
+/**
+ * Merchant self-service: resend the onboarding activation (set-password) email.
+ * Called from /onboarding/resend when their magic link has expired.
+ */
+export async function resendActivationLinkAction(email: string) {
+  if (!email) return { success: false, error: "Email is required." };
+
+  const { createClient: createSupabaseClient } = await import("@supabase/supabase-js");
+  const adminClient = createSupabaseClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  );
+
+  // Verify the merchant exists
+  const { data: merchant, error: merchantError } = await adminClient
+    .from("merchants")
+    .select("id, trading_name, business_name, subscription_plan, merchant_tier")
+    .eq("email", email.toLowerCase().trim())
+    .single();
+
+  if (merchantError || !merchant) {
+    // Swallow to prevent email enumeration
+    return { success: true };
+  }
+
+  const appUrl = getAppUrl();
+
+  // Generate a fresh magic link redirecting to set-password
+  const { data: magicLinkData, error: magicError } = await adminClient.auth.admin.generateLink({
+    type: "magiclink",
+    email: email.toLowerCase().trim(),
+    options: {
+      redirectTo: `${appUrl}/onboarding/set-password`,
+    },
+  });
+
+  if (magicError || !magicLinkData?.properties?.action_link) {
+    console.error("Failed to generate activation link:", magicError?.message);
+    return { success: false, error: "Failed to generate activation link. Please try again." };
+  }
+
+  // Rewrite the redirect_to to bypass PKCE flow
+  let setPasswordLink = magicLinkData.properties.action_link;
+  try {
+    const url = new URL(setPasswordLink);
+    url.searchParams.set("redirect_to", `${appUrl}/onboarding/set-password`);
+    setPasswordLink = url.toString();
+  } catch {
+    // Keep original link
+  }
+
+  const planLabel = (merchant.subscription_plan || merchant.merchant_tier || "starter") as
+    | "starter"
+    | "individual"
+    | "corporate";
+  const businessName = merchant.trading_name || merchant.business_name || "your business";
+
+  // Send the branded welcome email with the fresh link
+  const emailResult = await sendOnboardingWelcomeEmail(
+    email.toLowerCase().trim(),
+    businessName,
+    planLabel,
+    setPasswordLink
+  );
+
+  if (!emailResult.success) {
+    console.error("Failed to send activation email:", emailResult.error);
+    return { success: false, error: "Failed to send activation email. Please try again." };
+  }
+
   return { success: true };
 }

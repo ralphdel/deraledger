@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { calculateSubscriptionExpiry, PlanType } from "@/lib/subscription";
+import { getAppUrl } from "@/lib/server-utils";
 
 const supabase = createSupabaseClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -220,8 +221,7 @@ export async function POST(request: Request) {
   // We use generateLink to get tokens, then construct a URL that sends the user
   // directly to /onboarding/set-password with tokens in the hash fragment.
   // This bypasses the /auth/callback PKCE flow which causes "Invalid or expired link" errors.
-  const configuredUrl = process.env.NEXT_PUBLIC_APP_URL || "";
-  const appUrl = configuredUrl || (process.env.NODE_ENV === "production" ? "https://purpledger.vercel.app" : "http://localhost:3000");
+  const appUrl = getAppUrl();
 
   let setPasswordLink = `${appUrl}/onboarding/resend`; // fallback
 

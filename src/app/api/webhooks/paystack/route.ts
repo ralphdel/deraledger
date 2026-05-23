@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { PaymentService } from "@/lib/payment";
 import { calculateSubscriptionExpiry, PlanType } from "@/lib/subscription";
+import { getAppUrl } from "@/lib/server-utils";
 
 const supabase = createSupabaseClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -511,8 +512,7 @@ async function handleSubscriptionPayment(
   // We use generateLink to get tokens, then construct a URL that sends the user
   // directly to /onboarding/set-password with tokens in the hash fragment.
   // This bypasses the /auth/callback PKCE flow which causes "Invalid or expired link" errors.
-  const configuredUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
-  const appUrl = configuredUrl || (process.env.NODE_ENV === "development" ? "http://localhost:3000" : "https://purpledger.vercel.app");
+  const appUrl = getAppUrl();
 
   let setPasswordLink = `${appUrl}/onboarding/resend`; // fallback
 
@@ -747,7 +747,7 @@ async function handleInvoicePayment(
       .eq("id", invoice.merchant_id)
       .single();
 
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://purpledger.vercel.app";
+    const appUrl = getAppUrl();
 
     await sendPaymentReceiptEmail(
       fullInvoice.clients.email,

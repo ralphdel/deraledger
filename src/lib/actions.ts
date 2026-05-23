@@ -4,7 +4,8 @@ import { createClient } from "@/lib/supabase/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { revalidatePath } from "next/cache";
 import { requirePermission } from "./rbac";
-import { sendTeamInviteEmail, sendPasswordResetEmail, sendInvoiceEmail } from "./brevo";
+import { sendTeamInviteEmail, sendPasswordResetEmail, sendInvoiceEmail, sendOnboardingWelcomeEmail } from "./brevo";
+import { getAppUrl } from "@/lib/server-utils";
 import { PaymentService } from "@/lib/payment";
 import { DojahProvider, extractDojahMatchScore } from "@/lib/kyc/dojah.provider";
 import { verifyMerchantIdentity, verifyMerchantBusiness } from "@/lib/services/verification.service";
@@ -729,9 +730,37 @@ export async function adminDeleteMerchantAction(merchantId: string) {
     }
   }
 
-  // Delete all collected auth users
+  // Delete auth users ONLY if they have no other merchant associations.
+  // If a user is a team member in another merchant (other than the one being deleted),
+  // their auth account must be preserved — only their association to THIS merchant is removed.
   for (const uid of userIdsToDelete) {
     try {
+      // Check if this user belongs to any OTHER merchant as owner or team member
+      const [{ data: otherOwnership }, { data: otherTeamRows }] = await Promise.all([
+        adminClient
+          .from("merchants")
+          .select("id")
+          .eq("user_id", uid)
+          .neq("id", merchantId)
+          .limit(1),
+        adminClient
+          .from("merchant_team")
+          .select("id")
+          .eq("user_id", uid)
+          .neq("merchant_id", merchantId)
+          .limit(1),
+      ]);
+
+      const hasOtherMerchant = (otherOwnership && otherOwnership.length > 0);
+      const hasOtherTeam = (otherTeamRows && otherTeamRows.length > 0);
+
+      if (hasOtherMerchant || hasOtherTeam) {
+        // This user still belongs to another workspace — preserve their auth account.
+        // Their association with the deleted merchant is cleaned up via merchant_team row deletion below.
+        console.log(`Skipping auth deletion for user ${uid} — they have other merchant associations.`);
+        continue;
+      }
+
       const { error: authError } = await adminClient.auth.admin.deleteUser(uid);
       if (authError) {
         console.error(`Warning: auth user ${uid} removal failed:`, authError.message);
@@ -838,18 +867,19 @@ export async function adminResetPasswordAction(merchantId: string) {
 
   if (!merchant?.email) return { success: false, error: "Merchant not found" };
 
-  // Use 'recovery' type to generate a proper password-reset link (not a magic login link)
+  const appUrl = getAppUrl();
+
+  // Use 'recovery' type with explicit redirectTo so the link goes to our reset page
   const { data, error } = await adminClient.auth.admin.generateLink({
     type: "recovery",
     email: merchant.email,
+    options: {
+      redirectTo: `${appUrl}/reset-password`,
+    },
   });
 
   if (error) return { success: false, error: error.message };
 
-  const configuredUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
-  const appUrl = configuredUrl || (process.env.NODE_ENV === "development" ? "http://localhost:3000" : "https://purpledger.vercel.app");
-
-  // The recovery link from Supabase already supports redirect_to via the action_link
   const resetLink = data?.properties?.action_link || `${appUrl}/reset-password`;
 
   await adminClient.from("audit_logs").insert({
@@ -863,6 +893,76 @@ export async function adminResetPasswordAction(merchantId: string) {
 
   revalidatePath(`/admin/merchants/${merchantId}`);
   return { success: true, resetLink };
+}
+
+
+/**
+ * Admin action: resend the onboarding activation (set-password) magic link email
+ * to a merchant whose link has expired. Accessible from /admin/merchants/[id].
+ */
+export async function adminResendActivationLinkAction(merchantId: string) {
+  const guard = await requireSuperAdmin();
+  if (guard.error) return guard.error;
+  const adminClient = getServiceClient();
+
+  const { data: merchant } = await adminClient
+    .from("merchants")
+    .select("email, trading_name, business_name, subscription_plan, merchant_tier")
+    .eq("id", merchantId)
+    .single();
+
+  if (!merchant?.email) return { success: false, error: "Merchant not found" };
+
+  const appUrl = getAppUrl();
+
+  // Generate a fresh magic link
+  const { data: magicLinkData, error: magicError } = await adminClient.auth.admin.generateLink({
+    type: "magiclink",
+    email: merchant.email,
+    options: {
+      redirectTo: `${appUrl}/onboarding/set-password`,
+    },
+  });
+
+  if (magicError || !magicLinkData?.properties?.action_link) {
+    console.error("Failed to generate activation link:", magicError?.message);
+    return { success: false, error: magicError?.message || "Failed to generate link" };
+  }
+
+  // Rewrite redirect_to to bypass PKCE
+  let activationLink = magicLinkData.properties.action_link;
+  try {
+    const url = new URL(activationLink);
+    url.searchParams.set("redirect_to", `${appUrl}/onboarding/set-password`);
+    activationLink = url.toString();
+  } catch {
+    // Keep original link
+  }
+
+  const planLabel = (merchant.subscription_plan || merchant.merchant_tier || "starter") as
+    | "starter"
+    | "individual"
+    | "corporate";
+  const businessName = merchant.trading_name || merchant.business_name || "Business";
+
+  // Send the branded welcome email
+  try {
+    await sendOnboardingWelcomeEmail(merchant.email, businessName, planLabel, activationLink);
+  } catch (e) {
+    console.error("Failed to send activation email:", e);
+  }
+
+  await adminClient.from("audit_logs").insert({
+    event_type: "admin_activation_link_resent",
+    actor_id: null,
+    actor_role: "admin",
+    target_id: merchantId,
+    target_type: "merchant",
+    metadata: { actor_name: "SuperAdmin", email: merchant.email },
+  });
+
+  revalidatePath(`/admin/merchants/${merchantId}`);
+  return { success: true, activationLink };
 }
 
 // ── Team Member Management ───────────────────────────────────────────────────
@@ -1682,7 +1782,7 @@ export async function bulkCreateInvoicesAction(merchantId: string, invoicesData:
     const count = (countData?.length || 0) + 1;
     const invoiceNumber = `INV-${new Date().getFullYear()}-${String(count).padStart(4, "0")}`;
     const invoiceHash = crypto.randomUUID().replace(/-/g, "").substring(0, 16);
-    const paymentUrl = `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/pay/${invoiceHash}`;
+    const paymentUrl = `${getAppUrl()}/pay/${invoiceHash}`;
 
     // 2. Insert Invoice
     const { data: createdInvoice, error: invError } = await adminClient

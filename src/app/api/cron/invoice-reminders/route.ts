@@ -5,6 +5,7 @@ import {
   sendRecordReminderEmail,
 } from "@/lib/brevo";
 import { sendWhatsAppTemplate } from "@/lib/wati";
+import { getAppUrl } from "@/lib/server-utils";
 
 // Service role client — bypasses RLS for cron jobs
 const supabase = createClient(
@@ -56,8 +57,7 @@ export async function GET(request: Request) {
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const configuredUrl = process.env.NEXT_PUBLIC_APP_URL || "";
-    const appUrl = configuredUrl || (process.env.NODE_ENV === "production" ? "https://purpledger.vercel.app" : "http://localhost:3000");
+    const appUrl = getAppUrl();
 
     for (const invoice of invoices) {
       const client = invoice.clients;

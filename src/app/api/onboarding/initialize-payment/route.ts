@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { PaymentService } from "@/lib/payment";
 import crypto from "crypto";
+import { getAppUrl } from "@/lib/server-utils";
 
 export async function POST(request: Request) {
   const { email, tradingName, registeredName, ownerName, businessType, plan, sessionId, amountKobo } = await request.json();
@@ -9,8 +10,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
   }
 
-  const configuredUrl = process.env.NEXT_PUBLIC_APP_URL || "";
-  const appUrl = configuredUrl || (process.env.NODE_ENV === "production" ? "https://purpledger.vercel.app" : "http://localhost:3000");
+  const appUrl = getAppUrl();
   // Unique reference per transaction
   const reference = `SUB-${plan.toUpperCase()}-${crypto.randomBytes(6).toString("hex").toUpperCase()}`;
 
