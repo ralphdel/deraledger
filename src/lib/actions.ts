@@ -690,18 +690,54 @@ export async function adminDeleteMerchantAction(merchantId: string) {
   if (guard.error) return guard.error;
   const adminClient = getServiceClient();
 
-  // First fetch the user_id before deleting so we can remove the auth user too
+  // Fetch merchant details (user_id and email)
   const { data: merchant } = await adminClient
     .from("merchants")
-    .select("user_id")
+    .select("user_id, email")
     .eq("id", merchantId)
     .single();
 
-  // Also delete the Supabase Auth user so the email can be re-used for registration
+  // Fetch all team members' user_ids before deleting the merchant row
+  const { data: teamMembers } = await adminClient
+    .from("merchant_team")
+    .select("user_id")
+    .eq("merchant_id", merchantId);
+
+  // Collect all unique user IDs to delete from Supabase Auth
+  const userIdsToDelete = new Set<string>();
   if (merchant?.user_id) {
-    const { error: authError } = await adminClient.auth.admin.deleteUser(merchant.user_id);
-    if (authError) {
-      console.error("Warning: auth user removal failed:", authError.message);
+    userIdsToDelete.add(merchant.user_id);
+  }
+  if (teamMembers) {
+    for (const member of teamMembers) {
+      if (member.user_id) {
+        userIdsToDelete.add(member.user_id);
+      }
+    }
+  }
+
+  // Also list users and delete matching merchant email to be absolutely thorough
+  if (merchant?.email) {
+    try {
+      const { data: authUsers } = await adminClient.auth.admin.listUsers();
+      const match = authUsers?.users.find((u) => u.email?.toLowerCase() === merchant.email?.toLowerCase());
+      if (match) {
+        userIdsToDelete.add(match.id);
+      }
+    } catch (e) {
+      console.error("Warning: listing auth users failed during merchant deletion:", e);
+    }
+  }
+
+  // Delete all collected auth users
+  for (const uid of userIdsToDelete) {
+    try {
+      const { error: authError } = await adminClient.auth.admin.deleteUser(uid);
+      if (authError) {
+        console.error(`Warning: auth user ${uid} removal failed:`, authError.message);
+      }
+    } catch (e) {
+      console.error(`Warning: error deleting auth user ${uid}:`, e);
     }
   }
 
