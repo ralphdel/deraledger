@@ -94,6 +94,10 @@ export async function getMerchant(id?: string): Promise<(Merchant & { currentUse
     .select("*")
     .eq("id", mId)
     .single();
+
+  if (error || !data) {
+    return null;
+  }
     
   // Determine subscription status for lock enforcement.
   // CRITICAL: Must order by created_at DESC (not expiry_date) so the most recently

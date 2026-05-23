@@ -1,16 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useTransition, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { loginUser } from "../actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Mail, Lock, ArrowRight, Eye, EyeOff, Building2, Users } from "lucide-react";
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const reason = searchParams.get("reason");
   const [showPassword, setShowPassword] = useState(false);
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -81,6 +83,12 @@ export default function LoginPage() {
           Team Member
         </button>
       </div>
+
+      {reason === "account_removed" && (
+        <div className="mt-6 bg-amber-500/10 text-amber-400 text-sm p-3 rounded-md border border-amber-500/30 font-medium text-center animate-in fade-in">
+          This business account has been deleted. If you are a team member of another business, please sign in via the Team Member tab using your Business ID.
+        </div>
+      )}
 
       <form onSubmit={handleSubmit} className="mt-6 space-y-5">
         <div className="space-y-2">
@@ -185,5 +193,13 @@ export default function LoginPage() {
         </Link>
       </p>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="text-white/60 text-sm">Loading...</div>}>
+      <LoginForm />
+    </Suspense>
   );
 }

@@ -108,6 +108,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       const m = await getMerchant();
 
       if (m === null) {
+        if (typeof window !== "undefined") {
+          document.cookie = "purpledger_workspace_id=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT;";
+        }
         window.location.href = "/onboarding";
         return;
       }
@@ -119,16 +122,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       if (user) {
         const isOwner = m.user_id === user.id;
         if (!isOwner) {
-          const { data: teamRow } = await sb
+          const { data: teamRows } = await sb
             .from("merchant_team")
             .select("id")
             .eq("merchant_id", m.id)
             .eq("user_id", user.id)
             .eq("is_active", true)
-            .limit(1)
-            .single();
+            .limit(1);
 
-          if (!teamRow) {
+          if (!teamRows || teamRows.length === 0) {
             // No valid relationship found — ghost session. Sign out.
             console.warn("[Dashboard] Ghost session detected — signing out user with no valid merchant link.");
             await logoutUser();
