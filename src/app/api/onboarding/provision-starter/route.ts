@@ -37,23 +37,15 @@ export async function POST(request: Request) {
     const { data: magicLinkData, error: magicError } = await supabase.auth.admin.generateLink({
       type: "magiclink",
       email: email,
-      options: {
-        redirectTo: `${appUrl}/onboarding/set-password`,
-      },
     });
 
-    let setPasswordLink = `${appUrl}/onboarding/set-password`;
+    let setPasswordLink = `${appUrl}/onboarding/resend`;
 
     if (magicError) {
       console.error("Failed to generate magic link:", magicError.message);
-    } else if (magicLinkData?.properties?.action_link) {
-      try {
-        const url = new URL(magicLinkData.properties.action_link);
-        url.searchParams.set("redirect_to", `${appUrl}/onboarding/set-password`);
-        setPasswordLink = url.toString();
-      } catch {
-        setPasswordLink = magicLinkData.properties.action_link;
-      }
+    } else if (magicLinkData?.properties?.email_otp) {
+      const otp = magicLinkData.properties.email_otp;
+      setPasswordLink = `${appUrl}/auth/verify?token=${otp}&email=${encodeURIComponent(email)}&type=magiclink&next=${encodeURIComponent('/onboarding/set-password')}`;
     }
 
     // Update the merchant created by the DB trigger with the new fields

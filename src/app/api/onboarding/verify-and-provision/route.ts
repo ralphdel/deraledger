@@ -232,23 +232,9 @@ export async function POST(request: Request) {
 
   if (magicError) {
     console.error("Failed to generate magic link:", magicError.message);
-  } else if (magicLinkData?.properties) {
-    // The generateLink response contains hashed_token, verification_type etc.
-    // The action_link goes to Supabase's hosted endpoint which can cause PKCE issues.
-    // Instead, we'll use the action_link as-is but rewrite the redirect to go directly
-    // to the set-password page. The Supabase endpoint will redirect with tokens in the hash.
-    const actionLink = magicLinkData.properties.action_link;
-    if (actionLink) {
-      // Rewrite the redirect_to parameter in the action_link to point directly
-      // to the set-password page (not through /auth/callback)
-      try {
-        const url = new URL(actionLink);
-        url.searchParams.set("redirect_to", `${appUrl}/onboarding/set-password`);
-        setPasswordLink = url.toString();
-      } catch {
-        setPasswordLink = actionLink;
-      }
-    }
+  } else if (magicLinkData?.properties?.email_otp) {
+    const otp = magicLinkData.properties.email_otp;
+    setPasswordLink = `${appUrl}/auth/verify?token=${otp}&email=${encodeURIComponent(email)}&type=magiclink&next=${encodeURIComponent('/onboarding/set-password')}`;
   }
 
   // 7. Calculate Expiry and Create Subscription Record

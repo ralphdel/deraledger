@@ -523,19 +523,9 @@ async function handleSubscriptionPayment(
 
   if (magicError) {
     console.error("Failed to generate magic link:", magicError.message);
-  } else if (magicLinkData?.properties) {
-    // Rewrite the redirect_to parameter in the action_link to point directly
-    // to the set-password page (not through /auth/callback)
-    const actionLink = magicLinkData.properties.action_link;
-    if (actionLink) {
-      try {
-        const url = new URL(actionLink);
-        url.searchParams.set("redirect_to", `${appUrl}/onboarding/set-password`);
-        setPasswordLink = url.toString();
-      } catch {
-        setPasswordLink = actionLink;
-      }
-    }
+  } else if (magicLinkData?.properties?.email_otp) {
+    const otp = magicLinkData.properties.email_otp;
+    setPasswordLink = `${appUrl}/auth/verify?token=${otp}&email=${encodeURIComponent(email)}&type=magiclink&next=${encodeURIComponent('/onboarding/set-password')}`;
   }
 
   // Calculate Expiry and Create Subscription Record

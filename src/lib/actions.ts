@@ -869,18 +869,17 @@ export async function adminResetPasswordAction(merchantId: string) {
 
   const appUrl = getAppUrl();
 
-  // Use 'recovery' type with explicit redirectTo so the link goes to our reset page
+  // Use 'recovery' type
   const { data, error } = await adminClient.auth.admin.generateLink({
     type: "recovery",
     email: merchant.email,
-    options: {
-      redirectTo: `${appUrl}/reset-password`,
-    },
   });
 
   if (error) return { success: false, error: error.message };
+  if (!data?.properties?.email_otp) return { success: false, error: "Failed to generate OTP" };
 
-  const resetLink = data?.properties?.action_link || `${appUrl}/reset-password`;
+  const otp = data.properties.email_otp;
+  const resetLink = `${appUrl}/auth/verify?token=${otp}&email=${encodeURIComponent(merchant.email)}&type=recovery&next=${encodeURIComponent('/reset-password')}`;
 
   await adminClient.from("audit_logs").insert({
     event_type: "admin_password_reset",
@@ -919,25 +918,15 @@ export async function adminResendActivationLinkAction(merchantId: string) {
   const { data: magicLinkData, error: magicError } = await adminClient.auth.admin.generateLink({
     type: "magiclink",
     email: merchant.email,
-    options: {
-      redirectTo: `${appUrl}/onboarding/set-password`,
-    },
   });
 
-  if (magicError || !magicLinkData?.properties?.action_link) {
+  if (magicError || !magicLinkData?.properties?.email_otp) {
     console.error("Failed to generate activation link:", magicError?.message);
     return { success: false, error: magicError?.message || "Failed to generate link" };
   }
 
-  // Rewrite redirect_to to bypass PKCE
-  let activationLink = magicLinkData.properties.action_link;
-  try {
-    const url = new URL(activationLink);
-    url.searchParams.set("redirect_to", `${appUrl}/onboarding/set-password`);
-    activationLink = url.toString();
-  } catch {
-    // Keep original link
-  }
+  const otp = magicLinkData.properties.email_otp;
+  const activationLink = `${appUrl}/auth/verify?token=${otp}&email=${encodeURIComponent(merchant.email)}&type=magiclink&next=${encodeURIComponent('/onboarding/set-password')}`;
 
   const planLabel = (merchant.subscription_plan || merchant.merchant_tier || "starter") as
     | "starter"
