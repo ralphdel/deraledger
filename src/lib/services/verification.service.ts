@@ -319,13 +319,45 @@ export async function verifyMerchantIdentity(params: {
     console.error("[VerificationService] Selfie signed URL gen failed:", err?.message);
   }
 
-  // 5. Try Primary Provider
+  // 5. Sandbox Bypass — skip real provider call entirely in sandbox mode.
+  // Previously, the provider was called even in sandbox, causing YouVerify to return
+  // 404 (BVN not found in sandbox DB). The sandbox override then forced success,
+  // producing logs with both "verified" status AND a 404 error code. This early
+  // exit produces clean, honest sandbox logs with no provider error artefacts.
+  if (sandbox) {
+    const sandboxProviderKey = await getActiveProviderKey();
+    const sandboxResult: VerificationResult = {
+      success: true,
+      bvnExists: true,
+      faceMatch: true,
+      matchScore: 95,
+      returnedName: {},
+      providerReference: `sandbox-${Date.now()}`,
+      rawResponse: { sandbox: true, selfieSignedUrl },
+    };
+
+    await writeAuditLog(adminClient, {
+      merchantId: params.merchantId,
+      provider: sandboxProviderKey,
+      type: "bvn_selfie",
+      fingerprint,
+      maskedBvn: maskBVN(params.bvn),
+      status: "verified",
+      cost: 0,
+      sandbox: true,
+      result: sandboxResult,
+    });
+
+    return { ...sandboxResult, selfieSignedUrl };
+  }
+
+  // 6. Try Primary Provider (production only)
   let providerKey = await getActiveProviderKey();
   let provider = await getActiveProvider();
   let result: VerificationResult;
   let providerCallSucceeded = false;
 
-  const cost = sandbox ? 0 : await fetchProviderCost(adminClient, providerKey, "bvn_selfie");
+  const cost = await fetchProviderCost(adminClient, providerKey, "bvn_selfie");
 
   try {
     result = await executeProviderBVNWithFace(provider, params.bvn, selfieSignedUrl || "", params.selfieBase64, params.merchantId);
@@ -344,13 +376,13 @@ export async function verifyMerchantIdentity(params: {
     };
   }
 
-  // 6. Failover Routing if Primary fails
+  // 7. Failover Routing if Primary fails
   if (!providerCallSucceeded) {
     console.warn(`[VerificationService] Primary provider ${providerKey} failed. Trying fallback...`);
-    
+
     // Mark primary provider degraded or down in health registry
     await updateProviderHealth(providerKey, result.errorCode === "PROVIDER_INSUFFICIENT_BALANCE" ? "INSUFFICIENT_BALANCE" : "UNAVAILABLE");
-    
+
     const fallbackKey = providerKey === "DOJAH" ? "YOUVERIFY" : "DOJAH";
     const fallback = await getFallbackProvider(providerKey);
 
@@ -364,7 +396,7 @@ export async function verifyMerchantIdentity(params: {
         maskedBvn: maskBVN(params.bvn),
         status: "provider_down",
         cost: 0,
-        sandbox,
+        sandbox: false,
         result,
       });
 
@@ -373,9 +405,8 @@ export async function verifyMerchantIdentity(params: {
 
       // Attempt verification with the fallback
       try {
-        const fallbackCost = sandbox ? 0 : await fetchProviderCost(adminClient, fallbackKey, "bvn_selfie");
         const fallbackResult = await executeProviderBVNWithFace(fallback, params.bvn, selfieSignedUrl || "", params.selfieBase64, params.merchantId);
-        
+
         if (fallbackResult.success || !fallbackResult.errorCode || !["PROVIDER_UNAVAILABLE", "PROVIDER_INSUFFICIENT_BALANCE"].includes(fallbackResult.errorCode)) {
           providerKey = fallbackKey;
           result = fallbackResult;
@@ -387,28 +418,17 @@ export async function verifyMerchantIdentity(params: {
     }
   }
 
-  // 7. Process Provider Health Updates on final result
+  // 8. Process Provider Health Updates on final result
   if (providerCallSucceeded) {
-    await updateProviderHealth(providerKey, result.success ? "ACTIVE" : "ACTIVE");
+    await updateProviderHealth(providerKey, "ACTIVE");
   } else {
     // Both failed
     await updateProviderHealth(providerKey, "UNAVAILABLE");
     await sendProviderDownAlert(providerKey, 10);
   }
 
-  // 8. Sandbox override
-  if (sandbox) {
-    result = {
-      ...result,
-      success: true,
-      bvnExists: true,
-      faceMatch: true,
-      matchScore: result.matchScore ?? 95,
-    };
-  }
-
-  // 9. Name Matching Check
-  if (!sandbox && result.success && params.ownerName) {
+  // 9. Name Matching Check (production only)
+  if (result.success && params.ownerName) {
     const nameMatchResult = performNameMatch(params.ownerName, result.returnedName);
     if (!nameMatchResult.matches) {
       result = {
@@ -428,8 +448,8 @@ export async function verifyMerchantIdentity(params: {
     fingerprint,
     maskedBvn: maskBVN(params.bvn),
     status: result.success ? "verified" : "failed",
-    cost: sandbox ? 0 : await fetchProviderCost(adminClient, providerKey, "bvn_selfie"),
-    sandbox,
+    cost: await fetchProviderCost(adminClient, providerKey, "bvn_selfie"),
+    sandbox: false,
     result,
   });
 
@@ -504,11 +524,13 @@ export async function verifyMerchantBusiness(params: {
     }
   }
 
-  // 3. Sandbox Bypass
+  // 3. Sandbox Bypass — use the real active provider name so logs are accurate
   if (sandbox) {
+    const sandboxProviderKey = await getActiveProviderKey();
+    const sandboxRef = `sandbox-${Date.now()}`;
     await writeAuditLog(adminClient, {
       merchantId: params.merchantId,
-      provider: "DOJAH",
+      provider: sandboxProviderKey,
       type: "business",
       fingerprint,
       maskedBvn: null,
@@ -520,7 +542,7 @@ export async function verifyMerchantBusiness(params: {
         companyName: params.businessName,
         registrationStatus: "ACTIVE",
         personnel: [{ name: params.ownerName, role: "director" }],
-        providerReference: `sandbox-${Date.now()}`,
+        providerReference: sandboxRef,
         rawResponse: { sandbox: true },
       } as any,
     });
@@ -530,7 +552,7 @@ export async function verifyMerchantBusiness(params: {
       companyName: params.businessName,
       registrationStatus: "ACTIVE",
       personnel: [{ name: params.ownerName, role: "director" }],
-      providerReference: `sandbox-${Date.now()}`,
+      providerReference: sandboxRef,
       rawResponse: { sandbox: true },
       companyNameMatches: true,
       representativeFound: true,
@@ -684,7 +706,7 @@ export async function retryVerificationFromLog(
     // 2. Fetch original verification credentials from merchant record
     const { data: merchant, error: mErr } = await adminClient
       .from("merchants")
-      .select("bvn, selfie_url, business_name, owner_name, email")
+      .select("bvn, selfie_url, business_name, owner_name, email, cac_number")
       .eq("id", merchantId)
       .single();
 
@@ -725,8 +747,14 @@ export async function retryVerificationFromLog(
         return { success: false, error: result.error || "Retry verification failed." };
       }
     } else if (logRow.verification_type === "business") {
-      // CAC lookup retry
-      const registrationNumber = merchant.business_name || ""; // fallback representation
+      // CAC lookup retry — use the actual cac_number stored on the merchant record.
+      // Previously this used business_name as the registration number (which is wrong
+      // and always causes a 404 from the provider).
+      const registrationNumber = merchant.cac_number;
+      if (!registrationNumber) {
+        return { success: false, error: "No CAC/RC number found on merchant profile — cannot retry business verification." };
+      }
+
       const result = await provider.verifyBusiness({
         registrationNumber,
         businessName: merchant.business_name,

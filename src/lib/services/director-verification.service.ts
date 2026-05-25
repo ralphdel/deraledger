@@ -102,7 +102,50 @@ export async function verifyDirectorIdentity(params: {
     console.error("[DirectorService] Signed URL creation failed:", err?.message);
   }
 
-  // 3. Call Provider Gateway
+  // 3. Sandbox Bypass — skip real provider call in sandbox mode.
+  // Same fix as verifyMerchantIdentity: previously the real provider was called,
+  // returned 404, and the late sandbox override forced success — producing logs
+  // with both "verified" status AND a 404 error. Now we short-circuit immediately.
+  if (sandbox) {
+    const sandboxRecord = {
+      merchant_id: params.merchantId,
+      business_verification_id: params.businessVerificationId || null,
+      director_name: params.directorName,
+      director_role: params.directorRole,
+      masked_bvn: maskBVN(params.bvn),
+      provider_name: providerKey,
+      verification_status: "verified" as const,
+      selfie_url: selfieSignedUrl || null,
+      face_match_score: 95,
+      liveness_score: 95,
+      verification_id: `sandbox-${Date.now()}`,
+      normalized_response: { sandbox: true },
+      verification_cost: 0,
+      manual_review_required: false,
+      admin_notes: null,
+    };
+
+    try {
+      const { data: dbData, error: dbErr } = await adminClient
+        .from("business_director_verifications")
+        .insert(sandboxRecord)
+        .select("id")
+        .single();
+
+      if (dbErr) console.error("[DirectorService] Sandbox DB write error:", dbErr.message);
+
+      return {
+        success: true,
+        verificationId: dbData?.id || undefined,
+        faceMatchScore: 95,
+        status: "verified" as const,
+      };
+    } catch (err: any) {
+      return { success: false, faceMatchScore: null, status: "failed" as const, error: err?.message };
+    }
+  }
+
+  // 4. Call Provider Gateway (production only)
   let result: VerificationResult;
   try {
     const p = provider as any;
@@ -146,7 +189,7 @@ export async function verifyDirectorIdentity(params: {
       providerReference: null,
       rawResponse: {},
       errorCode: "PROVIDER_UNAVAILABLE",
-      error: err?.message || "Dojah director verification failed.",
+      error: err?.message || `${providerKey} director verification failed.`,
     };
   }
 
@@ -157,17 +200,7 @@ export async function verifyDirectorIdentity(params: {
     await updateProviderHealth(providerKey, "INSUFFICIENT_BALANCE");
   }
 
-  if (sandbox) {
-    result = {
-      ...result,
-      success: true,
-      bvnExists: true,
-      faceMatch: true,
-      matchScore: result.matchScore ?? 95,
-    };
-  }
-
-  // 4. Perform Name Match Check for director
+  // 5. Perform Name Match Check for director
   let nameMatch = true;
   let returnedFullName = "";
   if (result.success && result.returnedName) {
@@ -186,7 +219,7 @@ export async function verifyDirectorIdentity(params: {
   const finalStatus: "verified" | "failed" | "manual_review" =
     manualReview ? "manual_review" : (result.success ? "verified" : "failed");
 
-  // 5. Write to business_director_verifications
+  // 6. Write to business_director_verifications
   try {
     const { data: dbData, error: dbErr } = await adminClient
       .from("business_director_verifications")
@@ -200,7 +233,10 @@ export async function verifyDirectorIdentity(params: {
         verification_status: finalStatus,
         selfie_url: selfieSignedUrl || null,
         face_match_score: result.matchScore,
-        liveness_score: result.faceMatch ? 100 : 0,
+        // liveness_score: use the actual matchScore as a continuous score (0–100)
+        // rather than a binary 0/100. This ensures YouVerify scores are preserved
+        // identically to Dojah scores in the admin panel.
+        liveness_score: result.matchScore ?? (result.faceMatch ? 100 : 0),
         verification_id: result.providerReference,
         normalized_response: sanitizeResponse(result.rawResponse || {}),
         verification_cost: cost,

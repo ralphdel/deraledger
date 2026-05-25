@@ -2401,8 +2401,13 @@ export async function verifyRcNumberAction(merchantId: string, rcNumber: string)
   })();
 
   if (isSandbox) {
-    // Sandbox auto-pass — no provider call needed
-    await adminClient.from("merchants").update({ cac_number: rcNumber }).eq("id", merchantId);
+    // Sandbox auto-pass — no provider call needed.
+    // IMPORTANT: must also set cac_status = "verified" so that the admin reset
+    // (which clears both cac_number and cac_status) actually has something to undo.
+    await adminClient
+      .from("merchants")
+      .update({ cac_number: rcNumber, cac_status: "verified" })
+      .eq("id", merchantId);
     return { success: true };
   }
 
