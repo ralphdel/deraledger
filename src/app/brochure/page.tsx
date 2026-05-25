@@ -51,7 +51,7 @@ const slides = [
         <div className="flex flex-col sm:flex-row sm:items-center justify-between border-t border-white/5 pt-6 text-xs text-neutral-500 z-10 gap-4">
           <div>Built for growing SMEs, professional businesses, and agencies.</div>
           <div className="flex items-center gap-2 text-[#A78BFA]">
-            <span>deraledger.vercel.app</span>
+            <span>www.deraledger.com</span>
             <ExternalLink className="w-3.5 h-3.5" />
           </div>
         </div>
@@ -517,7 +517,7 @@ const slides = [
             <div className="mt-8 pt-6 border-t border-white/5 grid grid-cols-2 gap-4 text-[10px] text-neutral-500 text-left">
               <div className="flex items-center gap-1.5">
                 <Globe className="w-3.5 h-3.5 text-[#A78BFA]" />
-                <span>deraledger.vercel.app</span>
+                <span>www.deraledger.com</span>
               </div>
               <div className="flex items-center gap-1.5">
                 <Mail className="w-3.5 h-3.5 text-[#A78BFA]" />

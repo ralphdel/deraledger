@@ -61,7 +61,7 @@ export function LivenessCamera({ onComplete, onCancel, onFallback }: LivenessCam
   const [isInitializing, setIsInitializing] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
-  const [holdCountdown, setHoldCountdown] = useState(3);
+  const [holdCountdown, setHoldCountdown] = useState(5); // Configured to 5 seconds
   const [faceDetected, setFaceDetected] = useState<boolean | null>(null);
   const [justCaptured, setJustCaptured] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
@@ -186,14 +186,14 @@ export function LivenessCamera({ onComplete, onCancel, onFallback }: LivenessCam
   const startBiometricEngine = useCallback(() => {
     clearTimers();
     setStep("position");
-    setHoldCountdown(3);
+    setHoldCountdown(5); // Increased to 5s
     setFaceDetected(null);
     setJustCaptured(false);
     setLivenessProgress(0);
     blinkBaseDataRef.current = null;
 
     let alignedTicks = 0;
-    let countdownVal = 3;
+    let countdownVal = 5; // Increased to 5s
     let localStep: Step = "position";
     let blinkTicks = 0;
 
@@ -209,8 +209,8 @@ export function LivenessCamera({ onComplete, onCancel, onFallback }: LivenessCam
             alignedTicks = 0;
             localStep = "hold";
             setStep("hold");
-            setHoldCountdown(3);
-            countdownVal = 3;
+            setHoldCountdown(5);
+            countdownVal = 5;
           }
         } else {
           alignedTicks = 0;
@@ -242,10 +242,10 @@ export function LivenessCamera({ onComplete, onCancel, onFallback }: LivenessCam
             }
           }
         } else {
-          // If user moves out of oval, reset countdown back to 3 to enforce compliance
+          // If user moves out of oval, reset countdown back to 5 to enforce compliance
           alignedTicks = 0;
-          countdownVal = 3;
-          setHoldCountdown(3);
+          countdownVal = 5;
+          setHoldCountdown(5);
         }
       } else if (localStep === "blink") {
         blinkTicks++;
@@ -417,7 +417,8 @@ export function LivenessCamera({ onComplete, onCancel, onFallback }: LivenessCam
       )}
 
       {/* ── CAMERA / PREVIEW VIEWPORT ─────────────────────────────────────── */}
-      <div className="relative bg-black w-full aspect-[3/4] overflow-hidden flex items-center justify-center">
+      {/* Capped maximum height to 340px to ensure the card fits comfortably on large viewports */}
+      <div className="relative bg-black w-full aspect-[3/4] max-h-[340px] overflow-hidden flex items-center justify-center">
         
         {/* Initialization Overlay */}
         {isInitializing && !isPreview && (
@@ -561,8 +562,9 @@ export function LivenessCamera({ onComplete, onCancel, onFallback }: LivenessCam
         <canvas ref={sampleRef} className="hidden" />
       </div>
 
-      {/* ── INSTRUCTIONS PANEL ────────────────────────────────────────────── */}
-      <div className="px-5 py-4 bg-neutral-950 border-t border-white/5 z-20 flex-shrink-0">
+      {/* ── INSTRUCTIONS & BUTTONS PANEL ──────────────────────────────────── */}
+      {/* Explicit z-index and relative layout to prevent clicks from being hijacked by overlays on desktop */}
+      <div className="px-5 py-4 bg-neutral-950 border-t border-white/5 z-40 relative flex-shrink-0">
         
         {isPreview ? (
           <div className="text-center mb-4">
@@ -605,7 +607,7 @@ export function LivenessCamera({ onComplete, onCancel, onFallback }: LivenessCam
               size="sm"
               onClick={handleRetake}
               disabled={isConfirming}
-              className="flex-1 border-neutral-700 text-neutral-300 hover:text-white hover:bg-neutral-800 rounded-xl h-11 text-xs font-bold"
+              className="flex-1 border-neutral-700 text-neutral-300 hover:text-white hover:bg-neutral-800 rounded-xl h-11 text-xs font-bold pointer-events-auto"
             >
               <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
               Retake
@@ -614,7 +616,7 @@ export function LivenessCamera({ onComplete, onCancel, onFallback }: LivenessCam
               size="sm"
               onClick={handleConfirmSubmit}
               disabled={isConfirming}
-              className="flex-1 bg-[#7B2FF7] hover:bg-[#6F2CFF] text-white border-0 rounded-xl h-11 text-xs font-bold shadow-lg shadow-purple-900/30 transition-all active:scale-95"
+              className="flex-1 bg-[#7B2FF7] hover:bg-[#6F2CFF] text-white border-0 rounded-xl h-11 text-xs font-bold shadow-lg shadow-purple-900/30 transition-all active:scale-95 pointer-events-auto"
             >
               {isConfirming ? (
                 <>

@@ -10,11 +10,11 @@
  * 1. NEXT_PUBLIC_APP_URL (only if it does NOT contain "localhost" in production)
  * 2. VERCEL_PROJECT_PRODUCTION_URL  (Vercel canonical production URL)
  * 3. VERCEL_URL (Vercel deployment-specific URL — preview or production)
- * 4. Hardcoded production fallback: https://deraledger.vercel.app
+ * 4. Hardcoded production fallback: https://www.deraledger.com
  * 5. http://localhost:3000 (development only — never used in production)
  */
 
-const PRODUCTION_FALLBACK = "https://deraledger.vercel.app";
+const PRODUCTION_FALLBACK = "https://www.deraledger.com";
 
 export function getAppUrl(): string {
   const isProduction = process.env.NODE_ENV === "production";
