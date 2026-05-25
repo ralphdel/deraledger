@@ -777,19 +777,26 @@ export async function adminDeleteMerchantAction(merchantId: string) {
     await adminClient.from("audit_logs").delete().eq("target_id", merchantId);
     await adminClient.from("audit_logs").delete().eq("actor_id", merchantId);
     await adminClient.from("onboarding_sessions").delete().eq("merchant_id", merchantId).throwOnError();
-    
+
     // Some of these might fail if columns don't exist, so we don't throw on error for ones we aren't 100% sure about
     await adminClient.from("roles").delete().eq("merchant_id", merchantId);
-    
+
     await adminClient.from("merchant_team").delete().eq("merchant_id", merchantId).throwOnError();
     await adminClient.from("pending_invites").delete().eq("merchant_id", merchantId).throwOnError();
-    
+
     // Also try deleting from team_members if it's a separate table
     await adminClient.from("team_members").delete().eq("merchant_id", merchantId);
-    
+
     await adminClient.from("transactions").delete().eq("merchant_id", merchantId).throwOnError();
     await adminClient.from("manual_payments").delete().eq("merchant_id", merchantId).throwOnError();
     await adminClient.from("item_catalog").delete().eq("merchant_id", merchantId);
+
+    // ── KYC / Verification data ───────────────────────────────────────────────
+    // These tables hold a merchant_id FK and MUST be cleared before the
+    // merchants row is removed, otherwise Postgres throws a FK violation.
+    await adminClient.from("verification_logs").delete().eq("merchant_id", merchantId);
+    await adminClient.from("business_director_verifications").delete().eq("merchant_id", merchantId);
+    await adminClient.from("verification_rate_limits").delete().eq("merchant_id", merchantId);
 
     // Fetch invoices to delete associated line_items
     const { data: invoices } = await adminClient.from("invoices").select("id").eq("merchant_id", merchantId);
@@ -800,7 +807,7 @@ export async function adminDeleteMerchantAction(merchantId: string) {
 
     await adminClient.from("invoices").delete().eq("merchant_id", merchantId).throwOnError();
     await adminClient.from("clients").delete().eq("merchant_id", merchantId).throwOnError();
-    
+
     const { error } = await adminClient.from("merchants").delete().eq("id", merchantId);
     if (error) {
       console.error("Failed to delete merchant row:", error);
