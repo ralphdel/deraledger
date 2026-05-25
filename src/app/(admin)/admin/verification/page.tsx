@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import {
   ShieldCheck, ShieldAlert, ShieldX, Clock, CheckCircle, XCircle,
-  Search, Eye, RotateCcw, UploadCloud, ExternalLink,
+  Search, Eye, RotateCcw, UploadCloud, ExternalLink, ChevronDown, ChevronUp, User, Info, Loader
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -41,6 +41,11 @@ export default function VerificationQueuePage() {
   const [actionLoading, setActionLoading] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
+
+  const [directors, setDirectors] = useState<any[]>([]);
+  const [directorsLoading, setDirectorsLoading] = useState(false);
+  const [directorsExpanded, setDirectorsExpanded] = useState(true);
+  const [directorNotes, setDirectorNotes] = useState<Record<string, string>>({});
 
   useEffect(() => {
     loadMerchants();
@@ -168,6 +173,53 @@ export default function VerificationQueuePage() {
     setSelectedMerchant(m);
     setReviewNotes(""); setActionReason(""); setActionMode("idle");
     setReviewError(null); setActionSuccess(null);
+
+    const plan = m.subscription_plan || m.merchant_tier || "starter";
+    if (plan === "corporate") {
+      setDirectorsLoading(true);
+      const sb = createClient();
+      sb.from("business_director_verifications")
+        .select("*")
+        .eq("merchant_id", m.id)
+        .then(({ data }) => {
+          setDirectors(data || []);
+          setDirectorsLoading(false);
+        });
+    } else {
+      setDirectors([]);
+    }
+  };
+
+  const handleApproveDirector = async (id: string, notes: string) => {
+    const { adminManualReviewDirectorAction } = await import("@/lib/actions");
+    const res = await adminManualReviewDirectorAction({
+      directorVerificationId: id,
+      status: "verified",
+      adminNotes: notes || "Manually approved by admin.",
+    });
+    if (res.success) {
+      const sb = createClient();
+      const { data } = await sb.from("business_director_verifications").select("*").eq("merchant_id", selectedMerchant!.id);
+      setDirectors(data || []);
+    } else {
+      setReviewError("Failed to approve director: " + res.error);
+    }
+  };
+
+  const handleRejectDirector = async (id: string, notes: string) => {
+    const { adminManualReviewDirectorAction } = await import("@/lib/actions");
+    const res = await adminManualReviewDirectorAction({
+      directorVerificationId: id,
+      status: "failed",
+      adminNotes: notes || "Manually rejected by admin.",
+    });
+    if (res.success) {
+      const sb = createClient();
+      const { data } = await sb.from("business_director_verifications").select("*").eq("merchant_id", selectedMerchant!.id);
+      setDirectors(data || []);
+    } else {
+      setReviewError("Failed to reject director: " + res.error);
+    }
   };
 
   const handleViewDocument = async (pathOrUrl: string) => {
@@ -330,6 +382,147 @@ export default function VerificationQueuePage() {
                           ))}
                         </div>
                       </div>
+
+                      {/* Corporate Directors & Shareholders Panel */}
+                      {(selectedMerchant.subscription_plan === "corporate" || selectedMerchant.merchant_tier === "corporate") && (
+                        <div className="border border-neutral-200 rounded-xl overflow-hidden bg-white shadow-sm">
+                          <button
+                            type="button"
+                            onClick={() => setDirectorsExpanded(!directorsExpanded)}
+                            className="w-full flex items-center justify-between p-3.5 bg-neutral-50/50 hover:bg-neutral-50 border-b border-neutral-100 transition-colors"
+                          >
+                            <span className="font-bold text-sm text-neutral-800 flex items-center gap-2">
+                              <User className="h-4.5 w-4.5 text-[#7B2FF7]" />
+                              CAC Corporate Directors & KYB Roster
+                              <Badge className="ml-1 bg-[#E9D5FF] text-[#6F2CFF] text-[10px] font-extrabold border-0">
+                                {directors.length} Listed
+                              </Badge>
+                            </span>
+                            {directorsExpanded ? (
+                              <ChevronUp className="h-4 w-4 text-neutral-400" />
+                            ) : (
+                              <ChevronDown className="h-4 w-4 text-neutral-400" />
+                            )}
+                          </button>
+
+                          {directorsExpanded && (
+                            <div className="p-3.5 space-y-3.5 divide-y divide-neutral-100">
+                              {directorsLoading ? (
+                                <div className="py-6 flex flex-col items-center justify-center gap-2 text-neutral-400 text-xs">
+                                  <Loader className="h-5 w-5 animate-spin text-[#7B2FF7]" />
+                                  <span>Loading director KYC statuses...</span>
+                                </div>
+                              ) : directors.length === 0 ? (
+                                <div className="py-6 text-center text-xs text-neutral-400 flex items-center justify-center gap-2">
+                                  <Info className="h-4 w-4 text-neutral-300" />
+                                  <span>No director identity verification submitted for this account yet.</span>
+                                </div>
+                              ) : (
+                                directors.map((dir) => (
+                                  <div key={dir.id} className="pt-3.5 first:pt-0 space-y-3">
+                                    <div className="flex items-start justify-between gap-3">
+                                      <div className="space-y-1">
+                                        <h5 className="font-semibold text-sm text-neutral-900 flex items-center gap-1.5">
+                                          {dir.director_name}
+                                          <span className="text-[10px] bg-neutral-100 text-neutral-600 px-1.5 py-0.5 rounded capitalize font-medium">
+                                            {dir.director_role?.replace(/_/g, " ")}
+                                          </span>
+                                        </h5>
+                                        <p className="text-xs text-neutral-400 font-mono">
+                                          BVN: {dir.masked_bvn || "—"} · Provider: {dir.provider_name || "—"}
+                                        </p>
+                                        {dir.selfie_url && (
+                                          <button
+                                            type="button"
+                                            onClick={() => handleViewDocument(dir.selfie_url)}
+                                            className="text-xs text-[#7B2FF7] hover:underline flex items-center gap-1 font-semibold"
+                                          >
+                                            View Selfie <ExternalLink className="h-3 w-3" />
+                                          </button>
+                                        )}
+                                      </div>
+
+                                      <div className="flex flex-col items-end gap-1.5">
+                                        <Badge
+                                          variant="outline"
+                                          className={`text-[10px] font-bold border-2 capitalize ${
+                                            dir.verification_status === "verified"
+                                              ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                              : dir.verification_status === "failed"
+                                              ? "bg-red-50 text-red-700 border-red-200"
+                                              : "bg-amber-50 text-amber-700 border-amber-200"
+                                          }`}
+                                        >
+                                          {dir.verification_status?.replace(/_/g, " ")}
+                                        </Badge>
+                                        {dir.face_match_score !== null && (
+                                          <span className="text-[10px] text-neutral-400 font-mono">
+                                            Match Score: {dir.face_match_score}%
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    {/* Action panel if manual review or failed/pending */}
+                                    {dir.verification_status !== "verified" && (
+                                      <div className="bg-neutral-50 rounded-lg p-2.5 border border-neutral-200/60 space-y-2">
+                                        <span className="text-[10px] font-bold text-neutral-500 uppercase tracking-wider block">
+                                          Manual Override Action
+                                        </span>
+                                        
+                                        <div className="flex gap-2">
+                                          <input
+                                            type="text"
+                                            placeholder="Reason or notes for manual override..."
+                                            value={directorNotes[dir.id] || ""}
+                                            onChange={(e) =>
+                                              setDirectorNotes({
+                                                ...directorNotes,
+                                                [dir.id]: e.target.value,
+                                              })
+                                            }
+                                            className="w-full text-xs rounded border border-neutral-300 px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-[#7B2FF7] bg-white text-neutral-800"
+                                          />
+                                          
+                                          <Button
+                                            type="button"
+                                            size="sm"
+                                            onClick={() =>
+                                              handleApproveDirector(dir.id, directorNotes[dir.id] || "")
+                                            }
+                                            className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs h-8"
+                                          >
+                                            Approve
+                                          </Button>
+                                          
+                                          <Button
+                                            type="button"
+                                            size="sm"
+                                            variant="destructive"
+                                            onClick={() =>
+                                              handleRejectDirector(dir.id, directorNotes[dir.id] || "")
+                                            }
+                                            className="text-white font-bold text-xs h-8"
+                                          >
+                                            Reject
+                                          </Button>
+                                        </div>
+                                      </div>
+                                    )}
+
+                                    {dir.admin_notes && (
+                                      <div className="bg-neutral-50 rounded-lg p-2.5 border border-dashed text-xs text-neutral-600 leading-relaxed font-mono">
+                                        <span className="font-bold text-neutral-800 block mb-0.5">Admin Audit Notes:</span>
+                                        {dir.admin_notes}
+                                      </div>
+                                    )}
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
 
                       {/* Review notes */}
                       <div className="space-y-1.5">

@@ -645,3 +645,127 @@ export async function sendSubscriptionCancelledEmail(
     htmlContent,
   });
 }
+
+// ── KYC Compliance Admin Alerts (v2.1) ───────────────────────────────────────
+
+/**
+ * Alert sent to system administrators when a KYC provider goes down.
+ */
+export async function sendProviderDownAlert(providerName: string, failureCount: number) {
+  const htmlContent = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #111827; border: 1px solid #E5E7EB; border-radius: 8px; overflow: hidden;">
+      <div style="background-color: #DC2626; padding: 20px; text-align: center;">
+        <h2 style="color: white; margin: 0;">CRITICAL: KYC Provider Downtime Alert</h2>
+      </div>
+      <div style="padding: 30px;">
+        <p>Hello Admin,</p>
+        <p>This is an automated system alert from Deraledger KYC Engine.</p>
+        <div style="background-color: #FEF2F2; border: 1px solid #FECACA; padding: 16px; border-radius: 6px; margin: 20px 0; color: #991B1B;">
+          <p style="margin: 4px 0;"><strong>Provider Name:</strong> ${providerName.toUpperCase()}</p>
+          <p style="margin: 4px 0;"><strong>Consecutive Failures:</strong> ${failureCount}</p>
+          <p style="margin: 4px 0;"><strong>Status:</strong> DOWN (Disabled or Routed to Fallback)</p>
+          <p style="margin: 4px 0;"><strong>Timestamp:</strong> ${new Date().toISOString()}</p>
+        </div>
+        <p>The system has dynamically adjusted the priority queue to bypass this provider. Please log into the admin dashboard to run manual diagnostics.</p>
+      </div>
+    </div>
+  `;
+
+  return sendEmail({
+    sender: { name: "Deraledger Monitor", email: ADMIN_EMAIL },
+    to: [{ email: ADMIN_EMAIL }],
+    subject: `[ALERT] KYC Provider ${providerName.toUpperCase()} is DOWN!`,
+    htmlContent,
+  });
+}
+
+/**
+ * Alert sent when the verification retry queue size exceeds healthy bounds or has abandoned items.
+ */
+export async function sendRetryQueueOverflowAlert(pendingCount: number, abandonedCount: number) {
+  const htmlContent = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #111827; border: 1px solid #E5E7EB; border-radius: 8px; overflow: hidden;">
+      <div style="background-color: #EA580C; padding: 20px; text-align: center;">
+        <h2 style="color: white; margin: 0;">WARNING: KYC Retry Queue Overflow</h2>
+      </div>
+      <div style="padding: 30px;">
+        <p>Hello Admin,</p>
+        <p>The KYC Retry Queue is experiencing high volume or high failures.</p>
+        <div style="background-color: #FFF7ED; border: 1px solid #FED7AA; padding: 16px; border-radius: 6px; margin: 20px 0; color: #C2410C;">
+          <p style="margin: 4px 0;"><strong>Pending Retry Items:</strong> ${pendingCount}</p>
+          <p style="margin: 4px 0;"><strong>Abandoned Items (Max Retries Exhausted):</strong> ${abandonedCount}</p>
+          <p style="margin: 4px 0;"><strong>Timestamp:</strong> ${new Date().toISOString()}</p>
+        </div>
+        <p>This typically indicates extended API issues with one or more KYC providers. Please review the Retry Queue in the Admin Panel.</p>
+      </div>
+    </div>
+  `;
+
+  return sendEmail({
+    sender: { name: "Deraledger Monitor", email: ADMIN_EMAIL },
+    to: [{ email: ADMIN_EMAIL }],
+    subject: `[WARNING] KYC Retry Queue Overflow Alert`,
+    htmlContent,
+  });
+}
+
+/**
+ * Alert sent when a cost spike is detected (e.g. >2x average daily spend).
+ */
+export async function sendCostSpikeAlert(provider: string, currentCost: number, avgCost: number, multiplier: number) {
+  const htmlContent = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #111827; border: 1px solid #E5E7EB; border-radius: 8px; overflow: hidden;">
+      <div style="background-color: #DC2626; padding: 20px; text-align: center;">
+        <h2 style="color: white; margin: 0;">ALERT: KYC Verification Cost Spike</h2>
+      </div>
+      <div style="padding: 30px;">
+        <p>Hello Admin,</p>
+        <p>An anomalous spike in KYC verification costs has been detected in the last 24 hours.</p>
+        <div style="background-color: #FEF2F2; border: 1px solid #FECACA; padding: 16px; border-radius: 6px; margin: 20px 0; color: #991B1B;">
+          <p style="margin: 4px 0;"><strong>Target Provider:</strong> ${provider.toUpperCase()}</p>
+          <p style="margin: 4px 0;"><strong>Last 24h Total Cost:</strong> ₦${currentCost.toLocaleString()}</p>
+          <p style="margin: 4px 0;"><strong>7-Day Daily Average Cost:</strong> ₦${avgCost.toLocaleString()}</p>
+          <p style="margin: 4px 0;"><strong>Spike Multiplier:</strong> ${multiplier}x</p>
+        </div>
+        <p>Please check the cost monitoring dashboard for detailed merchant-by-merchant cost aggregation to rule out malicious attempts or credential abuse.</p>
+      </div>
+    </div>
+  `;
+
+  return sendEmail({
+    sender: { name: "Deraledger Monitor", email: ADMIN_EMAIL },
+    to: [{ email: ADMIN_EMAIL }],
+    subject: `[ALERT] KYC Cost Spike Detected: ${multiplier}x increase!`,
+    htmlContent,
+  });
+}
+
+/**
+ * Alert sent when a provider has a high failure rate in a given window.
+ */
+export async function sendHighFailureRateAlert(provider: string, failureRate: number, period: string) {
+  const htmlContent = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #111827; border: 1px solid #E5E7EB; border-radius: 8px; overflow: hidden;">
+      <div style="background-color: #D97706; padding: 20px; text-align: center;">
+        <h2 style="color: white; margin: 0;">WARNING: High KYC Failure Rate</h2>
+      </div>
+      <div style="padding: 30px;">
+        <p>Hello Admin,</p>
+        <p>A high failure rate has been detected for one of the active KYC providers.</p>
+        <div style="background-color: #FFFBEB; border: 1px solid #FDE68A; padding: 16px; border-radius: 6px; margin: 20px 0; color: #B45309;">
+          <p style="margin: 4px 0;"><strong>Provider:</strong> ${provider.toUpperCase()}</p>
+          <p style="margin: 4px 0;"><strong>Failure Rate:</strong> ${(failureRate * 100).toFixed(1)}%</p>
+          <p style="margin: 4px 0;"><strong>Time Window:</strong> ${period}</p>
+        </div>
+        <p>Please verify that the credentials are valid and that there are no schema or API structure changes from the provider.</p>
+      </div>
+    </div>
+  `;
+
+  return sendEmail({
+    sender: { name: "Deraledger Monitor", email: ADMIN_EMAIL },
+    to: [{ email: ADMIN_EMAIL }],
+    subject: `[WARNING] High KYC Failure Rate on ${provider.toUpperCase()}`,
+    htmlContent,
+  });
+}

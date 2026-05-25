@@ -1941,14 +1941,22 @@ export async function updateReferenceAction(data: {
 export async function submitDojahKycAction(params: {
   merchantId: string;
   bvn?: string;
-  selfieBase64?: string | string[];
-  selfieFileName?: string | string[];
+  selfieBase64?: string;
+  selfieFileName?: string;
   cacDocumentName?: string;
   cacFileBase64?: string;
   utilityDocumentName?: string;
   utilityFileBase64?: string;
 }) {
   const adminClient = getServiceClient();
+
+  // Enforce single confirmed selfie image constraint
+  if (Array.isArray(params.selfieBase64) || Array.isArray(params.selfieFileName)) {
+    return {
+      success: false,
+      error: "Only one confirmed selfie image is accepted.",
+    };
+  }
 
   // Rate limiting: max 5 attempts
   const { data: merchant } = await adminClient
@@ -1988,31 +1996,9 @@ export async function submitDojahKycAction(params: {
 
     // Only run BVN+Selfie verification if a new selfie is provided
     if (params.bvn && params.selfieBase64 && params.selfieFileName) {
-      let primaryBase64 = "";
-      let primaryStoragePath = "";
-
-      // Handle multiple liveness frames or single upload
-      if (Array.isArray(params.selfieBase64) && Array.isArray(params.selfieFileName)) {
-        primaryBase64 = params.selfieBase64[0]; // "straight face" frame used for verification
-        // Store all liveness frames (unchanged from original logic)
-        const filenames = [];
-        for (let i = 0; i < params.selfieBase64.length; i++) {
-          const buffer = Buffer.from(params.selfieBase64[i], "base64");
-          const filename = `${params.merchantId}/${params.selfieFileName[i]}`;
-          await adminClient.storage.from("kyc-documents").upload(filename, buffer, {
-            contentType: "image/jpeg",
-            upsert: true,
-          });
-          filenames.push(filename);
-        }
-        finalSelfieFileName = JSON.stringify(filenames);
-        primaryStoragePath = `${params.merchantId}/${params.selfieFileName[0]}`;
-      } else {
-        primaryBase64 = params.selfieBase64 as string;
-        finalSelfieFileName = params.selfieFileName as string;
-        primaryStoragePath = `${params.merchantId}/${finalSelfieFileName}`;
-        // Single frame upload — VerificationService will also upload, but upsert is safe
-      }
+      const primaryBase64 = params.selfieBase64;
+      const finalSelfieFileName = params.selfieFileName;
+      const primaryStoragePath = `${params.merchantId}/${finalSelfieFileName}`;
 
       // ── Route through VerificationService (provider-agnostic) ──────────────
       // VerificationService handles: storage-first upload for Youverify URL,
@@ -2842,5 +2828,36 @@ export async function adminUpdateDisputeAction(disputeId: string, updates: any) 
 
   if (error) return { success: false, error: error.message };
   return { success: true };
+}
+
+// ── Director KYB Server Actions ──────────────────────────────────────────────
+
+export async function verifyDirectorAction(params: {
+  merchantId: string;
+  businessVerificationId?: string;
+  directorName: string;
+  directorRole: "director" | "shareholder" | "beneficial_owner" | "signatory" | "proprietor" | "partner" | "trustee";
+  bvn: string;
+  selfieBase64: string;
+}) {
+  const guard = await requireMerchantOwner(params.merchantId);
+  if (!guard.permitted) return { success: false, error: guard.error, status: "failed" as const };
+
+  const { verifyDirectorIdentity } = await import("@/lib/services/director-verification.service");
+  const result = await verifyDirectorIdentity(params);
+  return result;
+}
+
+export async function adminManualReviewDirectorAction(params: {
+  directorVerificationId: string;
+  status: "verified" | "failed";
+  adminNotes: string;
+}) {
+  const guard = await requireSuperAdmin();
+  if (guard.error) return guard.error;
+
+  const { updateDirectorManualStatus } = await import("@/lib/services/director-verification.service");
+  const result = await updateDirectorManualStatus(params);
+  return result;
 }
 

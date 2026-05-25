@@ -3,7 +3,8 @@
 import { useState, useEffect, useTransition } from "react";
 import { Country, State } from "country-state-city";
 import Link from "next/link";
-import { Save, Shield, Upload, FileCheck, AlertTriangle, CheckCircle, Clock, ArrowRight, ExternalLink, Lock, Camera } from "lucide-react";
+import { Save, Shield, Upload, FileCheck, AlertTriangle, CheckCircle, Clock, ArrowRight, ExternalLink, Lock, Camera, User, Plus, Info } from "lucide-react";
+import DirectorSelfieModal from "@/components/kyc/director-selfie-modal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -62,6 +63,33 @@ export default function SettingsPage() {
   const [showLivenessCamera, setShowLivenessCamera] = useState(false);
   const [livenessFallback, setLivenessFallback] = useState(false);
   const [isBvnLocked, setIsBvnLocked] = useState(false);
+
+  // Director KYB states
+  const [directors, setDirectors] = useState<any[]>([]);
+  const [directorsLoading, setDirectorsLoading] = useState(false);
+  const [showVerifyDirectorModal, setShowVerifyDirectorModal] = useState(false);
+  const [newDirectorName, setNewDirectorName] = useState("");
+  const [newDirectorRole, setNewDirectorRole] = useState<"director" | "shareholder" | "beneficial_owner" | "signatory" | "proprietor" | "partner" | "trustee">("director");
+  const [activeDirectorToVerify, setActiveDirectorToVerify] = useState<{ name: string; role: typeof newDirectorRole } | null>(null);
+
+  const loadDirectors = async (merchantId: string) => {
+    setDirectorsLoading(true);
+    try {
+      const supabase = createClient();
+      const { data, error } = await supabase
+        .from("business_director_verifications")
+        .select("*")
+        .eq("merchant_id", merchantId)
+        .order("created_at", { ascending: true });
+      if (!error && data) {
+        setDirectors(data);
+      }
+    } catch (err) {
+      console.error("Failed to load directors", err);
+    } finally {
+      setDirectorsLoading(false);
+    }
+  };
 
   const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -161,6 +189,10 @@ export default function SettingsPage() {
         setCacNumber(m.cac_number || "");
         setLogoUrl(m.logo_url || null);
         setBusinessType(m.business_type || "sole_proprietorship");
+
+        if (tier === "corporate" && m.id) {
+          loadDirectors(m.id);
+        }
       }
       setLoading(false);
     });
@@ -258,8 +290,8 @@ export default function SettingsPage() {
       let finalSelfieFileName: string | string[] | undefined = undefined;
 
       if (livenessImages.length > 0) {
-        finalSelfieBase64 = livenessImages;
-        finalSelfieFileName = livenessImages.map((_, i) => `liveness-${i}-${Date.now()}.jpg`);
+        finalSelfieBase64 = livenessImages[0];
+        finalSelfieFileName = `liveness-${Date.now()}.jpg`;
       } else if (selfieFile) {
         finalSelfieBase64 = await toBase64(selfieFile);
         finalSelfieFileName = selfieFile.name;
@@ -554,6 +586,13 @@ export default function SettingsPage() {
                     placeholder="22XXXXXXXXX"
                     value={bvnNumber}
                     onChange={(e) => setBvnNumber(e.target.value.replace(/\D/g, ""))}
+                    onBlur={() => {
+                      if (bvnNumber && bvnNumber.length !== 11) {
+                        setKycError("BVN must be exactly 11 digits.");
+                      } else {
+                        setKycError(null);
+                      }
+                    }}
                     className="border-2 border-purp-200 bg-white h-11 max-w-xs"
                     disabled={profileIncomplete || merchant?.bvn_status === "verified" || merchant?.bvn_status === "pending" || isBvnLocked}
                   />
@@ -618,7 +657,7 @@ export default function SettingsPage() {
                   
                   {(livenessImages.length > 0 || selfieFile || merchant?.selfie_url) && (
                     <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700 text-xs whitespace-nowrap">
-                      <CheckCircle className="mr-1 h-3 w-3" /> {merchant?.selfie_url ? "Submitted" : (livenessImages.length > 0 ? "3 Images Captured" : "Selected")}
+                      <CheckCircle className="mr-1 h-3 w-3" /> {merchant?.selfie_url ? "Submitted" : (livenessImages.length > 0 ? "1 Image Confirmed" : "Selected")}
                     </Badge>
                   )}
                 </div>
@@ -734,6 +773,140 @@ export default function SettingsPage() {
                 </div>
               </div>
             ) : null}
+
+            {/* Corporate Directors KYB Roster — Business Plan only */}
+            {isCorporate && merchant?.cac_number && (
+              <div className="space-y-4 pt-4 border-t border-purp-200">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label className="text-sm font-semibold flex items-center gap-2 text-purp-900">
+                      <User className="h-4.5 w-4.5 text-purp-700" />
+                      Corporate Directors & Shareholder KYB
+                    </Label>
+                    <p className="text-xs text-neutral-500 mt-0.5">
+                      Verify legal identities of business directors and stakeholders as required by CAC regulation.
+                    </p>
+                  </div>
+                  <Badge variant="secondary" className="bg-purp-100 text-purp-700 font-bold text-xs border-0">
+                    {directors.length} Verified
+                  </Badge>
+                </div>
+
+                {directorsLoading ? (
+                  <div className="p-6 text-center text-xs text-neutral-400">
+                    Loading KYB roster...
+                  </div>
+                ) : directors.length === 0 ? (
+                  <div className="p-5 border border-dashed rounded-xl bg-white text-center text-xs text-neutral-400 space-y-1">
+                    <Info className="h-5 w-5 mx-auto text-neutral-300" />
+                    <p className="font-medium text-neutral-600">No directors verified yet</p>
+                    <p className="max-w-xs mx-auto text-[11px]">
+                      Add and verify at least one corporate director/shareholder to complete your Business KYB profile.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {directors.map((dir) => (
+                      <div key={dir.id} className="p-3 bg-white border rounded-xl flex items-center justify-between gap-3 hover:border-purp-200 transition-colors">
+                        <div className="min-w-0">
+                          <span className="text-xs font-bold text-neutral-800 block truncate">
+                            {dir.director_name}
+                          </span>
+                          <span className="text-[10px] bg-neutral-100 text-neutral-600 px-1.5 py-0.5 rounded capitalize font-semibold inline-block mt-0.5">
+                            {dir.director_role?.replace(/_/g, " ")}
+                          </span>
+                        </div>
+                        <Badge
+                          variant="outline"
+                          className={`text-[9px] font-bold px-1.5 border capitalize shrink-0 ${
+                            dir.verification_status === "verified"
+                              ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                              : dir.verification_status === "failed"
+                              ? "bg-red-50 text-red-700 border-red-200"
+                              : "bg-amber-50 text-amber-700 border-amber-200"
+                          }`}
+                        >
+                          {dir.verification_status?.replace(/_/g, " ")}
+                        </Badge>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Add Director Form or trigger button */}
+                {showVerifyDirectorModal ? (
+                  <div className="p-4 bg-purp-50/50 border-2 border-purp-200 border-dashed rounded-xl space-y-3">
+                    <span className="text-xs font-bold text-purp-900 block">Add Director / Major Shareholder</span>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <Label className="text-[10px] font-bold text-neutral-500 uppercase">Full Name (Matches BVN)</Label>
+                        <Input
+                          type="text"
+                          placeholder="e.g. Adebayo Olanrewaju"
+                          value={newDirectorName}
+                          onChange={(e) => setNewDirectorName(e.target.value)}
+                          className="bg-white h-9 text-xs"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-[10px] font-bold text-neutral-500 uppercase">Company Role</Label>
+                        <select
+                          value={newDirectorRole}
+                          onChange={(e: any) => setNewDirectorRole(e.target.value)}
+                          className="w-full h-9 rounded border border-neutral-200 bg-white px-3 py-1.5 text-xs text-neutral-900 focus:outline-none focus:ring-1 focus:ring-purp-500"
+                        >
+                          <option value="director">Director</option>
+                          <option value="shareholder">Major Shareholder</option>
+                          <option value="beneficial_owner">Ultimate Beneficial Owner</option>
+                          <option value="signatory">Authorized Signatory</option>
+                          <option value="proprietor">Proprietor</option>
+                          <option value="partner">Partner</option>
+                          <option value="trustee">Trustee</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="flex gap-2 justify-end pt-1">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setShowVerifyDirectorModal(false)}
+                        className="text-xs h-8 text-neutral-500 hover:text-neutral-700"
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={!newDirectorName.trim()}
+                        onClick={() => {
+                          setActiveDirectorToVerify({
+                            name: newDirectorName,
+                            role: newDirectorRole,
+                          });
+                        }}
+                        className="bg-purp-900 hover:bg-purp-800 text-white font-bold text-xs h-8 flex gap-1.5"
+                      >
+                        <Camera className="h-3.5 w-3.5" /> Continue to Selfie Verification
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      setNewDirectorName("");
+                      setNewDirectorRole("director");
+                      setShowVerifyDirectorModal(true);
+                    }}
+                    className="w-full h-10 border-2 border-dashed border-purp-200 text-purp-700 font-bold text-xs flex gap-1.5 hover:bg-purp-50"
+                  >
+                    <Plus className="h-4 w-4" /> Add & Verify a Director / Shareholder
+                  </Button>
+                )}
+              </div>
+            )}
           </div>
 
           <Button
@@ -1193,6 +1366,23 @@ export default function SettingsPage() {
             />
           </div>
         </div>
+      )}
+
+      {activeDirectorToVerify && merchant && (
+        <DirectorSelfieModal
+          merchantId={merchant.id}
+          directorName={activeDirectorToVerify.name}
+          directorRole={activeDirectorToVerify.role}
+          onClose={() => {
+            setActiveDirectorToVerify(null);
+            setShowVerifyDirectorModal(false);
+          }}
+          onSuccess={() => {
+            loadDirectors(merchant.id);
+            setActiveDirectorToVerify(null);
+            setShowVerifyDirectorModal(false);
+          }}
+        />
       )}
 
     </div>
