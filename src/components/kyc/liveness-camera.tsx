@@ -15,24 +15,24 @@ type Step = "position" | "hold" | "blink" | "preview";
 const STEPS: { id: Step; label: string; icon: React.ReactNode; instruction: string; sub: string }[] = [
   {
     id: "position",
-    label: "Position",
+    label: "Center Face",
     icon: <Scan className="h-4 w-4" />,
-    instruction: "Center your face in the oval",
-    sub: "Look straight ahead and fill the frame",
+    instruction: "Align your face in the oval",
+    sub: "Action 1 of 3: Look straight at the camera",
   },
   {
     id: "hold",
     label: "Hold Still",
     icon: <Eye className="h-4 w-4" />,
-    instruction: "Hold still — capturing…",
-    sub: "Keep your face steady inside the oval",
+    instruction: "Hold perfectly still now",
+    sub: "Action 2 of 3: Keep your head inside the oval",
   },
   {
     id: "blink",
     label: "Smile/Blink",
     icon: <Smile className="h-4 w-4" />,
     instruction: "Blink naturally or smile warmly",
-    sub: "Confirming liveness and presence",
+    sub: "Action 3 of 3: Verifying active facial liveness",
   },
   {
     id: "preview",
@@ -61,12 +61,12 @@ export function LivenessCamera({ onComplete, onCancel, onFallback }: LivenessCam
   const [isInitializing, setIsInitializing] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
-  const [holdCountdown, setHoldCountdown] = useState(5); // Configured to 5 seconds
+  const [holdCountdown, setHoldCountdown] = useState(5); // Dynamic 5s countdown for each step
   const [faceDetected, setFaceDetected] = useState<boolean | null>(null);
   const [justCaptured, setJustCaptured] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
 
-  // Stats for the blink/smile movement difference visual meter
+  // Liveness delta indicator progress percentage
   const [livenessProgress, setLivenessProgress] = useState(0);
 
   const stopStream = useCallback(() => {
@@ -110,7 +110,6 @@ export function LivenessCamera({ onComplete, onCancel, onFallback }: LivenessCam
       let n = 0;
 
       for (let i = 0; i < data.length; i += 4) {
-        // Compute standard relative luminance
         const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
         sum += lum;
         sumSq += lum * lum;
@@ -121,7 +120,6 @@ export function LivenessCamera({ onComplete, onCancel, onFallback }: LivenessCam
       const variance = sumSq / n - mean * mean;
       return variance > MIN_VARIANCE;
     } catch (e) {
-      // Safety bypass if canvas image extraction fails
       return true;
     }
   }, []);
@@ -172,28 +170,27 @@ export function LivenessCamera({ onComplete, onCancel, onFallback }: LivenessCam
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    // Mirror horizontal alignment for a natural-feeling capture
     ctx.translate(canvas.width, 0);
     ctx.scale(-1, 1);
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    ctx.setTransform(1, 0, 0, 1, 0, 0); // reset transforms
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
 
     const base64 = canvas.toDataURL("image/jpeg", 0.88).split(",")[1];
     setCapturedImage(base64);
   }, []);
 
-  // Automated Biometric State Machine
+  // Sequential Biometric State Machine
   const startBiometricEngine = useCallback(() => {
     clearTimers();
     setStep("position");
-    setHoldCountdown(5); // Increased to 5s
+    setHoldCountdown(5); // Action 1 starts at 5s
     setFaceDetected(null);
     setJustCaptured(false);
     setLivenessProgress(0);
     blinkBaseDataRef.current = null;
 
     let alignedTicks = 0;
-    let countdownVal = 5; // Increased to 5s
+    let countdownVal = 5;
     let localStep: Step = "position";
     let blinkTicks = 0;
 
@@ -204,37 +201,21 @@ export function LivenessCamera({ onComplete, onCancel, onFallback }: LivenessCam
       if (localStep === "position") {
         if (present) {
           alignedTicks++;
-          // If face is aligned/centered for 800ms (approx 7 ticks), auto-advance to Hold
-          if (alignedTicks >= 7) {
-            alignedTicks = 0;
-            localStep = "hold";
-            setStep("hold");
-            setHoldCountdown(5);
-            countdownVal = 5;
-          }
-        } else {
-          alignedTicks = 0;
-        }
-      } else if (localStep === "hold") {
-        if (present) {
-          alignedTicks++;
-          // Every 1 second (approx 8 ticks) decrement hold countdown
+          // Every 1 second (approx 8 ticks) decrement countdown
           if (alignedTicks >= 8) {
             alignedTicks = 0;
             countdownVal--;
             setHoldCountdown(countdownVal);
 
             if (countdownVal <= 0) {
-              // Capture photo at end of hold countdown
+              // Action 1 complete: auto-capture frame 1 and advance
               setJustCaptured(true);
               captureFrame();
-
-              // Advance to Blink/Smile step
-              localStep = "blink";
-              setStep("blink");
-              blinkTicks = 0;
-              blinkBaseDataRef.current = null;
-              setLivenessProgress(0);
+              
+              localStep = "hold";
+              setStep("hold");
+              countdownVal = 5;
+              setHoldCountdown(5);
 
               setTimeout(() => {
                 setJustCaptured(false);
@@ -242,14 +223,48 @@ export function LivenessCamera({ onComplete, onCancel, onFallback }: LivenessCam
             }
           }
         } else {
-          // If user moves out of oval, reset countdown back to 5 to enforce compliance
+          // Reset Action 1 countdown back to 5 if face is lost
+          alignedTicks = 0;
+          countdownVal = 5;
+          setHoldCountdown(5);
+        }
+      } else if (localStep === "hold") {
+        if (present) {
+          alignedTicks++;
+          // Every 1 second (approx 8 ticks) decrement countdown
+          if (alignedTicks >= 8) {
+            alignedTicks = 0;
+            countdownVal--;
+            setHoldCountdown(countdownVal);
+
+            if (countdownVal <= 0) {
+              // Action 2 complete: auto-capture frame 2 and advance
+              setJustCaptured(true);
+              captureFrame();
+
+              localStep = "blink";
+              setStep("blink");
+              blinkTicks = 0;
+              blinkBaseDataRef.current = null;
+              setLivenessProgress(0);
+              countdownVal = 5;
+              setHoldCountdown(5);
+
+              setTimeout(() => {
+                setJustCaptured(false);
+              }, 400);
+            }
+          }
+        } else {
+          // Reset Action 2 countdown back to 5 if face is lost
           alignedTicks = 0;
           countdownVal = 5;
           setHoldCountdown(5);
         }
       } else if (localStep === "blink") {
         blinkTicks++;
-        // Capture baseline face region after 4 ticks (approx 500ms) to ensure stream settles
+        
+        // Capture baseline face region after 4 ticks (approx 500ms) to ensure video settles
         if (blinkBaseDataRef.current === null && blinkTicks === 4) {
           blinkBaseDataRef.current = getFaceRegionData();
         }
@@ -263,17 +278,31 @@ export function LivenessCamera({ onComplete, onCancel, onFallback }: LivenessCam
             const progress = Math.min(100, (diff / LIVENESS_DIFF_THRESHOLD) * 100);
             setLivenessProgress(progress);
 
-            // Spikes above threshold indicate an active smile/blink (liveness confirmed)
+            // Spikes above threshold indicate liveness success
             if (diff >= LIVENESS_DIFF_THRESHOLD) {
-              clearTimers();
-              setJustCaptured(true);
-              captureFrame(); // Capture final smiling/blinking selfie
+              alignedTicks++;
+              
+              // Incrementally tick down countdown if liveness is maintained
+              if (alignedTicks >= 4) { // Fast confirmation interval once movement starts
+                alignedTicks = 0;
+                countdownVal--;
+                setHoldCountdown(Math.max(0, countdownVal));
 
-              setTimeout(() => {
-                setJustCaptured(false);
-                stopStream();
-                setStep("preview");
-              }, 800);
+                if (countdownVal <= 0) {
+                  clearTimers();
+                  setJustCaptured(true);
+                  captureFrame(); // Capture final verified liveness photo
+
+                  setTimeout(() => {
+                    setJustCaptured(false);
+                    stopStream();
+                    setStep("preview");
+                  }, 800);
+                }
+              }
+            } else {
+              // Pause countdown if user stops blinking/smiling
+              alignedTicks = 0;
             }
           }
         }
@@ -336,7 +365,6 @@ export function LivenessCamera({ onComplete, onCancel, onFallback }: LivenessCam
   const handleConfirmSubmit = () => {
     if (!capturedImage) return;
     setIsConfirming(true);
-    // Micro-interaction delay
     setTimeout(() => {
       onComplete([capturedImage]);
     }, 500);
@@ -411,13 +439,12 @@ export function LivenessCamera({ onComplete, onCancel, onFallback }: LivenessCam
             })}
           </div>
           <span className="text-[10px] font-bold text-purp-200 tracking-widest uppercase">
-            Step {stepIndex + 1} of 3
+            Action {stepIndex + 1} of 3
           </span>
         </div>
       )}
 
       {/* ── CAMERA / PREVIEW VIEWPORT ─────────────────────────────────────── */}
-      {/* Capped maximum height to 340px to ensure the card fits comfortably on large viewports */}
       <div className="relative bg-black w-full aspect-[3/4] max-h-[340px] overflow-hidden flex items-center justify-center">
         
         {/* Initialization Overlay */}
@@ -501,8 +528,8 @@ export function LivenessCamera({ onComplete, onCancel, onFallback }: LivenessCam
                 />
               </svg>
 
-              {/* Countdown overlay for hold step */}
-              {step === "hold" && holdCountdown > 0 && (
+              {/* Countdown overlay for hold/position steps */}
+              {!isPreview && (step === "position" || step === "hold") && faceDetected && holdCountdown > 0 && (
                 <div className="absolute inset-0 flex items-center justify-center">
                   <div className="w-16 h-16 rounded-full bg-black/60 backdrop-blur-md flex items-center justify-center border-2 border-emerald-400 shadow-lg">
                     <span className="text-3xl font-black text-emerald-400 tracking-tight animate-ping-once">
@@ -518,6 +545,15 @@ export function LivenessCamera({ onComplete, onCancel, onFallback }: LivenessCam
               )}
             </div>
 
+            {/* Dynamic Step Status Hud Overlay */}
+            {faceDetected && step === "position" && (
+              <div className="absolute bottom-6 flex flex-col items-center justify-center bg-black/60 backdrop-blur-md rounded-xl px-4 py-2 border border-white/10 shadow-lg">
+                <span className="text-[10px] font-black text-emerald-400 tracking-widest uppercase animate-pulse">
+                  Centering... {holdCountdown}s
+                </span>
+              </div>
+            )}
+
             {/* Hold progress bar overlay */}
             {faceDetected && step === "hold" && (
               <div className="absolute bottom-6 flex flex-col items-center justify-center bg-black/60 backdrop-blur-md rounded-xl px-4 py-2 border border-white/10 shadow-lg">
@@ -531,7 +567,7 @@ export function LivenessCamera({ onComplete, onCancel, onFallback }: LivenessCam
             {step === "blink" && (
               <div className="absolute bottom-6 flex flex-col items-center justify-center bg-black/60 backdrop-blur-md rounded-xl px-4 py-2.5 border border-white/10 shadow-lg w-[190px]">
                 <span className="text-[9px] font-bold text-purp-200 tracking-widest uppercase animate-pulse text-center">
-                  Smile or Blink Now
+                  {livenessProgress >= 100 ? `Capturing in ${holdCountdown}s` : "Smile or Blink Now"}
                 </span>
                 <div className="w-full h-1.5 bg-white/10 rounded-full mt-2 overflow-hidden relative">
                   <div
@@ -539,18 +575,8 @@ export function LivenessCamera({ onComplete, onCancel, onFallback }: LivenessCam
                     style={{ width: `${livenessProgress}%` }}
                   />
                 </div>
-                <span className="text-[8px] text-neutral-500 mt-1 uppercase tracking-wider">
+                <span className="text-[8px] text-neutral-500 mt-1 uppercase tracking-wider text-center">
                   Liveness action verification
-                </span>
-              </div>
-            )}
-
-            {/* Feedback Badge for position step */}
-            {faceDetected && step === "position" && (
-              <div className="absolute bottom-6 bg-emerald-500/90 backdrop-blur-md border border-emerald-400/40 rounded-full px-4 py-1.5 shadow-lg flex items-center gap-1.5 animate-in fade-in duration-300">
-                <span className="w-2 h-2 rounded-full bg-white animate-ping" />
-                <span className="text-white text-[10px] font-bold tracking-wider uppercase">
-                  Face Aligned ✓
                 </span>
               </div>
             )}
@@ -563,7 +589,6 @@ export function LivenessCamera({ onComplete, onCancel, onFallback }: LivenessCam
       </div>
 
       {/* ── INSTRUCTIONS & BUTTONS PANEL ──────────────────────────────────── */}
-      {/* Explicit z-index and relative layout to prevent clicks from being hijacked by overlays on desktop */}
       <div className="px-5 py-4 bg-neutral-950 border-t border-white/5 z-40 relative flex-shrink-0">
         
         {isPreview ? (
@@ -636,13 +661,17 @@ export function LivenessCamera({ onComplete, onCancel, onFallback }: LivenessCam
             {faceDetected === null ? (
               <span className="text-neutral-500">Initializing Biometrics...</span>
             ) : faceDetected ? (
-              step === "hold" ? (
+              step === "position" ? (
                 <span className="text-emerald-400 flex items-center gap-1.5 animate-pulse">
-                  <Eye className="h-3.5 w-3.5" /> Hold Still! Capturing in {holdCountdown}s...
+                  <Scan className="h-3.5 w-3.5" /> Aligned! Hold still for Action 1 ({holdCountdown}s)...
+                </span>
+              ) : step === "hold" ? (
+                <span className="text-emerald-400 flex items-center gap-1.5 animate-pulse">
+                  <Eye className="h-3.5 w-3.5" /> Keep still! Hold for Action 2 ({holdCountdown}s)...
                 </span>
               ) : step === "blink" ? (
                 <span className="text-emerald-400 flex items-center gap-1.5 animate-pulse">
-                  <Smile className="h-3.5 w-3.5 animate-bounce" /> Blink/smile to trigger auto-capture...
+                  <Smile className="h-3.5 w-3.5 animate-bounce" /> Blink/smile to confirm Action 3 ({holdCountdown}s)...
                 </span>
               ) : (
                 <span className="text-emerald-400 flex items-center gap-1.5">
