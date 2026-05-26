@@ -52,6 +52,59 @@ function maskBVN(bvn: string): string {
   return `${bvn.slice(0, 3)}******${bvn.slice(9)}`;
 }
 
+function normalizeName(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, "")
+    .trim();
+}
+
+function tokenizeName(value: string): string[] {
+  return normalizeName(value)
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function nameTokensMatch(left: string, right: string): boolean {
+  if (!left || !right) return false;
+  if (left === right) return true;
+
+  const minFuzzyLength = 4;
+  if (left.length < minFuzzyLength || right.length < minFuzzyLength) {
+    return false;
+  }
+
+  return left.includes(right) || right.includes(left);
+}
+
+function directorNameMatchesProfile(
+  profileName: string,
+  returnedName: { firstName?: string; middleName?: string; lastName?: string }
+): boolean {
+  const profileTokens = tokenizeName(profileName);
+  const bvnFullName = [returnedName.firstName, returnedName.middleName, returnedName.lastName]
+    .filter(Boolean)
+    .join(" ");
+  const bvnTokens = tokenizeName(bvnFullName);
+  const bvnSurname = normalizeName(returnedName.lastName || "");
+
+  if (!bvnTokens.length) return true;
+
+  if (!bvnSurname) {
+    return profileTokens.some((profileToken) =>
+      bvnTokens.some((bvnToken) => nameTokensMatch(profileToken, bvnToken))
+    );
+  }
+
+  const surnameMatches = profileTokens.some((profileToken) => nameTokensMatch(profileToken, bvnSurname));
+  if (!surnameMatches) return false;
+
+  const nonSurnameBvnTokens = bvnTokens.filter((token) => token !== bvnSurname);
+  return nonSurnameBvnTokens.some((bvnToken) =>
+    profileTokens.some((profileToken) => nameTokensMatch(profileToken, bvnToken))
+  );
+}
+
 // ── Main Service Functions ────────────────────────────────────────────────────
 
 /**
@@ -159,18 +212,12 @@ export async function verifyDirectorIdentity(params: {
     await updateProviderHealth(providerKey, "INSUFFICIENT_BALANCE");
   }
 
-  // 5. Perform Name Match Check for director
+  // 5. Perform Name Match Check for director.
+  // Sandbox providers may return synthetic identities, so do not escalate
+  // successful sandbox tests to manual review on name mismatch.
   let nameMatch = true;
-  let returnedFullName = "";
-  if (result.success && result.returnedName) {
-    returnedFullName = [result.returnedName.firstName, result.returnedName.middleName, result.returnedName.lastName]
-      .filter(Boolean)
-      .join(" ")
-      .toLowerCase();
-
-    const nameTokens = params.directorName.toLowerCase().replace(/[^a-z\s]/g, "").split(/\s+/).filter(Boolean);
-    const returnedTokens = returnedFullName.replace(/[^a-z\s]/g, "").split(/\s+/).filter(Boolean);
-    nameMatch = nameTokens.some((t) => returnedTokens.includes(t));
+  if (!sandbox && result.success && result.returnedName) {
+    nameMatch = directorNameMatchesProfile(params.directorName, result.returnedName);
   }
 
   // Flag manual review if names mismatch or confidence is low (<70)

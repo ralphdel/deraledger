@@ -76,6 +76,8 @@ CREATE TABLE IF NOT EXISTS verification_logs (
 );
 
 -- Add new columns to verification_logs if upgrading from verification_records
+ALTER TABLE verification_logs ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE verification_logs ADD COLUMN IF NOT EXISTS provider_name TEXT;
 ALTER TABLE verification_logs ADD COLUMN IF NOT EXISTS request_fingerprint TEXT;
 ALTER TABLE verification_logs ADD COLUMN IF NOT EXISTS masked_bvn TEXT;
 ALTER TABLE verification_logs ADD COLUMN IF NOT EXISTS response_status TEXT;
@@ -93,6 +95,34 @@ ALTER TABLE verification_logs ADD COLUMN IF NOT EXISTS provider_reference TEXT;
 ALTER TABLE verification_logs ADD COLUMN IF NOT EXISTS raw_response JSONB DEFAULT '{}';
 ALTER TABLE verification_logs ADD COLUMN IF NOT EXISTS attempt_number INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE verification_logs ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+-- Relax legacy columns carried over from verification_records.
+-- The new audit writer uses provider_name/normalized_status and no longer writes
+-- old columns like provider, success, status, or updated_at.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='verification_logs' AND column_name='provider')
+     AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='verification_logs' AND column_name='provider_name') THEN
+    UPDATE verification_logs
+    SET provider_name = COALESCE(provider_name, provider)
+    WHERE provider_name IS NULL AND provider IS NOT NULL;
+
+    ALTER TABLE verification_logs ALTER COLUMN provider DROP NOT NULL;
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='verification_logs' AND column_name='success') THEN
+    ALTER TABLE verification_logs ALTER COLUMN success DROP NOT NULL;
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='verification_logs' AND column_name='status') THEN
+    ALTER TABLE verification_logs ALTER COLUMN status DROP NOT NULL;
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='verification_logs' AND column_name='updated_at') THEN
+    ALTER TABLE verification_logs ALTER COLUMN updated_at SET DEFAULT now();
+  END IF;
+END
+$$;
 
 -- Replace legacy verification_type constraint carried over from verification_records
 DO $$

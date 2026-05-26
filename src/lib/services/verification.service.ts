@@ -415,7 +415,9 @@ export async function verifyMerchantIdentity(params: {
   }
 
   // 9. Name Matching Check
-  if (result.success && params.ownerName) {
+  // Sandbox providers often return fixed or synthetic identities, so we
+  // should not block successful test verifications on profile-name mismatch.
+  if (!sandbox && result.success && params.ownerName) {
     const nameMatchResult = performNameMatch(params.ownerName, result.returnedName);
     if (!nameMatchResult.matches) {
       result = {
@@ -854,6 +856,29 @@ function performNameMatch(
   ownerName: string,
   returnedName: { firstName?: string; lastName?: string; middleName?: string }
 ): { matches: boolean; bvnFullName: string } {
+  const normalizeName = (value: string) =>
+    value
+      .toLowerCase()
+      .replace(/[^a-z\s]/g, "")
+      .trim();
+
+  const tokenizeName = (value: string) =>
+    normalizeName(value)
+      .split(/\s+/)
+      .filter(Boolean);
+
+  const tokensMatch = (left: string, right: string): boolean => {
+    if (!left || !right) return false;
+    if (left === right) return true;
+
+    const minFuzzyLength = 4;
+    if (left.length < minFuzzyLength || right.length < minFuzzyLength) {
+      return false;
+    }
+
+    return left.includes(right) || right.includes(left);
+  };
+
   const bvnFullName = [returnedName.firstName, returnedName.middleName, returnedName.lastName]
     .filter(Boolean)
     .join(" ")
@@ -862,18 +887,26 @@ function performNameMatch(
 
   if (!bvnFullName) return { matches: true, bvnFullName: "—" };
 
-  const ownerTokens = ownerName
-    .toLowerCase()
-    .replace(/[^a-z\s]/g, "")
-    .split(/\s+/)
-    .filter(Boolean);
+  const ownerTokens = tokenizeName(ownerName);
+  const bvnTokens = tokenizeName(bvnFullName);
+  const bvnSurname = normalizeName(returnedName.lastName || "");
 
-  const bvnTokens = bvnFullName
-    .replace(/[^a-z\s]/g, "")
-    .split(/\s+/)
-    .filter(Boolean);
+  if (!bvnSurname) {
+    const matches = ownerTokens.some((ownerToken) =>
+      bvnTokens.some((bvnToken) => tokensMatch(ownerToken, bvnToken))
+    );
+    return { matches, bvnFullName };
+  }
 
-  const matches = ownerTokens.some((t) => bvnTokens.includes(t));
+  const surnameMatches = ownerTokens.some((ownerToken) => tokensMatch(ownerToken, bvnSurname));
+  if (!surnameMatches) {
+    return { matches: false, bvnFullName };
+  }
+
+  const nonSurnameBvnTokens = bvnTokens.filter((token) => token !== bvnSurname);
+  const matches = nonSurnameBvnTokens.some((bvnToken) =>
+    ownerTokens.some((ownerToken) => tokensMatch(ownerToken, bvnToken))
+  );
   return { matches, bvnFullName };
 }
 
