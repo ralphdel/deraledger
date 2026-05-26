@@ -19,7 +19,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { getMerchant } from "@/lib/data";
-import { submitDojahKycAction, verifyRcNumberAction, submitKycAction } from "@/lib/actions";
+import { submitDojahKycAction, verifyRcNumberAction, submitKycAction, getActiveVerificationProviderKeyAction } from "@/lib/actions";
 import { CreateClientModal } from "@/components/CreateClientModal";
 import { LivenessCamera } from "@/components/kyc/liveness-camera";
 import { createClient } from "@/lib/supabase/client";
@@ -55,6 +55,7 @@ export default function SettingsPage() {
   const [kycSuccess, setKycSuccess] = useState(false);
   const [kycError, setKycError] = useState<string | null>(null);
   const [upgradingPlan, setUpgradingPlan] = useState<string | null>(null);
+  const [activeProvider, setActiveProvider] = useState<string | null>(null);
 
   // Logo state
   const [uploadingLogo, setUploadingLogo] = useState(false);
@@ -196,6 +197,10 @@ export default function SettingsPage() {
         }
       }
       setLoading(false);
+    });
+
+    getActiveVerificationProviderKeyAction().then(res => {
+      if (res.success) setActiveProvider(res.provider);
     });
   }, []);
 
@@ -714,9 +719,17 @@ export default function SettingsPage() {
                   </div>
                 )}
                 {!merchant?.cac_number && (
-                  <p className="text-xs text-neutral-500 max-w-sm">
-                    Your RC number will be instantly verified against Dojah's corporate registry to ensure it matches your business name.
-                  </p>
+                  <div className="space-y-1.5 max-w-sm">
+                    <p className="text-xs text-neutral-500">
+                      Your RC number will be instantly verified against the corporate registry to ensure it matches your business name.
+                    </p>
+                    {activeProvider === "YOUVERIFY" && (
+                      <div className="bg-amber-50 border border-amber-200 text-amber-700 px-2.5 py-1.5 rounded text-xs flex gap-1.5 items-start mt-2">
+                        <AlertTriangle className="h-4 w-4 shrink-0" />
+                        <span><strong>Note:</strong> Youverify requires the prefix (e.g. RC, BN, IT) to be added to the verification number.</span>
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
             ) : isIndividual ? (

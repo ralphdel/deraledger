@@ -2822,3 +2822,8 @@ export async function adminManualReviewDirectorAction(params: {
   return result;
 }
 
+export async function getActiveVerificationProviderKeyAction() {
+  const { getActiveProviderKey } = await import("@/lib/kyc");
+  const key = await getActiveProviderKey();
+  return { success: true, provider: key };
+}
