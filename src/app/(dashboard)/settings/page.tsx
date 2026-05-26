@@ -3,7 +3,7 @@
 import { useState, useEffect, useTransition } from "react";
 import { Country, State } from "country-state-city";
 import Link from "next/link";
-import { Save, Shield, Upload, FileCheck, AlertTriangle, CheckCircle, Clock, ArrowRight, ExternalLink, Lock, Camera, User, Plus, Info } from "lucide-react";
+import { Save, Shield, Upload, FileCheck, AlertTriangle, CheckCircle, Clock, ArrowRight, ExternalLink, Lock, Camera, User, Plus, Info, AlertCircle } from "lucide-react";
 import DirectorSelfieModal from "@/components/kyc/director-selfie-modal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -51,6 +51,7 @@ export default function SettingsPage() {
   const [selfieFile, setSelfieFile] = useState<File | null>(null);
   const [kycSubmitting, setKycSubmitting] = useState(false);
   const [rcSubmitting, setRcSubmitting] = useState(false);
+  const [rcError, setRcError] = useState<string | null>(null);
   const [kycSuccess, setKycSuccess] = useState(false);
   const [kycError, setKycError] = useState<string | null>(null);
   const [upgradingPlan, setUpgradingPlan] = useState<string | null>(null);
@@ -223,22 +224,33 @@ export default function SettingsPage() {
 
   const handleVerifyRcNumber = async () => {
     if (!cacNumber || cacNumber.length < 5) {
-      setKycError("Please enter a valid RC Number (e.g. RC-123456).");
+      setRcError("Please enter a valid RC Number (e.g. RC-123456).");
       return;
     }
     if (!merchant?.id) return;
+    
+    if ((businessName && businessName !== merchant.business_name) || (ownerName && ownerName !== merchant.owner_name)) {
+      setRcError("You have unsaved profile changes. Please click 'Save Profile' in the Owner Information section before verifying your RC Number.");
+      return;
+    }
+    
+    if (!merchant.business_name || !merchant.owner_name) {
+      setRcError("Please complete your Business Profile and Owner Information, and click 'Save Profile' before verifying your RC Number.");
+      return;
+    }
+
     setRcSubmitting(true);
-    setKycError(null);
+    setRcError(null);
     try {
       const res = await verifyRcNumberAction(merchant.id, cacNumber);
       if (res.success) {
         setMerchant({ ...merchant, cac_number: cacNumber } as Merchant);
-        setKycError(null);
+        setRcError(null);
       } else {
-        setKycError(res.error || "Failed to verify RC Number.");
+        setRcError(res.error || "Failed to verify RC Number.");
       }
     } catch (e: any) {
-      setKycError(e.message || "An unexpected error occurred verifying your RC Number.");
+      setRcError(e.message || "An unexpected error occurred verifying your RC Number.");
     } finally {
       setRcSubmitting(false);
     }
@@ -695,6 +707,12 @@ export default function SettingsPage() {
                     </Badge>
                   )}
                 </div>
+                {rcError && (
+                  <div className="text-xs font-medium text-red-600 bg-red-50 border border-red-100 p-2.5 rounded-lg flex items-start gap-2">
+                    <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                    <span>{rcError}</span>
+                  </div>
+                )}
                 {!merchant?.cac_number && (
                   <p className="text-xs text-neutral-500 max-w-sm">
                     Your RC number will be instantly verified against Dojah's corporate registry to ensure it matches your business name.
