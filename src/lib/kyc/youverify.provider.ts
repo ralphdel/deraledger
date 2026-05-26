@@ -25,11 +25,9 @@ export class YouverifyProvider implements ProviderAdapter {
   private readonly baseUrl: string;
   private readonly appId: string;
   private readonly secretKey: string;
-  private readonly sandboxMode: boolean;
 
   constructor(options: { sandboxMode?: boolean; baseUrl?: string } = {}) {
     const sandboxMode = options.sandboxMode ?? process.env.VERIFICATION_MODE === 'sandbox';
-    this.sandboxMode = sandboxMode;
     this.baseUrl =
       options.baseUrl ||
       (sandboxMode
@@ -291,12 +289,15 @@ export class YouverifyProvider implements ProviderAdapter {
     const body = {
       registrationNumber: payload.registrationNumber,
       rcNumber: payload.registrationNumber,
+      registrationName: payload.businessName,
       countryCode: 'NG',
       isConsent: true,
     };
 
     try {
-      const res = await fetch(`${this.baseUrl}/v2/api/identity/businesses/cac`, {
+      // Prefer the current documented KYB endpoint first so sandbox returns
+      // Youverify's official sample data shape when available.
+      const res = await fetch(`${this.baseUrl}/v2/api/verifications/global/company-advance-check`, {
         method: 'POST',
         headers: this.headers,
         body: JSON.stringify(body),
@@ -304,18 +305,11 @@ export class YouverifyProvider implements ProviderAdapter {
 
       const json = await res.json().catch(() => ({}));
 
-      if (!res.ok) {
-        if (this.shouldUseSandboxBusinessFallback(payload.registrationNumber, json)) {
-          return this.buildSandboxBusinessResult(payload);
-        }
+      if (res.ok) {
+        return this.normalizeBusinessResponse(json);
+      }
 
-        const errorCode = this.normalizeHttpError(res.status);
-        const message =
-          res.status === 404
-            ? `Business with registration number ${payload.registrationNumber} was not found in the CAC registry.`
-            : typeof json?.message === 'string'
-            ? json.message
-            : `Youverify CAC request failed with status ${res.status}`;
+      if (res.status === 401 || res.status === 403) {
         return {
           success: false,
           companyName: null,
@@ -323,16 +317,47 @@ export class YouverifyProvider implements ProviderAdapter {
           personnel: [],
           providerReference: json?.requestId || null,
           rawResponse: json,
+          errorCode: this.normalizeHttpError(res.status),
+          error: typeof json?.message === 'string'
+            ? `Youverify business verification permission denied: ${json.message}`
+            : `Youverify business verification permission denied with status ${res.status}`,
+        };
+      }
+
+      // Backward-compatible fallback to the older CAC endpoint.
+      const legacyRes = await fetch(`${this.baseUrl}/v2/api/identity/businesses/cac`, {
+        method: 'POST',
+        headers: this.headers,
+        body: JSON.stringify(body),
+      });
+
+      const legacyJson = await legacyRes.json().catch(() => ({}));
+
+      if (legacyRes.ok) {
+        return this.normalizeBusinessResponse(legacyJson);
+      }
+
+      if (!legacyRes.ok) {
+        const effectiveJson = Object.keys(legacyJson || {}).length ? legacyJson : json;
+        const effectiveStatus = legacyRes.status || res.status;
+        const errorCode = this.normalizeHttpError(effectiveStatus);
+        const message =
+          effectiveStatus === 404
+            ? `Business with registration number ${payload.registrationNumber} was not found in the CAC registry.`
+            : typeof effectiveJson?.message === 'string'
+            ? effectiveJson.message
+            : `Youverify CAC request failed with status ${effectiveStatus}`;
+        return {
+          success: false,
+          companyName: null,
+          registrationStatus: null,
+          personnel: [],
+          providerReference: effectiveJson?.requestId || null,
+          rawResponse: effectiveJson,
           errorCode,
           error: message,
         };
       }
-
-      if (this.shouldUseSandboxBusinessFallback(payload.registrationNumber, json)) {
-        return this.buildSandboxBusinessResult(payload);
-      }
-
-      return this.normalizeBusinessResponse(json);
     } catch (err: any) {
       return {
         success: false,
@@ -464,14 +489,37 @@ export class YouverifyProvider implements ProviderAdapter {
     addPersonnel(company?.trustees, 'trustee');
     addPersonnel(company?.officers, 'signatory');
     addPersonnel(company?.members, 'partner');
+    addPersonnel(company?.keyPersonnel, 'director');
+    addPersonnel(company?.companyContactPersons, 'signatory');
 
     const singleProp = company?.proprietorName || company?.proprietor_name;
     if (typeof singleProp === 'string' && singleProp.trim().length > 1) {
       personnel.push({ name: singleProp.trim(), role: 'proprietor' });
     }
 
+    if (Array.isArray(company?.keyPersonnel)) {
+      for (const person of company.keyPersonnel) {
+        const name = typeof person?.name === 'string' ? person.name.trim() : '';
+        if (!name) continue;
+
+        const designation = String(person?.designation || '').toUpperCase();
+        let role = 'director';
+        if (designation.includes('SHAREHOLDER')) role = 'shareholder';
+        else if (designation.includes('SECRETARY') || designation.includes('SIGNATORY') || designation.includes('WITNESS')) role = 'signatory';
+        else if (designation.includes('TRUSTEE')) role = 'trustee';
+        else if (designation.includes('PARTNER')) role = 'partner';
+        else if (designation.includes('PROPRIETOR')) role = 'proprietor';
+        personnel.push({ name, role });
+      }
+    }
+
     const companyName: string | null = company?.companyName || company?.company_name || company?.name || null;
-    const registrationStatus: string | null = company?.status || company?.registrationStatus || json?.status || null;
+    const registrationStatus: string | null =
+      company?.companyStatus ||
+      company?.registrationStatus ||
+      company?.status ||
+      json?.status ||
+      null;
 
     return {
       success: Boolean(companyName),
@@ -489,60 +537,13 @@ export class YouverifyProvider implements ProviderAdapter {
         return 'PROVIDER_INSUFFICIENT_BALANCE';
       case 403:
         return 'PROVIDER_PERMISSION_DENIED';
+      case 401:
+        return 'PROVIDER_PERMISSION_DENIED';
       case 404:
         return 'BUSINESS_NOT_FOUND';
       default:
         if (status >= 500) return 'PROVIDER_UNAVAILABLE';
         return 'UNKNOWN_ERROR';
     }
-  }
-
-  private shouldUseSandboxBusinessFallback(registrationNumber: string, json: any): boolean {
-    if (!this.sandboxMode) return false;
-    if (!this.isSandboxTestRegistrationNumber(registrationNumber)) return false;
-
-    const data = json?.data || json;
-    const company = data?.company || data;
-    const hasCompanyIdentity = Boolean(
-      company?.companyName ||
-      company?.company_name ||
-      company?.name ||
-      company?.registrationNumber ||
-      company?.registration_number
-    );
-
-    return !hasCompanyIdentity;
-  }
-
-  private isSandboxTestRegistrationNumber(registrationNumber: string): boolean {
-    const normalized = (registrationNumber || "").trim().toUpperCase();
-    return [
-      "RC0000000",
-      "BN0000000",
-      "IT0000000",
-      "RC000000",
-      "BN000000",
-      "IT000000",
-    ].includes(normalized);
-  }
-
-  private buildSandboxBusinessResult(payload: BusinessVerificationPayload): BusinessVerificationResult {
-    return {
-      success: true,
-      companyName: payload.businessName || "SANDBOX BUSINESS",
-      registrationStatus: "ACTIVE",
-      personnel: payload.ownerName
-        ? [{ name: payload.ownerName, role: "director" }]
-        : [],
-      providerReference: `YOUVERIFY_SANDBOX_${payload.registrationNumber}`,
-      rawResponse: {
-        sandbox: true,
-        provider: "YOUVERIFY",
-        registrationNumber: payload.registrationNumber,
-        companyName: payload.businessName || "SANDBOX BUSINESS",
-        personnel: payload.ownerName ? [{ name: payload.ownerName, role: "director" }] : [],
-        fallbackApplied: true,
-      },
-    };
   }
 }
