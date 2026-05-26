@@ -2,9 +2,10 @@
  * DeraLedger — Youverify Verification Provider
  *
  * Implements ProviderAdapter for Youverify sandbox/production.
- * Environment variables required:
- *   YOUVERIFY_APP_ID    — Youverify App/Token ID
- *   YOUVERIFY_SECRET_KEY — Youverify secret key
+ * Environment variables:
+ *   YOUVERIFY_SECRET_KEY - Youverify API key sent as the token header
+ *   YOUVERIFY_API_KEY    - Optional alias for YOUVERIFY_SECRET_KEY
+ *   YOUVERIFY_APP_ID     - Optional legacy app id, sent only when present
  */
 
 import type {
@@ -34,19 +35,24 @@ export class YouverifyProvider implements ProviderAdapter {
         ? process.env.YOUVERIFY_SANDBOX_BASE_URL || 'https://api.sandbox.youverify.co'
         : process.env.YOUVERIFY_PRODUCTION_BASE_URL || 'https://api.youverify.co');
     this.appId = process.env.YOUVERIFY_APP_ID || '';
-    this.secretKey = process.env.YOUVERIFY_SECRET_KEY || '';
+    this.secretKey = process.env.YOUVERIFY_SECRET_KEY || process.env.YOUVERIFY_API_KEY || '';
   }
 
   isConfigured(): boolean {
-    return Boolean(this.appId && this.secretKey);
+    return Boolean(this.secretKey);
   }
 
   private get headers(): Record<string, string> {
-    return {
+    const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       token: this.secretKey,
-      'app-id': this.appId,
     };
+
+    if (this.appId) {
+      headers['app-id'] = this.appId;
+    }
+
+    return headers;
   }
 
   // ── Standalone BVN check ───────────────────────────────────────────────────
@@ -197,7 +203,7 @@ export class YouverifyProvider implements ProviderAdapter {
         providerReference: null,
         rawResponse: {},
         errorCode: 'PROVIDER_NOT_CONFIGURED',
-        error: 'Youverify is not configured. Set YOUVERIFY_APP_ID and YOUVERIFY_SECRET_KEY.',
+        error: 'Youverify is not configured. Set YOUVERIFY_SECRET_KEY or YOUVERIFY_API_KEY.',
       };
     }
 
@@ -282,7 +288,7 @@ export class YouverifyProvider implements ProviderAdapter {
         providerReference: null,
         rawResponse: {},
         errorCode: 'PROVIDER_NOT_CONFIGURED',
-        error: 'Youverify is not configured. Set YOUVERIFY_APP_ID and YOUVERIFY_SECRET_KEY.',
+        error: 'Youverify is not configured. Set YOUVERIFY_SECRET_KEY or YOUVERIFY_API_KEY.',
       };
     }
 
