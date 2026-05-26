@@ -196,6 +196,8 @@ export async function isVerificationSandboxMode(): Promise<boolean> {
   return (
     process.env.VERIFICATION_MODE === 'sandbox' ||
     process.env.DOJAH_BASE_URL?.includes('sandbox') ||
+    process.env.YOUVERIFY_SANDBOX_BASE_URL?.includes('sandbox') ||
+    process.env.YOUVERIFY_PRODUCTION_BASE_URL?.includes('sandbox') ||
     process.env.NODE_ENV !== 'production'
   );
 }

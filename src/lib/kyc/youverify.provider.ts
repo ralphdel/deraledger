@@ -25,9 +25,11 @@ export class YouverifyProvider implements ProviderAdapter {
   private readonly baseUrl: string;
   private readonly appId: string;
   private readonly secretKey: string;
+  private readonly sandboxMode: boolean;
 
   constructor(options: { sandboxMode?: boolean; baseUrl?: string } = {}) {
     const sandboxMode = options.sandboxMode ?? process.env.VERIFICATION_MODE === 'sandbox';
+    this.sandboxMode = sandboxMode;
     this.baseUrl =
       options.baseUrl ||
       (sandboxMode
@@ -288,6 +290,7 @@ export class YouverifyProvider implements ProviderAdapter {
 
     const body = {
       registrationNumber: payload.registrationNumber,
+      rcNumber: payload.registrationNumber,
       countryCode: 'NG',
       isConsent: true,
     };
@@ -302,6 +305,10 @@ export class YouverifyProvider implements ProviderAdapter {
       const json = await res.json().catch(() => ({}));
 
       if (!res.ok) {
+        if (this.shouldUseSandboxBusinessFallback(payload.registrationNumber, json)) {
+          return this.buildSandboxBusinessResult(payload);
+        }
+
         const errorCode = this.normalizeHttpError(res.status);
         const message =
           res.status === 404
@@ -319,6 +326,10 @@ export class YouverifyProvider implements ProviderAdapter {
           errorCode,
           error: message,
         };
+      }
+
+      if (this.shouldUseSandboxBusinessFallback(payload.registrationNumber, json)) {
+        return this.buildSandboxBusinessResult(payload);
       }
 
       return this.normalizeBusinessResponse(json);
@@ -484,5 +495,54 @@ export class YouverifyProvider implements ProviderAdapter {
         if (status >= 500) return 'PROVIDER_UNAVAILABLE';
         return 'UNKNOWN_ERROR';
     }
+  }
+
+  private shouldUseSandboxBusinessFallback(registrationNumber: string, json: any): boolean {
+    if (!this.sandboxMode) return false;
+    if (!this.isSandboxTestRegistrationNumber(registrationNumber)) return false;
+
+    const data = json?.data || json;
+    const company = data?.company || data;
+    const hasCompanyIdentity = Boolean(
+      company?.companyName ||
+      company?.company_name ||
+      company?.name ||
+      company?.registrationNumber ||
+      company?.registration_number
+    );
+
+    return !hasCompanyIdentity;
+  }
+
+  private isSandboxTestRegistrationNumber(registrationNumber: string): boolean {
+    const normalized = (registrationNumber || "").trim().toUpperCase();
+    return [
+      "RC0000000",
+      "BN0000000",
+      "IT0000000",
+      "RC000000",
+      "BN000000",
+      "IT000000",
+    ].includes(normalized);
+  }
+
+  private buildSandboxBusinessResult(payload: BusinessVerificationPayload): BusinessVerificationResult {
+    return {
+      success: true,
+      companyName: payload.businessName || "SANDBOX BUSINESS",
+      registrationStatus: "ACTIVE",
+      personnel: payload.ownerName
+        ? [{ name: payload.ownerName, role: "director" }]
+        : [],
+      providerReference: `YOUVERIFY_SANDBOX_${payload.registrationNumber}`,
+      rawResponse: {
+        sandbox: true,
+        provider: "YOUVERIFY",
+        registrationNumber: payload.registrationNumber,
+        companyName: payload.businessName || "SANDBOX BUSINESS",
+        personnel: payload.ownerName ? [{ name: payload.ownerName, role: "director" }] : [],
+        fallbackApplied: true,
+      },
+    };
   }
 }
