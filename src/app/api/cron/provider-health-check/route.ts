@@ -1,5 +1,13 @@
 import { NextResponse } from "next/server";
-import { getProviderRegistry, instantiateProvider, isVerificationSandboxMode, markProviderStatus, recordHealthEvent } from "@/lib/kyc/index";
+import {
+  getProviderRegistry,
+  instantiateProvider,
+  isVerificationSandboxMode,
+  markProviderStatus,
+  recordHealthEvent,
+  updateProviderHealth,
+  type VerificationProviderKey,
+} from "@/lib/kyc/index";
 import { sendProviderDownAlert } from "@/lib/brevo";
 
 export async function POST(request: Request) {
@@ -57,9 +65,11 @@ async function runHealthChecks() {
         }
 
         await markProviderStatus(row.provider_name, newStatus, currentFailures);
+        await updateProviderHealth(row.provider_name as VerificationProviderKey, "UNAVAILABLE");
         results.push({ provider: row.provider_name, status: newStatus, failures: currentFailures });
       } else {
         // Success -> reset
+        await updateProviderHealth(row.provider_name as VerificationProviderKey, "ACTIVE");
         await markProviderStatus(row.provider_name, "ACTIVE", 0);
         results.push({ provider: row.provider_name, status: "ACTIVE", failures: 0 });
       }
