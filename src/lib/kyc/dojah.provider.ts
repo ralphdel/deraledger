@@ -38,6 +38,8 @@ export type DojahBVNSelfieResult = {
   reference_id?: string;
   status?: boolean;
   message?: string;
+  error?: string;
+  http_status?: number;
   [key: string]: unknown;
 };
 
@@ -47,8 +49,13 @@ export class DojahProvider implements ProviderAdapter {
   private readonly appId: string;
   private readonly secretKey: string;
 
-  constructor() {
-    this.baseUrl = process.env.DOJAH_BASE_URL || 'https://sandbox.dojah.io';
+  constructor(options: { sandboxMode?: boolean; baseUrl?: string } = {}) {
+    const sandboxMode = options.sandboxMode ?? process.env.VERIFICATION_MODE === 'sandbox';
+    this.baseUrl =
+      options.baseUrl ||
+      (sandboxMode
+        ? process.env.DOJAH_SANDBOX_BASE_URL || 'https://sandbox.dojah.io'
+        : process.env.DOJAH_PRODUCTION_BASE_URL || 'https://api.dojah.io');
     this.appId = process.env.DOJAH_APP_ID || '';
     this.secretKey = process.env.DOJAH_SECRET_KEY || '';
   }
@@ -265,10 +272,19 @@ export class DojahProvider implements ProviderAdapter {
       });
 
       const matchScore = extractDojahMatchScore(rawResult) ?? null;
+      const bvnExists = Boolean(rawResult.entity?.bvn || rawResult.status);
+      const faceMatch = matchScore !== null && matchScore >= 70;
+      const providerError = rawResult.status === false || rawResult.error || rawResult.message;
+      const errorCode = providerError
+        ? this.normalizeHttpError(Number(rawResult.http_status) || 400)
+        : faceMatch
+          ? undefined
+          : 'FACE_MATCH_FAILED';
+
       return {
-        success: rawResult.status === true || rawResult.entity?.bvn === payload.bvn,
-        bvnExists: Boolean(rawResult.entity?.bvn || rawResult.status),
-        faceMatch: matchScore !== null && matchScore >= 70,
+        success: bvnExists && faceMatch,
+        bvnExists,
+        faceMatch,
         matchScore,
         returnedName: {
           firstName: rawResult.entity?.first_name,
@@ -276,7 +292,13 @@ export class DojahProvider implements ProviderAdapter {
           middleName: rawResult.entity?.middle_name,
         },
         providerReference: rawResult.reference_id || null,
-        rawResponse: rawResult as any,
+        rawResponse: rawResult,
+        errorCode,
+        error: providerError
+          ? String(rawResult.error || rawResult.message || 'Dojah verification failed.')
+          : faceMatch
+            ? undefined
+            : 'Dojah did not return a passing selfie match score.',
       };
     } catch (err: any) {
       return {
@@ -319,7 +341,14 @@ export class DojahProvider implements ProviderAdapter {
     const json = await res.json().catch(() => ({}));
     if (!res.ok) {
       const message = typeof json?.message === 'string' ? json.message : `Dojah request failed with ${res.status}`;
-      throw new Error(message);
+      return {
+        ...(json as Record<string, unknown>),
+        status: false,
+        message,
+        error: typeof json?.error === 'string' ? json.error : message,
+        http_status: res.status,
+        reference_id: json?.reference_id,
+      } as DojahBVNSelfieResult;
     }
 
     return json as DojahBVNSelfieResult;
@@ -425,7 +454,7 @@ export class DojahProvider implements ProviderAdapter {
         };
       }
 
-      // Perform a dummy fetch to check if the Dojah API is reachable and responding
+      // Perform a minimal invalid lookup to check if the Dojah API is reachable.
       const res = await fetch(`${this.baseUrl}/api/v1/kyc/cac?rc_number=000000`, {
         method: 'GET',
         headers: {

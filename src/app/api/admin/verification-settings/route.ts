@@ -8,7 +8,7 @@ import { createClient as createSupabaseClient } from "@supabase/supabase-js";
  *   Returns: { provider, sandboxMode, health }
  *
  * POST /api/admin/verification-settings
- *   Body: { provider?: "DOJAH" | "YOUVERIFY", sandboxMode?: boolean }
+ *   Body: { provider?: "DOJAH" | "YOUVERIFY" | "SMILEID", sandboxMode?: boolean }
  *   Returns: { success: true }
  *
  * Protected: Requires admin_session cookie. No merchant RLS bypass needed
@@ -50,6 +50,7 @@ export async function GET(request: Request) {
   let health: Record<string, string> = {
     DOJAH: "UNCHECKED",
     YOUVERIFY: "UNCHECKED",
+    SMILEID: "UNCHECKED",
   };
   try {
     health = JSON.parse(map["verification_provider_health"] || "{}");
@@ -81,9 +82,9 @@ export async function POST(request: Request) {
 
   if (provider !== undefined) {
     const normalized = (provider || "").toUpperCase();
-    if (normalized !== "DOJAH" && normalized !== "YOUVERIFY") {
+    if (normalized !== "DOJAH" && normalized !== "YOUVERIFY" && normalized !== "SMILEID") {
       return NextResponse.json(
-        { error: "Invalid provider. Must be DOJAH or YOUVERIFY." },
+        { error: "Invalid provider. Must be DOJAH, YOUVERIFY, or SMILEID." },
         { status: 400 }
       );
     }

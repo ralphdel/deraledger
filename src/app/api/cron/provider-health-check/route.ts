@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getProviderRegistry, instantiateProvider, markProviderStatus, recordHealthEvent } from "@/lib/kyc/index";
+import { getProviderRegistry, instantiateProvider, isVerificationSandboxMode, markProviderStatus, recordHealthEvent } from "@/lib/kyc/index";
 import { sendProviderDownAlert } from "@/lib/brevo";
 
 export async function POST(request: Request) {
@@ -29,11 +29,12 @@ async function runHealthChecks() {
   try {
     const registry = await getProviderRegistry();
     const results = [];
+    const sandboxMode = await isVerificationSandboxMode();
 
     for (const row of registry) {
       if (row.status === "DISABLED") continue;
 
-      const provider = instantiateProvider(row.provider_name);
+      const provider = instantiateProvider(row.provider_name, { sandboxMode });
       
       // Perform health check ping
       const checkResult = await (provider as any).checkProviderHealth();

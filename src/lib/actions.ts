@@ -401,38 +401,6 @@ export async function getInvoiceHistory(invoiceId: string) {
   return data;
 }
 
-export async function mockKYCVerification(merchantId: string, documentType: "cac" | "utility_bill" | "bvn") {
-  const supabase = await createClient();
-  
-  // Simulated processing delay for the API vendor
-  await new Promise((resolve) => setTimeout(resolve, 2000));
-  
-  // Decide the new tier based on KYC completion
-  const newTier = documentType === "cac" ? "corporate" : "individual";
-  
-  // Update the merchant status securely
-  const { error } = await supabase
-    .from("merchants")
-    .update({
-      verification_status: "verified",
-      merchant_tier: newTier,
-      subscription_plan: newTier,
-      kyc_submitted_at: new Date().toISOString(),
-      kyc_notes: "Auto-verified via PurpBot / Vendor Mock",
-      monthly_collection_limit: newTier === "corporate" ? 50000000 : 5000000,
-    })
-    .eq("id", merchantId);
-
-  if (error) {
-    return { success: false, error: error.message };
-  }
-  
-  revalidatePath("/dashboard");
-  revalidatePath("/settings");
-  revalidatePath("/admin/merchants");
-  return { success: true, tier: newTier };
-}
-
 export async function submitKycAction(merchantId: string, updates: any) {
   const supabase = createSupabaseClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -2009,7 +1977,7 @@ export async function submitDojahKycAction(params: {
 
       // ── Route through VerificationService (provider-agnostic) ──────────────
       // VerificationService handles: storage-first upload for Youverify URL,
-      // provider selection, name matching, sandbox bypass, and audit logging.
+      // provider selection, sandbox/production routing, name matching, and audit logging.
       const svcResult = await verifyMerchantIdentity({
         merchantId: params.merchantId,
         bvn: params.bvn,
@@ -2389,28 +2357,6 @@ export async function verifyRcNumberAction(merchantId: string, rcNumber: string)
     return { success: false, error: "Legal owner or shareholder name not configured. Please complete your Business Profile first." };
   }
 
-  const isSandbox = await (async () => {
-    try {
-      const { isVerificationSandboxMode } = await import("@/lib/kyc/index");
-      return await isVerificationSandboxMode();
-    } catch {
-      return process.env.VERIFICATION_MODE === "sandbox" ||
-        process.env.DOJAH_BASE_URL?.includes("sandbox") ||
-        process.env.NODE_ENV !== "production";
-    }
-  })();
-
-  if (isSandbox) {
-    // Sandbox auto-pass — no provider call needed.
-    // IMPORTANT: must also set cac_status = "verified" so that the admin reset
-    // (which clears both cac_number and cac_status) actually has something to undo.
-    await adminClient
-      .from("merchants")
-      .update({ cac_number: rcNumber, cac_status: "verified" })
-      .eq("id", merchantId);
-    return { success: true };
-  }
-
   try {
     // ── Route through VerificationService (provider-agnostic) ────────────────
     const svcResult = await verifyMerchantBusiness({
@@ -2432,7 +2378,10 @@ export async function verifyRcNumberAction(merchantId: string, rcNumber: string)
     }
 
     // Representative mismatch is non-fatal — admin reviews during approval
-    await adminClient.from("merchants").update({ cac_number: rcNumber }).eq("id", merchantId);
+    await adminClient
+      .from("merchants")
+      .update({ cac_number: rcNumber, cac_status: "verified" })
+      .eq("id", merchantId);
     return { success: true };
   } catch (error: any) {
     return { success: false, error: error.message };

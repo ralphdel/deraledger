@@ -26,8 +26,13 @@ export class YouverifyProvider implements ProviderAdapter {
   private readonly appId: string;
   private readonly secretKey: string;
 
-  constructor() {
-    this.baseUrl = process.env.YOUVERIFY_BASE_URL || 'https://api.sandbox.youverify.co';
+  constructor(options: { sandboxMode?: boolean; baseUrl?: string } = {}) {
+    const sandboxMode = options.sandboxMode ?? process.env.VERIFICATION_MODE === 'sandbox';
+    this.baseUrl =
+      options.baseUrl ||
+      (sandboxMode
+        ? process.env.YOUVERIFY_SANDBOX_BASE_URL || 'https://api.sandbox.youverify.co'
+        : process.env.YOUVERIFY_PRODUCTION_BASE_URL || 'https://api.youverify.co');
     this.appId = process.env.YOUVERIFY_APP_ID || '';
     this.secretKey = process.env.YOUVERIFY_SECRET_KEY || '';
   }

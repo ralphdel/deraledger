@@ -206,11 +206,12 @@ export type DirectorRole =
 
 // ── Provider keys ─────────────────────────────────────────────────────────────
 
-export type VerificationProviderKey = 'DOJAH' | 'YOUVERIFY';
+export type VerificationProviderKey = 'DOJAH' | 'YOUVERIFY' | 'SMILEID';
 
 export interface ProviderHealthRecord {
   DOJAH: ProviderHealthStatus;
   YOUVERIFY: ProviderHealthStatus;
+  SMILEID: ProviderHealthStatus;
 }
 
 export type ProviderHealthStatus =

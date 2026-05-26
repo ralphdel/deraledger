@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 
-type ProviderKey = "DOJAH" | "YOUVERIFY";
+type ProviderKey = "DOJAH" | "YOUVERIFY" | "SMILEID";
 type HealthStatus = "ACTIVE" | "UNAVAILABLE" | "INSUFFICIENT_BALANCE" | "PERMISSION_ISSUE" | "UNCHECKED";
 
 interface VerificationSettings {
@@ -33,6 +33,13 @@ const PROVIDER_META = {
     docsUrl: "https://docs.youverify.co",
     color: "bg-blue-100 border-blue-200 text-blue-900",
     activeColor: "border-2 border-blue-600 bg-blue-50/50",
+  },
+  SMILEID: {
+    label: "SmileID",
+    description: "Future provider slot. Currently returns not configured until integration credentials are wired.",
+    docsUrl: "https://docs.usesmileid.com",
+    color: "bg-emerald-100 border-emerald-200 text-emerald-900",
+    activeColor: "border-2 border-emerald-600 bg-emerald-50/50",
   },
 } as const;
 
@@ -184,7 +191,7 @@ export default function VerificationSettingsPage() {
             Existing in-progress verifications are not affected.
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {(["DOJAH", "YOUVERIFY"] as ProviderKey[]).map((key) => {
+            {(["DOJAH", "YOUVERIFY", "SMILEID"] as ProviderKey[]).map((key) => {
               const meta = PROVIDER_META[key];
               const isSelected = stagedProvider === key;
               const health = settings?.health?.[key] || "UNCHECKED";
@@ -234,7 +241,7 @@ export default function VerificationSettingsPage() {
               </p>
               <p className="text-xs text-neutral-500 mt-0.5 leading-relaxed">
                 {stagedSandbox
-                  ? "All verification requests will bypass strict checks. BVN and face match results are mocked. Safe for development."
+                  ? "All verification requests will call provider sandbox APIs and store sandbox audit logs. Use provider-approved test data."
                   : "Production mode. All verifications make real API calls and enforce strict name matching. Ensure provider balance is sufficient."}
               </p>
             </div>
@@ -274,7 +281,7 @@ export default function VerificationSettingsPage() {
             Health status is automatically updated when a verification request encounters a provider error.
             This is not a live ping — it reflects the most recent verification attempt.
           </p>
-          {(["DOJAH", "YOUVERIFY"] as ProviderKey[]).map((key) => {
+          {(["DOJAH", "YOUVERIFY", "SMILEID"] as ProviderKey[]).map((key) => {
             const meta = PROVIDER_META[key];
             const health = (settings?.health?.[key] as HealthStatus) || "UNCHECKED";
             return (

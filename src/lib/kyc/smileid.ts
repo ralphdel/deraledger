@@ -13,11 +13,10 @@ import type {
   BusinessVerificationResult,
   NormalizedVerificationResponse,
   ProviderHealthCheckResult,
-  VerificationProviderKey,
 } from './types';
 
 export class SmileIDProvider implements ProviderAdapter {
-  readonly providerName = 'SMILEID' as any; // Cast so providerName signature matches type
+  readonly providerName = 'SMILEID' as const;
 
   isConfigured(): boolean {
     return false; // Not yet configured

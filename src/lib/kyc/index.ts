@@ -40,6 +40,11 @@ interface ProviderRow {
   health_check_failures: number;
 }
 
+type ProviderInstantiationOptions = {
+  sandboxMode?: boolean;
+  baseUrl?: string | null;
+};
+
 // ── Service client ────────────────────────────────────────────────────────────
 
 function getServiceClient() {
@@ -73,12 +78,9 @@ export async function getProviderRegistry(): Promise<ProviderRow[]> {
  * Falls back to Dojah (env-var) if DB is unavailable.
  */
 export async function getActiveProvider(): Promise<DojahProvider | YouverifyProvider | SmileIDProvider> {
-  const registry = await getProviderRegistry();
-  const active = registry.find((r) => r.status === 'ACTIVE');
-  if (active) return instantiateProvider(active.provider_name);
-  // Fallback: read platform_settings (legacy)
   const key = await getActiveProviderKey();
-  return instantiateProvider(key);
+  const sandboxMode = await isVerificationSandboxMode();
+  return instantiateProvider(key, { sandboxMode });
 }
 
 /**
@@ -93,7 +95,8 @@ export async function getFallbackProvider(
     (r) => r.status === 'ACTIVE' && r.provider_name.toUpperCase() !== excludeProviderName.toUpperCase()
   );
   if (!fallback) return null;
-  return instantiateProvider(fallback.provider_name);
+  const sandboxMode = await isVerificationSandboxMode();
+  return instantiateProvider(fallback.provider_name, { sandboxMode });
 }
 
 /**
@@ -149,7 +152,16 @@ export async function getActiveVerificationProvider(): Promise<YouverifyProvider
 export async function getActiveProviderKey(): Promise<VerificationProviderKey> {
   try {
     const sb = getServiceClient();
-    // Try new verification_providers table first
+    const { data: setting } = await sb
+      .from('platform_settings')
+      .select('value')
+      .eq('key', 'active_verification_provider')
+      .maybeSingle();
+    const configured = setting?.value?.toUpperCase();
+    if (configured === 'YOUVERIFY') return 'YOUVERIFY';
+    if (configured === 'DOJAH') return 'DOJAH';
+    if (configured === 'SMILEID') return 'SMILEID';
+
     const { data: providerData } = await sb
       .from('verification_providers')
       .select('provider_name')
@@ -159,14 +171,7 @@ export async function getActiveProviderKey(): Promise<VerificationProviderKey> {
       .maybeSingle();
     if (providerData?.provider_name === 'YOUVERIFY') return 'YOUVERIFY';
     if (providerData?.provider_name === 'DOJAH') return 'DOJAH';
-    // Fallback to platform_settings
-    const { data } = await sb
-      .from('platform_settings')
-      .select('value')
-      .eq('key', 'active_verification_provider')
-      .maybeSingle();
-    const raw = data?.value?.toUpperCase();
-    if (raw === 'YOUVERIFY') return 'YOUVERIFY';
+    if (providerData?.provider_name === 'SMILEID') return 'SMILEID';
     return 'DOJAH';
   } catch {
     return 'DOJAH';
@@ -197,13 +202,14 @@ export async function isVerificationSandboxMode(): Promise<boolean> {
 
 /** Instantiates the correct provider class from a name string. */
 export function instantiateProvider(
-  name: string
+  name: string,
+  options: ProviderInstantiationOptions = {}
 ): DojahProvider | YouverifyProvider | SmileIDProvider {
   switch (name.toUpperCase()) {
-    case 'YOUVERIFY': return new YouverifyProvider();
+    case 'YOUVERIFY': return new YouverifyProvider({ sandboxMode: options.sandboxMode, baseUrl: options.baseUrl || undefined });
     case 'SMILEID':   return new SmileIDProvider();
     case 'DOJAH':
-    default:          return new DojahProvider();
+    default:          return new DojahProvider({ sandboxMode: options.sandboxMode, baseUrl: options.baseUrl || undefined });
   }
 }
 

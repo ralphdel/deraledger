@@ -12,6 +12,9 @@ CREATE TABLE IF NOT EXISTS verification_providers (
     CHECK (status IN ('ACTIVE', 'DEGRADED', 'DOWN', 'DISABLED')),
   priority INTEGER NOT NULL DEFAULT 10,
   api_base_url TEXT,
+  bvn_selfie_cost NUMERIC(10,2) NOT NULL DEFAULT 150,
+  business_cost NUMERIC(10,2) NOT NULL DEFAULT 150,
+  director_cost NUMERIC(10,2) NOT NULL DEFAULT 150,
   supports_bvn BOOLEAN NOT NULL DEFAULT true,
   supports_selfie BOOLEAN NOT NULL DEFAULT true,
   supports_liveness BOOLEAN NOT NULL DEFAULT false,
@@ -28,6 +31,10 @@ VALUES
   ('YOUVERIFY', 'ACTIVE', 2, 'https://api.sandbox.youverify.co', true, true, false, true),
   ('SMILEID', 'DISABLED', 3, null, true, true, true, false)
 ON CONFLICT (provider_name) DO NOTHING;
+
+ALTER TABLE verification_providers ADD COLUMN IF NOT EXISTS bvn_selfie_cost NUMERIC(10,2) NOT NULL DEFAULT 150;
+ALTER TABLE verification_providers ADD COLUMN IF NOT EXISTS business_cost NUMERIC(10,2) NOT NULL DEFAULT 150;
+ALTER TABLE verification_providers ADD COLUMN IF NOT EXISTS director_cost NUMERIC(10,2) NOT NULL DEFAULT 150;
 
 -- 2. Rename verification_records to verification_logs if old table exists
 -- (idempotent: only runs if old table exists and new does not)
@@ -71,16 +78,57 @@ CREATE TABLE IF NOT EXISTS verification_logs (
 -- Add new columns to verification_logs if upgrading from verification_records
 ALTER TABLE verification_logs ADD COLUMN IF NOT EXISTS request_fingerprint TEXT;
 ALTER TABLE verification_logs ADD COLUMN IF NOT EXISTS masked_bvn TEXT;
+ALTER TABLE verification_logs ADD COLUMN IF NOT EXISTS response_status TEXT;
 ALTER TABLE verification_logs ADD COLUMN IF NOT EXISTS normalized_status TEXT NOT NULL DEFAULT 'pending';
 ALTER TABLE verification_logs ADD COLUMN IF NOT EXISTS retry_count INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE verification_logs ADD COLUMN IF NOT EXISTS verification_cost NUMERIC(10,2) NOT NULL DEFAULT 0;
+ALTER TABLE verification_logs ADD COLUMN IF NOT EXISTS is_sandbox BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE verification_logs ADD COLUMN IF NOT EXISTS request_timestamp TIMESTAMPTZ NOT NULL DEFAULT now();
 ALTER TABLE verification_logs ADD COLUMN IF NOT EXISTS response_timestamp TIMESTAMPTZ;
 ALTER TABLE verification_logs ADD COLUMN IF NOT EXISTS verification_id TEXT;
+ALTER TABLE verification_logs ADD COLUMN IF NOT EXISTS error_code TEXT;
+ALTER TABLE verification_logs ADD COLUMN IF NOT EXISTS error_message TEXT;
+ALTER TABLE verification_logs ADD COLUMN IF NOT EXISTS match_score NUMERIC(5,2);
+ALTER TABLE verification_logs ADD COLUMN IF NOT EXISTS provider_reference TEXT;
+ALTER TABLE verification_logs ADD COLUMN IF NOT EXISTS raw_response JSONB DEFAULT '{}';
+ALTER TABLE verification_logs ADD COLUMN IF NOT EXISTS attempt_number INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE verification_logs ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+-- Replace legacy verification_type constraint carried over from verification_records
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'verification_records_verification_type_check'
+  ) THEN
+    ALTER TABLE verification_logs DROP CONSTRAINT verification_records_verification_type_check;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'verification_logs_verification_type_check'
+  ) THEN
+    ALTER TABLE verification_logs DROP CONSTRAINT verification_logs_verification_type_check;
+  END IF;
+
+  ALTER TABLE verification_logs
+    ADD CONSTRAINT verification_logs_verification_type_check
+    CHECK (verification_type IN ('bvn_selfie', 'business', 'director', 'identity'));
+END
+$$;
 
 -- Migrate existing verification_type values (identity -> bvn_selfie for logs)
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='verification_logs' AND column_name='verification_type') THEN
+    UPDATE verification_logs
+    SET verification_type = 'bvn_selfie'
+    WHERE verification_type = 'identity';
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='verification_logs' AND column_name='status') THEN
     UPDATE verification_logs SET normalized_status = CASE WHEN status = 'verified' THEN 'verified' WHEN status = 'failed' THEN 'failed' ELSE 'pending' END
     WHERE normalized_status = 'pending' AND status IS NOT NULL;
   END IF;

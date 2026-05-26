@@ -140,7 +140,8 @@ function generateFingerprint(bvnOrCAC: string, merchantId: string, type: string)
 async function getCachedVerification(
   adminClient: any,
   fingerprint: string,
-  type: "bvn_selfie" | "business" | "director"
+  type: "bvn_selfie" | "business" | "director",
+  sandbox: boolean
 ): Promise<any | null> {
   try {
     const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -151,6 +152,7 @@ async function getCachedVerification(
       .select("*")
       .eq("request_fingerprint", fingerprint)
       .eq("verification_type", type)
+      .eq("is_sandbox", sandbox)
       .eq("normalized_status", "verified")
       .gte("created_at", oneDayAgo)
       .order("created_at", { ascending: false })
@@ -169,6 +171,7 @@ async function getCachedVerification(
       .select("*")
       .eq("request_fingerprint", fingerprint)
       .eq("verification_type", type)
+      .eq("is_sandbox", sandbox)
       .eq("normalized_status", "failed")
       .gte("created_at", fiveMinsAgo)
       .order("created_at", { ascending: false })
@@ -226,6 +229,21 @@ function maskBVN(bvn: string): string {
   return `${bvn.slice(0, 3)}******${bvn.slice(9)}`;
 }
 
+function isProviderRoutingFailure(errorCode?: string): boolean {
+  return [
+    "PROVIDER_UNAVAILABLE",
+    "PROVIDER_INSUFFICIENT_BALANCE",
+    "PROVIDER_NOT_CONFIGURED",
+    "PROVIDER_PERMISSION_DENIED",
+  ].includes(errorCode || "");
+}
+
+function providerHealthStatusFor(errorCode?: string): "UNAVAILABLE" | "INSUFFICIENT_BALANCE" | "PERMISSION_ISSUE" {
+  if (errorCode === "PROVIDER_INSUFFICIENT_BALANCE") return "INSUFFICIENT_BALANCE";
+  if (errorCode === "PROVIDER_PERMISSION_DENIED" || errorCode === "PROVIDER_NOT_CONFIGURED") return "PERMISSION_ISSUE";
+  return "UNAVAILABLE";
+}
+
 // ── Main Service Functions ────────────────────────────────────────────────────
 
 /**
@@ -262,10 +280,10 @@ export async function verifyMerchantIdentity(params: {
 
   // 2. Duplicate Check (Fingerprint Cache check)
   const fingerprint = generateFingerprint(params.bvn, params.merchantId, "bvn_selfie");
-  const cached = await getCachedVerification(adminClient, fingerprint, "bvn_selfie");
+  const cached = await getCachedVerification(adminClient, fingerprint, "bvn_selfie", sandbox);
 
   if (cached) {
-    // If cached success, return mock cached success
+    // If cached success, return the stored provider result.
     if (cached.normalized_status === "verified") {
       const matchScore = Number(cached.match_score) || 95;
       return {
@@ -319,49 +337,18 @@ export async function verifyMerchantIdentity(params: {
     console.error("[VerificationService] Selfie signed URL gen failed:", err?.message);
   }
 
-  // 5. Sandbox Bypass — skip real provider call entirely in sandbox mode.
-  // Previously, the provider was called even in sandbox, causing YouVerify to return
-  // 404 (BVN not found in sandbox DB). The sandbox override then forced success,
-  // producing logs with both "verified" status AND a 404 error code. This early
-  // exit produces clean, honest sandbox logs with no provider error artefacts.
-  if (sandbox) {
-    const sandboxProviderKey = await getActiveProviderKey();
-    const sandboxResult: VerificationResult = {
-      success: true,
-      bvnExists: true,
-      faceMatch: true,
-      matchScore: 95,
-      returnedName: {},
-      providerReference: `sandbox-${Date.now()}`,
-      rawResponse: { sandbox: true, selfieSignedUrl },
-    };
-
-    await writeAuditLog(adminClient, {
-      merchantId: params.merchantId,
-      provider: sandboxProviderKey,
-      type: "bvn_selfie",
-      fingerprint,
-      maskedBvn: maskBVN(params.bvn),
-      status: "verified",
-      cost: 0,
-      sandbox: true,
-      result: sandboxResult,
-    });
-
-    return { ...sandboxResult, selfieSignedUrl };
-  }
-
-  // 6. Try Primary Provider (production only)
+  // 5. Try Primary Provider. Sandbox mode uses the provider sandbox API.
   let providerKey = await getActiveProviderKey();
+  const primaryProviderKey = providerKey;
   let provider = await getActiveProvider();
   let result: VerificationResult;
   let providerCallSucceeded = false;
 
-  const cost = await fetchProviderCost(adminClient, providerKey, "bvn_selfie");
+  const cost = sandbox ? 0 : await fetchProviderCost(adminClient, providerKey, "bvn_selfie");
 
   try {
     result = await executeProviderBVNWithFace(provider, params.bvn, selfieSignedUrl || "", params.selfieBase64, params.merchantId);
-    providerCallSucceeded = !result.errorCode || !["PROVIDER_UNAVAILABLE", "PROVIDER_INSUFFICIENT_BALANCE"].includes(result.errorCode);
+    providerCallSucceeded = !isProviderRoutingFailure(result.errorCode);
   } catch (err: any) {
     result = {
       success: false,
@@ -381,12 +368,12 @@ export async function verifyMerchantIdentity(params: {
     console.warn(`[VerificationService] Primary provider ${providerKey} failed. Trying fallback...`);
 
     // Mark primary provider degraded or down in health registry
-    await updateProviderHealth(providerKey, result.errorCode === "PROVIDER_INSUFFICIENT_BALANCE" ? "INSUFFICIENT_BALANCE" : "UNAVAILABLE");
+    await updateProviderHealth(providerKey, providerHealthStatusFor(result.errorCode));
 
-    const fallbackKey = providerKey === "DOJAH" ? "YOUVERIFY" : "DOJAH";
     const fallback = await getFallbackProvider(providerKey);
 
     if (fallback) {
+      const fallbackKey = fallback.providerName;
       // Write temporary audit record for primary failure as "retrying" / "provider_down"
       await writeAuditLog(adminClient, {
         merchantId: params.merchantId,
@@ -396,7 +383,7 @@ export async function verifyMerchantIdentity(params: {
         maskedBvn: maskBVN(params.bvn),
         status: "provider_down",
         cost: 0,
-        sandbox: false,
+        sandbox,
         result,
       });
 
@@ -407,7 +394,7 @@ export async function verifyMerchantIdentity(params: {
       try {
         const fallbackResult = await executeProviderBVNWithFace(fallback, params.bvn, selfieSignedUrl || "", params.selfieBase64, params.merchantId);
 
-        if (fallbackResult.success || !fallbackResult.errorCode || !["PROVIDER_UNAVAILABLE", "PROVIDER_INSUFFICIENT_BALANCE"].includes(fallbackResult.errorCode)) {
+        if (!isProviderRoutingFailure(fallbackResult.errorCode)) {
           providerKey = fallbackKey;
           result = fallbackResult;
           providerCallSucceeded = true;
@@ -427,7 +414,7 @@ export async function verifyMerchantIdentity(params: {
     await sendProviderDownAlert(providerKey, 10);
   }
 
-  // 9. Name Matching Check (production only)
+  // 9. Name Matching Check
   if (result.success && params.ownerName) {
     const nameMatchResult = performNameMatch(params.ownerName, result.returnedName);
     if (!nameMatchResult.matches) {
@@ -448,8 +435,8 @@ export async function verifyMerchantIdentity(params: {
     fingerprint,
     maskedBvn: maskBVN(params.bvn),
     status: result.success ? "verified" : "failed",
-    cost: await fetchProviderCost(adminClient, providerKey, "bvn_selfie"),
-    sandbox: false,
+    cost: sandbox ? 0 : providerKey === primaryProviderKey ? cost : await fetchProviderCost(adminClient, providerKey, "bvn_selfie"),
+    sandbox,
     result,
   });
 
@@ -493,7 +480,7 @@ export async function verifyMerchantBusiness(params: {
 
   // 2. Duplicate Check
   const fingerprint = generateFingerprint(params.registrationNumber, params.merchantId, "business");
-  const cached = await getCachedVerification(adminClient, fingerprint, "business");
+  const cached = await getCachedVerification(adminClient, fingerprint, "business", sandbox);
 
   if (cached) {
     if (cached.normalized_status === "verified") {
@@ -524,42 +511,7 @@ export async function verifyMerchantBusiness(params: {
     }
   }
 
-  // 3. Sandbox Bypass — use the real active provider name so logs are accurate
-  if (sandbox) {
-    const sandboxProviderKey = await getActiveProviderKey();
-    const sandboxRef = `sandbox-${Date.now()}`;
-    await writeAuditLog(adminClient, {
-      merchantId: params.merchantId,
-      provider: sandboxProviderKey,
-      type: "business",
-      fingerprint,
-      maskedBvn: null,
-      status: "verified",
-      cost: 0,
-      sandbox: true,
-      result: {
-        success: true,
-        companyName: params.businessName,
-        registrationStatus: "ACTIVE",
-        personnel: [{ name: params.ownerName, role: "director" }],
-        providerReference: sandboxRef,
-        rawResponse: { sandbox: true },
-      } as any,
-    });
-
-    return {
-      success: true,
-      companyName: params.businessName,
-      registrationStatus: "ACTIVE",
-      personnel: [{ name: params.ownerName, role: "director" }],
-      providerReference: sandboxRef,
-      rawResponse: { sandbox: true },
-      companyNameMatches: true,
-      representativeFound: true,
-    };
-  }
-
-  // 4. Call Primary Provider
+  // 3. Call Primary Provider. Sandbox mode uses the provider sandbox API.
   let providerKey = await getActiveProviderKey();
   let provider = await getActiveProvider();
   let result: BusinessVerificationResult;
@@ -571,7 +523,7 @@ export async function verifyMerchantBusiness(params: {
       businessName: params.businessName,
       ownerName: params.ownerName,
     });
-    providerCallSucceeded = !result.errorCode || !["PROVIDER_UNAVAILABLE", "PROVIDER_INSUFFICIENT_BALANCE"].includes(result.errorCode);
+    providerCallSucceeded = !isProviderRoutingFailure(result.errorCode);
   } catch (err: any) {
     result = {
       success: false,
@@ -588,12 +540,12 @@ export async function verifyMerchantBusiness(params: {
   // 5. Failover Routing if Primary fails
   if (!providerCallSucceeded) {
     console.warn(`[VerificationService] Primary CAC provider ${providerKey} failed. Trying fallback...`);
-    await updateProviderHealth(providerKey, result.errorCode === "PROVIDER_INSUFFICIENT_BALANCE" ? "INSUFFICIENT_BALANCE" : "UNAVAILABLE");
+    await updateProviderHealth(providerKey, providerHealthStatusFor(result.errorCode));
 
-    const fallbackKey = providerKey === "DOJAH" ? "YOUVERIFY" : "DOJAH";
     const fallback = await getFallbackProvider(providerKey);
 
     if (fallback) {
+      const fallbackKey = fallback.providerName;
       await writeAuditLog(adminClient, {
         merchantId: params.merchantId,
         provider: providerKey,
@@ -615,7 +567,7 @@ export async function verifyMerchantBusiness(params: {
           ownerName: params.ownerName,
         });
 
-        if (fallbackResult.success || !fallbackResult.errorCode || !["PROVIDER_UNAVAILABLE", "PROVIDER_INSUFFICIENT_BALANCE"].includes(fallbackResult.errorCode)) {
+        if (!isProviderRoutingFailure(fallbackResult.errorCode)) {
           providerKey = fallbackKey;
           result = fallbackResult;
           providerCallSucceeded = true;
@@ -812,10 +764,12 @@ async function executeProviderBVNWithFace(
     // Normalize raw Dojah response
     const { extractDojahMatchScore } = await import("@/lib/kyc/dojah.provider");
     const matchScore = extractDojahMatchScore(raw) ?? null;
+    const bvnExists = Boolean(raw.entity?.bvn || raw.status);
+    const faceMatch = matchScore !== null && matchScore >= 70;
     return {
-      success: raw.status === true || raw.entity?.bvn === bvn,
-      bvnExists: Boolean(raw.entity?.bvn || raw.status),
-      faceMatch: matchScore !== null && matchScore >= 70,
+      success: bvnExists && faceMatch,
+      bvnExists,
+      faceMatch,
       matchScore,
       returnedName: {
         firstName: raw.entity?.first_name,
@@ -849,7 +803,7 @@ async function writeAuditLog(
   try {
     const attemptNum = await getNextAttemptNumber(adminClient, params.merchantId, params.type);
 
-    await adminClient.from("verification_logs").insert({
+    const { error } = await adminClient.from("verification_logs").insert({
       merchant_id: params.merchantId,
       provider_name: params.provider.toUpperCase(),
       verification_type: params.type,
@@ -868,8 +822,12 @@ async function writeAuditLog(
       request_timestamp: new Date().toISOString(),
       response_timestamp: new Date().toISOString(),
     });
+    if (error) {
+      throw new Error(error.message);
+    }
   } catch (err: any) {
     console.error("[VerificationService] Audit write failed:", err?.message);
+    throw err;
   }
 }
 
