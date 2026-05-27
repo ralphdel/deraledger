@@ -8,6 +8,7 @@ export interface TransactionParams {
   reference: string;
   callbackUrl: string;
   metadata: Record<string, unknown>;
+  paymentMethod?: "card" | "bank_transfer" | "ussd" | "crypto";
   subaccountCode?: string; // ACCT_xxx — for Collection Invoice splits
   bearer?: "account" | "subaccount"; // Who bears Paystack fee
 }

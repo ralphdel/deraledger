@@ -10,6 +10,7 @@ function UpgradeSuccessContent() {
   const searchParams = useSearchParams();
   const plan = searchParams.get("plan");
   const reference = searchParams.get("reference");
+  const provider = searchParams.get("provider") || "paystack";
   const planLabel =
     plan === "corporate"
       ? "Business"
@@ -32,7 +33,7 @@ function UpgradeSuccessContent() {
         await fetch("/api/payment/verify-upgrade", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ reference }),
+          body: JSON.stringify({ reference, provider }),
         });
       } catch (e) {
         console.error("Failed to proactively verify upgrade:", e);
@@ -47,7 +48,7 @@ function UpgradeSuccessContent() {
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [reference, router]);
+  }, [provider, reference, router]);
 
   useEffect(() => {
     if (countdown === 0 && !verifying) {

@@ -11,6 +11,7 @@ function PaymentCallbackContent() {
   const params = useSearchParams();
   const trxref = params.get("trxref");
   const reference = params.get("reference");
+  const provider = params.get("provider") || "paystack";
   const ref = trxref || reference;
   const [status, setStatus] = useState<"verifying" | "success" | "error">("verifying");
   const [errorMsg, setErrorMsg] = useState("");
@@ -30,7 +31,7 @@ function PaymentCallbackContent() {
         const res = await fetch("/api/onboarding/verify-and-provision", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ reference: ref }),
+          body: JSON.stringify({ reference: ref, provider }),
         });
         const data = await res.json();
         if (res.ok && data.success) {
@@ -48,7 +49,7 @@ function PaymentCallbackContent() {
     };
 
     verifyPayment();
-  }, [ref, router]);
+  }, [provider, ref, router]);
 
   if (!ref || status === "verifying") {
     return (

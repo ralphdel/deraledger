@@ -12,6 +12,7 @@ function RenewCallbackContent() {
 
   useEffect(() => {
     const reference = searchParams.get("reference") || searchParams.get("trxref");
+    const provider = searchParams.get("provider") || "paystack";
 
     if (!reference) {
       setStatus("error");
@@ -24,7 +25,7 @@ function RenewCallbackContent() {
     fetch("/api/payment/verify-renew", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reference }),
+      body: JSON.stringify({ reference, provider }),
     })
       .then((res) => res.json())
       .then((data) => {
@@ -53,7 +54,7 @@ function RenewCallbackContent() {
         setMessage("An unexpected error occurred. Redirecting to billing...");
         setTimeout(() => { window.location.href = "/settings/billing"; }, 3000);
       });
-  }, []);
+  }, [searchParams]);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-neutral-50">

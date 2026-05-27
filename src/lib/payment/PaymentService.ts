@@ -4,6 +4,7 @@
 
 import { PaystackAdapter } from "./adapters/PaystackAdapter";
 import { BreetAdapter } from "./adapters/BreetAdapter";
+import { MonnifyAdapter } from "./adapters/MonnifyAdapter";
 import type {
   IPaymentProcessor,
   TransactionParams,
@@ -18,9 +19,9 @@ import type {
   CryptoTransactionResult,
 } from "./types";
 
-function createProcessor(): IPaymentProcessor {
-  const provider = process.env.PAYMENT_PROVIDER ?? "paystack";
+type SupportedFiatProvider = "paystack" | "monnify";
 
+function createProcessor(provider = (process.env.PAYMENT_PROVIDER ?? "paystack")): IPaymentProcessor {
   if (provider === "paystack") {
     const key = process.env.PAYSTACK_SECRET_KEY;
     if (!key) {
@@ -31,11 +32,20 @@ function createProcessor(): IPaymentProcessor {
     return new PaystackAdapter(key);
   }
 
-  // Future: add Monnify adapter here
-  // if (provider === "monnify") { ... }
+  if (provider === "monnify") {
+    const apiKey = process.env.MONNIFY_API_KEY;
+    const secretKey = process.env.MONNIFY_SECRET_KEY;
+    const contractCode = process.env.MONNIFY_CONTRACT_CODE;
+    if (!apiKey || !secretKey || !contractCode) {
+      throw new Error(
+        "Monnify is not configured. Set MONNIFY_API_KEY, MONNIFY_SECRET_KEY, and MONNIFY_CONTRACT_CODE."
+      );
+    }
+    return new MonnifyAdapter(apiKey, secretKey, contractCode);
+  }
 
   throw new Error(
-    `Unknown PAYMENT_PROVIDER: "${provider}". Supported: "paystack"`
+    `Unknown PAYMENT_PROVIDER: "${provider}". Supported: "paystack", "monnify"`
   );
 }
 
@@ -43,12 +53,23 @@ function createProcessor(): IPaymentProcessor {
 // which would throw if env vars aren't available during static analysis.
 let _processor: IPaymentProcessor | null = null;
 let _breet: BreetAdapter | null = null;
+const _providers = new Map<SupportedFiatProvider, IPaymentProcessor>();
 
 function getProcessor(): IPaymentProcessor {
   if (!_processor) {
     _processor = createProcessor();
   }
   return _processor;
+}
+
+function getProcessorFor(provider: SupportedFiatProvider): IPaymentProcessor {
+  const cached = _providers.get(provider);
+  if (cached) {
+    return cached;
+  }
+  const created = createProcessor(provider);
+  _providers.set(provider, created);
+  return created;
 }
 
 function getBreetProcessor(): BreetAdapter {
@@ -62,32 +83,32 @@ function getBreetProcessor(): BreetAdapter {
 // Consumers call these. They never know which adapter is running underneath.
 
 export const PaymentService = {
-  initializeTransaction(p: TransactionParams): Promise<TransactionResult> {
-    return getProcessor().initializeTransaction(p);
+  initializeTransaction(p: TransactionParams, provider?: SupportedFiatProvider): Promise<TransactionResult> {
+    return provider ? getProcessorFor(provider).initializeTransaction(p) : getProcessor().initializeTransaction(p);
   },
 
-  verifyTransaction(reference: string): Promise<Record<string, unknown>> {
-    return getProcessor().verifyTransaction(reference);
+  verifyTransaction(reference: string, provider?: SupportedFiatProvider): Promise<Record<string, unknown>> {
+    return provider ? getProcessorFor(provider).verifyTransaction(reference) : getProcessor().verifyTransaction(reference);
   },
 
-  createSubaccount(p: SubaccountParams): Promise<SubaccountResult> {
-    return getProcessor().createSubaccount(p);
+  createSubaccount(p: SubaccountParams, provider?: SupportedFiatProvider): Promise<SubaccountResult> {
+    return provider ? getProcessorFor(provider).createSubaccount(p) : getProcessor().createSubaccount(p);
   },
 
-  updateSubaccount(code: string, p: Partial<SubaccountParams>): Promise<SubaccountResult> {
-    return getProcessor().updateSubaccount(code, p);
+  updateSubaccount(code: string, p: Partial<SubaccountParams>, provider?: SupportedFiatProvider): Promise<SubaccountResult> {
+    return provider ? getProcessorFor(provider).updateSubaccount(code, p) : getProcessor().updateSubaccount(code, p);
   },
 
-  getBankList(country?: string): Promise<BankListItem[]> {
-    return getProcessor().getBankList(country);
+  getBankList(country?: string, provider?: SupportedFiatProvider): Promise<BankListItem[]> {
+    return provider ? getProcessorFor(provider).getBankList(country) : getProcessor().getBankList(country);
   },
 
-  resolveAccountNumber(bankCode: string, accountNumber: string): Promise<AccountResolutionResult> {
-    return getProcessor().resolveAccountNumber(bankCode, accountNumber);
+  resolveAccountNumber(bankCode: string, accountNumber: string, provider?: SupportedFiatProvider): Promise<AccountResolutionResult> {
+    return provider ? getProcessorFor(provider).resolveAccountNumber(bankCode, accountNumber) : getProcessor().resolveAccountNumber(bankCode, accountNumber);
   },
 
-  verifyWebhook(payload: unknown, signature: string): WebhookVerificationResult {
-    return getProcessor().verifyWebhook(payload, signature);
+  verifyWebhook(payload: unknown, signature: string, provider?: SupportedFiatProvider): WebhookVerificationResult {
+    return provider ? getProcessorFor(provider).verifyWebhook(payload, signature) : getProcessor().verifyWebhook(payload, signature);
   },
 
   generateCryptoDepositAddress(p: CryptoDepositAddressParams): Promise<CryptoDepositAddressResult> {

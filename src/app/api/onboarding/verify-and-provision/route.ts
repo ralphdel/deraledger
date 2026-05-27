@@ -30,27 +30,33 @@ const supabase = createSupabaseClient(
  * 5. Send magic link email
  */
 export async function POST(request: Request) {
-  const { reference } = await request.json();
+  const { reference, provider } = await request.json();
 
   if (!reference) {
     return NextResponse.json({ error: "Missing reference" }, { status: 400 });
   }
 
-  // 1. Verify with Paystack that the payment actually succeeded
-  const paystackRes = await fetch(`https://api.paystack.co/transaction/verify/${reference}`, {
-    headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` },
-  });
-  const paystackData = await paystackRes.json();
+  // 1. Verify that the payment actually succeeded
+  const { PaymentService } = await import("@/lib/payment");
+  const providerName = provider === "monnify" ? "monnify" : "paystack";
+  const paystackData = await PaymentService.verifyTransaction(reference, providerName as "paystack" | "monnify");
 
-  if (!paystackData.status || paystackData.data?.status !== "success") {
-    console.error("Paystack verification failed:", paystackData);
+  const normalizedStatus =
+    (paystackData as any)?.data?.status ||
+    (paystackData as any)?.paymentStatus ||
+    (paystackData as any)?.status;
+
+  if (normalizedStatus !== "success" && normalizedStatus !== "PAID") {
+    console.error("Provider verification failed:", paystackData);
     return NextResponse.json({ error: "Payment not verified" }, { status: 400 });
   }
 
-  const { metadata, amount } = paystackData.data;
+  const payload = (paystackData as any)?.data || paystackData;
+  const metadata = payload?.metadata || payload?.metaData || {};
+  const amount = payload?.amount ?? payload?.amountPaid ?? 0;
   const sessionId = metadata?.session_id as string | undefined;
   const plan = (metadata?.plan as string) || "corporate";
-  const email = (metadata?.email as string) || paystackData.data.customer?.email;
+  const email = (metadata?.email as string) || payload?.customer?.email;
   const businessName = (metadata?.business_name as string) || "My Business"; // The registered name
   const tradingName = (metadata?.trading_name as string) || businessName;
   const ownerName = (metadata?.owner_name as string) || null;

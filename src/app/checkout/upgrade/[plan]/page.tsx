@@ -13,12 +13,6 @@ import { Button } from "@/components/ui/button";
 import { getMerchant } from "@/lib/data";
 import type { Merchant } from "@/lib/types";
 
-const PROVIDER_FLAGS = {
-  paystack: true,
-  monnify: false,
-  breet: false,
-};
-
 const PLAN_CONFIG: Record<string, {
   label: string; price: string; priceKobo: number; interval: string;
   verification: string; features: string[];
@@ -38,7 +32,15 @@ const PLAN_CONFIG: Record<string, {
   },
 };
 
-type Tab = "card" | "transfer" | "crypto";
+type Tab = "card" | "bank_transfer" | "ussd" | "crypto";
+type AvailableMethod = {
+  method: Tab;
+  label: string;
+  description: string;
+  enabled: boolean;
+  provider: "paystack" | "monnify" | "breet";
+  fallbackProvider: "paystack" | "monnify" | "breet" | null;
+};
 
 interface UpgradeCheckoutPageProps {
   params: Promise<{ plan: string }>;
@@ -57,6 +59,7 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
   const [cryptoDetails, setCryptoDetails] = useState<{
     address: string; network: string; coin: string; fiatAmount: number; reference: string;
   } | null>(null);
+  const [availableMethods, setAvailableMethods] = useState<AvailableMethod[]>([]);
   const [copied, setCopied] = useState(false);
   const paystackLoaded = useRef(false);
   // ownerName + businessType are read from sessionStorage (set by upgrade settings page)
@@ -92,6 +95,25 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
       .finally(() => setLoadingMerchant(false));
   }, []);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch(`/api/checkout/payment-methods?kind=upgrade&plan=${plan}`, {
+      signal: controller.signal,
+    })
+      .then((res) => res.json())
+      .then((payload) => {
+        const methods = Array.isArray(payload?.availableMethods) ? payload.availableMethods as AvailableMethod[] : [];
+        setAvailableMethods(methods);
+        if (methods.length > 0 && !methods.some((method) => method.method === tab)) {
+          setTab(methods[0].method);
+        }
+      })
+      .catch(() => {
+        setAvailableMethods([]);
+      });
+    return () => controller.abort();
+  }, [plan, tab]);
+
   if (!config) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#12061F]">
@@ -106,7 +128,7 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleCardPayment = async () => {
+  const handleFiatPayment = async (paymentMethod: Extract<Tab, "card" | "bank_transfer" | "ussd">) => {
     if (!verificationDisclosureAccepted) {
       setError("Please go back and acknowledge the verification disclosure before payment.");
       return;
@@ -124,10 +146,16 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
           relationshipClaim,
           verificationDisclosureAccepted,
           disclosureVersion,
+          paymentMethod,
         }),
       });
       const data = await res.json();
       if (!data.accessCode) throw new Error(data.error || "Failed to initialize payment.");
+
+      if (data.provider && data.provider !== "paystack") {
+        window.location.href = data.authorizationUrl;
+        return;
+      }
 
       const pop = (window as Window & { PaystackPop?: { setup: (opts: Record<string, unknown>) => { openIframe: () => void } } }).PaystackPop;
       if (!pop) throw new Error("Paystack not loaded. Please refresh and try again.");
@@ -148,10 +176,12 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
           relationship_claim: relationshipClaim || null,
           verification_disclosure_accepted: verificationDisclosureAccepted,
           verification_disclosure_version: disclosureVersion,
+          payment_method_requested: paymentMethod,
+          resolved_provider: data.provider || "paystack",
         },
         callback: (response: { reference: string }) => {
           sessionStorage.removeItem("upgradeCheckout");
-          router.push(`/settings/upgrade-success?reference=${response.reference}&plan=${plan}`);
+          router.push(`/settings/upgrade-success?reference=${response.reference}&plan=${plan}&provider=${data.provider || "paystack"}`);
         },
         onClose: () => setLoading(false),
       });
@@ -193,10 +223,13 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
   };
 
   const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
-    { id: "card", label: "Card & Bank", icon: <CreditCard className="h-4 w-4" /> },
-    { id: "transfer", label: "Bank Transfer", icon: <ArrowRightLeft className="h-4 w-4" /> },
+    { id: "card", label: "Card", icon: <CreditCard className="h-4 w-4" /> },
+    { id: "bank_transfer", label: "Bank Transfer", icon: <ArrowRightLeft className="h-4 w-4" /> },
+    { id: "ussd", label: "USSD", icon: <ShieldCheck className="h-4 w-4" /> },
     { id: "crypto", label: "Crypto", icon: <Bitcoin className="h-4 w-4" /> },
   ];
+  const visibleTabs = tabs.filter((entry) => availableMethods.some((method) => method.method === entry.id));
+  const cryptoEnabled = availableMethods.some((method) => method.method === "crypto");
 
   return (
     <div className="min-h-screen bg-[#12061F] flex flex-col">
@@ -255,7 +288,7 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
 
           <div className="mt-8 flex items-center gap-2 text-white/40 text-xs">
             <ShieldCheck className="h-3.5 w-3.5" />
-            Payments powered by Paystack &amp; Breet
+            Payments routed securely by DeraLedger
           </div>
         </div>
 
@@ -269,7 +302,7 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
 
           {/* Tab selector */}
           <div className="flex gap-2 mb-6 border-b border-white/10 pb-1">
-            {tabs.map(t => (
+            {visibleTabs.map(t => (
               <button
                 key={t.id}
                 onClick={() => { setTab(t.id); setError(null); setCryptoDetails(null); }}
@@ -287,31 +320,29 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
           {/* Card & Bank */}
           {tab === "card" && (
             <div className="flex-1 flex flex-col gap-4">
-              {PROVIDER_FLAGS.paystack && (
-                <div className="rounded-xl border border-[#7B2FF7]/30 bg-[#7B2FF7]/5 p-5">
-                  <div className="flex items-center gap-3 mb-3">
-                    <div className="w-10 h-10 rounded-lg bg-[#7B2FF7] flex items-center justify-center">
-                      <CreditCard className="h-5 w-5 text-white" />
-                    </div>
-                    <div>
-                      <p className="font-semibold text-white text-sm">Paystack</p>
-                      <p className="text-xs text-white/50">Debit/credit card, USSD, or bank account</p>
-                    </div>
+              <div className="rounded-xl border border-[#7B2FF7]/30 bg-[#7B2FF7]/5 p-5">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="w-10 h-10 rounded-lg bg-[#7B2FF7] flex items-center justify-center">
+                    <CreditCard className="h-5 w-5 text-white" />
                   </div>
-                  <p className="text-xs text-white/50 mb-4">
-                    A secure Paystack window will open. Your card details are never stored by DeraLedger.
-                  </p>
-                  <Button onClick={handleCardPayment} disabled={loading || loadingMerchant || !verificationDisclosureAccepted}
-                    className="w-full h-12 bg-[#7B2FF7] hover:bg-[#B58CFF] hover:text-[#12061F] text-white font-bold text-base border-0 transition-all">
-                    {loading ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Opening Paystack...</> : <>Pay {config.price} <CreditCard className="ml-2 h-4 w-4" /></>}
-                  </Button>
+                  <div>
+                    <p className="font-semibold text-white text-sm">Card Payment</p>
+                    <p className="text-xs text-white/50">The active backend route decides which provider processes this payment.</p>
+                  </div>
                 </div>
-              )}
+                <p className="text-xs text-white/50 mb-4">
+                  Your card details are handled by the selected payment provider, not stored by DeraLedger.
+                </p>
+                <Button onClick={() => void handleFiatPayment("card")} disabled={loading || loadingMerchant || !verificationDisclosureAccepted}
+                  className="w-full h-12 bg-[#7B2FF7] hover:bg-[#B58CFF] hover:text-[#12061F] text-white font-bold text-base border-0 transition-all">
+                  {loading ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Opening checkout...</> : <>Pay {config.price} <CreditCard className="ml-2 h-4 w-4" /></>}
+                </Button>
+              </div>
             </div>
           )}
 
           {/* Bank Transfer */}
-          {tab === "transfer" && (
+          {tab === "bank_transfer" && (
             <div className="flex-1 flex flex-col gap-4">
               <div className="rounded-xl border border-blue-500/30 bg-blue-500/10 p-5">
                 <div className="flex items-center gap-3 mb-3">
@@ -319,16 +350,39 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
                     <ArrowRightLeft className="h-5 w-5 text-white" />
                   </div>
                   <div>
-                    <p className="font-semibold text-white text-sm">Bank Transfer via Paystack</p>
+                    <p className="font-semibold text-white text-sm">Bank Transfer</p>
                     <p className="text-xs text-blue-400">Pay from your Nigerian bank account</p>
                   </div>
                 </div>
                 <p className="text-xs text-white/50 mb-4">
-                  Paystack will generate a virtual account number. Transfer the exact amount to activate your plan.
+                  The active backend route will generate the exact transfer flow for this upgrade.
                 </p>
-                <Button onClick={handleCardPayment} disabled={loading || loadingMerchant || !verificationDisclosureAccepted}
+                <Button onClick={() => void handleFiatPayment("bank_transfer")} disabled={loading || loadingMerchant || !verificationDisclosureAccepted}
                   className="w-full h-12 bg-blue-600 hover:bg-blue-500 text-white font-bold text-base border-0">
                   {loading ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Opening...</> : <>Get Transfer Details <ArrowRightLeft className="ml-2 h-4 w-4" /></>}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {tab === "ussd" && (
+            <div className="flex-1 flex flex-col gap-4">
+              <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-5">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="w-10 h-10 rounded-lg bg-emerald-600 flex items-center justify-center">
+                    <ShieldCheck className="h-5 w-5 text-white" />
+                  </div>
+                  <div>
+                    <p className="font-semibold text-white text-sm">USSD Payment</p>
+                    <p className="text-xs text-emerald-300">Generate bank-specific USSD instructions through the active provider.</p>
+                  </div>
+                </div>
+                <p className="text-xs text-white/50 mb-4">
+                  This opens the provider-hosted USSD flow for the exact upgrade amount.
+                </p>
+                <Button onClick={() => void handleFiatPayment("ussd")} disabled={loading || loadingMerchant || !verificationDisclosureAccepted}
+                  className="w-full h-12 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-base border-0">
+                  {loading ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Opening...</> : <>Generate USSD <ShieldCheck className="ml-2 h-4 w-4" /></>}
                 </Button>
               </div>
             </div>
@@ -337,7 +391,7 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
           {/* Crypto */}
           {tab === "crypto" && (
             <div className="flex-1 flex flex-col gap-4">
-              {!PROVIDER_FLAGS.breet ? (
+              {!cryptoEnabled ? (
                 <div className="rounded-xl border-2 border-amber-100 bg-amber-50 p-6 text-center">
                   <Bitcoin className="h-10 w-10 text-amber-500 mx-auto mb-3" />
                   <p className="font-semibold text-amber-900 mb-1">Crypto Payments — Coming Soon</p>
@@ -362,7 +416,7 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
                       <Bitcoin className="h-5 w-5 text-white" />
                     </div>
                     <div>
-                      <p className="font-semibold text-orange-900 text-sm">Pay with Crypto (Breet)</p>
+                      <p className="font-semibold text-orange-900 text-sm">Pay with Crypto</p>
                       <p className="text-xs text-orange-600">BTC, USDT, ETH</p>
                     </div>
                   </div>

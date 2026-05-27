@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { PaymentService } from "@/lib/payment";
+import { resolvePaymentRoute, type PaymentMethod } from "@/lib/services/payment-routing.service";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -66,11 +67,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Merchant is not verified or has no settlement account set up" }, { status: 403 });
     }
 
-    if (paymentMethod !== "crypto" && invoice.payment_provider === "monnify") {
-      return NextResponse.json({ 
-        error: "Monnify is currently undergoing maintenance. Please contact the merchant for an alternative payment link." 
-      }, { status: 400 });
-    }
+    const selectedMethod = (paymentMethod || "card") as PaymentMethod;
+    const route = await resolvePaymentRoute("invoice_payment", selectedMethod);
 
     // Calculate k-factor and total charge
     const kFactor = grandTotal > 0 ? cappedPayment / grandTotal : 0;
@@ -93,9 +91,12 @@ export async function POST(request: Request) {
       merchant_id: invoice.merchant_id,
       payment_amount: cappedPayment,
       k_factor: kFactor,
+      payment_method_requested: selectedMethod,
+      resolved_provider: route.provider,
+      payment_purpose: "invoice_payment",
     };
 
-    if (paymentMethod === "crypto") {
+    if (selectedMethod === "crypto") {
       const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
       const cryptoResponse = await fetch(`${appUrl}/api/checkout/crypto-invoice`, {
         method: "POST",
@@ -118,7 +119,7 @@ export async function POST(request: Request) {
       return NextResponse.json(cryptoResult);
     }
 
-    // Default: Fiat Checkout (Paystack)
+    // Default: Fiat Checkout
     const result = await PaymentService.initializeTransaction({
       email: invoice.clients?.email || "customer@deraledger.app",
       amountKobo: chargeAmountKobo,
@@ -126,14 +127,16 @@ export async function POST(request: Request) {
       subaccountCode: merchant.payment_subaccount_code,
       callbackUrl: `${appUrl}/pay/${invoiceId}?reference=${reference}`,
       bearer: "account",
+      paymentMethod: selectedMethod,
       metadata,
-    });
+    }, route.provider === "monnify" ? "monnify" : "paystack");
 
     return NextResponse.json({
       success: true,
       authorizationUrl: result.authorizationUrl,
       accessCode: result.accessCode,
       reference: result.reference,
+      provider: route.provider,
     });
 
   } catch (error) {

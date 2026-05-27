@@ -8,6 +8,7 @@ import {
   VERIFICATION_DISCLOSURE_VERSION,
   type RelationshipClaim,
 } from "@/lib/services/onboarding-flow.service";
+import { resolvePaymentRoute, type PaymentMethod } from "@/lib/services/payment-routing.service";
 
 export async function POST(request: Request) {
   try {
@@ -25,6 +26,7 @@ export async function POST(request: Request) {
       relationshipClaim,
       verificationDisclosureAccepted,
       disclosureVersion,
+      paymentMethod,
     } = await request.json();
 
     if (newPlan !== "individual" && newPlan !== "corporate") {
@@ -54,6 +56,12 @@ export async function POST(request: Request) {
     const reference = `upg_${merchant.id.substring(0, 8)}_${Date.now()}`;
 
     const appUrl = getAppUrl();
+    const method = (paymentMethod || "card") as PaymentMethod;
+    const route = await resolvePaymentRoute("plan_upgrade", method);
+    const callback = new URL(`${appUrl}/settings/upgrade-success`);
+    callback.searchParams.set("reference", reference);
+    callback.searchParams.set("plan", newPlan);
+    callback.searchParams.set("provider", route.provider);
     const ipAddress =
       request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
       request.headers.get("x-real-ip");
@@ -74,7 +82,7 @@ export async function POST(request: Request) {
       email: user.email || merchant.email || "billing@deraledger.app",
       amountKobo,
       reference,
-      callbackUrl: `${appUrl}/settings/upgrade-success?reference=${reference}&plan=${newPlan}`,
+      callbackUrl: callback.toString(),
       metadata: {
         type: "subscription_upgrade",
         merchant_id: merchant.id,
@@ -84,14 +92,19 @@ export async function POST(request: Request) {
         relationship_claim: (relationshipClaim as RelationshipClaim) || null,
         verification_disclosure_accepted: verificationDisclosureAccepted === true,
         verification_disclosure_version: disclosureVersionToStore,
+        payment_method_requested: method,
+        resolved_provider: route.provider,
+        payment_purpose: "plan_upgrade",
       },
-    });
+      paymentMethod: method,
+    }, route.provider === "monnify" ? "monnify" : "paystack");
 
     return NextResponse.json({
       success: true,
       authorizationUrl: result.authorizationUrl,
       accessCode: result.accessCode,
       reference,
+      provider: route.provider,
     });
   } catch (error: any) {
     console.error("Upgrade initialization failed:", error);

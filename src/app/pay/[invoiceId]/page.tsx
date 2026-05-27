@@ -12,10 +12,13 @@ import { Label } from "@/components/ui/label";
 import { ShieldCheck, Receipt, Clock, CheckCircle2, Lock, AlertTriangle, Info, AlertCircle, Copy, Wallet, CreditCard, ArrowRightLeft, Sparkles, ExternalLink } from "lucide-react";
 
 // Feature flags — controls which payment rails are active
-const PROVIDER_FLAGS = {
-  paystack: true,   // Card + Bank Transfer via Paystack
-  monnify: false,   // Dynamic bank accounts via Monnify (coming soon)
-  breet: true,      // Crypto treasury settlement via Breet
+type AvailableMethod = {
+  method: "card" | "bank_transfer" | "ussd" | "crypto";
+  label: string;
+  description: string;
+  enabled: boolean;
+  provider: "paystack" | "monnify" | "breet";
+  fallbackProvider: "paystack" | "monnify" | "breet" | null;
 };
 
 export default function PublicPaymentPortal({ params }: { params: Promise<{ invoiceId: string }> }) {
@@ -29,7 +32,8 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
   const [isProcessing, setIsProcessing] = useState(false);
   const [success, setSuccess] = useState(false);
   const [paymentError, setPaymentError] = useState<string | null>(null);
-  const [paymentMethod, setPaymentMethod] = useState<"card" | "transfer" | "crypto">("card");
+  const [paymentMethod, setPaymentMethod] = useState<"card" | "bank_transfer" | "ussd" | "crypto">("card");
+  const [availableMethods, setAvailableMethods] = useState<AvailableMethod[]>([]);
   const [refreshedInvoice, setRefreshedInvoice] = useState<InvoiceWithLineItems | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [cryptoDetails, setCryptoDetails] = useState<{
@@ -120,6 +124,25 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
       })
       .catch(() => setLoading(false));
   }, [invoiceId]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch(`/api/checkout/payment-methods?kind=invoice&invoiceId=${invoiceId}`, {
+      signal: controller.signal,
+    })
+      .then((res) => res.json())
+      .then((payload) => {
+        const methods = Array.isArray(payload?.availableMethods) ? payload.availableMethods as AvailableMethod[] : [];
+        setAvailableMethods(methods);
+        if (methods.length > 0 && !methods.some((method) => method.method === paymentMethod)) {
+          setPaymentMethod(methods[0].method);
+        }
+      })
+      .catch(() => {
+        setAvailableMethods([]);
+      });
+    return () => controller.abort();
+  }, [invoiceId, paymentMethod]);
 
   if (loading) {
     return (
@@ -294,7 +317,7 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
     setInputAmount(finalAmount.toString());
   };
 
-  const cryptoEnabled = PROVIDER_FLAGS.breet && (invoice?.payment_provider === "breet" || invoice?.payment_provider === "paystack");
+  const cryptoEnabled = availableMethods.some((method) => method.method === "crypto");
 
   const handlePayment = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -597,27 +620,48 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                 <button
                   type="button"
                   onClick={() => setPaymentMethod("card")}
+                  disabled={!availableMethods.some((method) => method.method === "card")}
                   className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-lg text-xs font-semibold transition-all duration-200 ${
                     paymentMethod === "card"
                       ? "bg-white shadow text-purp-900 ring-1 ring-purp-200"
-                      : "text-neutral-500 hover:text-neutral-700"
+                      : availableMethods.some((method) => method.method === "card")
+                      ? "text-neutral-500 hover:text-neutral-700"
+                      : "text-neutral-400"
                   }`}
                 >
                   <CreditCard className="h-5 w-5" />
-                  <span>Card / Bank</span>
+                  <span>Card</span>
                 </button>
                 {/* Transfer */}
                 <button
                   type="button"
-                  onClick={() => setPaymentMethod("transfer")}
+                  onClick={() => setPaymentMethod("bank_transfer")}
+                  disabled={!availableMethods.some((method) => method.method === "bank_transfer")}
                   className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-lg text-xs font-semibold transition-all duration-200 ${
-                    paymentMethod === "transfer"
+                    paymentMethod === "bank_transfer"
                       ? "bg-white shadow text-purp-900 ring-1 ring-purp-200"
-                      : "text-neutral-500 hover:text-neutral-700"
+                      : availableMethods.some((method) => method.method === "bank_transfer")
+                      ? "text-neutral-500 hover:text-neutral-700"
+                      : "text-neutral-400"
                   }`}
                 >
                   <ArrowRightLeft className="h-5 w-5" />
                   <span>Transfer</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod("ussd")}
+                  disabled={!availableMethods.some((method) => method.method === "ussd")}
+                  className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-lg text-xs font-semibold transition-all duration-200 ${
+                    paymentMethod === "ussd"
+                      ? "bg-white shadow text-purp-900 ring-1 ring-purp-200"
+                      : availableMethods.some((method) => method.method === "ussd")
+                      ? "text-neutral-500 hover:text-neutral-700"
+                      : "text-neutral-400"
+                  }`}
+                >
+                  <ShieldCheck className="h-5 w-5" />
+                  <span>USSD</span>
                 </button>
                 {/* Crypto */}
                 <button

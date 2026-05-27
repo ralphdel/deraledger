@@ -23,13 +23,16 @@ const supabaseAdmin = createSupabaseClient(
  */
 export async function POST(request: Request) {
   try {
-    const { reference } = await request.json();
+    const { reference, provider } = await request.json();
     if (!reference) {
       return NextResponse.json({ error: "Missing reference" }, { status: 400 });
     }
 
     // 1. Verify with Paystack directly — source of truth
-    const tx = await PaymentService.verifyTransaction(reference);
+    const tx = await PaymentService.verifyTransaction(
+      reference,
+      provider === "monnify" ? "monnify" : "paystack"
+    );
 
     if (tx.status !== "success") {
       return NextResponse.json({ error: "Payment not successful" }, { status: 400 });
