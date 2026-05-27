@@ -1,0 +1,781 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { calculateSubscriptionExpiry, type PlanType } from "@/lib/subscription";
+import { getAppUrl } from "@/lib/server-utils";
+import {
+  enterPaidSetupMode,
+  recordVerificationDisclosure,
+  VERIFICATION_DISCLOSURE_VERSION,
+  type RelationshipClaim,
+} from "@/lib/services/onboarding-flow.service";
+
+type FiatProvider = "paystack" | "monnify";
+
+export type SuccessfulFiatPayment = {
+  provider: FiatProvider;
+  metadata: Record<string, unknown>;
+  amountKobo: number;
+  reference: string;
+  channel: string;
+  feesKobo?: number | null;
+};
+
+export async function processSuccessfulFiatPayment(
+  supabase: SupabaseClient,
+  payment: SuccessfulFiatPayment
+) {
+  const paymentType = String(payment.metadata?.type || "invoice_payment");
+
+  if (paymentType === "subscription") {
+    return confirmInitialSubscription(supabase, payment);
+  }
+
+  if (paymentType === "subscription_upgrade") {
+    return confirmSubscriptionUpgrade(supabase, payment);
+  }
+
+  if (paymentType === "subscription_renewal") {
+    return confirmSubscriptionRenewal(supabase, payment);
+  }
+
+  return confirmInvoicePayment(supabase, payment);
+}
+
+async function confirmSubscriptionRenewal(
+  supabase: SupabaseClient,
+  payment: SuccessfulFiatPayment
+) {
+  const { metadata, amountKobo, reference, provider } = payment;
+  const merchantId = metadata?.merchant_id as string | undefined;
+  const plan = metadata?.plan as "individual" | "corporate" | undefined;
+
+  if (!merchantId || !plan) {
+    console.error("Renewal confirmation missing metadata:", metadata);
+    return { received: true, skipped: true };
+  }
+
+  assertExpectedPlanAmount(metadata, amountKobo, reference);
+
+  const { data: existingPayment } = await supabase
+    .from("subscription_payments")
+    .select("id")
+    .eq("paystack_ref", reference)
+    .single();
+
+  if (existingPayment) {
+    return { received: true, already_processed: true };
+  }
+
+  const amountPaidNgn = amountKobo / 100;
+  const { data: currentSub } = await supabase
+    .from("subscriptions")
+    .select("plan_type, expiry_date")
+    .eq("merchant_id", merchantId)
+    .in("status", ["active", "expired"])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .single();
+
+  const expiryDate = calculateSubscriptionExpiry(
+    amountPaidNgn,
+    plan as PlanType,
+    currentSub
+      ? { planType: currentSub.plan_type as PlanType, expiryDate: currentSub.expiry_date }
+      : undefined
+  );
+  const periodStart =
+    currentSub && new Date(currentSub.expiry_date) > new Date()
+      ? new Date(currentSub.expiry_date).toISOString()
+      : new Date().toISOString();
+
+  await supabase
+    .from("merchants")
+    .update({
+      subscription_plan: plan,
+      merchant_tier: plan,
+      monthly_collection_limit: plan === "individual" ? 5000000 : 0,
+      subscription_notifications_sent: {},
+    })
+    .eq("id", merchantId);
+
+  const { error: subUpsertError } = await supabase.from("subscriptions").upsert(
+    {
+      merchant_id: merchantId,
+      plan_type: plan,
+      amount_paid: amountPaidNgn,
+      start_date: new Date().toISOString(),
+      expiry_date: expiryDate.toISOString(),
+      status: "active",
+      last_notified_at: null,
+      is_banner_dismissed: false,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "merchant_id" }
+  );
+
+  if (subUpsertError) {
+    throw new Error(`Failed to upsert renewal subscription: ${subUpsertError.message}`);
+  }
+
+  await supabase.from("subscription_payments").insert({
+    merchant_id: merchantId,
+    plan,
+    amount_ngn: amountPaidNgn,
+    period_start: periodStart,
+    period_end: expiryDate.toISOString(),
+    paystack_ref: reference,
+    payment_type: "renewal",
+    status: "paid",
+  });
+
+  await supabase.from("audit_logs").insert({
+    event_type: "subscription_renewed",
+    actor_id: null,
+    actor_role: "system",
+    target_id: merchantId,
+    target_type: "merchant",
+    metadata: {
+      actor_name: `System (${provider} Webhook)`,
+      plan,
+      reference,
+      amount_ngn: amountPaidNgn,
+    },
+  });
+
+  try {
+    const { data: merchant } = await supabase
+      .from("merchants")
+      .select("email, business_name")
+      .eq("id", merchantId)
+      .single();
+    if (merchant?.email) {
+      const { sendSubscriptionRenewalEmail } = await import("@/lib/brevo");
+      await sendSubscriptionRenewalEmail(
+        merchant.email,
+        merchant.business_name,
+        plan,
+        amountPaidNgn,
+        periodStart,
+        expiryDate.toISOString(),
+        reference
+      );
+    }
+  } catch (error) {
+    console.error("Failed to send renewal confirmation email:", error);
+  }
+
+  return { received: true, processed: true };
+}
+
+async function confirmSubscriptionUpgrade(
+  supabase: SupabaseClient,
+  payment: SuccessfulFiatPayment
+) {
+  const { metadata, amountKobo, reference, provider } = payment;
+  const merchantId = metadata?.merchant_id as string | undefined;
+  const newPlan = metadata?.new_plan as "individual" | "corporate" | undefined;
+  const relationshipClaim = metadata?.relationship_claim as RelationshipClaim | undefined;
+
+  if (!merchantId || !newPlan) {
+    console.error("Upgrade confirmation missing metadata:", metadata);
+    return { received: true, skipped: true };
+  }
+
+  assertExpectedPlanAmount(metadata, amountKobo, reference);
+
+  const { data: existingPayment } = await supabase
+    .from("subscription_payments")
+    .select("id")
+    .eq("paystack_ref", reference)
+    .single();
+  if (existingPayment) {
+    return { received: true, already_processed: true };
+  }
+
+  const { data: merchant } = await supabase
+    .from("merchants")
+    .select("id, owner_name, business_type")
+    .eq("id", merchantId)
+    .single();
+
+  if (!merchant) {
+    console.error("Merchant not found for upgrade:", merchantId);
+    return { received: true, skipped: true };
+  }
+
+  const ownerName = metadata?.owner_name as string | undefined;
+  const businessType = metadata?.business_type as string | undefined;
+  const updates: Record<string, unknown> = {
+    subscription_plan: newPlan,
+    merchant_tier: newPlan,
+    monthly_collection_limit: newPlan === "individual" ? 5000000 : 0,
+    subscription_notifications_sent: {},
+  };
+
+  if (businessType) {
+    updates.business_type = businessType;
+  } else if (newPlan === "individual" && !merchant.business_type) {
+    updates.business_type = "sole_proprietorship";
+  }
+
+  if (ownerName) {
+    updates.owner_name = ownerName;
+    if (merchant.owner_name && merchant.owner_name !== ownerName) {
+      updates.bvn = null;
+      updates.bvn_status = "unverified";
+      updates.selfie_url = null;
+      updates.selfie_status = "unverified";
+      updates.verification_status = "unverified";
+    }
+  }
+
+  if (relationshipClaim) {
+    updates.relationship_claim = relationshipClaim;
+  }
+
+  const { error: updateError } = await supabase
+    .from("merchants")
+    .update(updates)
+    .eq("id", merchantId);
+
+  if (updateError) {
+    throw new Error(`Failed to update upgraded merchant: ${updateError.message}`);
+  }
+
+  await enterPaidSetupMode(supabase, {
+    merchantId,
+    planType: newPlan,
+    relationshipClaim: relationshipClaim || null,
+    paymentReference: reference,
+  });
+
+  const amountPaidNgn = amountKobo / 100;
+  const { data: currentSub } = await supabase
+    .from("subscriptions")
+    .select("plan_type, expiry_date")
+    .eq("merchant_id", merchantId)
+    .in("status", ["active", "expired"])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .single();
+
+  const expiryDate = calculateSubscriptionExpiry(
+    amountPaidNgn,
+    newPlan as PlanType,
+    currentSub
+      ? { planType: currentSub.plan_type as PlanType, expiryDate: currentSub.expiry_date }
+      : undefined
+  );
+  const periodStart =
+    currentSub && new Date(currentSub.expiry_date) > new Date()
+      ? new Date(currentSub.expiry_date).toISOString()
+      : new Date().toISOString();
+
+  const { error: subUpsertError } = await supabase.from("subscriptions").upsert(
+    {
+      merchant_id: merchantId,
+      plan_type: newPlan,
+      amount_paid: amountPaidNgn,
+      start_date: new Date().toISOString(),
+      expiry_date: expiryDate.toISOString(),
+      status: "active",
+      last_notified_at: null,
+      is_banner_dismissed: false,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "merchant_id" }
+  );
+
+  if (subUpsertError) {
+    throw new Error(`Failed to upsert upgraded subscription: ${subUpsertError.message}`);
+  }
+
+  await supabase.from("subscription_payments").insert({
+    merchant_id: merchantId,
+    plan: newPlan,
+    amount_ngn: amountPaidNgn,
+    period_start: periodStart,
+    period_end: expiryDate.toISOString(),
+    paystack_ref: reference,
+    payment_type: "upgrade",
+    status: "paid",
+  });
+
+  await supabase.from("audit_logs").insert({
+    event_type: "subscription_upgraded",
+    actor_id: null,
+    actor_role: "system",
+    target_id: merchantId,
+    target_type: "merchant",
+    metadata: {
+      actor_name: `System (${provider} Webhook)`,
+      new_plan: newPlan,
+      reference,
+      amount_ngn: amountPaidNgn,
+    },
+  });
+
+  return { received: true, processed: true };
+}
+
+async function confirmInitialSubscription(
+  supabase: SupabaseClient,
+  payment: SuccessfulFiatPayment
+) {
+  const { metadata, amountKobo, reference, provider } = payment;
+  const sessionId = metadata?.session_id as string | undefined;
+  const plan = metadata?.plan as "individual" | "corporate" | undefined;
+  const email = metadata?.email as string | undefined;
+  const businessName = metadata?.business_name as string | undefined;
+  const businessType = metadata?.business_type as string | undefined;
+  const ownerName = metadata?.owner_name as string | undefined;
+  const relationshipClaim = metadata?.relationship_claim as RelationshipClaim | undefined;
+  const disclosureAccepted =
+    metadata?.verification_disclosure_accepted === true ||
+    metadata?.verification_disclosure_accepted === "true";
+  const disclosureVersion =
+    (metadata?.verification_disclosure_version as string | undefined) ||
+    VERIFICATION_DISCLOSURE_VERSION;
+
+  if (!sessionId || !plan || !email || !businessName) {
+    console.error("Initial subscription confirmation missing metadata:", metadata);
+    return { received: true, skipped: true };
+  }
+
+  assertExpectedPlanAmount(metadata, amountKobo, reference);
+
+  const { data: session } = await supabase
+    .from("onboarding_sessions")
+    .update({ status: "processing" })
+    .eq("id", sessionId)
+    .eq("status", "awaiting_payment")
+    .select("id")
+    .single();
+
+  if (!session) {
+    return { received: true, already_processed: true };
+  }
+
+  const activePlan = plan || "corporate";
+  const { data: authUser, error: authError } = await supabase.auth.admin.createUser({
+    email,
+    email_confirm: true,
+    user_metadata: {
+      business_name: businessName,
+      plan: activePlan,
+    },
+  });
+
+  let userId = authUser?.user?.id;
+  if (authError || !userId) {
+    if (authError?.message?.includes("already") || authError?.status === 422) {
+      const { data: existingUsers } = await supabase.auth.admin.listUsers();
+      const existingUser = existingUsers?.users.find((user) => user.email === email);
+      userId = existingUser?.id;
+    }
+
+    if (!userId) {
+      throw new Error(`Failed to resolve subscription auth user: ${authError?.message || "unknown error"}`);
+    }
+  }
+
+  const [byUserId, byEmail] = await Promise.all([
+    supabase.from("merchants").select("id, business_name, user_id").eq("user_id", userId),
+    supabase.from("merchants").select("id, business_name, user_id").eq("email", email),
+  ]);
+
+  const allMerchants = [...(byUserId.data || []), ...(byEmail.data || [])];
+  const seen = new Set<string>();
+  const uniqueMerchants = allMerchants.filter((merchant) => {
+    if (seen.has(merchant.id)) return false;
+    seen.add(merchant.id);
+    return true;
+  });
+
+  let merchantId: string;
+  if (uniqueMerchants.length > 0) {
+    const sorted = [...uniqueMerchants].sort((a, b) => {
+      if (a.business_name === "Default Business" && b.business_name !== "Default Business") return 1;
+      if (b.business_name === "Default Business" && a.business_name !== "Default Business") return -1;
+      return 0;
+    });
+    const keep = sorted[0];
+    const toDelete = sorted.slice(1);
+
+    for (const duplicate of toDelete) {
+      await supabase.from("audit_logs").delete().eq("target_id", duplicate.id);
+      await supabase.from("audit_logs").delete().eq("actor_id", duplicate.id);
+      await supabase.from("onboarding_sessions").delete().eq("merchant_id", duplicate.id);
+      await supabase.from("merchant_team").delete().eq("merchant_id", duplicate.id);
+      await supabase.from("merchants").delete().eq("id", duplicate.id);
+    }
+
+    merchantId = keep.id;
+    const { error: updateError } = await supabase
+      .from("merchants")
+      .update({
+        user_id: userId,
+        business_name: businessName,
+        email,
+        subscription_plan: activePlan,
+        merchant_tier: activePlan,
+        business_type: businessType || "sole_proprietorship",
+        owner_name: ownerName || null,
+        relationship_claim: relationshipClaim || null,
+        monthly_collection_limit: activePlan === "individual" ? 5000000 : 0,
+        subscription_notifications_sent: {},
+      })
+      .eq("id", merchantId);
+
+    if (updateError) {
+      throw new Error(`Failed to update subscription merchant: ${updateError.message}`);
+    }
+
+    await supabase.from("merchant_team").delete().eq("merchant_id", merchantId).neq("user_id", userId);
+    const { data: existingTeam } = await supabase
+      .from("merchant_team")
+      .select("id")
+      .eq("merchant_id", merchantId)
+      .eq("user_id", userId)
+      .single();
+
+    if (!existingTeam) {
+      await supabase.from("merchant_team").insert({
+        merchant_id: merchantId,
+        user_id: userId,
+        role: "owner",
+        must_change_password: true,
+      });
+    }
+  } else {
+    const { data: newMerchant, error: merchantError } = await supabase
+      .from("merchants")
+      .insert({
+        user_id: userId,
+        email,
+        business_name: businessName,
+        business_type: businessType || "sole_proprietorship",
+        owner_name: ownerName || null,
+        relationship_claim: relationshipClaim || null,
+        subscription_plan: activePlan,
+        merchant_tier: activePlan,
+        verification_status: "unverified",
+        fee_absorption_default: "business",
+        monthly_collection_limit: activePlan === "individual" ? 5000000 : 0,
+        subscription_notifications_sent: {},
+      })
+      .select("id")
+      .single();
+
+    if (merchantError || !newMerchant) {
+      throw new Error(`Failed to create subscription merchant: ${merchantError?.message || "unknown error"}`);
+    }
+
+    merchantId = newMerchant.id;
+    await supabase.from("merchant_team").insert({
+      merchant_id: merchantId,
+      user_id: userId,
+      role: "owner",
+      must_change_password: true,
+    });
+  }
+
+  await enterPaidSetupMode(supabase, {
+    merchantId,
+    planType: activePlan,
+    relationshipClaim: relationshipClaim || null,
+    paymentReference: reference,
+  });
+
+  if (disclosureAccepted) {
+    await recordVerificationDisclosure(supabase, {
+      planType: activePlan,
+      context: "onboarding",
+      userId,
+      merchantId,
+      onboardingSessionId: sessionId,
+      disclosureVersion,
+      deviceMetadata: { source: `${provider}_webhook` },
+    });
+  }
+
+  const amountPaidNgn = amountKobo / 100;
+  await supabase
+    .from("onboarding_sessions")
+    .update({
+      status: "payment_confirmed",
+      paystack_ref: reference,
+      amount_paid: amountPaidNgn,
+      merchant_id: merchantId,
+      idempotency_key: reference,
+    })
+    .eq("id", sessionId);
+
+  const appUrl = getAppUrl();
+  let setPasswordLink = `${appUrl}/onboarding/resend`;
+  const { data: magicLinkData, error: magicError } = await supabase.auth.admin.generateLink({
+    type: "magiclink",
+    email,
+  });
+
+  if (!magicError && magicLinkData?.properties?.email_otp) {
+    const otp = magicLinkData.properties.email_otp;
+    setPasswordLink = `${appUrl}/auth/verify?token=${otp}&email=${encodeURIComponent(
+      email
+    )}&type=magiclink&next=${encodeURIComponent("/onboarding/set-password")}`;
+  }
+
+  const expiryDate = calculateSubscriptionExpiry(amountPaidNgn, activePlan as PlanType);
+  await supabase.from("subscriptions").insert({
+    merchant_id: merchantId,
+    plan_type: activePlan,
+    amount_paid: amountPaidNgn,
+    start_date: new Date().toISOString(),
+    expiry_date: expiryDate.toISOString(),
+    status: "active",
+  });
+
+  await supabase.from("subscription_payments").insert({
+    merchant_id: merchantId,
+    plan: activePlan,
+    amount_ngn: amountPaidNgn,
+    period_start: new Date().toISOString(),
+    period_end: expiryDate.toISOString(),
+    paystack_ref: reference,
+    payment_type: "new",
+    status: "paid",
+  });
+
+  try {
+    const { sendOnboardingWelcomeEmail } = await import("@/lib/brevo");
+    await sendOnboardingWelcomeEmail(
+      email,
+      businessName,
+      activePlan as "individual" | "corporate",
+      setPasswordLink,
+      expiryDate.toISOString()
+    );
+  } catch (error) {
+    console.error("Failed to send welcome email:", error);
+  }
+
+  await supabase.from("audit_logs").insert({
+    event_type: "subscription_payment_confirmed",
+    actor_id: null,
+    actor_role: "system",
+    target_id: merchantId,
+    target_type: "merchant",
+    metadata: {
+      actor_name: `System (${provider} Webhook)`,
+      plan: activePlan,
+      reference,
+      amount_ngn: amountPaidNgn,
+    },
+  });
+
+  return { received: true, processed: true };
+}
+
+async function confirmInvoicePayment(
+  supabase: SupabaseClient,
+  payment: SuccessfulFiatPayment
+) {
+  const { metadata, reference, channel, feesKobo, provider } = payment;
+  const invoiceId = metadata?.invoice_id as string | undefined;
+  const paymentAmount = Number(metadata?.payment_amount);
+
+  if (!invoiceId || !paymentAmount) {
+    console.error("Invoice confirmation missing metadata:", metadata);
+    return { received: true, skipped: true };
+  }
+
+  const { data: existingTxn } = await supabase
+    .from("transactions")
+    .select("id")
+    .eq("paystack_reference", reference)
+    .single();
+
+  if (existingTxn) {
+    return { received: true, already_processed: true };
+  }
+
+  const { data: invoice, error: invoiceError } = await supabase
+    .from("invoices")
+    .select("*")
+    .eq("id", invoiceId)
+    .single();
+
+  if (invoiceError || !invoice) {
+    console.error("Invoice not found for payment confirmation:", invoiceId);
+    return { received: true, skipped: true };
+  }
+
+  if (invoice.invoice_type === "record") {
+    console.error("Payment provider webhook received for record invoice:", invoiceId);
+    return { received: true, skipped: true };
+  }
+
+  const currentOutstanding = Number(invoice.outstanding_balance);
+  if (paymentAmount <= 0 || paymentAmount > currentOutstanding) {
+    console.error("Invoice payment amount failed guard:", {
+      invoiceId,
+      paymentAmount,
+      currentOutstanding,
+      reference,
+    });
+    return { received: true, skipped: true };
+  }
+
+  const currentAmountPaid = Number(invoice.amount_paid);
+  const newAmountPaid = currentAmountPaid + paymentAmount;
+  const newOutstanding = Math.max(0, currentOutstanding - paymentAmount);
+  const newStatus = newOutstanding <= 0 ? "closed" : "partially_paid";
+
+  const { error: updateError } = await supabase
+    .from("invoices")
+    .update({
+      amount_paid: newAmountPaid,
+      outstanding_balance: newOutstanding,
+      status: newStatus,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", invoiceId);
+
+  if (updateError) {
+    throw new Error(`Failed to update invoice after payment: ${updateError.message}`);
+  }
+
+  const kFactor =
+    Number(metadata?.k_factor) ||
+    (currentOutstanding > 0 ? paymentAmount / currentOutstanding : 0);
+  const taxCollected = Math.round(kFactor * Number(invoice.tax_value) * 100) / 100;
+  const discountApplied = Math.round(kFactor * Number(invoice.discount_value) * 100) / 100;
+  const rawFee = paymentAmount * 0.015 + 100;
+  const processorFee = feesKobo ? feesKobo / 100 : Math.min(rawFee, 2000);
+  const paymentMethod = normalizePaymentMethod(channel);
+
+  await supabase.from("transactions").insert({
+    invoice_id: invoiceId,
+    merchant_id: invoice.merchant_id,
+    amount_paid: paymentAmount,
+    k_factor: kFactor,
+    tax_collected: taxCollected,
+    discount_applied: discountApplied,
+    paystack_fee: processorFee,
+    fee_absorbed_by: invoice.fee_absorption || "business",
+    payment_method: paymentMethod,
+    paystack_reference: reference,
+    status: "success",
+  });
+
+  await supabase.from("payment_events").insert({
+    merchant_id: invoice.merchant_id,
+    invoice_id: invoiceId,
+    event_type: "charge.success",
+    processor: provider,
+    processor_ref: reference,
+    amount_kobo: Math.round(paymentAmount * 100),
+    raw_payload: metadata,
+    idempotency_key: reference,
+  });
+
+  await supabase.from("audit_logs").insert({
+    event_type: "payment_received",
+    actor_id: null,
+    actor_role: "system",
+    target_id: invoiceId,
+    target_type: "invoice",
+    metadata: {
+      actor_merchant_id: invoice.merchant_id,
+      actor_name: `System (${provider} Webhook)`,
+      amount: paymentAmount,
+      reference,
+    },
+  });
+
+  try {
+    await sendInvoiceReceipt(supabase, invoice, invoiceId, paymentAmount, newOutstanding);
+  } catch (error) {
+    console.error("Failed to send invoice receipt:", error);
+  }
+
+  return { received: true, processed: true };
+}
+
+function normalizePaymentMethod(channel: string) {
+  const normalized = channel.toLowerCase();
+  if (normalized.includes("card")) return "card";
+  if (normalized.includes("transfer") || normalized.includes("account") || normalized.includes("bank")) {
+    return "bank_transfer";
+  }
+  return "ussd";
+}
+
+function assertExpectedPlanAmount(
+  metadata: Record<string, unknown>,
+  amountKobo: number,
+  reference: string
+) {
+  const expected = Number(metadata.amount_expected_kobo);
+  if (!Number.isFinite(expected) || expected <= 0) {
+    return;
+  }
+
+  if (Math.round(expected) !== Math.round(amountKobo)) {
+    throw new Error(
+      `Payment amount mismatch for ${reference}: expected ${Math.round(expected)}, got ${Math.round(amountKobo)}`
+    );
+  }
+}
+
+async function sendInvoiceReceipt(
+  supabase: SupabaseClient,
+  invoice: Record<string, unknown>,
+  invoiceId: string,
+  paymentAmount: number,
+  newOutstanding: number
+) {
+  const { data: fullInvoice } = await supabase
+    .from("invoices")
+    .select("*, clients(email, full_name)")
+    .eq("id", invoiceId)
+    .single();
+
+  if (!fullInvoice?.clients?.email) {
+    return;
+  }
+
+  const { data: allocations } = await supabase
+    .from("invoice_allocations")
+    .select("allocated_amount")
+    .eq("target_invoice_id", invoiceId);
+  const totalDeposit =
+    allocations?.reduce((sum: number, allocation: { allocated_amount: unknown }) => {
+      return sum + Number(allocation.allocated_amount);
+    }, 0) || 0;
+
+  const { sendPaymentReceiptEmail } = await import("@/lib/brevo");
+  const { formatNaira } = await import("@/lib/calculations");
+  const { data: merchantData } = await supabase
+    .from("merchants")
+    .select("business_name")
+    .eq("id", invoice.merchant_id as string)
+    .single();
+
+  await sendPaymentReceiptEmail(
+    fullInvoice.clients.email,
+    fullInvoice.clients.full_name || "Valued Client",
+    merchantData?.business_name || "Deraledger Merchant",
+    String(invoice.invoice_number || ""),
+    formatNaira(paymentAmount),
+    formatNaira(Math.max(0, newOutstanding)),
+    invoice.pay_by_date
+      ? new Date(invoice.pay_by_date as string).toLocaleDateString("en-GB", {
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+        })
+      : null,
+    `${getAppUrl()}/pay/${invoiceId}`,
+    totalDeposit > 0 ? formatNaira(totalDeposit) : undefined
+  );
+}

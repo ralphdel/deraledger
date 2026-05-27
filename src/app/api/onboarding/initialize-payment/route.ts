@@ -58,6 +58,7 @@ export async function POST(request: Request) {
         verification_disclosure_accepted: verificationDisclosureAccepted === true,
         verification_disclosure_version: disclosureVersion || VERIFICATION_DISCLOSURE_VERSION,
         session_id: sessionId,
+        amount_expected_kobo: amountKobo,
         payment_method_requested: method,
         resolved_provider: route.provider,
         payment_purpose: "plan_subscription",

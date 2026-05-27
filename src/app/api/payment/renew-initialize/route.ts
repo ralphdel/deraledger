@@ -73,6 +73,7 @@ export async function POST(request: Request) {
         email: resolvedEmail,
         business_name: merchant.business_name,
         owner_name: merchant.owner_name || null,
+        amount_expected_kobo: amountKobo,
         payment_method_requested: method,
         resolved_provider: route.provider,
         payment_purpose: "plan_subscription",

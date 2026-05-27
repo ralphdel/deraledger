@@ -92,6 +92,7 @@ export async function POST(request: Request) {
         relationship_claim: (relationshipClaim as RelationshipClaim) || null,
         verification_disclosure_accepted: verificationDisclosureAccepted === true,
         verification_disclosure_version: disclosureVersionToStore,
+        amount_expected_kobo: amountKobo,
         payment_method_requested: method,
         resolved_provider: route.provider,
         payment_purpose: "plan_upgrade",
