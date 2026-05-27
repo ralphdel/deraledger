@@ -294,8 +294,6 @@ export class YouverifyProvider implements ProviderAdapter {
 
     const body = {
       registrationNumber: payload.registrationNumber,
-      rcNumber: payload.registrationNumber,
-      registrationName: payload.businessName,
       countryCode: 'NG',
       isConsent: true,
     };
@@ -315,6 +313,23 @@ export class YouverifyProvider implements ProviderAdapter {
         return this.normalizeBusinessResponse(json);
       }
 
+      if (
+        res.status === 403 &&
+        typeof json?.message === 'string' &&
+        json.message.toLowerCase().includes('only test ids are allowed')
+      ) {
+        return {
+          success: false,
+          companyName: null,
+          registrationStatus: null,
+          personnel: [],
+          providerReference: json?.requestId || null,
+          rawResponse: json,
+          errorCode: 'BUSINESS_NOT_FOUND',
+          error: `${json.message}. Use Youverify sandbox test IDs such as RC00000000.`,
+        };
+      }
+
       if (res.status === 401 || res.status === 403) {
         return {
           success: false,
@@ -327,6 +342,23 @@ export class YouverifyProvider implements ProviderAdapter {
           error: typeof json?.message === 'string'
             ? `Youverify business verification permission denied: ${json.message}`
             : `Youverify business verification permission denied with status ${res.status}`,
+        };
+      }
+
+      if (res.status === 400) {
+        const message =
+          typeof json?.message === 'string'
+            ? json.message
+            : `Youverify CAC request failed validation with status ${res.status}`;
+        return {
+          success: false,
+          companyName: null,
+          registrationStatus: null,
+          personnel: [],
+          providerReference: json?.requestId || null,
+          rawResponse: json,
+          errorCode: 'UNKNOWN_ERROR',
+          error: message,
         };
       }
 
@@ -527,13 +559,17 @@ export class YouverifyProvider implements ProviderAdapter {
       json?.status ||
       null;
 
+    const found = Boolean(companyName) && String(registrationStatus || '').toLowerCase() !== 'not_found';
+
     return {
-      success: Boolean(companyName),
+      success: found,
       companyName,
       registrationStatus,
       personnel,
       providerReference: json?.requestId || data?.id || null,
       rawResponse: json,
+      errorCode: found ? undefined : 'BUSINESS_NOT_FOUND',
+      error: found ? undefined : 'Business was not found in the CAC registry.',
     };
   }
 
