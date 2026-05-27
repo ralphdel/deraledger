@@ -29,6 +29,40 @@ import {
 import type { Merchant } from "@/lib/types";
 
 type ActionMode = "idle" | "reject" | "reupload" | "reset";
+type DirectorVerificationRow = {
+  id: string;
+  director_name?: string | null;
+  director_role?: string | null;
+  masked_bvn?: string | null;
+  provider_name?: string | null;
+  selfie_url?: string | null;
+  verification_status?: string | null;
+  face_match_score?: number | null;
+  admin_notes?: string | null;
+};
+type RegistrySnapshotRow = {
+  id: string;
+  provider_name?: string | null;
+  registered_name?: string | null;
+  registration_number?: string | null;
+  directors_json?: { name?: string; role?: string }[] | null;
+};
+type BusinessAffiliationRow = {
+  id: string;
+  status?: string | null;
+  match_reason?: string | null;
+  matched_registry_name?: string | null;
+};
+type DirectorInvitationRow = {
+  id: string;
+  selected_director_name?: string | null;
+  director_email?: string | null;
+  status?: string | null;
+};
+type VerificationCostRow = {
+  id: string;
+  cost_amount?: number | string | null;
+};
 
 export default function VerificationQueuePage() {
   const [merchants, setMerchants] = useState<Merchant[]>([]);
@@ -42,16 +76,16 @@ export default function VerificationQueuePage() {
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
 
-  const [directors, setDirectors] = useState<any[]>([]);
+  const [directors, setDirectors] = useState<DirectorVerificationRow[]>([]);
   const [directorsLoading, setDirectorsLoading] = useState(false);
   const [directorsExpanded, setDirectorsExpanded] = useState(true);
   const [directorNotes, setDirectorNotes] = useState<Record<string, string>>({});
+  const [registrySnapshot, setRegistrySnapshot] = useState<RegistrySnapshotRow | null>(null);
+  const [businessAffiliations, setBusinessAffiliations] = useState<BusinessAffiliationRow[]>([]);
+  const [directorInvitations, setDirectorInvitations] = useState<DirectorInvitationRow[]>([]);
+  const [verificationCosts, setVerificationCosts] = useState<VerificationCostRow[]>([]);
 
-  useEffect(() => {
-    loadMerchants();
-  }, []);
-
-  const loadMerchants = () => {
+  function loadMerchants() {
     const sb = createClient();
     sb.from("merchants")
       .select("*")
@@ -60,7 +94,11 @@ export default function VerificationQueuePage() {
         setMerchants((data || []) as Merchant[]);
         setLoading(false);
       });
-  };
+  }
+
+  useEffect(() => {
+    loadMerchants();
+  }, []);
 
   const refreshMerchant = (updates: Partial<Merchant>) => {
     if (!selectedMerchant) return;
@@ -173,11 +211,15 @@ export default function VerificationQueuePage() {
     setSelectedMerchant(m);
     setReviewNotes(""); setActionReason(""); setActionMode("idle");
     setReviewError(null); setActionSuccess(null);
+    setRegistrySnapshot(null);
+    setBusinessAffiliations([]);
+    setDirectorInvitations([]);
+    setVerificationCosts([]);
 
     const plan = m.subscription_plan || m.merchant_tier || "starter";
+    const sb = createClient();
     if (plan === "corporate") {
       setDirectorsLoading(true);
-      const sb = createClient();
       sb.from("business_director_verifications")
         .select("*")
         .eq("merchant_id", m.id)
@@ -188,6 +230,18 @@ export default function VerificationQueuePage() {
     } else {
       setDirectors([]);
     }
+
+    Promise.all([
+      sb.from("business_registry_snapshots").select("*").eq("merchant_id", m.id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
+      sb.from("business_affiliations").select("*").eq("merchant_id", m.id).order("created_at", { ascending: false }),
+      sb.from("director_invitations").select("*").eq("merchant_id", m.id).order("created_at", { ascending: false }),
+      sb.from("verification_costs").select("*").eq("merchant_id", m.id).order("created_at", { ascending: false }).limit(10),
+    ]).then(([snapshotRes, affiliationRes, invitationRes, costRes]) => {
+      setRegistrySnapshot(snapshotRes.data || null);
+      setBusinessAffiliations(affiliationRes.data || []);
+      setDirectorInvitations(invitationRes.data || []);
+      setVerificationCosts(costRes.data || []);
+    });
   };
 
   const handleApproveDirector = async (id: string, notes: string) => {
@@ -332,6 +386,116 @@ export default function VerificationQueuePage() {
                         </div>
                       </div>
 
+                      {/* PRD setup-mode and authority context */}
+                      <div className="rounded-xl border border-purple-200 bg-purple-50/60 p-3 space-y-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="font-semibold text-purple-950 text-sm">Setup Mode & Authority Review</p>
+                            <p className="text-xs text-purple-700 mt-0.5">
+                              Tracks paid setup, live feature gating, saved registry snapshot, affiliation matching, invitations, and cost context.
+                            </p>
+                          </div>
+                          <Badge variant="outline" className="border-purple-200 bg-white text-purple-700 font-bold capitalize">
+                            {selectedMerchant.onboarding_status?.replace(/_/g, " ") || "legacy"}
+                          </Badge>
+                        </div>
+
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                          {[
+                            { label: "Setup mode", value: selectedMerchant.setup_mode ? "Yes" : "No" },
+                            { label: "Live features", value: selectedMerchant.live_features_enabled ? "Enabled" : "Locked" },
+                            { label: "Relationship", value: selectedMerchant.relationship_claim?.replace(/_/g, " ") || "not set" },
+                            { label: "Affiliation", value: selectedMerchant.business_affiliation_status?.replace(/_/g, " ") || "not started" },
+                          ].map((item) => (
+                            <div key={item.label} className="rounded-lg bg-white border border-purple-100 p-2">
+                              <p className="text-[10px] uppercase font-bold text-purple-400">{item.label}</p>
+                              <p className="mt-0.5 text-xs font-semibold text-neutral-900 capitalize">{item.value}</p>
+                            </div>
+                          ))}
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div className="rounded-lg bg-white border border-purple-100 p-3">
+                            <p className="text-xs font-bold text-neutral-900">Verification disclosure</p>
+                            <p className="mt-1 text-xs text-neutral-600">
+                              Version: {selectedMerchant.verification_disclosure_version || "-"}
+                            </p>
+                            <p className="text-xs text-neutral-600">
+                              Acknowledged: {selectedMerchant.verification_disclosure_acknowledged_at ? new Date(selectedMerchant.verification_disclosure_acknowledged_at).toLocaleString() : "-"}
+                            </p>
+                          </div>
+                          <div className="rounded-lg bg-white border border-purple-100 p-3">
+                            <p className="text-xs font-bold text-neutral-900">Verification cost context</p>
+                            <p className="mt-1 text-xs text-neutral-600">
+                              Attempts shown: {verificationCosts.length}
+                            </p>
+                            <p className="text-xs text-neutral-600">
+                              Total shown: NGN {verificationCosts.reduce((sum, item) => sum + Number(item.cost_amount || 0), 0).toLocaleString()}
+                            </p>
+                          </div>
+                        </div>
+
+                        {registrySnapshot ? (
+                          <div className="rounded-lg bg-white border border-purple-100 p-3 space-y-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <div>
+                                <p className="text-xs font-bold text-neutral-900">Saved business registry snapshot</p>
+                                <p className="text-[11px] text-neutral-500">
+                                  {registrySnapshot.registered_name || "-"} - {registrySnapshot.registration_number || "-"}
+                                </p>
+                              </div>
+                              <Badge variant="outline" className="text-[10px] uppercase">{registrySnapshot.provider_name}</Badge>
+                            </div>
+                            {Array.isArray(registrySnapshot.directors_json) && registrySnapshot.directors_json.length > 0 ? (
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                {registrySnapshot.directors_json.slice(0, 6).map((person: { name?: string; role?: string }, index: number) => (
+                                  <div key={`${person.name}-${index}`} className="rounded border bg-neutral-50 px-2 py-1.5">
+                                    <p className="truncate text-xs font-semibold text-neutral-800">{person.name || "Unnamed director"}</p>
+                                    <p className="text-[10px] text-neutral-500 capitalize">{String(person.role || "director").replace(/_/g, " ")}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="text-xs text-amber-700">No director roster was returned in the saved snapshot.</p>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="rounded-lg bg-white border border-dashed border-purple-100 p-3 text-xs text-neutral-500">
+                            No saved registry snapshot yet. RC/CAC lookup must run before affiliation matching or director approval.
+                          </div>
+                        )}
+
+                        {(businessAffiliations.length > 0 || directorInvitations.length > 0) && (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div className="rounded-lg bg-white border border-purple-100 p-3 space-y-2">
+                              <p className="text-xs font-bold text-neutral-900">Affiliation matches</p>
+                              {businessAffiliations.length === 0 ? (
+                                <p className="text-xs text-neutral-500">No affiliation match recorded.</p>
+                              ) : businessAffiliations.slice(0, 4).map((item) => (
+                                <div key={item.id} className="text-xs border-t border-neutral-100 pt-2 first:border-t-0 first:pt-0">
+                                  <p className="font-semibold capitalize">{item.status?.replace(/_/g, " ")}</p>
+                                  <p className="text-neutral-500">{item.match_reason || item.matched_registry_name || "-"}</p>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="rounded-lg bg-white border border-purple-100 p-3 space-y-2">
+                              <p className="text-xs font-bold text-neutral-900">Director invitations</p>
+                              {directorInvitations.length === 0 ? (
+                                <p className="text-xs text-neutral-500">No director invitation sent.</p>
+                              ) : directorInvitations.slice(0, 4).map((invite) => (
+                                <div key={invite.id} className="text-xs border-t border-neutral-100 pt-2 first:border-t-0 first:pt-0">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="font-semibold truncate">{invite.selected_director_name}</span>
+                                    <Badge variant="outline" className="text-[9px] capitalize">{invite.status}</Badge>
+                                  </div>
+                                  <p className="text-neutral-500 truncate">{invite.director_email}</p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
                       {/* Dojah block */}
                       <div className="rounded-xl border border-blue-200 bg-blue-50 p-3">
                         <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -434,7 +598,7 @@ export default function VerificationQueuePage() {
                                         {dir.selfie_url && (
                                           <button
                                             type="button"
-                                            onClick={() => handleViewDocument(dir.selfie_url)}
+                                            onClick={() => dir.selfie_url && handleViewDocument(dir.selfie_url)}
                                             className="text-xs text-[#7B2FF7] hover:underline flex items-center gap-1 font-semibold"
                                           >
                                             View Selfie <ExternalLink className="h-3 w-3" />

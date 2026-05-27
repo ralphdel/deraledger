@@ -2819,6 +2819,50 @@ export async function verifyDirectorAction(params: {
   return result;
 }
 
+export async function getDirectorApprovalContextAction(merchantId: string) {
+  const guard = await requireMerchantOwner(merchantId);
+  if (!guard.permitted) return { success: false, error: guard.error, snapshot: null, invitations: [] };
+
+  const {
+    getLatestRegistrySnapshot,
+    listDirectorInvitations,
+  } = await import("@/lib/services/director-invitation.service");
+
+  const [snapshotResult, invitationsResult] = await Promise.all([
+    getLatestRegistrySnapshot(merchantId),
+    listDirectorInvitations(merchantId),
+  ]);
+
+  return {
+    success: snapshotResult.success && invitationsResult.success,
+    error: snapshotResult.error || invitationsResult.error,
+    snapshot: snapshotResult.snapshot,
+    invitations: invitationsResult.invitations,
+  };
+}
+
+export async function createDirectorInvitationAction(params: {
+  merchantId: string;
+  selectedDirectorRecordId: string;
+  directorEmail: string;
+  directorPhone?: string | null;
+}) {
+  const guard = await requireMerchantOwner(params.merchantId);
+  if (!guard.permitted || !guard.userId) return { success: false, error: guard.error };
+  if (!params.directorEmail || !params.directorEmail.includes("@")) {
+    return { success: false, error: "Enter a valid director email address." };
+  }
+
+  const { createDirectorInvitation } = await import("@/lib/services/director-invitation.service");
+  const result = await createDirectorInvitation({
+    ...params,
+    requesterUserId: guard.userId,
+  });
+
+  revalidatePath("/settings");
+  return result;
+}
+
 export async function adminManualReviewDirectorAction(params: {
   directorVerificationId: string;
   status: "verified" | "failed";

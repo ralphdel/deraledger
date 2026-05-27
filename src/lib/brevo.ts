@@ -102,6 +102,43 @@ export async function sendTeamInviteEmail(
   });
 }
 
+export async function sendDirectorInvitationEmail(params: {
+  toEmail: string;
+  directorName: string;
+  businessName: string;
+  requesterName?: string | null;
+  approvalLink: string;
+  expiresAt: string;
+}) {
+  const htmlContent = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #111827; border: 1px solid #E5E7EB; border-radius: 8px; overflow: hidden;">
+      <div style="background-color: #111827; padding: 22px; text-align: center;">
+        <h2 style="color: white; margin: 0;">Director approval required</h2>
+      </div>
+      <div style="padding: 30px;">
+        <p>Hello ${params.directorName},</p>
+        <p>${params.requesterName || "A representative"} is setting up <strong>${params.businessName}</strong> on DeraLedger and needs a listed director or owner to verify and approve the workspace before live payment collection is enabled.</p>
+        <div style="background-color: #F8FAFC; border: 1px solid #E5E7EB; padding: 16px; border-radius: 6px; margin: 20px 0;">
+          <p style="margin: 4px 0;"><strong>Business:</strong> ${params.businessName}</p>
+          <p style="margin: 4px 0;"><strong>Approval expires:</strong> ${new Date(params.expiresAt).toLocaleString()}</p>
+        </div>
+        <p>This approval requires BVN and selfie verification. Do not continue if you do not recognize this request.</p>
+        <p style="margin-top: 24px;">
+          <a href="${params.approvalLink}" style="background-color: #111827; color: white; padding: 12px 18px; border-radius: 6px; text-decoration: none; font-weight: bold;">Review and approve</a>
+        </p>
+        <p style="font-size: 12px; color: #6B7280; margin-top: 24px;">If the button does not work, open this link: ${params.approvalLink}</p>
+      </div>
+    </div>
+  `;
+
+  return sendEmail({
+    sender: { name: "Deraledger Verification", email: ADMIN_EMAIL },
+    to: [{ email: params.toEmail }],
+    subject: `Approve ${params.businessName} on DeraLedger`,
+    htmlContent,
+  });
+}
+
 export async function sendPasswordResetEmail(toEmail: string, resetLink: string) {
   const htmlContent = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #111827; border: 1px solid #E5E7EB; border-radius: 8px; overflow: hidden;">

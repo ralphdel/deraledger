@@ -6,7 +6,6 @@
  */
 
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
-import crypto from "crypto";
 import {
   getActiveProvider,
   getActiveProviderKey,

@@ -19,13 +19,40 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { getMerchant } from "@/lib/data";
-import { submitDojahKycAction, verifyRcNumberAction, submitKycAction, getActiveVerificationProviderKeyAction } from "@/lib/actions";
+import {
+  submitDojahKycAction,
+  verifyRcNumberAction,
+  submitKycAction,
+  getActiveVerificationProviderKeyAction,
+  getDirectorApprovalContextAction,
+  createDirectorInvitationAction,
+} from "@/lib/actions";
 import { CreateClientModal } from "@/components/CreateClientModal";
 import { LivenessCamera } from "@/components/kyc/liveness-camera";
 import { createClient } from "@/lib/supabase/client";
 import type { Merchant } from "@/lib/types";
 
 const CURRENT_PLATFORM_VERSION = 1;
+
+type DirectorVerificationRow = {
+  id: string;
+  director_name?: string | null;
+  director_role?: string | null;
+  verification_status?: string | null;
+};
+
+type RegistrySnapshotRow = {
+  id: string;
+  registered_name?: string | null;
+  registration_number?: string | null;
+  directors_json?: { name?: string; role?: string }[] | null;
+};
+
+type DirectorInvitationRow = {
+  id: string;
+  selected_director_name?: string | null;
+  status?: string | null;
+};
 
 export default function SettingsPage() {
   const [businessName, setBusinessName] = useState("");
@@ -67,12 +94,19 @@ export default function SettingsPage() {
   const [isBvnLocked, setIsBvnLocked] = useState(false);
 
   // Director KYB states
-  const [directors, setDirectors] = useState<any[]>([]);
+  const [directors, setDirectors] = useState<DirectorVerificationRow[]>([]);
   const [directorsLoading, setDirectorsLoading] = useState(false);
   const [showVerifyDirectorModal, setShowVerifyDirectorModal] = useState(false);
   const [newDirectorName, setNewDirectorName] = useState("");
   const [newDirectorRole, setNewDirectorRole] = useState<"director" | "shareholder" | "beneficial_owner" | "signatory" | "proprietor" | "partner" | "trustee">("director");
   const [activeDirectorToVerify, setActiveDirectorToVerify] = useState<{ name: string; role: typeof newDirectorRole } | null>(null);
+  const [registrySnapshot, setRegistrySnapshot] = useState<RegistrySnapshotRow | null>(null);
+  const [directorInvitations, setDirectorInvitations] = useState<DirectorInvitationRow[]>([]);
+  const [selectedRegistryDirector, setSelectedRegistryDirector] = useState("");
+  const [directorInviteEmail, setDirectorInviteEmail] = useState("");
+  const [directorInviteSubmitting, setDirectorInviteSubmitting] = useState(false);
+  const [directorInviteMessage, setDirectorInviteMessage] = useState<string | null>(null);
+  const [directorInviteError, setDirectorInviteError] = useState<string | null>(null);
 
   const loadDirectors = async (merchantId: string) => {
     setDirectorsLoading(true);
@@ -90,6 +124,40 @@ export default function SettingsPage() {
       console.error("Failed to load directors", err);
     } finally {
       setDirectorsLoading(false);
+    }
+  };
+
+  const loadDirectorApprovalContext = async (merchantId: string) => {
+    try {
+      const result = await getDirectorApprovalContextAction(merchantId);
+      if (result.success) {
+        setRegistrySnapshot(result.snapshot);
+        setDirectorInvitations(result.invitations || []);
+      }
+    } catch (err) {
+      console.error("Failed to load director approval context", err);
+    }
+  };
+
+  const handleCreateDirectorInvitation = async () => {
+    if (!merchant) return;
+    setDirectorInviteSubmitting(true);
+    setDirectorInviteError(null);
+    setDirectorInviteMessage(null);
+    try {
+      const result = await createDirectorInvitationAction({
+        merchantId: merchant.id,
+        selectedDirectorRecordId: selectedRegistryDirector,
+        directorEmail: directorInviteEmail,
+      });
+      if (!result.success) throw new Error(result.error || "Could not send director invitation.");
+      setDirectorInviteMessage("Director approval invitation sent.");
+      setDirectorInviteEmail("");
+      await loadDirectorApprovalContext(merchant.id);
+    } catch (err) {
+      setDirectorInviteError(err instanceof Error ? err.message : "Could not send director invitation.");
+    } finally {
+      setDirectorInviteSubmitting(false);
     }
   };
 
@@ -119,9 +187,9 @@ export default function SettingsPage() {
       
       setLogoUrl(publicUrl);
       setMerchant({ ...merchant, logo_url: publicUrl } as Merchant);
-    } catch (err: any) {
+    } catch (err) {
       console.error("Error uploading logo:", err);
-      setKycError("Failed to upload logo: " + err.message + ". Please ensure your database storage policies are set up correctly.");
+      setKycError("Failed to upload logo: " + (err instanceof Error ? err.message : "Unknown error") + ". Please ensure your database storage policies are set up correctly.");
     } finally {
       setUploadingLogo(false);
     }
@@ -135,9 +203,9 @@ export default function SettingsPage() {
       await submitKycAction(merchant.id, { logo_url: null });
       setLogoUrl(null);
       setMerchant({ ...merchant, logo_url: null } as Merchant);
-    } catch (err: any) {
+    } catch (err) {
       console.error("Error removing logo:", err);
-      setKycError("Failed to remove logo: " + err.message);
+      setKycError("Failed to remove logo: " + (err instanceof Error ? err.message : "Unknown error"));
     } finally {
       setUploadingLogo(false);
     }
@@ -194,6 +262,7 @@ export default function SettingsPage() {
 
         if (tier === "corporate" && m.id) {
           loadDirectors(m.id);
+          loadDirectorApprovalContext(m.id);
         }
       }
       setLoading(false);
@@ -280,12 +349,13 @@ export default function SettingsPage() {
       if (res.success) {
         setCacNumber(normalizedCacNumber);
         setMerchant({ ...merchant, cac_number: normalizedCacNumber } as Merchant);
+        await loadDirectorApprovalContext(merchant.id);
         setRcError(null);
       } else {
         setRcError(res.error || "Failed to verify RC Number.");
       }
-    } catch (e: any) {
-      setRcError(e.message || "An unexpected error occurred verifying your RC Number.");
+    } catch (e) {
+      setRcError(e instanceof Error ? e.message : "An unexpected error occurred verifying your RC Number.");
     } finally {
       setRcSubmitting(false);
     }
@@ -422,6 +492,13 @@ export default function SettingsPage() {
   const effectiveVerificationStatus = profileIncomplete ? "unverified" : verificationStatus;
   // Lock owner_name once BVN or selfie has been verified — name is legally bound to identity
   const isOwnerNameLocked = merchant?.bvn_status === "verified" || merchant?.selfie_status === "verified";
+  const registryDirectors = Array.isArray(registrySnapshot?.directors_json)
+    ? registrySnapshot.directors_json
+    : [];
+  const needsDirectorApproval =
+    isCorporate &&
+    ["no_match", "rejected"].includes(String(merchant?.business_affiliation_status || "")) ||
+    (isCorporate && merchant?.relationship_claim === "representative_claim");
 
   if (loading) {
     return (
@@ -894,6 +971,91 @@ export default function SettingsPage() {
                   </div>
                 )}
 
+                {registrySnapshot && (
+                  <div className="rounded-xl border border-neutral-200 bg-white p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-bold text-neutral-900">Saved CAC registry snapshot</p>
+                        <p className="mt-0.5 text-[11px] text-neutral-500">
+                          {registrySnapshot.registered_name || "Registered business"} - {registrySnapshot.registration_number}
+                        </p>
+                      </div>
+                      <Badge variant="outline" className="text-[10px] uppercase">
+                        {merchant?.business_affiliation_status?.replace(/_/g, " ") || "not started"}
+                      </Badge>
+                    </div>
+
+                    {registryDirectors.length > 0 ? (
+                      <div className="space-y-2">
+                        <p className="text-[10px] font-bold uppercase text-neutral-500">Registry directors / owners</p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {registryDirectors.map((person: { name?: string; role?: string }, index: number) => (
+                            <div key={`${person.name}-${index}`} className="rounded-lg border border-neutral-100 bg-neutral-50 px-3 py-2">
+                              <p className="truncate text-xs font-semibold text-neutral-800">{person.name || "Unnamed director"}</p>
+                              <p className="text-[10px] capitalize text-neutral-500">{String(person.role || "director").replace(/_/g, " ")}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-amber-700">The saved registry payload did not include a director list.</p>
+                    )}
+                  </div>
+                )}
+
+                {needsDirectorApproval && registryDirectors.length > 0 && (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 space-y-3">
+                    <div>
+                      <p className="text-xs font-bold text-amber-900">Director approval required</p>
+                      <p className="mt-0.5 text-[11px] text-amber-800">
+                        A listed director must verify identity and approve this workspace before live payment collection is enabled.
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-[1fr_1.2fr] gap-2">
+                      <select
+                        value={selectedRegistryDirector}
+                        onChange={(e) => setSelectedRegistryDirector(e.target.value)}
+                        className="h-10 rounded border border-amber-200 bg-white px-3 text-xs text-neutral-900 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                      >
+                        <option value="">Select listed director</option>
+                        {registryDirectors.map((person: { name?: string; role?: string }, index: number) => (
+                          <option key={`${person.name}-${index}`} value={String(index)}>
+                            {person.name || `Director ${index + 1}`}
+                          </option>
+                        ))}
+                      </select>
+                      <Input
+                        type="email"
+                        placeholder="Director email"
+                        value={directorInviteEmail}
+                        onChange={(e) => setDirectorInviteEmail(e.target.value)}
+                        className="h-10 bg-white text-xs"
+                      />
+                    </div>
+                    <Button
+                      type="button"
+                      onClick={handleCreateDirectorInvitation}
+                      disabled={directorInviteSubmitting || !selectedRegistryDirector || !directorInviteEmail}
+                      className="w-full h-10 bg-amber-700 hover:bg-amber-800 text-white text-xs font-bold"
+                    >
+                      {directorInviteSubmitting ? "Sending invitation..." : "Send director approval invite"}
+                    </Button>
+                    {directorInviteMessage && <p className="text-xs font-semibold text-emerald-700">{directorInviteMessage}</p>}
+                    {directorInviteError && <p className="text-xs font-semibold text-red-700">{directorInviteError}</p>}
+                    {directorInvitations.length > 0 && (
+                      <div className="space-y-1.5 pt-1">
+                        <p className="text-[10px] font-bold uppercase text-amber-900">Recent invitations</p>
+                        {directorInvitations.slice(0, 3).map((invite) => (
+                          <div key={invite.id} className="flex items-center justify-between gap-2 rounded-lg bg-white px-3 py-2 text-xs">
+                            <span className="truncate font-medium text-neutral-700">{invite.selected_director_name}</span>
+                            <Badge variant="outline" className="text-[9px] capitalize">{invite.status}</Badge>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Add Director Form or trigger button */}
                 {showVerifyDirectorModal ? (
                   <div className="p-4 bg-purp-50/50 border-2 border-purp-200 border-dashed rounded-xl space-y-3">
@@ -913,7 +1075,7 @@ export default function SettingsPage() {
                         <Label className="text-[10px] font-bold text-neutral-500 uppercase">Company Role</Label>
                         <select
                           value={newDirectorRole}
-                          onChange={(e: any) => setNewDirectorRole(e.target.value)}
+                          onChange={(e) => setNewDirectorRole(e.target.value as typeof newDirectorRole)}
                           className="w-full h-9 rounded border border-neutral-200 bg-white px-3 py-1.5 text-xs text-neutral-900 focus:outline-none focus:ring-1 focus:ring-purp-500"
                         >
                           <option value="director">Director</option>
