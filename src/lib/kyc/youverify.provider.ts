@@ -207,7 +207,13 @@ export class YouverifyProvider implements ProviderAdapter {
       };
     }
 
-    if (!payload.selfieImageUrl) {
+    // Prefer base64 directly — Youverify servers cannot reach private Supabase signed URLs.
+    // Strip the data-URI prefix if present so we send only the raw base64 string.
+    const selfieBase64 = payload.selfieBase64
+      ? payload.selfieBase64.replace(/^data:image\/[a-z]+;base64,/, '')
+      : null;
+
+    if (!selfieBase64 && !payload.selfieImageUrl) {
       return {
         success: false,
         bvnExists: false,
@@ -217,23 +223,22 @@ export class YouverifyProvider implements ProviderAdapter {
         providerReference: null,
         rawResponse: {},
         errorCode: 'UNKNOWN_ERROR',
-        error: 'Selfie image URL is required for Youverify BVN verification.',
+        error: 'A selfie image (base64 or URL) is required for Youverify BVN verification.',
       };
     }
 
+    // Correct Youverify payload — selfie is a top-level sibling of `id`, not nested under `validations`
     const body = {
       id: payload.bvn,
       isSubjectConsent: true,
-      validations: {
-        selfie: {
-          image: payload.selfieImageUrl,
-        },
+      selfie: {
+        image: selfieBase64 || payload.selfieImageUrl,
       },
-      premiumBVN: false,
     };
 
     try {
-      const res = await fetch(`${this.baseUrl}/v2/api/identity/ind/bvn/verify-with-face`, {
+      // Primary: correct Nigeria BVN+selfie endpoint
+      const res = await fetch(`${this.baseUrl}/v2/api/identity/ng/bvn`, {
         method: 'POST',
         headers: this.headers,
         body: JSON.stringify(body),
@@ -241,26 +246,68 @@ export class YouverifyProvider implements ProviderAdapter {
 
       const json = await res.json().catch(() => ({}));
 
-      if (!res.ok) {
-        const errorCode = this.normalizeHttpError(res.status);
-        const message =
-          typeof json?.message === 'string'
-            ? json.message
-            : `Youverify BVN request failed with status ${res.status}`;
+      if (res.ok) {
+        return this.normalizeBVNResponse(json);
+      }
+
+      // Fallback: try the older verify-with-face endpoint for accounts that still support it
+      if (res.status === 404) {
+        const legacyBody = {
+          id: payload.bvn,
+          isSubjectConsent: true,
+          validations: {
+            selfie: {
+              image: selfieBase64 || payload.selfieImageUrl,
+            },
+          },
+          premiumBVN: false,
+        };
+
+        const legacyRes = await fetch(`${this.baseUrl}/v2/api/identity/ind/bvn/verify-with-face`, {
+          method: 'POST',
+          headers: this.headers,
+          body: JSON.stringify(legacyBody),
+        });
+
+        const legacyJson = await legacyRes.json().catch(() => ({}));
+
+        if (legacyRes.ok) {
+          return this.normalizeBVNResponse(legacyJson);
+        }
+
+        const legacyMessage =
+          typeof legacyJson?.message === 'string'
+            ? legacyJson.message
+            : `Youverify BVN request failed with status ${legacyRes.status}`;
         return {
           success: false,
           bvnExists: false,
           faceMatch: false,
           matchScore: null,
           returnedName: {},
-          providerReference: json?.requestId || null,
-          rawResponse: json,
-          errorCode,
-          error: message,
+          providerReference: legacyJson?.requestId || null,
+          rawResponse: legacyJson,
+          errorCode: this.normalizeHttpError(legacyRes.status),
+          error: legacyMessage,
         };
       }
 
-      return this.normalizeBVNResponse(json);
+      const errorCode = this.normalizeHttpError(res.status);
+      const message =
+        typeof json?.message === 'string'
+          ? json.message
+          : `Youverify BVN request failed with status ${res.status}`;
+      return {
+        success: false,
+        bvnExists: false,
+        faceMatch: false,
+        matchScore: null,
+        returnedName: {},
+        providerReference: json?.requestId || null,
+        rawResponse: json,
+        errorCode,
+        error: message,
+      };
     } catch (err: any) {
       return {
         success: false,
@@ -275,6 +322,7 @@ export class YouverifyProvider implements ProviderAdapter {
       };
     }
   }
+
 
   // ── Business (CAC) Verification (Legacy compatibility) ──────────────────────
 
