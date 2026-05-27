@@ -479,9 +479,16 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
                     This helps us confirm whether you can activate the business directly or need director approval.
                   </p>
                   <div className="grid gap-3">
-                    <label className="flex items-start gap-3 rounded-lg border border-white/10 bg-[#12061F]/50 p-3">
+                    <label
+                      className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors ${
+                        relationshipClaim === "owner_affiliated_claim"
+                          ? "border-[#7B2FF7] bg-[#7B2FF7]/15"
+                          : "border-white/10 bg-[#12061F]/50 hover:border-white/20"
+                      }`}
+                    >
                       <input
                         type="radio"
+                        name="relationshipClaim"
                         checked={relationshipClaim === "owner_affiliated_claim"}
                         onChange={() => setRelationshipClaim("owner_affiliated_claim")}
                         className="mt-1 h-4 w-4 accent-[#7B2FF7]"
@@ -491,9 +498,16 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
                         <span className="block text-xs text-white/50">We will match your verified identity against the CAC registry record.</span>
                       </span>
                     </label>
-                    <label className="flex items-start gap-3 rounded-lg border border-white/10 bg-[#12061F]/50 p-3">
+                    <label
+                      className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors ${
+                        relationshipClaim === "representative_claim"
+                          ? "border-[#7B2FF7] bg-[#7B2FF7]/15"
+                          : "border-white/10 bg-[#12061F]/50 hover:border-white/20"
+                      }`}
+                    >
                       <input
                         type="radio"
+                        name="relationshipClaim"
                         checked={relationshipClaim === "representative_claim"}
                         onChange={() => setRelationshipClaim("representative_claim")}
                         className="mt-1 h-4 w-4 accent-[#7B2FF7]"
