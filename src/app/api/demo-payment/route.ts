@@ -120,12 +120,16 @@ export async function POST(request: Request) {
     }
 
     // Default: Fiat Checkout
+    const callback = new URL(`${appUrl}/pay/${invoiceId}`);
+    callback.searchParams.set("reference", reference);
+    callback.searchParams.set("provider", route.provider);
+
     const result = await PaymentService.initializeTransaction({
       email: invoice.clients?.email || "customer@deraledger.app",
       amountKobo: chargeAmountKobo,
       reference,
       subaccountCode: merchant.payment_subaccount_code,
-      callbackUrl: `${appUrl}/pay/${invoiceId}?reference=${reference}`,
+      callbackUrl: callback.toString(),
       bearer: "account",
       paymentMethod: selectedMethod,
       metadata,

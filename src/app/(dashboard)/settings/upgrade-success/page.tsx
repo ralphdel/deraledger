@@ -9,8 +9,12 @@ function UpgradeSuccessContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const plan = searchParams.get("plan");
-  const reference = searchParams.get("reference");
-  const provider = searchParams.get("provider") || "paystack";
+  const reference =
+    searchParams.get("reference") ||
+    searchParams.get("trxref") ||
+    searchParams.get("paymentReference") ||
+    searchParams.get("transactionReference");
+  const provider = searchParams.get("provider") || undefined;
   const planLabel =
     plan === "corporate"
       ? "Business"

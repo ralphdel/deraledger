@@ -15,12 +15,26 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Missing reference" }, { status: 400 });
     }
 
-    const tx = await PaymentService.verifyTransaction(
-      reference,
-      provider === "monnify" ? "monnify" : "paystack"
-    );
+    const providersToTry: Array<"paystack" | "monnify"> =
+      provider === "monnify" ? ["monnify"] : provider === "paystack" ? ["paystack"] : ["paystack", "monnify"];
+    let tx: Record<string, unknown> | null = null;
+    let lastError: unknown = null;
+
+    for (const providerName of providersToTry) {
+      try {
+        const verified = await PaymentService.verifyTransaction(reference, providerName);
+        if (verified.status === "success") {
+          tx = verified;
+          break;
+        }
+        lastError = new Error("Payment not successful");
+      } catch (error) {
+        lastError = error;
+      }
+    }
     
-    if (tx.status !== "success") {
+    if (!tx) {
+      console.error("Verify upgrade provider fallback failed:", lastError);
       return NextResponse.json({ error: "Payment not successful" }, { status: 400 });
     }
 

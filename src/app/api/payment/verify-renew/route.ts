@@ -29,12 +29,26 @@ export async function POST(request: Request) {
     }
 
     // 1. Verify with Paystack directly — source of truth
-    const tx = await PaymentService.verifyTransaction(
-      reference,
-      provider === "monnify" ? "monnify" : "paystack"
-    );
+    const providersToTry: Array<"paystack" | "monnify"> =
+      provider === "monnify" ? ["monnify"] : provider === "paystack" ? ["paystack"] : ["paystack", "monnify"];
+    let tx: Record<string, unknown> | null = null;
+    let lastError: unknown = null;
 
-    if (tx.status !== "success") {
+    for (const providerName of providersToTry) {
+      try {
+        const verified = await PaymentService.verifyTransaction(reference, providerName);
+        if (verified.status === "success") {
+          tx = verified;
+          break;
+        }
+        lastError = new Error("Payment not successful");
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    if (!tx) {
+      console.error("verify-renew: provider fallback failed:", lastError);
       return NextResponse.json({ error: "Payment not successful" }, { status: 400 });
     }
 

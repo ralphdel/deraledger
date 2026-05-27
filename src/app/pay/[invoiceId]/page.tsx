@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useState, useEffect } from "react";
+import { use, useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { formatNaira, calculateProportionalPayment, getMinimumPayment } from "@/lib/calculations";
@@ -29,6 +29,7 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
   const [loading, setLoading] = useState(true);
   const [inputAmount, setInputAmount] = useState<string>("");
   const searchParams = useSearchParams();
+  const verifiedReferenceRef = useRef<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [success, setSuccess] = useState(false);
   const [paymentError, setPaymentError] = useState<string | null>(null);
@@ -68,12 +69,29 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
   };
 
   useEffect(() => {
-    if (searchParams.has("reference") || searchParams.has("trxref")) {
+    const reference =
+      searchParams.get("reference") ||
+      searchParams.get("trxref") ||
+      searchParams.get("paymentReference") ||
+      searchParams.get("transactionReference");
+    const provider = searchParams.get("provider") || undefined;
+
+    if (reference && verifiedReferenceRef.current !== reference) {
+      verifiedReferenceRef.current = reference;
       setSuccess(true);
       // Poll for updated invoice data after payment — webhook may take a moment to update DB
       setIsRefreshing(true);
       let attempts = 0;
       const maxAttempts = 6;
+      const verifyPayment = async () => {
+        try {
+          await fetch("/api/payment/verify-invoice", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reference, provider }),
+          });
+        } catch {}
+      };
       const poll = async () => {
         attempts++;
         try {
@@ -95,9 +113,9 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
           setIsRefreshing(false);
         }
       };
-      setTimeout(poll, 1500); // Start first attempt after 1.5s to give webhook time
+      void verifyPayment().finally(() => setTimeout(poll, 1200));
     }
-  }, [searchParams, invoiceId]);
+  }, [searchParams, invoiceId, invoice?.amount_paid]);
 
   useEffect(() => {
     // Fetch via our secure server-side API route — uses service role key to

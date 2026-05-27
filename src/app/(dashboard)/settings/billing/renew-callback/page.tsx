@@ -11,8 +11,12 @@ function RenewCallbackContent() {
   const [message, setMessage] = useState("Verifying your payment...");
 
   useEffect(() => {
-    const reference = searchParams.get("reference") || searchParams.get("trxref");
-    const provider = searchParams.get("provider") || "paystack";
+    const reference =
+      searchParams.get("reference") ||
+      searchParams.get("trxref") ||
+      searchParams.get("paymentReference") ||
+      searchParams.get("transactionReference");
+    const provider = searchParams.get("provider") || undefined;
 
     if (!reference) {
       setStatus("error");

@@ -579,13 +579,19 @@ async function confirmInvoicePayment(
   supabase: SupabaseClient,
   payment: SuccessfulFiatPayment
 ) {
-  const { metadata, reference, channel, feesKobo, provider } = payment;
+  const { metadata, amountKobo, reference, channel, feesKobo, provider } = payment;
   const invoiceId = metadata?.invoice_id as string | undefined;
   const paymentAmount = Number(metadata?.payment_amount);
 
   if (!invoiceId || !paymentAmount) {
     console.error("Invoice confirmation missing metadata:", metadata);
     return { received: true, skipped: true };
+  }
+
+  if (amountKobo < Math.round(paymentAmount * 100)) {
+    throw new Error(
+      `Invoice payment amount mismatch for ${reference}: expected at least ${Math.round(paymentAmount * 100)}, got ${amountKobo}`
+    );
   }
 
   const { data: existingTxn } = await supabase

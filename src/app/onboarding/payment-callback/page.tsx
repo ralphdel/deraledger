@@ -9,10 +9,12 @@ import { Button } from "@/components/ui/button";
 function PaymentCallbackContent() {
   const router = useRouter();
   const params = useSearchParams();
-  const trxref = params.get("trxref");
-  const reference = params.get("reference");
-  const provider = params.get("provider") || "paystack";
-  const ref = trxref || reference;
+  const ref =
+    params.get("reference") ||
+    params.get("trxref") ||
+    params.get("paymentReference") ||
+    params.get("transactionReference");
+  const provider = params.get("provider") || undefined;
   const [status, setStatus] = useState<"verifying" | "success" | "error">("verifying");
   const [errorMsg, setErrorMsg] = useState("");
 

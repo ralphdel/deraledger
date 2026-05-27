@@ -38,16 +38,35 @@ export async function POST(request: Request) {
 
   // 1. Verify that the payment actually succeeded
   const { PaymentService } = await import("@/lib/payment");
-  const providerName = provider === "monnify" ? "monnify" : "paystack";
-  const paystackData = await PaymentService.verifyTransaction(reference, providerName as "paystack" | "monnify");
+  const providersToTry: Array<"paystack" | "monnify"> =
+    provider === "monnify" ? ["monnify"] : provider === "paystack" ? ["paystack"] : ["paystack", "monnify"];
+  let paystackData: Record<string, unknown> | null = null;
+  let lastVerificationError: unknown = null;
+
+  for (const providerName of providersToTry) {
+    try {
+      const verified = await PaymentService.verifyTransaction(reference, providerName);
+      const status =
+        (verified as any)?.data?.status ||
+        (verified as any)?.paymentStatus ||
+        (verified as any)?.status;
+      if (status === "success" || status === "PAID") {
+        paystackData = verified;
+        break;
+      }
+      lastVerificationError = new Error("Payment not verified");
+    } catch (error) {
+      lastVerificationError = error;
+    }
+  }
 
   const normalizedStatus =
     (paystackData as any)?.data?.status ||
     (paystackData as any)?.paymentStatus ||
     (paystackData as any)?.status;
 
-  if (normalizedStatus !== "success" && normalizedStatus !== "PAID") {
-    console.error("Provider verification failed:", paystackData);
+  if (!paystackData || (normalizedStatus !== "success" && normalizedStatus !== "PAID")) {
+    console.error("Provider verification failed:", lastVerificationError || paystackData);
     return NextResponse.json({ error: "Payment not verified" }, { status: 400 });
   }
 
