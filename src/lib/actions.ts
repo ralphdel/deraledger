@@ -2342,6 +2342,7 @@ export async function adminGetKycDocumentUrlAction(pathOrUrl: string) {
 
 export async function verifyRcNumberAction(merchantId: string, rcNumber: string) {
   const adminClient = getServiceClient();
+  const normalizedRcNumber = rcNumber.trim().toUpperCase().replace(/[\s-]/g, "");
 
   const { data: merchant } = await adminClient
     .from("merchants")
@@ -2349,11 +2350,14 @@ export async function verifyRcNumberAction(merchantId: string, rcNumber: string)
     .eq("id", merchantId)
     .single();
 
-  if (!merchant?.business_name) {
+  const businessName = merchant?.business_name?.trim();
+  const ownerName = merchant?.owner_name?.trim();
+
+  if (!businessName) {
     return { success: false, error: "Business name not configured. Please complete your Business Profile first." };
   }
 
-  if (!merchant?.owner_name) {
+  if (!ownerName) {
     return { success: false, error: "Legal owner or shareholder name not configured. Please complete your Business Profile first." };
   }
 
@@ -2361,9 +2365,9 @@ export async function verifyRcNumberAction(merchantId: string, rcNumber: string)
     // ── Route through VerificationService (provider-agnostic) ────────────────
     const svcResult = await verifyMerchantBusiness({
       merchantId,
-      registrationNumber: rcNumber,
-      businessName: merchant.business_name,
-      ownerName: merchant.owner_name!,
+      registrationNumber: normalizedRcNumber,
+      businessName,
+      ownerName,
     });
 
     if (!svcResult.success) {
@@ -2380,7 +2384,7 @@ export async function verifyRcNumberAction(merchantId: string, rcNumber: string)
     // Representative mismatch is non-fatal — admin reviews during approval
     await adminClient
       .from("merchants")
-      .update({ cac_number: rcNumber, cac_status: "verified" })
+      .update({ cac_number: normalizedRcNumber, cac_status: "verified" })
       .eq("id", merchantId);
     return { success: true };
   } catch (error: any) {

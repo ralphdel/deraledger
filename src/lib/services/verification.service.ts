@@ -131,9 +131,10 @@ async function incrementRateLimit(
 
 // ── Duplicate Prevention Helpers ──────────────────────────────────────────────
 
-function generateFingerprint(bvnOrCAC: string, merchantId: string, type: string): string {
+function generateFingerprint(bvnOrCAC: string, merchantId: string, type: string, context = ""): string {
   const normalized = (bvnOrCAC || "").trim().toLowerCase();
-  const data = `${normalized}_${merchantId}_${type}`;
+  const normalizedContext = context.trim().toLowerCase();
+  const data = `${normalized}_${merchantId}_${type}_${normalizedContext}`;
   return crypto.createHash("sha256").update(data).digest("hex");
 }
 
@@ -481,7 +482,12 @@ export async function verifyMerchantBusiness(params: {
   }
 
   // 2. Duplicate Check
-  const fingerprint = generateFingerprint(params.registrationNumber, params.merchantId, "business");
+  const fingerprint = generateFingerprint(
+    params.registrationNumber,
+    params.merchantId,
+    "business",
+    params.businessName
+  );
   const cached = await getCachedVerification(adminClient, fingerprint, "business", sandbox);
 
   if (cached) {

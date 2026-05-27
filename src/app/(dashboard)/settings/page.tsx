@@ -207,39 +207,68 @@ export default function SettingsPage() {
   const handleSave = async () => {
     if (!merchant) return;
     setSaving(true);
+    setKycError(null);
     const effectiveTier = merchant.subscription_plan || merchant.merchant_tier || "starter";
+    const normalizedBusinessName = businessName.trim();
+    const normalizedTradingName = tradingName.trim();
+    const normalizedOwnerName = ownerName.trim();
     const updates: Record<string, unknown> = {
-      business_name: effectiveTier === "corporate" ? (businessName || tradingName) : (tradingName || businessName),
-      trading_name: tradingName,
-      business_street: businessStreet || null,
-      business_city: businessCity || null,
-      business_state: businessState || null,
+      business_name: effectiveTier === "corporate"
+        ? (normalizedBusinessName || normalizedTradingName)
+        : (normalizedTradingName || normalizedBusinessName),
+      trading_name: normalizedTradingName,
+      business_street: businessStreet.trim() || null,
+      business_city: businessCity.trim() || null,
+      business_state: businessState.trim() || null,
       business_country: businessCountry || null,
       // Only write owner_name if it has NOT been identity-verified — prevents post-verification name changes
-      ...(!isOwnerNameLocked && { owner_name: ownerName || null }),
+      ...(!isOwnerNameLocked && { owner_name: normalizedOwnerName || null }),
       business_type: businessType,
-      phone: phone || null,
+      phone: phone.trim() || null,
       fee_absorption_default: feeDefault,
       platform_version: CURRENT_PLATFORM_VERSION,
     };
-    await submitKycAction(merchant.id, updates);
-    setMerchant({ ...merchant, ...updates } as Merchant);
+    const result = await submitKycAction(merchant.id, updates);
+    if (!result.success) {
+      setKycError(result.error || "Failed to save profile.");
+      setSaving(false);
+      return;
+    }
+
+    const freshMerchant = await getMerchant(merchant.id);
+    if (freshMerchant) {
+      setMerchant(freshMerchant as Merchant);
+      setBusinessName(freshMerchant.business_name || "");
+      setTradingName(freshMerchant.trading_name || freshMerchant.business_name || "");
+      setOwnerName(freshMerchant.owner_name || "");
+    } else {
+      setMerchant({ ...merchant, ...updates } as Merchant);
+      setBusinessName(String(updates.business_name || ""));
+      setTradingName(String(updates.trading_name || ""));
+      if (!isOwnerNameLocked) setOwnerName(String(updates.owner_name || ""));
+    }
     setSaving(false);
   };
 
   const handleVerifyRcNumber = async () => {
-    if (!cacNumber || cacNumber.length < 5) {
+    const normalizedCacNumber = cacNumber.trim().toUpperCase().replace(/[\s-]/g, "");
+    if (!normalizedCacNumber || normalizedCacNumber.length < 5) {
       setRcError("Please enter a valid RC Number (e.g. RC-123456).");
       return;
     }
     if (!merchant?.id) return;
-    
-    if ((businessName && businessName !== merchant.business_name) || (ownerName && ownerName !== merchant.owner_name)) {
+
+    const savedBusinessName = merchant.business_name?.trim() || "";
+    const savedOwnerName = merchant.owner_name?.trim() || "";
+    if (
+      (businessName.trim() && businessName.trim() !== savedBusinessName) ||
+      (ownerName.trim() && ownerName.trim() !== savedOwnerName)
+    ) {
       setRcError("You have unsaved profile changes. Please click 'Save Profile' in the Owner Information section before verifying your RC Number.");
       return;
     }
-    
-    if (!merchant.business_name || !merchant.owner_name) {
+
+    if (!savedBusinessName || !savedOwnerName) {
       setRcError("Please complete your Business Profile and Owner Information, and click 'Save Profile' before verifying your RC Number.");
       return;
     }
@@ -247,9 +276,10 @@ export default function SettingsPage() {
     setRcSubmitting(true);
     setRcError(null);
     try {
-      const res = await verifyRcNumberAction(merchant.id, cacNumber);
+      const res = await verifyRcNumberAction(merchant.id, normalizedCacNumber);
       if (res.success) {
-        setMerchant({ ...merchant, cac_number: cacNumber } as Merchant);
+        setCacNumber(normalizedCacNumber);
+        setMerchant({ ...merchant, cac_number: normalizedCacNumber } as Merchant);
         setRcError(null);
       } else {
         setRcError(res.error || "Failed to verify RC Number.");
