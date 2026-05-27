@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { PaymentService } from "@/lib/payment";
 import { processSuccessfulFiatPayment } from "@/lib/services/fiat-payment-confirmation.service";
+import { getPaymentEnvironment } from "@/lib/services/payment-routing.service";
 
 const supabase = createSupabaseClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -23,6 +24,7 @@ export async function POST(request: Request) {
   const verification = PaymentService.verifyWebhook(body, signature, "monnify");
 
   if (process.env.NODE_ENV === "production" && !verification.valid) {
+    await recordWebhookHealth("failed");
     return new NextResponse("Invalid signature", { status: 401 });
   }
 
@@ -30,6 +32,7 @@ export async function POST(request: Request) {
   try {
     payload = JSON.parse(body) as MonnifyWebhookPayload;
   } catch {
+    await recordWebhookHealth("failed");
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
@@ -53,6 +56,7 @@ export async function POST(request: Request) {
       channel: normalized.channel,
       feesKobo: normalized.feesKobo,
     });
+    await recordWebhookHealth("success");
 
     return NextResponse.json({
       ...result,
@@ -61,8 +65,23 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     console.error("Monnify webhook processing failed:", error);
+    await recordWebhookHealth("failed");
     return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
   }
+}
+
+async function recordWebhookHealth(status: "success" | "failed") {
+  const environment = getPaymentEnvironment();
+  const now = new Date().toISOString();
+  await supabase
+    .from("payment_providers")
+    .update(
+      status === "success"
+        ? { last_successful_webhook_at: now, updated_at: now }
+        : { last_failed_webhook_at: now, updated_at: now }
+    )
+    .eq("provider_name", "monnify")
+    .eq("environment", environment);
 }
 
 function normalizeMonnifyWebhook(payload: MonnifyWebhookPayload) {

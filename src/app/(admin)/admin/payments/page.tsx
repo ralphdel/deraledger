@@ -62,6 +62,31 @@ type PaymentAdminPayload = {
   providers: PaymentProviderRow[];
   routes: PaymentRouteRow[];
   methods: PaymentMethodRow[];
+  events: PaymentEventRow[];
+  transactions: PaymentTransactionRow[];
+};
+
+type PaymentEventRow = {
+  id: string;
+  created_at: string;
+  event_type: string;
+  processor: string | null;
+  processor_ref: string | null;
+  amount_kobo: number | null;
+  merchant_id: string | null;
+  invoice_id: string | null;
+};
+
+type PaymentTransactionRow = {
+  id: string;
+  created_at: string;
+  invoice_id: string | null;
+  merchant_id: string | null;
+  amount_paid: number | null;
+  payment_method: string | null;
+  status: string | null;
+  paystack_reference: string | null;
+  processor_reference?: string | null;
 };
 
 const PROVIDERS = ["paystack", "monnify", "breet"] as const;
@@ -111,6 +136,8 @@ export default function AdminPaymentsPage() {
     () => methods.filter((row) => row.environment === environment),
     [methods, environment]
   );
+  const recentEvents = data?.events || [];
+  const recentTransactions = data?.transactions || [];
 
   function updateProvider(
     providerName: PaymentProviderRow["provider_name"],
@@ -249,6 +276,8 @@ export default function AdminPaymentsPage() {
                 <TableHead>Transfer</TableHead>
                 <TableHead>USSD</TableHead>
                 <TableHead>Crypto</TableHead>
+                <TableHead>Last Success</TableHead>
+                <TableHead>Last Failure</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -278,12 +307,80 @@ export default function AdminPaymentsPage() {
                   <TableCell><Switch checked={provider.supports_bank_transfer} onCheckedChange={(value) => updateProvider(provider.provider_name, "supports_bank_transfer", value)} /></TableCell>
                   <TableCell><Switch checked={provider.supports_ussd} onCheckedChange={(value) => updateProvider(provider.provider_name, "supports_ussd", value)} /></TableCell>
                   <TableCell><Switch checked={provider.supports_crypto} onCheckedChange={(value) => updateProvider(provider.provider_name, "supports_crypto", value)} /></TableCell>
+                  <TableCell className="text-xs text-neutral-500">{formatDate(provider.last_successful_webhook_at)}</TableCell>
+                  <TableCell className="text-xs text-neutral-500">{formatDate(provider.last_failed_webhook_at)}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
         </CardContent>
       </Card>
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        <Card className="border shadow-none">
+          <CardHeader>
+            <CardTitle className="text-base">Recent Payment Transactions</CardTitle>
+          </CardHeader>
+          <CardContent className="overflow-x-auto p-0">
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-neutral-50">
+                  <TableHead>Created</TableHead>
+                  <TableHead>Method</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Amount</TableHead>
+                  <TableHead>Reference</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {recentTransactions.length === 0 ? (
+                  <TableRow><TableCell colSpan={5} className="py-8 text-center text-sm text-neutral-500">No payment transactions yet.</TableCell></TableRow>
+                ) : recentTransactions.map((transaction) => (
+                  <TableRow key={transaction.id}>
+                    <TableCell className="text-xs text-neutral-500">{formatDate(transaction.created_at)}</TableCell>
+                    <TableCell className="capitalize">{transaction.payment_method || "-"}</TableCell>
+                    <TableCell><Badge variant="outline" className="border-2 capitalize">{transaction.status || "-"}</Badge></TableCell>
+                    <TableCell className="font-medium">{formatNaira(Number(transaction.amount_paid || 0))}</TableCell>
+                    <TableCell className="max-w-[180px] truncate font-mono text-xs">{transaction.processor_reference || transaction.paystack_reference || "-"}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+
+        <Card className="border shadow-none">
+          <CardHeader>
+            <CardTitle className="text-base">Recent Provider Events</CardTitle>
+          </CardHeader>
+          <CardContent className="overflow-x-auto p-0">
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-neutral-50">
+                  <TableHead>Created</TableHead>
+                  <TableHead>Provider</TableHead>
+                  <TableHead>Event</TableHead>
+                  <TableHead>Amount</TableHead>
+                  <TableHead>Reference</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {recentEvents.length === 0 ? (
+                  <TableRow><TableCell colSpan={5} className="py-8 text-center text-sm text-neutral-500">No provider webhook events yet.</TableCell></TableRow>
+                ) : recentEvents.map((event) => (
+                  <TableRow key={event.id}>
+                    <TableCell className="text-xs text-neutral-500">{formatDate(event.created_at)}</TableCell>
+                    <TableCell className="capitalize">{event.processor || "-"}</TableCell>
+                    <TableCell>{event.event_type}</TableCell>
+                    <TableCell className="font-medium">{formatNaira(Number(event.amount_kobo || 0) / 100)}</TableCell>
+                    <TableCell className="max-w-[180px] truncate font-mono text-xs">{event.processor_ref || "-"}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      </div>
 
       <Card className="border shadow-none">
         <CardHeader>
@@ -400,4 +497,22 @@ export default function AdminPaymentsPage() {
       </Card>
     </div>
   );
+}
+
+function formatDate(value: string | null) {
+  if (!value) return "-";
+  return new Date(value).toLocaleString("en-NG", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function formatNaira(value: number) {
+  return new Intl.NumberFormat("en-NG", {
+    style: "currency",
+    currency: "NGN",
+    maximumFractionDigits: 0,
+  }).format(value);
 }

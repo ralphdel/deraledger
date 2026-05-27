@@ -201,6 +201,7 @@ function resolveProviderCandidate(
   if (!provider) return null;
   if (!providerSupportsMethod(provider, method)) return null;
   if (!providerHasCredentials(providerName)) return null;
+  if (method === "crypto" && providerName === "breet" && provider.status !== "active") return null;
   if (!isProviderStatusUsable(provider.status, environment, provider.allow_degraded_routing)) return null;
   return provider;
 }

@@ -17,10 +17,20 @@ export async function GET() {
   }
 
   const environment = getPaymentEnvironment();
-  const [providersRes, routesRes, methodsRes] = await Promise.all([
+  const [providersRes, routesRes, methodsRes, eventsRes, transactionsRes] = await Promise.all([
     supabase.from("payment_providers").select("*").order("environment").order("provider_name"),
     supabase.from("payment_provider_routes").select("*").order("environment").order("payment_purpose"),
     supabase.from("payment_method_configs").select("*").order("environment").order("payment_purpose"),
+    supabase
+      .from("payment_events")
+      .select("id, created_at, event_type, processor, processor_ref, amount_kobo, merchant_id, invoice_id")
+      .order("created_at", { ascending: false })
+      .limit(50),
+    supabase
+      .from("transactions")
+      .select("id, created_at, invoice_id, merchant_id, amount_paid, payment_method, status, paystack_reference, processor_reference")
+      .order("created_at", { ascending: false })
+      .limit(50),
   ]);
 
   if (providersRes.error || routesRes.error || methodsRes.error) {
@@ -44,6 +54,8 @@ export async function GET() {
     providers,
     routes,
     methods,
+    events: eventsRes.error ? [] : eventsRes.data || [],
+    transactions: transactionsRes.error ? [] : transactionsRes.data || [],
   }, {
     headers: {
       "Cache-Control": "no-store",
