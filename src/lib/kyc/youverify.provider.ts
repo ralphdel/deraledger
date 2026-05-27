@@ -343,7 +343,7 @@ export class YouverifyProvider implements ProviderAdapter {
         return this.normalizeBusinessResponse(legacyJson);
       }
 
-      if (!legacyRes.ok) {
+      else {
         const effectiveJson = Object.keys(legacyJson || {}).length ? legacyJson : json;
         const effectiveStatus = legacyRes.status || res.status;
         const errorCode = this.normalizeHttpError(effectiveStatus);
