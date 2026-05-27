@@ -8,6 +8,8 @@ const supabase = createSupabaseClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   const guard = await requireAdminPortalSession();
   if (!guard.ok) {
@@ -42,6 +44,10 @@ export async function GET() {
     providers,
     routes,
     methods,
+  }, {
+    headers: {
+      "Cache-Control": "no-store",
+    },
   });
 }
 
@@ -64,31 +70,132 @@ export async function POST(request: Request) {
   }
 
   if (body.providers?.length) {
-    const { error } = await supabase.from("payment_providers").upsert(body.providers, {
-      onConflict: "provider_name,environment",
-    });
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
+    for (const provider of body.providers) {
+      const row = sanitizeProvider(provider);
+      if (!row) continue;
+      const { error } = await supabase
+        .from("payment_providers")
+        .update(row.updates)
+        .eq("provider_name", row.provider_name)
+        .eq("environment", row.environment);
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 500 });
+      }
     }
   }
 
   if (body.routes?.length) {
-    const { error } = await supabase.from("payment_provider_routes").upsert(body.routes, {
-      onConflict: "payment_purpose,payment_method,environment",
-    });
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
+    for (const route of body.routes) {
+      const row = sanitizeRoute(route);
+      if (!row) continue;
+      const { error } = await supabase
+        .from("payment_provider_routes")
+        .update(row.updates)
+        .eq("payment_purpose", row.payment_purpose)
+        .eq("payment_method", row.payment_method)
+        .eq("environment", row.environment);
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 500 });
+      }
     }
   }
 
   if (body.methods?.length) {
-    const { error } = await supabase.from("payment_method_configs").upsert(body.methods, {
-      onConflict: "payment_purpose,payment_method,environment",
-    });
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
+    for (const method of body.methods) {
+      const row = sanitizeMethod(method);
+      if (!row) continue;
+      const { error } = await supabase
+        .from("payment_method_configs")
+        .update(row.updates)
+        .eq("payment_purpose", row.payment_purpose)
+        .eq("payment_method", row.payment_method)
+        .eq("environment", row.environment);
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 500 });
+      }
     }
   }
 
   return NextResponse.json({ success: true });
+}
+
+function sanitizeProvider(row: Record<string, unknown>) {
+  const provider_name = row.provider_name;
+  const environment = row.environment;
+  if (!isProvider(provider_name) || !isEnvironment(environment)) return null;
+
+  return {
+    provider_name,
+    environment,
+    updates: {
+      status: row.status,
+      allow_degraded_routing: Boolean(row.allow_degraded_routing),
+      supports_card: Boolean(row.supports_card),
+      supports_bank_transfer: Boolean(row.supports_bank_transfer),
+      supports_ussd: Boolean(row.supports_ussd),
+      supports_crypto: Boolean(row.supports_crypto),
+      updated_at: new Date().toISOString(),
+    },
+  };
+}
+
+function sanitizeRoute(row: Record<string, unknown>) {
+  const payment_purpose = row.payment_purpose;
+  const payment_method = row.payment_method;
+  const environment = row.environment;
+  if (!isPurpose(payment_purpose) || !isMethod(payment_method) || !isEnvironment(environment)) return null;
+  if (!isProvider(row.primary_provider)) return null;
+
+  return {
+    payment_purpose,
+    payment_method,
+    environment,
+    updates: {
+      primary_provider: row.primary_provider,
+      fallback_provider: isProvider(row.fallback_provider) ? row.fallback_provider : null,
+      is_enabled: Boolean(row.is_enabled),
+      updated_at: new Date().toISOString(),
+    },
+  };
+}
+
+function sanitizeMethod(row: Record<string, unknown>) {
+  const payment_purpose = row.payment_purpose;
+  const payment_method = row.payment_method;
+  const environment = row.environment;
+  if (!isPurpose(payment_purpose) || !isMethod(payment_method) || !isEnvironment(environment)) return null;
+
+  return {
+    payment_purpose,
+    payment_method,
+    environment,
+    updates: {
+      is_enabled: Boolean(row.is_enabled),
+      display_label: String(row.display_label || payment_method),
+      display_description: row.display_description ? String(row.display_description) : null,
+      updated_at: new Date().toISOString(),
+    },
+  };
+}
+
+function isProvider(value: unknown): value is "paystack" | "monnify" | "breet" {
+  return value === "paystack" || value === "monnify" || value === "breet";
+}
+
+function isEnvironment(value: unknown): value is "sandbox" | "live" {
+  return value === "sandbox" || value === "live";
+}
+
+function isPurpose(value: unknown): value is string {
+  return (
+    value === "plan_subscription" ||
+    value === "plan_upgrade" ||
+    value === "invoice_payment" ||
+    value === "payment_link" ||
+    value === "crypto_payment"
+  );
+}
+
+function isMethod(value: unknown): value is string {
+  return value === "card" || value === "bank_transfer" || value === "ussd" || value === "crypto";
 }
