@@ -143,6 +143,8 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
   const [registeredName, setRegisteredName] = useState("");
   const [ownerName, setOwnerName] = useState("");
   const [businessType, setBusinessType] = useState("sole_proprietorship");
+  const [relationshipClaim, setRelationshipClaim] = useState<"owner_affiliated_claim" | "representative_claim">("owner_affiliated_claim");
+  const [verificationDisclosureAccepted, setVerificationDisclosureAccepted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isSuccess, setIsSuccess] = useState(false);
@@ -178,6 +180,12 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
     setLoading(true);
 
     try {
+      if (planId !== "starter" && !verificationDisclosureAccepted) {
+        setError("Please acknowledge that live payment collection unlocks only after verification.");
+        setLoading(false);
+        return;
+      }
+
       const checkRes = await fetch("/api/onboarding/check-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -221,6 +229,10 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
           email,
           businessName: registeredName || businessName,
           plan: planId,
+          businessType,
+          relationshipClaim: planId === "corporate" ? relationshipClaim : "owner_affiliated_claim",
+          verificationDisclosureAccepted,
+          disclosureVersion: "1.0",
         }),
       });
       const sessionData = await sessionRes.json();
@@ -238,6 +250,9 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
         registeredName: registeredName || businessName,
         ownerName,
         businessType,
+        relationshipClaim: planId === "corporate" ? relationshipClaim : "owner_affiliated_claim",
+        verificationDisclosureAccepted,
+        disclosureVersion: "1.0",
         plan: planId,
         sessionId: sessionData.sessionId,
         amountKobo: config.priceKobo,
@@ -457,6 +472,41 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
                 );
               })()}
 
+              {planId === "corporate" && (
+                <div className="space-y-2">
+                  <Label className="text-white">Relationship with this business</Label>
+                  <p className="text-xs text-white/50">
+                    This helps us confirm whether you can activate the business directly or need director approval.
+                  </p>
+                  <div className="grid gap-3">
+                    <label className="flex items-start gap-3 rounded-lg border border-white/10 bg-[#12061F]/50 p-3">
+                      <input
+                        type="radio"
+                        checked={relationshipClaim === "owner_affiliated_claim"}
+                        onChange={() => setRelationshipClaim("owner_affiliated_claim")}
+                        className="mt-1 h-4 w-4 accent-[#7B2FF7]"
+                      />
+                      <span>
+                        <span className="block text-sm font-medium text-white">I am a Director, Owner, Shareholder, or Proprietor</span>
+                        <span className="block text-xs text-white/50">We will match your verified identity against the CAC registry record.</span>
+                      </span>
+                    </label>
+                    <label className="flex items-start gap-3 rounded-lg border border-white/10 bg-[#12061F]/50 p-3">
+                      <input
+                        type="radio"
+                        checked={relationshipClaim === "representative_claim"}
+                        onChange={() => setRelationshipClaim("representative_claim")}
+                        className="mt-1 h-4 w-4 accent-[#7B2FF7]"
+                      />
+                      <span>
+                        <span className="block text-sm font-medium text-white">I am setting this up on behalf of the business</span>
+                        <span className="block text-xs text-white/50">A listed director or owner will need to verify and approve activation.</span>
+                      </span>
+                    </label>
+                  </div>
+                </div>
+              )}
+
               <div className="space-y-1.5">
                 <Label htmlFor="email" className="text-white">Email Address</Label>
                 <Input
@@ -473,9 +523,25 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
                 </p>
               </div>
 
+              {planId !== "starter" && (
+                <label className="flex items-start gap-3 rounded-xl border border-[#7B2FF7]/30 bg-[#7B2FF7]/10 p-4">
+                  <input
+                    type="checkbox"
+                    checked={verificationDisclosureAccepted}
+                    onChange={(e) => setVerificationDisclosureAccepted(e.target.checked)}
+                    className="mt-1 h-4 w-4 accent-[#7B2FF7]"
+                  />
+                  <span className="text-sm leading-relaxed text-white/80">
+                    <span className="block font-semibold text-white">Verification required before live collection</span>
+                    Your subscription gives access to the setup dashboard, but live payment links,
+                    invoice checkout, settlement, and payment collection stay disabled until verification is completed.
+                  </span>
+                </label>
+              )}
+
               <Button
                 type="submit"
-                disabled={loading}
+                disabled={loading || (planId !== "starter" && !verificationDisclosureAccepted)}
                 className="mt-4 h-12 w-full bg-[#7B2FF7] text-base font-bold text-white hover:bg-[#B58CFF] hover:text-[#12061F] transition-all border-0"
               >
                 {loading ? (

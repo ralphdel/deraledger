@@ -2,6 +2,12 @@ import { NextResponse } from "next/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { calculateSubscriptionExpiry, PlanType } from "@/lib/subscription";
 import { getAppUrl } from "@/lib/server-utils";
+import {
+  enterPaidSetupMode,
+  recordVerificationDisclosure,
+  VERIFICATION_DISCLOSURE_VERSION,
+  type RelationshipClaim,
+} from "@/lib/services/onboarding-flow.service";
 
 const supabase = createSupabaseClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -49,6 +55,9 @@ export async function POST(request: Request) {
   const tradingName = (metadata?.trading_name as string) || businessName;
   const ownerName = (metadata?.owner_name as string) || null;
   const businessType = (metadata?.business_type as string) || "sole_proprietorship";
+  const relationshipClaim = (metadata?.relationship_claim as RelationshipClaim | undefined) || null;
+  const disclosureAccepted = metadata?.verification_disclosure_accepted === true || metadata?.verification_disclosure_accepted === "true";
+  const disclosureVersion = (metadata?.verification_disclosure_version as string) || VERIFICATION_DISCLOSURE_VERSION;
 
   if (!sessionId || !email) {
     console.error("Missing session_id or email in Paystack metadata:", metadata);
@@ -149,6 +158,7 @@ export async function POST(request: Request) {
         merchant_tier: activePlan,
         monthly_collection_limit: activePlan === "individual" ? 5000000 : 0,
         platform_version: 1,
+        relationship_claim: relationshipClaim,
       })
       .eq("id", merchantId);
 
@@ -187,6 +197,7 @@ export async function POST(request: Request) {
         fee_absorption_default: "business",
         monthly_collection_limit: activePlan === "individual" ? 5000000 : 0,
         platform_version: 1,
+        relationship_claim: relationshipClaim,
       })
       .select("id")
       .single();
@@ -202,6 +213,30 @@ export async function POST(request: Request) {
       user_id: userId,
       role: "owner",
       must_change_password: true,
+    });
+  }
+
+  await enterPaidSetupMode(supabase, {
+    merchantId,
+    planType: activePlan,
+    relationshipClaim,
+    paymentReference: reference,
+  });
+
+  if (disclosureAccepted) {
+    const ipAddress =
+      request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+      request.headers.get("x-real-ip");
+    await recordVerificationDisclosure(supabase, {
+      planType: activePlan,
+      context: "onboarding",
+      userId,
+      merchantId,
+      onboardingSessionId: sessionId,
+      ipAddress,
+      userAgent: request.headers.get("user-agent"),
+      disclosureVersion,
+      deviceMetadata: { source: "payment_callback_verify" },
     });
   }
 

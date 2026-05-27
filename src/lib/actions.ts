@@ -17,6 +17,7 @@ import {
   canCreateCustomRole,
   canAccessFeature,
 } from "@/lib/services/access-control";
+import { syncMerchantSetupStatus } from "@/lib/services/onboarding-flow.service";
 
 // Service role client for admin-level operations
 function getServiceClient() {
@@ -418,6 +419,7 @@ export async function submitKycAction(merchantId: string, updates: any) {
   }
 
   await logAudit("kyc_submit", merchantId, "merchant", { updates });
+  await syncMerchantSetupStatus(supabase, merchantId);
 
   revalidatePath("/settings");
   revalidatePath("/admin/verification");
@@ -1224,7 +1226,7 @@ export async function createInvoiceAction(data: {
   // Check Starter tier invoice limit (max 5 total invoices)
   const { data: merchantInfo } = await adminClient
     .from("merchants")
-    .select("subscription_plan, merchant_tier, verification_status")
+    .select("subscription_plan, merchant_tier, verification_status, live_features_enabled, setup_mode")
     .eq("id", data.merchant_id)
     .single();
 
@@ -2169,6 +2171,8 @@ export async function adminApproveVerificationAction(merchantId: string) {
 
   if (error) return { success: false, error: error.message };
 
+  await syncMerchantSetupStatus(adminClient, merchantId);
+
   await logAudit("admin_verification_approved", merchantId, "merchant", {
     actor: "admin",
     new_status: "verified",
@@ -2346,7 +2350,7 @@ export async function verifyRcNumberAction(merchantId: string, rcNumber: string)
 
   const { data: merchant } = await adminClient
     .from("merchants")
-    .select("business_name, owner_name, business_type")
+    .select("business_name, owner_name, business_type, relationship_claim")
     .eq("id", merchantId)
     .single();
 
@@ -2386,6 +2390,8 @@ export async function verifyRcNumberAction(merchantId: string, rcNumber: string)
       .from("merchants")
       .update({ cac_number: normalizedRcNumber, cac_status: "verified" })
       .eq("id", merchantId);
+
+    await syncMerchantSetupStatus(adminClient, merchantId);
     return { success: true };
   } catch (error: any) {
     return { success: false, error: error.message };

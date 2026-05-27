@@ -190,7 +190,7 @@ export default function DashboardPage() {
       )}
 
       {/* Verification Banner */}
-      {merchant && merchant.verification_status !== "verified" && merchant.subscription_plan !== "starter" && (
+      {merchant && (merchant.setup_mode === true || merchant.live_features_enabled === false || merchant.verification_status !== "verified") && merchant.subscription_plan !== "starter" && (
         <Card className={`border-2 shadow-none ${
           merchant.verification_status === "pending"
             ? "border-amber-300 bg-amber-50/50 dark:border-amber-500/20 dark:bg-amber-500/10"
@@ -210,12 +210,16 @@ export default function DashboardPage() {
                 )}
                 <div>
                   <p className="font-semibold text-sm text-purp-900 dark:text-white">
-                    {merchant.verification_status === "pending"
+                    {merchant.setup_mode === true
+                      ? "Workspace Created In Setup Mode"
+                      : merchant.verification_status === "pending"
                       ? "Verification Under Review"
                       : "Complete Your Account Verification"}
                   </p>
                   <p className="text-xs text-neutral-600 dark:text-white/60 mt-0.5">
-                    {merchant.verification_status === "pending"
+                    {merchant.setup_mode === true
+                      ? "Live payment collection is disabled until verification is completed. You can continue setting up your workspace."
+                      : merchant.verification_status === "pending"
                       ? "Your documents are being reviewed by a platform admin. You'll be notified when approved."
                       : "Verify your business to unlock higher collection limits and full platform features."}
                   </p>

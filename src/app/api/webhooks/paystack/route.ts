@@ -3,6 +3,12 @@ import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { PaymentService } from "@/lib/payment";
 import { calculateSubscriptionExpiry, PlanType } from "@/lib/subscription";
 import { getAppUrl } from "@/lib/server-utils";
+import {
+  enterPaidSetupMode,
+  recordVerificationDisclosure,
+  VERIFICATION_DISCLOSURE_VERSION,
+  type RelationshipClaim,
+} from "@/lib/services/onboarding-flow.service";
 
 const supabase = createSupabaseClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -183,6 +189,7 @@ async function handleSubscriptionUpgrade(
 ) {
   const merchantId = metadata?.merchant_id as string | undefined;
   const newPlan = metadata?.new_plan as "individual" | "corporate" | undefined;
+  const relationshipClaim = metadata?.relationship_claim as RelationshipClaim | undefined;
 
   if (!merchantId || !newPlan) {
     console.error("Upgrade webhook missing required metadata:", metadata);
@@ -228,6 +235,9 @@ async function handleSubscriptionUpgrade(
       updates.verification_status = "unverified";
     }
   }
+  if (relationshipClaim) {
+    updates.relationship_claim = relationshipClaim;
+  }
 
   const { error: updateError } = await supabase
     .from("merchants")
@@ -238,6 +248,13 @@ async function handleSubscriptionUpgrade(
     console.error("Failed to upgrade merchant:", updateError.message);
     return NextResponse.json({ error: "Merchant upgrade failed" }, { status: 500 });
   }
+
+  await enterPaidSetupMode(supabase, {
+    merchantId,
+    planType: newPlan,
+    relationshipClaim: relationshipClaim || null,
+    paymentReference: reference,
+  });
 
   // Calculate Prorated Expiry
   const amountPaidNgn = amount / 100;
@@ -326,6 +343,10 @@ async function handleSubscriptionPayment(
   const email = metadata?.email as string | undefined;
   const businessName = metadata?.business_name as string | undefined;
   const businessType = metadata?.business_type as string | undefined;
+  const ownerName = metadata?.owner_name as string | undefined;
+  const relationshipClaim = metadata?.relationship_claim as RelationshipClaim | undefined;
+  const disclosureAccepted = metadata?.verification_disclosure_accepted === true || metadata?.verification_disclosure_accepted === "true";
+  const disclosureVersion = (metadata?.verification_disclosure_version as string | undefined) || VERIFICATION_DISCLOSURE_VERSION;
 
   if (!sessionId || !plan || !email || !businessName) {
     console.error("Subscription webhook missing required metadata:", metadata);
@@ -434,6 +455,8 @@ async function handleSubscriptionPayment(
         subscription_plan: activePlan,
         merchant_tier: activePlan,
         business_type: businessType || "sole_proprietorship",
+        owner_name: ownerName || null,
+        relationship_claim: relationshipClaim || null,
         monthly_collection_limit: activePlan === "individual" ? 5000000 : 0,
         subscription_notifications_sent: {},
       })
@@ -472,6 +495,8 @@ async function handleSubscriptionPayment(
         email,
         business_name: businessName,
         business_type: businessType || "sole_proprietorship",
+        owner_name: ownerName || null,
+        relationship_claim: relationshipClaim || null,
         subscription_plan: activePlan,
         merchant_tier: activePlan,
         verification_status: "unverified",
@@ -493,6 +518,25 @@ async function handleSubscriptionPayment(
       user_id: userId,
       role: "owner",
       must_change_password: true,
+    });
+  }
+
+  await enterPaidSetupMode(supabase, {
+    merchantId,
+    planType: activePlan,
+    relationshipClaim: relationshipClaim || null,
+    paymentReference: reference,
+  });
+
+  if (disclosureAccepted) {
+    await recordVerificationDisclosure(supabase, {
+      planType: activePlan,
+      context: "onboarding",
+      userId,
+      merchantId,
+      onboardingSessionId: sessionId,
+      disclosureVersion,
+      deviceMetadata: { source: "paystack_webhook" },
     });
   }
 

@@ -2,6 +2,12 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { PaymentService } from "@/lib/payment";
 import { getAppUrl } from "@/lib/server-utils";
+import {
+  recordVerificationDisclosure,
+  requiresVerificationDisclosure,
+  VERIFICATION_DISCLOSURE_VERSION,
+  type RelationshipClaim,
+} from "@/lib/services/onboarding-flow.service";
 
 export async function POST(request: Request) {
   try {
@@ -12,10 +18,24 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { newPlan, ownerName, businessType } = await request.json();
+    const {
+      newPlan,
+      ownerName,
+      businessType,
+      relationshipClaim,
+      verificationDisclosureAccepted,
+      disclosureVersion,
+    } = await request.json();
 
     if (newPlan !== "individual" && newPlan !== "corporate") {
       return NextResponse.json({ error: "Invalid plan" }, { status: 400 });
+    }
+
+    if (requiresVerificationDisclosure(newPlan) && verificationDisclosureAccepted !== true) {
+      return NextResponse.json(
+        { error: "Please acknowledge the verification disclosure before payment." },
+        { status: 400 }
+      );
     }
 
     // Get merchant
@@ -34,6 +54,21 @@ export async function POST(request: Request) {
     const reference = `upg_${merchant.id.substring(0, 8)}_${Date.now()}`;
 
     const appUrl = getAppUrl();
+    const ipAddress =
+      request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+      request.headers.get("x-real-ip");
+    const disclosureVersionToStore = disclosureVersion || VERIFICATION_DISCLOSURE_VERSION;
+
+    await recordVerificationDisclosure(supabase, {
+      planType: newPlan,
+      context: "upgrade",
+      userId: user.id,
+      merchantId: merchant.id,
+      ipAddress,
+      userAgent: request.headers.get("user-agent"),
+      disclosureVersion: disclosureVersionToStore,
+      deviceMetadata: { source: "upgrade_checkout" },
+    });
 
     const result = await PaymentService.initializeTransaction({
       email: user.email || merchant.email || "billing@deraledger.app",
@@ -46,6 +81,9 @@ export async function POST(request: Request) {
         new_plan: newPlan,
         owner_name: ownerName || null,
         business_type: businessType || null,
+        relationship_claim: (relationshipClaim as RelationshipClaim) || null,
+        verification_disclosure_accepted: verificationDisclosureAccepted === true,
+        verification_disclosure_version: disclosureVersionToStore,
       },
     });
 

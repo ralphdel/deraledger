@@ -121,6 +121,8 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
   const [sameOwner, setSameOwner] = useState(true);
   // Business type — relevant for corporate plan, defaults to sole_proprietorship
   const [businessType, setBusinessType] = useState("sole_proprietorship");
+  const [relationshipClaim, setRelationshipClaim] = useState<"owner_affiliated_claim" | "representative_claim">("owner_affiliated_claim");
+  const [verificationDisclosureAccepted, setVerificationDisclosureAccepted] = useState(false);
 
   // NOTE: owner_name is NOT locked during any upgrade flow.
   // When upgrading (starter→individual, individual→corporate, starter→corporate),
@@ -185,12 +187,19 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
       setError("Please select your business registration type before upgrading.");
       return;
     }
+    if (!verificationDisclosureAccepted) {
+      setError("Please acknowledge that live payment collection remains disabled until verification is complete.");
+      return;
+    }
     // Save owner name + business type then navigate to the checkout page
     sessionStorage.setItem(
       "upgradeCheckout",
       JSON.stringify({
         ownerName: ownerName.trim(),
         businessType: plan === "corporate" ? businessType : null,
+        relationshipClaim: plan === "corporate" ? relationshipClaim : "owner_affiliated_claim",
+        verificationDisclosureAccepted,
+        disclosureVersion: "1.0",
       })
     );
     router.push(`/checkout/upgrade/${plan}`);
@@ -299,6 +308,53 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
                   )}
 
                   {/* ── Owner / Director Name — ALWAYS editable during upgrade ── */}
+                  {plan === "corporate" && (
+                    <div className="space-y-3">
+                      <Label className="text-sm font-medium text-white">
+                        What is your relationship with this business? <span className="text-red-400">*</span>
+                      </Label>
+                      <p className="text-xs text-white/50">
+                        This helps us confirm that the business account is being created by an authorized person.
+                      </p>
+                      <div className="grid gap-3">
+                        <label className={`flex cursor-pointer items-start gap-3 rounded-xl border p-4 transition-colors ${
+                          relationshipClaim === "owner_affiliated_claim"
+                            ? "border-[#7B2FF7] bg-[#7B2FF7]/15"
+                            : "border-white/10 bg-[#12061F]/50 hover:border-white/20"
+                        }`}>
+                          <input
+                            type="radio"
+                            name="relationshipClaim"
+                            checked={relationshipClaim === "owner_affiliated_claim"}
+                            onChange={() => setRelationshipClaim("owner_affiliated_claim")}
+                            className="mt-1 h-4 w-4 accent-[#7B2FF7]"
+                          />
+                          <span>
+                            <span className="block text-sm font-semibold text-white">I am a Director, Owner, Shareholder, or Proprietor</span>
+                            <span className="mt-1 block text-xs text-white/50">We will match your verified identity against the business registry record.</span>
+                          </span>
+                        </label>
+                        <label className={`flex cursor-pointer items-start gap-3 rounded-xl border p-4 transition-colors ${
+                          relationshipClaim === "representative_claim"
+                            ? "border-[#7B2FF7] bg-[#7B2FF7]/15"
+                            : "border-white/10 bg-[#12061F]/50 hover:border-white/20"
+                        }`}>
+                          <input
+                            type="radio"
+                            name="relationshipClaim"
+                            checked={relationshipClaim === "representative_claim"}
+                            onChange={() => setRelationshipClaim("representative_claim")}
+                            className="mt-1 h-4 w-4 accent-[#7B2FF7]"
+                          />
+                          <span>
+                            <span className="block text-sm font-semibold text-white">I am setting this up on behalf of the business</span>
+                            <span className="mt-1 block text-xs text-white/50">A listed director or owner will need to verify and approve activation.</span>
+                          </span>
+                        </label>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="space-y-2">
                     <div className="flex items-center gap-3 flex-wrap">
                       <Label className="text-sm font-medium text-white">
@@ -372,9 +428,21 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
                 </div>
               )}
 
+              <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-amber-400/30 bg-amber-400/10 p-4">
+                <input
+                  type="checkbox"
+                  checked={verificationDisclosureAccepted}
+                  onChange={(event) => setVerificationDisclosureAccepted(event.target.checked)}
+                  className="mt-1 h-4 w-4 accent-[#7B2FF7]"
+                />
+                <span className="text-sm leading-relaxed text-amber-100">
+                  I understand that my subscription gives setup access only, and live payment collection will remain disabled until successful verification.
+                </span>
+              </label>
+
               <Button
                 onClick={handleUpgrade}
-                disabled={loadingMerchant}
+                disabled={loadingMerchant || !verificationDisclosureAccepted}
                 className="mt-6 h-12 w-full bg-[#7B2FF7] hover:bg-[#B58CFF] hover:text-[#12061F] text-base font-bold text-white transition-all border-0"
               >
                 <span className="flex items-center gap-2">

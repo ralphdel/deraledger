@@ -62,6 +62,9 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
   // ownerName + businessType are read from sessionStorage (set by upgrade settings page)
   const [ownerName, setOwnerName] = useState("");
   const [businessType, setBusinessType] = useState<string | null>(null);
+  const [relationshipClaim, setRelationshipClaim] = useState<"owner_affiliated_claim" | "representative_claim" | null>(null);
+  const [verificationDisclosureAccepted, setVerificationDisclosureAccepted] = useState(false);
+  const [disclosureVersion, setDisclosureVersion] = useState("1.0");
 
   useEffect(() => {
     if (paystackLoaded.current) return;
@@ -79,6 +82,9 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
         const parsed = JSON.parse(stored);
         setOwnerName(parsed.ownerName || "");
         setBusinessType(parsed.businessType || null);
+        setRelationshipClaim(parsed.relationshipClaim || null);
+        setVerificationDisclosureAccepted(parsed.verificationDisclosureAccepted === true);
+        setDisclosureVersion(parsed.disclosureVersion || "1.0");
       } catch { /* ignore */ }
     }
     getMerchant()
@@ -101,13 +107,24 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
   };
 
   const handleCardPayment = async () => {
+    if (!verificationDisclosureAccepted) {
+      setError("Please go back and acknowledge the verification disclosure before payment.");
+      return;
+    }
     setError(null);
     setLoading(true);
     try {
       const res = await fetch("/api/payment/upgrade", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ newPlan: plan, ownerName, businessType }),
+        body: JSON.stringify({
+          newPlan: plan,
+          ownerName,
+          businessType,
+          relationshipClaim,
+          verificationDisclosureAccepted,
+          disclosureVersion,
+        }),
       });
       const data = await res.json();
       if (!data.accessCode) throw new Error(data.error || "Failed to initialize payment.");
@@ -128,6 +145,9 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
           new_plan: plan,
           owner_name: ownerName || null,
           business_type: businessType || null,
+          relationship_claim: relationshipClaim || null,
+          verification_disclosure_accepted: verificationDisclosureAccepted,
+          verification_disclosure_version: disclosureVersion,
         },
         callback: (response: { reference: string }) => {
           sessionStorage.removeItem("upgradeCheckout");
@@ -143,13 +163,24 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
   };
 
   const handleCryptoPayment = async () => {
+    if (!verificationDisclosureAccepted) {
+      setError("Please go back and acknowledge the verification disclosure before payment.");
+      return;
+    }
     setError(null);
     setLoading(true);
     try {
       const res = await fetch("/api/checkout/crypto-upgrade", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ newPlan: plan, ownerName, businessType }),
+        body: JSON.stringify({
+          newPlan: plan,
+          ownerName,
+          businessType,
+          relationshipClaim,
+          verificationDisclosureAccepted,
+          disclosureVersion,
+        }),
       });
       const data = await res.json();
       if (!data.cryptoAddress) throw new Error(data.error || "Failed to generate address.");
@@ -231,7 +262,10 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
         {/* ── Right: Payment Methods ── */}
         <div className="flex-1 bg-[#12061F] border-l border-white/5 p-6 md:p-10 flex flex-col">
           <h2 className="text-lg font-bold text-white mb-1">Choose payment method</h2>
-          <p className="text-sm text-white/60 mb-6">Select how you&apos;d like to pay for your upgrade.</p>
+          <p className="text-sm text-white/60 mb-4">Select how you&apos;d like to pay for your upgrade.</p>
+          <div className="mb-6 rounded-xl border border-amber-400/30 bg-amber-400/10 p-4 text-sm text-amber-100">
+            Your payment moves this workspace into setup mode. Live payment links, checkout, settlement, and payment collection remain disabled until verification is completed.
+          </div>
 
           {/* Tab selector */}
           <div className="flex gap-2 mb-6 border-b border-white/10 pb-1">
@@ -267,7 +301,7 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
                   <p className="text-xs text-white/50 mb-4">
                     A secure Paystack window will open. Your card details are never stored by DeraLedger.
                   </p>
-                  <Button onClick={handleCardPayment} disabled={loading || loadingMerchant}
+                  <Button onClick={handleCardPayment} disabled={loading || loadingMerchant || !verificationDisclosureAccepted}
                     className="w-full h-12 bg-[#7B2FF7] hover:bg-[#B58CFF] hover:text-[#12061F] text-white font-bold text-base border-0 transition-all">
                     {loading ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Opening Paystack...</> : <>Pay {config.price} <CreditCard className="ml-2 h-4 w-4" /></>}
                   </Button>
@@ -292,7 +326,7 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
                 <p className="text-xs text-white/50 mb-4">
                   Paystack will generate a virtual account number. Transfer the exact amount to activate your plan.
                 </p>
-                <Button onClick={handleCardPayment} disabled={loading || loadingMerchant}
+                <Button onClick={handleCardPayment} disabled={loading || loadingMerchant || !verificationDisclosureAccepted}
                   className="w-full h-12 bg-blue-600 hover:bg-blue-500 text-white font-bold text-base border-0">
                   {loading ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Opening...</> : <>Get Transfer Details <ArrowRightLeft className="ml-2 h-4 w-4" /></>}
                 </Button>
@@ -332,7 +366,7 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
                       <p className="text-xs text-orange-600">BTC, USDT, ETH</p>
                     </div>
                   </div>
-                  <Button onClick={handleCryptoPayment} disabled={loading} className="w-full h-11 bg-orange-500 hover:bg-orange-600 text-white font-bold">
+                  <Button onClick={handleCryptoPayment} disabled={loading || !verificationDisclosureAccepted} className="w-full h-11 bg-orange-500 hover:bg-orange-600 text-white font-bold">
                     {loading ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Generating...</> : "Generate Crypto Address"}
                   </Button>
                 </div>

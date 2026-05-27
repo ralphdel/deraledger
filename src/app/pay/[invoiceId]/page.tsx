@@ -229,7 +229,10 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
   }
 
   // Merchant Verification Guard
-  const isMerchantVerified = merchant?.verification_status === "verified";
+  const isMerchantVerified =
+    merchant?.verification_status === "verified" &&
+    merchant?.setup_mode !== true &&
+    merchant?.live_features_enabled !== false;
   const hasSettlementAccount = !!merchant?.payment_subaccount_code;
   const isAcceptingPayments = isMerchantVerified && hasSettlementAccount;
 

@@ -47,6 +47,18 @@ export interface Merchant {
   identity_verified_at?: string | null;
   /** Which provider was used for this merchant's last verification */
   active_verification_provider?: "DOJAH" | "YOUVERIFY" | null;
+  workspace_id?: string | null;
+  workspace_type?: "personal" | "business" | string | null;
+  onboarding_status?: "setup_mode" | "pending_kyc" | "pending_kyb" | "pending_affiliation_match" | "pending_director_approval" | "pending_manual_review" | "active" | "rejected" | string | null;
+  setup_mode?: boolean | null;
+  live_features_enabled?: boolean | null;
+  verification_disclosure_acknowledged_at?: string | null;
+  verification_disclosure_version?: string | null;
+  relationship_claim?: "owner_affiliated_claim" | "representative_claim" | string | null;
+  business_registry_snapshot_id?: string | null;
+  business_affiliation_status?: "not_started" | "strong_match" | "partial_match" | "no_match" | "director_approved" | "rejected" | "manual_review" | string | null;
+  paid_setup_started_at?: string | null;
+  live_features_activated_at?: string | null;
   // Settlement fields (v2.1)
   settlement_bank_name: string | null;
   settlement_bank_code: string | null;

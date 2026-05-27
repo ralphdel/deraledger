@@ -60,6 +60,16 @@ export interface AccessResult {
   upgradeRequired?: "individual" | "corporate";
 }
 
+function liveCollectionEnabled(
+  merchant: Pick<Merchant, "subscription_plan" | "merchant_tier" | "verification_status" | "live_features_enabled" | "setup_mode">
+): boolean {
+  const plan = getPlan(merchant);
+  if (plan === "starter") return false;
+  if (merchant.live_features_enabled === true) return true;
+  if (merchant.setup_mode === true) return false;
+  return merchant.verification_status === "verified";
+}
+
 // ── Gate: Create any invoice ──────────────────────────────────────────────────
 /**
  * Check if merchant can create a new invoice (any type).
@@ -84,7 +94,7 @@ export function canCreateInvoice(
 
 // ── Gate: Create collection invoice ──────────────────────────────────────────
 export function canCreateCollectionInvoice(
-  merchant: Pick<Merchant, "subscription_plan" | "merchant_tier" | "verification_status">
+  merchant: Pick<Merchant, "subscription_plan" | "merchant_tier" | "verification_status" | "live_features_enabled" | "setup_mode">
 ): AccessResult {
   const plan = getPlan(merchant);
   const limits = PLAN_LIMITS[plan];
@@ -97,10 +107,10 @@ export function canCreateCollectionInvoice(
     };
   }
 
-  if (merchant.verification_status !== "verified") {
+  if (!liveCollectionEnabled(merchant)) {
     return {
       allowed: false,
-      reason: "Collection invoices require completed KYC verification. Please complete verification in Settings.",
+      reason: "Live payment collection is disabled until verification is completed. You can continue setting up your workspace.",
     };
   }
 
@@ -298,4 +308,3 @@ export function isIdentityVerified(
 ): boolean {
   return merchant.identity_verified === true;
 }
-

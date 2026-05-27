@@ -49,7 +49,7 @@ export async function POST(request: Request) {
     // Fetch the merchant to get the subaccount code
     const { data: merchant, error: merchantError } = await supabase
       .from("merchants")
-      .select("payment_subaccount_code, verification_status")
+      .select("payment_subaccount_code, verification_status, live_features_enabled, setup_mode")
       .eq("id", invoice.merchant_id)
       .single();
 
@@ -57,7 +57,12 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Merchant not found" }, { status: 404 });
     }
 
-    if (merchant.verification_status !== "verified" || !merchant.payment_subaccount_code) {
+    if (
+      merchant.verification_status !== "verified" ||
+      merchant.setup_mode === true ||
+      merchant.live_features_enabled === false ||
+      !merchant.payment_subaccount_code
+    ) {
       return NextResponse.json({ error: "Merchant is not verified or has no settlement account set up" }, { status: 403 });
     }
 

@@ -33,6 +33,7 @@ import type {
 import { PROVIDER_COSTS } from "@/lib/kyc/types";
 import { enqueueRetry } from "./retry.service";
 import { sendProviderDownAlert } from "@/lib/brevo";
+import { persistBusinessRegistrySnapshot } from "@/lib/services/onboarding-flow.service";
 
 // ── Supabase service client (server-only) ─────────────────────────────────────
 
@@ -620,7 +621,7 @@ export async function verifyMerchantBusiness(params: {
   }
 
   // 9. Write audit record
-  await writeAuditLog(adminClient, {
+  const verificationLogId = await writeAuditLog(adminClient, {
     merchantId: params.merchantId,
     provider: providerKey,
     type: "business",
@@ -631,6 +632,41 @@ export async function verifyMerchantBusiness(params: {
     sandbox,
     result: result as any,
   });
+
+  const hasBusinessRegistryPayload =
+    Boolean(result.companyName) ||
+    Boolean(result.personnel && result.personnel.length > 0) ||
+    Object.keys(result.rawResponse || {}).length > 0;
+
+  if (hasBusinessRegistryPayload) {
+    const { data: merchantSnapshotContext } = await adminClient
+      .from("merchants")
+      .select("business_type, relationship_claim")
+      .eq("id", params.merchantId)
+      .maybeSingle();
+
+    await persistBusinessRegistrySnapshot(adminClient, {
+      merchantId: params.merchantId,
+      providerName: providerKey,
+      businessType: merchantSnapshotContext?.business_type || null,
+      registeredName: result.companyName || params.businessName,
+      registrationNumber: params.registrationNumber,
+      registrationStatus: result.registrationStatus || (result.success ? "ACTIVE" : "unknown"),
+      personnel: result.personnel || [],
+      rawResponse: sanitizeRawResponse(result.rawResponse || {}),
+      normalizedResponse: {
+        companyName: result.companyName,
+        registrationStatus: result.registrationStatus,
+        personnel: result.personnel || [],
+        success: result.success,
+        errorCode: result.errorCode || null,
+      },
+      verificationReference: result.providerReference || null,
+      verificationLogId,
+      ownerName: params.ownerName,
+      relationshipClaim: merchantSnapshotContext?.relationship_claim || "owner_affiliated_claim",
+    });
+  }
 
   return { ...result, companyNameMatches, representativeFound };
 }
@@ -807,11 +843,11 @@ async function writeAuditLog(
     sandbox: boolean;
     result: any;
   }
-): Promise<void> {
+): Promise<string | null> {
   try {
     const attemptNum = await getNextAttemptNumber(adminClient, params.merchantId, params.type);
 
-    const { error } = await adminClient.from("verification_logs").insert({
+    const { data, error } = await adminClient.from("verification_logs").insert({
       merchant_id: params.merchantId,
       provider_name: params.provider.toUpperCase(),
       verification_type: params.type,
@@ -829,10 +865,24 @@ async function writeAuditLog(
       attempt_number: attemptNum,
       request_timestamp: new Date().toISOString(),
       response_timestamp: new Date().toISOString(),
-    });
+    }).select("id").single();
     if (error) {
       throw new Error(error.message);
     }
+
+    if (data?.id) {
+      await adminClient.from("verification_costs").insert({
+        verification_log_id: data.id,
+        merchant_id: params.merchantId,
+        provider_name: params.provider.toUpperCase(),
+        verification_type: params.type,
+        status: params.status,
+        cost_amount: params.cost,
+        is_sandbox: params.sandbox,
+      });
+    }
+
+    return data?.id || null;
   } catch (err: any) {
     console.error("[VerificationService] Audit write failed:", err?.message);
     throw err;

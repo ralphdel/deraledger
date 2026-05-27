@@ -39,6 +39,15 @@ interface FormLineItem {
   discountPct: string;
 }
 
+function canUseCollectionInvoices(merchant?: Merchant | null): boolean {
+  if (!merchant) return false;
+  const plan = merchant.subscription_plan || merchant.merchant_tier || "starter";
+  if (plan === "starter") return false;
+  if (merchant.live_features_enabled === true) return true;
+  if (merchant.setup_mode === true || merchant.live_features_enabled === false) return false;
+  return merchant.verification_status === "verified";
+}
+
 function CreateInvoiceForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -94,9 +103,7 @@ function CreateInvoiceForm() {
         // CRITICAL: Force starter plan or unverified merchants to record type only.
         // This prevents direct URL bypass where unverified or starter plan users
         // load the collection invoice form by putting ?type=collection in their URL query param.
-        const plan = m.subscription_plan || m.merchant_tier || "starter";
-        const isUnverified = m.verification_status !== "verified";
-        if (plan === "starter" || isUnverified) {
+        if (!canUseCollectionInvoices(m)) {
           setInvoiceType("record");
           if (searchParams.get("type") === "collection") {
             router.replace("/invoices/create?type=record", { scroll: false });
@@ -175,13 +182,12 @@ function CreateInvoiceForm() {
     // Strict KYC and plan gate for collection invoices to block URL bypasses
     if (invoiceType === "collection") {
       const plan = merchant.subscription_plan || merchant.merchant_tier || "starter";
-      const isUnverified = merchant.verification_status !== "verified";
       if (plan === "starter") {
         setError("Collection Invoices are not available on the Starter plan. Please upgrade.");
         return;
       }
-      if (isUnverified) {
-        setError("Your account KYC must be verified before you can create collection invoices.");
+      if (!canUseCollectionInvoices(merchant)) {
+        setError("Live payment collection is disabled until verification is completed. You can continue setting up your workspace.");
         return;
       }
     }
@@ -298,13 +304,13 @@ function CreateInvoiceForm() {
           </Card>
 
           <Card
-            className={`border-2 transition-all shadow-sm ${(merchant?.subscription_plan === "starter" || merchant?.verification_status !== "verified") ? "opacity-60 bg-neutral-50 dark:bg-white/5 cursor-not-allowed" : "cursor-pointer"
+            className={`border-2 transition-all shadow-sm ${!canUseCollectionInvoices(merchant) ? "opacity-60 bg-neutral-50 dark:bg-white/5 cursor-not-allowed" : "cursor-pointer"
               } ${invoiceType === "collection"
                 ? "border-blue-600 bg-blue-50 ring-2 ring-blue-200 dark:bg-blue-500/10 dark:border-blue-500/50 dark:ring-blue-500/20"
                 : "border-neutral-200 hover:border-blue-300 dark:border-white/10 dark:bg-[#1A0B2E] dark:hover:border-blue-500/30"
               }`}
             onClick={() => {
-              if (merchant?.subscription_plan === "starter" || merchant?.verification_status !== "verified") return; // Locked for starter or unverified
+              if (!canUseCollectionInvoices(merchant)) return; // Locked until verification activates live features
               setInvoiceType("collection");
               router.replace("/invoices/create?type=collection", { scroll: false });
             }}
@@ -320,9 +326,9 @@ function CreateInvoiceForm() {
                     <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-amber-600 bg-amber-100 dark:bg-amber-500/20 dark:text-amber-400 px-2 py-0.5 rounded-full">
                       <Lock className="h-3 w-3" /> Upgrade
                     </span>
-                  ) : merchant?.verification_status !== "verified" ? (
+                  ) : !canUseCollectionInvoices(merchant) ? (
                     <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-amber-600 bg-amber-100 dark:bg-amber-500/20 dark:text-amber-400 px-2 py-0.5 rounded-full">
-                      <Lock className="h-3 w-3" /> Verify KYC
+                      <Lock className="h-3 w-3" /> Verify
                     </span>
                   ) : null}
                 </div>

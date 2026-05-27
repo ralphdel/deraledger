@@ -60,6 +60,10 @@ interface CheckoutData {
   businessName: string;
   registeredName: string;
   ownerName: string;
+  businessType?: string | null;
+  relationshipClaim?: "owner_affiliated_claim" | "representative_claim" | null;
+  verificationDisclosureAccepted?: boolean;
+  disclosureVersion?: string;
   plan: string;
   sessionId: string;
   amountKobo: number;
@@ -184,6 +188,10 @@ function SubscriptionCheckoutContent() {
           tradingName: checkoutData.businessName,
           registeredName: checkoutData.registeredName,
           ownerName: checkoutData.ownerName,
+          businessType: checkoutData.businessType,
+          relationshipClaim: checkoutData.relationshipClaim,
+          verificationDisclosureAccepted: checkoutData.verificationDisclosureAccepted,
+          disclosureVersion: checkoutData.disclosureVersion,
           plan: checkoutData.plan,
           sessionId: checkoutData.sessionId,
           amountKobo: checkoutData.amountKobo,
@@ -216,6 +224,10 @@ function SubscriptionCheckoutContent() {
           business_name: checkoutData.registeredName,
           trading_name: checkoutData.businessName,
           owner_name: checkoutData.ownerName || null,
+          business_type: checkoutData.businessType || null,
+          relationship_claim: checkoutData.relationshipClaim || null,
+          verification_disclosure_accepted: checkoutData.verificationDisclosureAccepted === true,
+          verification_disclosure_version: checkoutData.disclosureVersion || null,
           session_id: checkoutData.sessionId,
           context,
         },
@@ -334,7 +346,12 @@ function SubscriptionCheckoutContent() {
         {/* ── Right: Payment Methods ── */}
         <div className="flex-1 bg-[#12061F] border-l border-white/5 p-6 md:p-10 flex flex-col">
           <h2 className="text-lg font-bold text-white mb-1">Choose payment method</h2>
-          <p className="text-sm text-white/60 mb-6">Select how you&apos;d like to pay for your subscription.</p>
+          <p className="text-sm text-white/60 mb-4">Select how you&apos;d like to pay for your subscription.</p>
+          {context === "onboarding" && plan !== "starter" && (
+            <div className="mb-6 rounded-xl border border-amber-400/30 bg-amber-400/10 p-4 text-sm text-amber-100">
+              Your subscription creates a setup workspace. Live payment links, checkout, settlement, and payment collection remain disabled until verification is completed.
+            </div>
+          )}
 
           {/* Tab selector */}
           <div className="flex gap-2 mb-6 border-b border-white/10 pb-1">

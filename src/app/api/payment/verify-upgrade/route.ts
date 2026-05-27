@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { PaymentService } from "@/lib/payment";
+import { enterPaidSetupMode, type RelationshipClaim } from "@/lib/services/onboarding-flow.service";
 
 const supabaseAdmin = createSupabaseClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -31,6 +32,7 @@ export async function POST(request: Request) {
     const newPlan = metadata.new_plan;
     const ownerName = metadata.owner_name || null;
     const businessType = metadata.business_type || null;
+    const relationshipClaim = (metadata.relationship_claim as RelationshipClaim | undefined) || null;
 
     if (!merchantId || !newPlan) {
       return NextResponse.json({ error: "Missing metadata" }, { status: 400 });
@@ -73,6 +75,9 @@ export async function POST(request: Request) {
         updates.verification_status = "unverified";
       }
     }
+    if (relationshipClaim) {
+      updates.relationship_claim = relationshipClaim;
+    }
 
     const { error: updateError } = await supabaseAdmin
       .from("merchants")
@@ -83,6 +88,13 @@ export async function POST(request: Request) {
       console.error("Failed to verify upgrade (db error):", updateError.message);
       return NextResponse.json({ error: "Database update failed" }, { status: 500 });
     }
+
+    await enterPaidSetupMode(supabaseAdmin, {
+      merchantId,
+      planType: newPlan,
+      relationshipClaim,
+      paymentReference: reference,
+    });
 
     // Log to audit (only if not already logged)
     const { data: existingLog } = await supabaseAdmin

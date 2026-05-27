@@ -36,6 +36,15 @@ type ManualPaymentWithInvoice = {
   invoices?: InvoiceWithClient | null;
 };
 
+function canUseCollectionInvoices(merchant?: Merchant | null): boolean {
+  if (!merchant) return false;
+  const plan = merchant.subscription_plan || merchant.merchant_tier || "starter";
+  if (plan === "starter") return false;
+  if (merchant.live_features_enabled === true) return true;
+  if (merchant.setup_mode === true || merchant.live_features_enabled === false) return false;
+  return merchant.verification_status === "verified";
+}
+
 export default function InvoicesPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -64,8 +73,8 @@ export default function InvoicesPage() {
       setManualPayments(manualPaymentData as ManualPaymentWithInvoice[]);
       if (merchantResult) setMerchant(merchantResult);
       
-      // If Starter tier or unverified, force back to Record filter and don't allow Collection
-      if (merchantResult?.subscription_plan === "starter" || merchantResult?.verification_status !== "verified") {
+      // If live collection is locked, force back to all/record and don't allow Collection.
+      if (!canUseCollectionInvoices(merchantResult)) {
         if (savedType === "collection") setTypeFilter("all");
       }
       
@@ -74,7 +83,7 @@ export default function InvoicesPage() {
   }, []);
 
   const handleTypeChange = (value: "all" | "record" | "collection") => {
-    if ((merchant?.subscription_plan === "starter" || merchant?.verification_status !== "verified") && value === "collection") return;
+    if (!canUseCollectionInvoices(merchant) && value === "collection") return;
     setTypeFilter(value);
     localStorage.setItem("purpledger_invoice_type_filter", value);
   };
@@ -139,7 +148,7 @@ export default function InvoicesPage() {
     );
   }
 
-  const isRestricted = merchant?.subscription_plan === "starter" || merchant?.verification_status !== "verified";
+  const isRestricted = !canUseCollectionInvoices(merchant);
 
   return (
     <PermissionGuard permission="view_invoices" merchant={merchant} featureLabel="Invoices">
@@ -231,7 +240,7 @@ export default function InvoicesPage() {
             <CreditCard className="h-4 w-4" /> Collection
             {merchant?.subscription_plan === "starter" ? (
               <span className="absolute -top-2 -right-2 bg-amber-100 dark:bg-amber-500/20 text-amber-800 dark:text-amber-400 text-[9px] font-bold px-1.5 py-0.5 rounded-full border border-amber-300 dark:border-amber-500/30 z-10">PRO</span>
-            ) : merchant?.verification_status !== "verified" ? (
+            ) : isRestricted ? (
               <span className="absolute -top-2 -right-2 bg-amber-100 dark:bg-amber-500/20 text-amber-800 dark:text-amber-400 text-[9px] font-bold px-1.5 py-0.5 rounded-full border border-amber-300 dark:border-amber-500/30 z-10">KYC</span>
             ) : null}
           </button>
