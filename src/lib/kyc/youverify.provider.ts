@@ -227,12 +227,14 @@ export class YouverifyProvider implements ProviderAdapter {
       };
     }
 
-    // Correct Youverify payload — selfie is a top-level sibling of `id`, not nested under `validations`
+    // Youverify BVN+selfie payload — face image is nested under `validations.selfie.image`
     const body = {
       id: payload.bvn,
       isSubjectConsent: true,
-      selfie: {
-        image: selfieBase64 || payload.selfieImageUrl,
+      validations: {
+        selfie: {
+          image: selfieBase64 || payload.selfieImageUrl,
+        },
       },
     };
 
