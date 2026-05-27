@@ -207,13 +207,12 @@ export class YouverifyProvider implements ProviderAdapter {
       };
     }
 
-    // Prefer base64 directly — Youverify servers cannot reach private Supabase signed URLs.
-    // Strip the data-URI prefix if present so we send only the raw base64 string.
-    const selfieBase64 = payload.selfieBase64
-      ? payload.selfieBase64.replace(/^data:image\/[a-z]+;base64,/, '')
-      : null;
+    // Youverify requires `validations.selfie.image` to be a valid URI.
+    // Supabase signed URLs are publicly accessible — use that as primary.
+    // base64 is NOT accepted by Youverify's validator.
+    const imageUri = payload.selfieImageUrl || null;
 
-    if (!selfieBase64 && !payload.selfieImageUrl) {
+    if (!imageUri) {
       return {
         success: false,
         bvnExists: false,
@@ -223,17 +222,17 @@ export class YouverifyProvider implements ProviderAdapter {
         providerReference: null,
         rawResponse: {},
         errorCode: 'UNKNOWN_ERROR',
-        error: 'A selfie image (base64 or URL) is required for Youverify BVN verification.',
+        error: 'A publicly accessible selfie URL is required for Youverify BVN verification. Ensure the selfie is uploaded and a signed URL is generated before calling.',
       };
     }
 
-    // Youverify BVN+selfie payload — face image is nested under `validations.selfie.image`
+    // Youverify BVN+selfie payload — face image must be a valid public URL
     const body = {
       id: payload.bvn,
       isSubjectConsent: true,
       validations: {
         selfie: {
-          image: selfieBase64 || payload.selfieImageUrl,
+          image: imageUri,
         },
       },
     };
@@ -259,7 +258,7 @@ export class YouverifyProvider implements ProviderAdapter {
           isSubjectConsent: true,
           validations: {
             selfie: {
-              image: selfieBase64 || payload.selfieImageUrl,
+              image: imageUri,
             },
           },
           premiumBVN: false,
