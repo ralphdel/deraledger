@@ -16,6 +16,14 @@ type PublicInvitationRow = {
     registered_name?: string | null;
     registration_number?: string | null;
   } | null;
+  latest_director_verification?: {
+    id: string;
+    status: string;
+    face_match_score?: number | null;
+    liveness_score?: number | null;
+    created_at?: string | null;
+    updated_at?: string | null;
+  } | null;
 };
 
 export async function GET(
@@ -45,6 +53,16 @@ export async function GET(
       requesterName: merchant.owner_name,
       registeredName: snapshot.registered_name,
       registrationNumber: snapshot.registration_number,
+      latestVerification: invitation.latest_director_verification
+        ? {
+            id: invitation.latest_director_verification.id,
+            status: invitation.latest_director_verification.status,
+            faceMatchScore: invitation.latest_director_verification.face_match_score,
+            livenessScore: invitation.latest_director_verification.liveness_score,
+            submittedAt: invitation.latest_director_verification.created_at,
+            updatedAt: invitation.latest_director_verification.updated_at,
+          }
+        : null,
     },
   });
 }

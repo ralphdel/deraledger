@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { CheckCircle, ShieldCheck, XCircle, AlertCircle, Camera } from "lucide-react";
+import { CheckCircle, ShieldCheck, XCircle, AlertCircle, Camera, Lock, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -16,6 +16,14 @@ type InvitationContext = {
   registeredName?: string | null;
   registrationNumber?: string | null;
   expiresAt: string;
+  latestVerification?: {
+    id: string;
+    status: "pending" | "verified" | "failed" | "manual_review";
+    faceMatchScore?: number | null;
+    livenessScore?: number | null;
+    submittedAt?: string | null;
+    updatedAt?: string | null;
+  } | null;
 };
 
 export default function DirectorApprovalPage() {
@@ -39,7 +47,11 @@ export default function DirectorApprovalPage() {
       .then((data) => {
         if (!data.success) throw new Error(data.error || "Invitation not found.");
         setInvitation(data.invitation);
-        setVerified(data.invitation.status === "verified" || data.invitation.status === "approved");
+        setVerified(
+          data.invitation.status === "verified" ||
+          data.invitation.status === "approved" ||
+          data.invitation.latestVerification?.status === "verified"
+        );
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
@@ -56,11 +68,47 @@ export default function DirectorApprovalPage() {
         body: JSON.stringify({ bvn, selfieBase64 }),
       });
       const data = await res.json();
-      if (!res.ok && data.status !== "manual_review") throw new Error(data.error || "Verification failed.");
+      if (!res.ok && data.status !== "manual_review" && data.status !== "failed") throw new Error(data.error || "Verification failed.");
       if (data.status === "manual_review") {
         setMessage("Identity was submitted for manual review. DeraLedger compliance will review this request.");
+        setInvitation((current) => current
+          ? {
+              ...current,
+              latestVerification: {
+                id: data.verificationId || "submitted",
+                status: "manual_review",
+                faceMatchScore: data.faceMatchScore,
+                submittedAt: new Date().toISOString(),
+              },
+            }
+          : current);
+      } else if (data.status === "failed") {
+        setInvitation((current) => current
+          ? {
+              ...current,
+              latestVerification: {
+                id: data.verificationId || "submitted",
+                status: "failed",
+                faceMatchScore: data.faceMatchScore,
+                submittedAt: new Date().toISOString(),
+              },
+            }
+          : current);
+        setMessage("Identity verification was submitted but could not be completed. Please contact support or wait for compliance review before trying again.");
       } else {
         setVerified(true);
+        setInvitation((current) => current
+          ? {
+              ...current,
+              status: "verified",
+              latestVerification: {
+                id: data.verificationId || "submitted",
+                status: "verified",
+                faceMatchScore: data.faceMatchScore,
+                submittedAt: new Date().toISOString(),
+              },
+            }
+          : current);
         setMessage("Identity verified. You can now approve or reject this workspace request.");
       }
     } catch (err) {
@@ -100,6 +148,17 @@ export default function DirectorApprovalPage() {
   }
 
   const locked = ["expired", "cancelled", "approved", "rejected"].includes(invitation.status);
+  const latestVerification = invitation.latestVerification || null;
+  const verificationSubmitted = Boolean(latestVerification);
+  const verificationLocked = verificationSubmitted && latestVerification?.status !== "verified";
+  const verificationStatusCopy =
+    latestVerification?.status === "manual_review"
+      ? "Your identity verification has already been submitted and is waiting for compliance review. For your protection, the BVN and selfie step is locked to prevent duplicate verification charges."
+      : latestVerification?.status === "pending"
+        ? "Your identity verification has already been submitted and is being processed. For your protection, the BVN and selfie step is locked to prevent duplicate verification charges."
+        : latestVerification?.status === "failed"
+          ? "Your identity verification was already submitted but could not be completed. The BVN and selfie step is locked to prevent duplicate charges. Please contact support or wait for compliance review."
+          : "Your identity has already been verified. The BVN and selfie step is locked to prevent duplicate verification charges.";
 
   return (
     <main className="min-h-screen bg-neutral-50 px-4 py-8">
@@ -131,56 +190,82 @@ export default function DirectorApprovalPage() {
           ) : (
             <>
               {!verified && (
-                <div className="space-y-3 rounded-lg border p-4">
-                  <div className="flex items-center gap-2 text-sm font-bold text-neutral-900">
-                    <ShieldCheck className="h-4 w-4" />
-                    Verify your identity
-                  </div>
-                  <Input
-                    maxLength={11}
-                    placeholder="Enter BVN"
-                    value={bvn}
-                    onChange={(event) => setBvn(event.target.value.replace(/\D/g, ""))}
-                    className="font-mono"
-                  />
-                  {showCamera ? (
-                    <LivenessCamera
-                      onComplete={(images) => {
-                        setSelfieBase64(images[0]);
-                        setShowCamera(false);
-                      }}
-                      onCancel={() => setShowCamera(false)}
-                      onFallback={(err) => {
-                        setShowCamera(false);
-                        setError(`Camera failed: ${err}`);
-                      }}
-                    />
-                  ) : selfieBase64 ? (
-                    <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs font-semibold text-emerald-700">
-                      Selfie captured.
+                verificationLocked ? (
+                  <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                    <div className="flex items-center gap-2 font-bold">
+                      {latestVerification?.status === "pending" ? <Clock className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
+                      Verification already submitted
                     </div>
-                  ) : (
-                    <Button type="button" variant="outline" onClick={() => setShowCamera(true)} className="w-full gap-2">
-                      <Camera className="h-4 w-4" />
-                      Capture selfie
+                    <p>{verificationStatusCopy}</p>
+                    {latestVerification?.submittedAt && (
+                      <p className="text-xs text-amber-700">
+                        Submitted: {new Date(latestVerification.submittedAt).toLocaleString()}
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-3 rounded-lg border p-4">
+                    <div className="flex items-center gap-2 text-sm font-bold text-neutral-900">
+                      <ShieldCheck className="h-4 w-4" />
+                      Verify your identity
+                    </div>
+                    <Input
+                      maxLength={11}
+                      placeholder="Enter BVN"
+                      value={bvn}
+                      onChange={(event) => setBvn(event.target.value.replace(/\D/g, ""))}
+                      className="font-mono"
+                    />
+                    {showCamera ? (
+                      <LivenessCamera
+                        onComplete={(images) => {
+                          setSelfieBase64(images[0]);
+                          setShowCamera(false);
+                        }}
+                        onCancel={() => setShowCamera(false)}
+                        onFallback={(err) => {
+                          setShowCamera(false);
+                          setError(`Camera failed: ${err}`);
+                        }}
+                      />
+                    ) : selfieBase64 ? (
+                      <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs font-semibold text-emerald-700">
+                        Selfie captured.
+                      </div>
+                    ) : (
+                      <Button type="button" variant="outline" onClick={() => setShowCamera(true)} className="w-full gap-2">
+                        <Camera className="h-4 w-4" />
+                        Capture selfie
+                      </Button>
+                    )}
+                    <Button onClick={verifyIdentity} disabled={submitting || bvn.length !== 11 || !selfieBase64} className="w-full bg-neutral-900 text-white hover:bg-neutral-800">
+                      {submitting ? "Verifying..." : "Submit identity verification"}
                     </Button>
-                  )}
-                  <Button onClick={verifyIdentity} disabled={submitting || bvn.length !== 11 || !selfieBase64} className="w-full bg-neutral-900 text-white hover:bg-neutral-800">
-                    {submitting ? "Verifying..." : "Submit identity verification"}
-                  </Button>
-                </div>
+                  </div>
+                )
               )}
 
               {verified && (
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  <Button onClick={() => decide("approved")} disabled={submitting} className="gap-2 bg-emerald-600 text-white hover:bg-emerald-700">
-                    <CheckCircle className="h-4 w-4" />
-                    Approve activation
-                  </Button>
-                  <Button onClick={() => decide("rejected")} disabled={submitting} variant="destructive" className="gap-2">
-                    <XCircle className="h-4 w-4" />
-                    Reject request
-                  </Button>
+                <div className="space-y-3">
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+                    <div className="flex items-center gap-2 font-bold">
+                      <Lock className="h-4 w-4" />
+                      Identity verification completed
+                    </div>
+                    <p className="mt-1 text-xs text-emerald-700">
+                      The BVN and selfie step is locked for this invitation to prevent duplicate verification charges.
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <Button onClick={() => decide("approved")} disabled={submitting} className="gap-2 bg-emerald-600 text-white hover:bg-emerald-700">
+                      <CheckCircle className="h-4 w-4" />
+                      Approve activation
+                    </Button>
+                    <Button onClick={() => decide("rejected")} disabled={submitting} variant="destructive" className="gap-2">
+                      <XCircle className="h-4 w-4" />
+                      Reject request
+                    </Button>
+                  </div>
                 </div>
               )}
             </>

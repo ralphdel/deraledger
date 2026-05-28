@@ -195,6 +195,24 @@ export async function getDirectorInvitationByToken(token: string) {
     invite.status = "opened";
   }
 
+  const { data: latestVerification } = await adminClient
+    .from("director_verifications")
+    .select("id, status, face_match_score, liveness_score, normalized_response_json, created_at, updated_at")
+    .eq("invitation_id", invite.id)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (latestVerification?.status === "verified" && invite.status === "opened") {
+    await adminClient
+      .from("director_invitations")
+      .update({ status: "verified", updated_at: new Date().toISOString() })
+      .eq("id", invite.id);
+    invite.status = "verified";
+  }
+
+  invite.latest_director_verification = latestVerification || null;
+
   return { success: true, invitation: invite };
 }
 
@@ -209,6 +227,30 @@ export async function verifyInvitationDirector(params: {
   if (!invite) return { success: false, error: inviteResult.error || "Invitation not found.", status: "failed" as const };
   if (invite.status === "expired" || invite.status === "cancelled" || invite.status === "rejected") {
     return { success: false, error: "This director invitation is no longer active.", status: "failed" as const };
+  }
+  if (invite.status === "approved") {
+    return { success: true, status: "verified" as const, duplicatePrevented: true };
+  }
+
+  const existingVerification = invite.latest_director_verification;
+  if (existingVerification) {
+    if (existingVerification.status === "verified" && invite.status !== "verified") {
+      await adminClient
+        .from("director_invitations")
+        .update({ status: "verified", updated_at: new Date().toISOString() })
+        .eq("id", invite.id);
+    }
+
+    return {
+      success: existingVerification.status === "verified",
+      status: existingVerification.status,
+      faceMatchScore: existingVerification.face_match_score ?? null,
+      duplicatePrevented: true,
+      error:
+        existingVerification.status === "verified"
+          ? undefined
+          : "Director identity verification has already been submitted. Please wait for review or contact support.",
+    };
   }
 
   const role = normalizeRole(safeDirectorList(invite.business_registry_snapshots?.directors_json)
