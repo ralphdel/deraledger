@@ -434,7 +434,10 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
 
                 if (planId === "corporate") {
                   ownerHelp = "This name must match the CAC registry details for verification.";
-                  if (businessType === "sole_proprietorship") {
+                  if (relationshipClaim === "representative_claim") {
+                    ownerLabel = "Account Representative Full Name";
+                    ownerHelp = "Enter your own legal name. A listed director or owner will verify and approve the business separately.";
+                  } else if (businessType === "sole_proprietorship") {
                     ownerLabel = "Sole Proprietor / Business Owner Full Name";
                     ownerPlaceholder = "e.g. Adebayo Olanrewaju";
                   } else if (businessType === "ltd" || businessType === "plc") {

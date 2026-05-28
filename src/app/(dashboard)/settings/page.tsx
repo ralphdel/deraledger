@@ -333,12 +333,12 @@ export default function SettingsPage() {
       (businessName.trim() && businessName.trim() !== savedBusinessName) ||
       (ownerName.trim() && ownerName.trim() !== savedOwnerName)
     ) {
-      setRcError("You have unsaved profile changes. Please click 'Save Profile' in the Owner Information section before verifying your RC Number.");
+      setRcError("You have unsaved profile changes. Please click 'Save Profile' in the profile identity section before verifying your RC Number.");
       return;
     }
 
     if (!savedBusinessName || !savedOwnerName) {
-      setRcError("Please complete your Business Profile and Owner Information, and click 'Save Profile' before verifying your RC Number.");
+      setRcError("Please complete your Business Profile and profile identity details, then click 'Save Profile' before verifying your RC Number.");
       return;
     }
 
@@ -465,7 +465,9 @@ export default function SettingsPage() {
 
   let ownerLabel = "Owner's Full Name";
   if (isCorporate) {
-    if (businessType === "sole_proprietorship") {
+    if (merchant?.relationship_claim === "representative_claim") {
+      ownerLabel = "Account Representative Full Name";
+    } else if (businessType === "sole_proprietorship") {
       ownerLabel = "Sole Proprietor / Business Owner Full Name";
     } else if (businessType === "ltd" || businessType === "plc") {
       ownerLabel = "Director or Shareholder Full Name";
@@ -491,7 +493,7 @@ export default function SettingsPage() {
   const profileIncomplete = ownerNameMissing || businessNameMissing || businessAddressMissing || phoneMissing;
   const effectiveVerificationStatus = profileIncomplete ? "unverified" : verificationStatus;
   // Lock owner_name once BVN or selfie has been verified — name is legally bound to identity
-  const isOwnerNameLocked = merchant?.bvn_status === "verified" || merchant?.selfie_status === "verified";
+  const isOwnerNameLocked = merchant?.bvn_status === "verified" && merchant?.selfie_status === "verified";
   const registryDirectors = Array.isArray(registrySnapshot?.directors_json)
     ? registrySnapshot.directors_json
     : [];
@@ -779,9 +781,9 @@ export default function SettingsPage() {
                     />
                   )}
                   
-                  {(livenessImages.length > 0 || selfieFile || merchant?.selfie_url) && (
+                  {(livenessImages.length > 0 || selfieFile || (merchant?.selfie_url && merchant?.selfie_status !== "rejected")) && (
                     <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700 text-xs whitespace-nowrap">
-                      <CheckCircle className="mr-1 h-3 w-3" /> {merchant?.selfie_url ? "Submitted" : (livenessImages.length > 0 ? "1 Image Confirmed" : "Selected")}
+                      <CheckCircle className="mr-1 h-3 w-3" /> {merchant?.selfie_url && merchant?.selfie_status !== "rejected" ? "Submitted" : (livenessImages.length > 0 ? "1 Image Confirmed" : "Selected")}
                     </Badge>
                   )}
                 </div>
@@ -1291,8 +1293,10 @@ export default function SettingsPage() {
               <p className="text-xs text-neutral-500">
                 {isOwnerNameLocked
                   ? "This name is locked — it has been matched and verified against your BVN identity. Contact admin to reset if a correction is needed."
+                  : isCorporate && merchant?.relationship_claim === "representative_claim"
+                  ? "Your own full legal name as the account representative. A listed director will verify and approve the business separately."
                   : isCorporate
-                  ? "Full legal name of the shareholder with the highest share. Used to verify BVN."
+                  ? "Full legal name of the director, owner, or shareholder opening this account. Used for BVN identity verification."
                   : "Your full legal name as it appears on your BVN. Used for identity verification."}
               </p>
               <Input

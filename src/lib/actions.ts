@@ -1994,8 +1994,9 @@ export async function submitDojahKycAction(params: {
       selfieMatch = svcResult.faceMatch;
       nameMatch = svcResult.errorCode !== "NAME_MISMATCH";
 
-      newBvnStatus = (svcResult.bvnExists && nameMatch) ? "verified" : "rejected";
-      newSelfieStatus = selfieMatch ? "verified" : "rejected";
+      const identityVerified = svcResult.success && svcResult.bvnExists && selfieMatch && nameMatch;
+      newBvnStatus = identityVerified ? "verified" : "rejected";
+      newSelfieStatus = identityVerified ? "verified" : "rejected";
     }
 
     const plan = merchant?.subscription_plan || merchant?.merchant_tier || "starter";

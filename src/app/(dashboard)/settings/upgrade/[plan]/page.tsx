@@ -33,8 +33,9 @@ const CAMA_TYPES = [
   { value: "cooperative",         label: "Cooperative Society",                       ownerLabel: "President or Trustee Full Name" },
 ];
 
-function getOwnerLabel(businessType: string, plan: string): string {
+function getOwnerLabel(businessType: string, plan: string, relationshipClaim?: string): string {
   if (plan !== "corporate") return "Business Owner Full Name";
+  if (relationshipClaim === "representative_claim") return "Account Representative Full Name";
   return CAMA_TYPES.find(t => t.value === businessType)?.ownerLabel ?? "Director or Shareholder Full Name";
 }
 
@@ -358,7 +359,7 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
                   <div className="space-y-2">
                     <div className="flex items-center gap-3 flex-wrap">
                       <Label className="text-sm font-medium text-white">
-                        {getOwnerLabel(businessType, plan)} <span className="text-red-400">*</span>
+                        {getOwnerLabel(businessType, plan, relationshipClaim)} <span className="text-red-400">*</span>
                       </Label>
                       {(merchant?.bvn_status === "verified" || merchant?.selfie_status === "verified") && (
                         <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded-full px-2.5 py-0.5">
@@ -399,7 +400,9 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
                     />
                     <p className="text-xs text-white/50">
                       {plan === "corporate"
-                        ? `This name will be used for ${getOwnerLabel(businessType, plan).toLowerCase()} verification against CAC and BVN records.`
+                        ? relationshipClaim === "representative_claim"
+                          ? "Enter your own legal name. A listed director or owner will verify and approve the business separately."
+                          : `This name will be used for ${getOwnerLabel(businessType, plan, relationshipClaim).toLowerCase()} verification against CAC and BVN records.`
                         : "This name should match your BVN details. Verification will be completed in your account settings after upgrade."}
                     </p>
                   </div>
