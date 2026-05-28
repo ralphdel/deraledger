@@ -204,8 +204,15 @@ export default function VerificationQueuePage() {
     const res = await adminResetVerificationAction(selectedMerchant.id);
     if (res.success) {
       refreshMerchant((res.updates || { verification_status: "unverified", cac_status: "unverified", bvn_status: "unverified", utility_status: "unverified", selfie_status: "unverified" }) as Partial<Merchant>);
+      setDirectors([]);
+      setRegistrySnapshot(null);
+      setBusinessAffiliations([]);
+      setDirectorInvitations([]);
+      setVerificationCosts([]);
+      setDirectorNotes({});
       setActionSuccess(res.message || "Verification reset. Merchant must restart verification.");
       setActionMode("idle");
+      loadMerchants();
     } else setReviewError(res.error || "Reset failed.");
     setActionLoading(false);
   };
@@ -247,8 +254,12 @@ export default function VerificationQueuePage() {
       setDirectors([]);
     }
 
+    const snapshotQuery = m.business_registry_snapshot_id
+      ? sb.from("business_registry_snapshots").select("*").eq("id", m.business_registry_snapshot_id).maybeSingle()
+      : Promise.resolve({ data: null, error: null });
+
     Promise.all([
-      sb.from("business_registry_snapshots").select("*").eq("merchant_id", m.id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
+      snapshotQuery,
       sb.from("business_affiliations").select("*").eq("merchant_id", m.id).order("created_at", { ascending: false }),
       sb.from("director_invitations").select("*").eq("merchant_id", m.id).order("created_at", { ascending: false }),
       sb.from("verification_costs").select("*").eq("merchant_id", m.id).order("created_at", { ascending: false }).limit(10),

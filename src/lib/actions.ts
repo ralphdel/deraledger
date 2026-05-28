@@ -764,9 +764,18 @@ export async function adminDeleteMerchantAction(merchantId: string) {
     // ── KYC / Verification data ───────────────────────────────────────────────
     // These tables hold a merchant_id FK and MUST be cleared before the
     // merchants row is removed, otherwise Postgres throws a FK violation.
-    await adminClient.from("verification_logs").delete().eq("merchant_id", merchantId);
+    await adminClient.from("director_verifications").delete().eq("merchant_id", merchantId);
+    await adminClient.from("director_invitations").delete().eq("merchant_id", merchantId);
+    await adminClient.from("business_affiliations").delete().eq("merchant_id", merchantId);
+    await adminClient.from("business_registry_snapshots").delete().eq("merchant_id", merchantId);
     await adminClient.from("business_director_verifications").delete().eq("merchant_id", merchantId);
+    await adminClient.from("verification_costs").delete().eq("merchant_id", merchantId);
+    await adminClient.from("verification_disclosures").delete().eq("merchant_id", merchantId);
+    await adminClient.from("user_kyc_profiles").delete().eq("merchant_id", merchantId);
+    await adminClient.from("verification_logs").delete().eq("merchant_id", merchantId);
     await adminClient.from("verification_rate_limits").delete().eq("merchant_id", merchantId);
+    await adminClient.from("workspace_subscriptions").delete().eq("merchant_id", merchantId);
+    await adminClient.from("workspaces").delete().eq("merchant_id", merchantId);
 
     // Fetch invoices to delete associated line_items
     const { data: invoices } = await adminClient.from("invoices").select("id").eq("merchant_id", merchantId);
@@ -2389,6 +2398,15 @@ export async function adminResetVerificationAction(merchantId: string) {
   const resetCleanupErrors = resetCleanupResults
     .map((result) => result.error?.message)
     .filter(Boolean);
+
+  if (resetCleanupErrors.length > 0) {
+    return {
+      success: false,
+      error: `Verification was reset, but director approval cleanup failed: ${resetCleanupErrors.join("; ")}`,
+    };
+  }
+
+  await syncMerchantSetupStatus(adminClient, merchantId);
 
   // Audit log preserves what was archived — never deleted
   await logAudit("admin_verification_reset", merchantId, "merchant", {

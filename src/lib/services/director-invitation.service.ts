@@ -4,6 +4,7 @@ import { sendDirectorInvitationEmail } from "@/lib/brevo";
 import { getAppUrl } from "@/lib/server-utils";
 import { verifyDirectorIdentity } from "@/lib/services/director-verification.service";
 import { syncMerchantSetupStatus } from "@/lib/services/onboarding-flow.service";
+import { isVerificationSandboxMode } from "@/lib/kyc/index";
 
 type DirectorRole =
   | "director"
@@ -200,7 +201,7 @@ export async function getDirectorInvitationByToken(token: string) {
   const tokenHash = hashToken(token);
   const { data: invite, error } = await adminClient
     .from("director_invitations")
-    .select("*, merchants(business_name, trading_name, owner_name), business_registry_snapshots(registered_name, registration_number, directors_json)")
+    .select("*, merchants(business_name, trading_name, owner_name, business_registry_snapshot_id), business_registry_snapshots(registered_name, registration_number, directors_json)")
     .eq("token_hash", tokenHash)
     .maybeSingle();
 
@@ -224,6 +225,26 @@ export async function getDirectorInvitationByToken(token: string) {
     invite.status = "opened";
   }
 
+  const activeRegistrySnapshotId = invite.merchants?.business_registry_snapshot_id || null;
+  const inviteRegistrySnapshotId = invite.registry_snapshot_id || null;
+  const inviteCanBeReused = activeRegistrySnapshotId && inviteRegistrySnapshotId === activeRegistrySnapshotId;
+  if (!inviteCanBeReused && ["sent", "opened", "verified"].includes(invite.status)) {
+    await adminClient
+      .from("director_invitations")
+      .update({
+        status: "cancelled",
+        updated_at: new Date().toISOString(),
+        decision_metadata: {
+          staleReason: "Registry snapshot is no longer active for this merchant.",
+          cancelledAt: new Date().toISOString(),
+        },
+      })
+      .eq("id", invite.id);
+    invite.status = "cancelled";
+    invite.latest_director_verification = null;
+    return { success: true, invitation: invite };
+  }
+
   const { data: latestVerification } = await adminClient
     .from("director_verifications")
     .select("id, status, face_match_score, liveness_score, normalized_response_json, created_at, updated_at")
@@ -232,7 +253,37 @@ export async function getDirectorInvitationByToken(token: string) {
     .limit(1)
     .maybeSingle();
 
-  if (latestVerification?.status === "verified" && invite.status === "opened") {
+  let effectiveVerification = latestVerification || null;
+  const sandbox = await isVerificationSandboxMode();
+  const bypassSandboxSelfieReview =
+    sandbox && process.env.YOUVERIFY_SANDBOX_BYPASS_SELFIE_MATCH !== "false";
+
+  if (effectiveVerification?.status === "manual_review" && bypassSandboxSelfieReview) {
+    await adminClient
+      .from("director_verifications")
+      .update({ status: "verified", updated_at: new Date().toISOString() })
+      .eq("id", effectiveVerification.id);
+
+    const normalizedResponse = effectiveVerification.normalized_response_json as {
+      businessDirectorVerificationId?: string | null;
+    } | null;
+    const linkedBusinessDirectorId = normalizedResponse?.businessDirectorVerificationId;
+    if (linkedBusinessDirectorId) {
+      await adminClient
+        .from("business_director_verifications")
+        .update({
+          verification_status: "verified",
+          manual_review_required: false,
+          admin_notes: "Sandbox director verification auto-reconciled after fixture selfie bypass.",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", linkedBusinessDirectorId);
+    }
+
+    effectiveVerification = { ...effectiveVerification, status: "verified" };
+  }
+
+  if (effectiveVerification?.status === "verified" && invite.status === "opened") {
     await adminClient
       .from("director_invitations")
       .update({ status: "verified", updated_at: new Date().toISOString() })
@@ -240,7 +291,7 @@ export async function getDirectorInvitationByToken(token: string) {
     invite.status = "verified";
   }
 
-  invite.latest_director_verification = latestVerification || null;
+  invite.latest_director_verification = effectiveVerification;
 
   return { success: true, invitation: invite };
 }

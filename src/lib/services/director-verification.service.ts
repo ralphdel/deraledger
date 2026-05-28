@@ -219,8 +219,14 @@ export async function verifyDirectorIdentity(params: {
     nameMatch = directorNameMatchesProfile(params.directorName, result.returnedName);
   }
 
-  // Flag manual review if names mismatch or confidence is low (<70)
-  const manualReview = result.success && (!nameMatch || (result.matchScore !== null && result.matchScore < 70));
+  // Flag manual review if names mismatch or confidence is low (<70).
+  // In sandbox, Youverify fixture photos can return a low confidence score even
+  // when the sandbox BVN was found and the provider adapter accepted the test
+  // response. Keep sandbox tests flowing unless the bypass is explicitly off.
+  const bypassSandboxSelfieReview =
+    sandbox && process.env.YOUVERIFY_SANDBOX_BYPASS_SELFIE_MATCH !== "false";
+  const lowConfidence = result.matchScore !== null && result.matchScore < 70;
+  const manualReview = result.success && (!nameMatch || (!bypassSandboxSelfieReview && lowConfidence));
   const finalStatus: "verified" | "failed" | "manual_review" =
     manualReview ? "manual_review" : (result.success ? "verified" : "failed");
 
