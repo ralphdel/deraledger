@@ -81,6 +81,9 @@ export type ResolvedPaymentRoute = {
   fallbackProvider: PaymentProvider | null;
 };
 
+export const SUPERADMIN_SANDBOX_EMAIL =
+  (process.env.SUPERADMIN_SANDBOX_EMAIL || "ralphdel14@yahoo.com").toLowerCase();
+
 const supabase = createSupabaseClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -111,6 +114,11 @@ function getRuntimeEnvironment(): PaymentEnvironment {
     return env;
   }
   return process.env.NODE_ENV === "production" ? "live" : "sandbox";
+}
+
+export function getPaymentEnvironmentForMerchantEmail(email?: string | null): PaymentEnvironment {
+  if (email?.toLowerCase() === SUPERADMIN_SANDBOX_EMAIL) return "sandbox";
+  return getRuntimeEnvironment();
 }
 
 function isProviderStatusUsable(

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { PaymentService } from "@/lib/payment";
 import { getAppUrl } from "@/lib/server-utils";
-import { resolvePaymentRoute, type PaymentMethod } from "@/lib/services/payment-routing.service";
+import { getPaymentEnvironmentForMerchantEmail, resolvePaymentRoute, type PaymentMethod } from "@/lib/services/payment-routing.service";
 
 export async function POST(request: Request) {
   try {
@@ -36,7 +36,7 @@ export async function POST(request: Request) {
 
     const appUrl = getAppUrl();
     const method = (paymentMethod || "card") as PaymentMethod;
-    const route = await resolvePaymentRoute("plan_subscription", method);
+    const route = await resolvePaymentRoute("plan_subscription", method, getPaymentEnvironmentForMerchantEmail(user.email || merchant.email));
     const callback = new URL(`${appUrl}/settings/billing/renew-callback`);
     callback.searchParams.set("provider", route.provider);
 

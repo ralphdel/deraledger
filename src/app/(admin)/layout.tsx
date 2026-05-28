@@ -41,6 +41,7 @@ const adminNavItems = [
   { href: "/admin/verification-costs", label: "Verification Costs", icon: Banknote },
   { href: "/admin/verification-settings", label: "Verification Settings", icon: Settings2 },
   { href: "/admin/payments", label: "Payment Routing", icon: Banknote },
+  { href: "/admin/system", label: "System Controls", icon: Settings2 },
   { href: "/admin/merchants", label: "Merchants", icon: Users },
   { href: "/admin/disputes", label: "Disputes Queue", icon: ShieldAlert },
   { href: "/admin/crypto", label: "Crypto Ops Center", icon: Coins },

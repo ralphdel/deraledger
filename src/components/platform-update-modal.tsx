@@ -6,8 +6,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { getMerchant } from "@/lib/data";
-import { acknowledgeUpdateAction } from "@/lib/actions";
+import { acknowledgeUpdateAction, getPlatformUpdateStateAction } from "@/lib/actions";
 import { createClient } from "@/lib/supabase/client";
+
+const SAFE_SUPERADMIN_EMAIL = "ralphdel14@yahoo.com";
+const DEFAULT_UPDATE_SUMMARY =
+  "We've made important changes to how DeraLedger works. Please review what's new before continuing.";
+const DEFAULT_REQUIRED_ACTION =
+  "Review your profile, subscription, verification, and settlement setup after continuing.";
 
 const UPDATE_HIGHLIGHTS = [
   {
@@ -45,23 +51,30 @@ export function PlatformUpdateModal() {
   const [open, setOpen] = useState(false);
   const [isPending, startTransition] = useTransition();
   const [done, setDone] = useState(false);
+  const [updateCopy, setUpdateCopy] = useState({
+    title: "Platform Update",
+    summary: DEFAULT_UPDATE_SUMMARY,
+    requiredAction: DEFAULT_REQUIRED_ACTION,
+  });
 
   useEffect(() => {
     async function checkVersion() {
       const sb = createClient();
       const { data: { session } } = await sb.auth.getSession();
       if (!session?.user) return;
+      if (session.user.email?.toLowerCase() === SAFE_SUPERADMIN_EMAIL) return;
       
       const m = await getMerchant();
       if (m) {
         setMerchantId(m.id);
-        const { data: platformSetting } = await sb
-          .from("platform_settings")
-          .select("value")
-          .eq("key", "current_platform_version")
-          .single();
+        const updateState = await getPlatformUpdateStateAction();
+        setUpdateCopy({
+          title: updateState.success ? updateState.title : "Platform Update",
+          summary: updateState.success && updateState.summary ? updateState.summary : DEFAULT_UPDATE_SUMMARY,
+          requiredAction: updateState.success && updateState.requiredAction ? updateState.requiredAction : DEFAULT_REQUIRED_ACTION,
+        });
         
-        const currentVersion = parseInt(platformSetting?.value || "1", 10);
+        const currentVersion = updateState.success ? (updateState.currentVersion ?? 1) : 1;
         const merchantVersion = m.last_acknowledged_version ?? 0;
 
         if (merchantVersion < currentVersion) {
@@ -96,10 +109,9 @@ export function PlatformUpdateModal() {
             <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-purp-100 border-2 border-purp-200 mb-4 shadow-sm">
               <Sparkles className="h-7 w-7 text-purp-700" />
             </div>
-            <h2 className="text-xl font-bold text-purp-900">Platform Update</h2>
+            <h2 className="text-xl font-bold text-purp-900">{updateCopy.title}</h2>
             <p className="text-neutral-500 text-xs mt-1.5 px-4">
-              We&apos;ve made important changes to how DeraLedger works.
-              Please review what&apos;s new before continuing.
+              {updateCopy.summary}
             </p>
           </div>
 
@@ -124,8 +136,9 @@ export function PlatformUpdateModal() {
 
           {/* Policy notice */}
           <div className="p-3 bg-neutral-50 border border-neutral-200 rounded-xl text-[10px] text-neutral-600 mb-5 leading-snug">
-            By continuing, you acknowledge these platform changes and confirm your business usage
-            remains compliant with <span className="font-semibold text-purp-900">DeraLedger&apos;s Terms of Service</span>.
+            <span className="font-semibold text-purp-900">Next step:</span> {updateCopy.requiredAction}
+            <br />
+            By continuing, you acknowledge these platform changes and confirm your business usage remains compliant with DeraLedger&apos;s Terms of Service.
           </div>
 
           {/* CTA */}

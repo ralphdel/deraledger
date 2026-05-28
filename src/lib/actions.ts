@@ -1843,6 +1843,34 @@ export async function acknowledgeUpdateAction(merchantId: string) {
 
 // ── References ────────────────────────────────────────────────────────────────
 
+export async function getPlatformUpdateStateAction() {
+  const adminClient = getServiceClient();
+  const { data, error } = await adminClient
+    .from("platform_settings")
+    .select("key, value")
+    .in("key", [
+      "current_platform_version",
+      "force_logout_on_update",
+      "platform_update_title",
+      "platform_update_summary",
+      "platform_update_required_action",
+      "superadmin_sandbox_email",
+    ]);
+
+  if (error) return { success: false, error: error.message };
+
+  const map = Object.fromEntries((data || []).map((row) => [row.key, row.value || ""]));
+  return {
+    success: true,
+    currentVersion: Number(map.current_platform_version || 1),
+    forceLogoutOnUpdate: map.force_logout_on_update !== "false",
+    title: map.platform_update_title || "Platform Update",
+    summary: map.platform_update_summary || "",
+    requiredAction: map.platform_update_required_action || "",
+    superadminSandboxEmail: map.superadmin_sandbox_email || "ralphdel14@yahoo.com",
+  };
+}
+
 export async function createReferenceAction(data: {
   merchant_id: string;
   name: string;
@@ -2238,29 +2266,50 @@ export async function adminRejectVerificationAction(merchantId: string, reason: 
   }
 
   const adminClient = getServiceClient();
+  const now = new Date().toISOString();
+  const updates = {
+    verification_status: "rejected",
+    onboarding_status: "rejected",
+    setup_mode: true,
+    live_features_enabled: false,
+    kyc_rejection_reason: reason.trim(),
+    kyc_reviewed_at: now,
+    kyc_notes: reason.trim(),
+    updated_at: now,
+  };
 
   const { error } = await adminClient
     .from("merchants")
-    .update({
-      verification_status: "rejected",
-      kyc_rejection_reason: reason.trim(),
-      kyc_reviewed_at: new Date().toISOString(),
-      kyc_notes: reason.trim(),
-      updated_at: new Date().toISOString(),
-    })
+    .update(updates)
     .eq("id", merchantId);
 
   if (error) return { success: false, error: error.message };
+
+  await ensureWorkspaceForMerchant(adminClient, merchantId);
+  await adminClient
+    .from("workspaces")
+    .update({
+      onboarding_status: "rejected",
+      setup_mode: true,
+      live_features_enabled: false,
+      updated_at: now,
+    })
+    .eq("merchant_id", merchantId);
 
   await logAudit("admin_verification_rejected", merchantId, "merchant", {
     actor: "admin",
     new_status: "rejected",
     rejection_reason: reason.trim(),
+    live_features_enabled: false,
   });
 
   revalidatePath("/admin/verification");
   revalidatePath("/admin/merchants");
-  return { success: true };
+  return {
+    success: true,
+    updates,
+    message: "Verification rejected. Live payment features remain disabled.",
+  };
 }
 
 /**
@@ -2281,38 +2330,55 @@ export async function adminResetVerificationAction(merchantId: string) {
     .single();
 
   const archiveTimestamp = new Date().toISOString();
+  const updates = {
+    verification_status: "unverified",
+    onboarding_status: "setup_mode",
+    setup_mode: true,
+    live_features_enabled: false,
+    // Reset all document statuses
+    cac_status: "unverified",
+    bvn_status: "unverified",
+    utility_status: "unverified",
+    selfie_status: "unverified",
+    // Clear active document slots; audit log preserves the previous references.
+    cac_document_url: null,
+    utility_document_url: null,
+    selfie_url: null,
+    cac_number: null,
+    // Full restart: merchant must re-enter identity details.
+    bvn: null,
+    owner_name: null,
+    // Reset authority matching state without deleting historical snapshots/logs.
+    business_affiliation_status: "not_started",
+    business_registry_snapshot_id: null,
+    // Clear KYC metadata
+    dojah_reference: null,
+    dojah_match_score: null,
+    kyc_rejection_reason: null,
+    kyc_notes: null,
+    kyc_submitted_at: null,
+    kyc_attempt_count: 0,
+    kyc_reset_at: archiveTimestamp,
+    updated_at: archiveTimestamp,
+  };
 
   const { error } = await adminClient
     .from("merchants")
-    .update({
-      verification_status: "unverified",
-      // Reset all document statuses
-      cac_status: "unverified",
-      bvn_status: "unverified",
-      utility_status: "unverified",
-      selfie_status: "unverified",
-      // Clear document URLs (archived in audit log below)
-      cac_document_url: null,
-      utility_document_url: null,
-      selfie_url: null,
-      cac_number: null,
-      // CRITICAL: also clear BVN and owner_name so merchant can genuinely re-verify
-      // Without this, Individual plan merchants stay stuck (bvn set but bvn_status=unverified)
-      bvn: null,
-      owner_name: null,
-      // Clear KYC metadata
-      dojah_reference: null,
-      dojah_match_score: null,
-      kyc_rejection_reason: null,
-      kyc_notes: null,
-      kyc_submitted_at: null,
-      kyc_attempt_count: 0,
-      kyc_reset_at: archiveTimestamp,
-      updated_at: archiveTimestamp,
-    })
+    .update(updates)
     .eq("id", merchantId);
 
   if (error) return { success: false, error: error.message };
+
+  await ensureWorkspaceForMerchant(adminClient, merchantId);
+  await adminClient
+    .from("workspaces")
+    .update({
+      onboarding_status: "setup_mode",
+      setup_mode: true,
+      live_features_enabled: false,
+      updated_at: archiveTimestamp,
+    })
+    .eq("merchant_id", merchantId);
 
   // Audit log preserves what was archived — never deleted
   await logAudit("admin_verification_reset", merchantId, "merchant", {
@@ -2325,11 +2391,16 @@ export async function adminResetVerificationAction(merchantId: string) {
     archived_cac_number: merchant?.cac_number ?? null,
     archived_bvn: merchant?.bvn ? "[redacted]" : null,
     archived_owner_name: merchant?.owner_name ?? null,
+    live_features_enabled: false,
   });
 
   revalidatePath("/admin/verification");
   revalidatePath("/admin/merchants");
-  return { success: true };
+  return {
+    success: true,
+    updates,
+    message: "Verification reset. Merchant must restart KYC/KYB before live features can be enabled.",
+  };
 }
 
 /**
@@ -2337,7 +2408,11 @@ export async function adminResetVerificationAction(merchantId: string) {
  * Merchant receives notification and must re-submit specific documents.
  * Friendlier alternative to hard Reject.
  */
-export async function adminRequestReuploadAction(merchantId: string, reason: string) {
+export async function adminRequestReuploadAction(
+  merchantId: string,
+  reason: string,
+  fields: Array<"cac_status" | "bvn_status" | "utility_status" | "selfie_status"> = []
+) {
   const guard = await requireSuperAdmin();
   if (guard.error) return guard.error;
   if (!reason || reason.trim().length < 5) {
@@ -2345,27 +2420,93 @@ export async function adminRequestReuploadAction(merchantId: string, reason: str
   }
 
   const adminClient = getServiceClient();
+  const now = new Date().toISOString();
+  const targetedUpdates = fields.reduce<Record<string, "rejected">>((acc, field) => {
+    acc[field] = "rejected";
+    return acc;
+  }, {});
+  const updates = {
+    ...targetedUpdates,
+    verification_status: "requires_reupload",
+    setup_mode: true,
+    live_features_enabled: false,
+    onboarding_status: "pending_manual_review",
+    kyc_rejection_reason: reason.trim(),
+    kyc_notes: `Additional verification information required: ${reason.trim()}`,
+    kyc_reviewed_at: now,
+    updated_at: now,
+  };
 
   const { error } = await adminClient
     .from("merchants")
-    .update({
-      verification_status: "requires_reupload",
-      kyc_rejection_reason: reason.trim(),
-      kyc_notes: `Additional verification information required: ${reason.trim()}`,
-      kyc_reviewed_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    })
+    .update(updates)
     .eq("id", merchantId);
 
   if (error) return { success: false, error: error.message };
+
+  await ensureWorkspaceForMerchant(adminClient, merchantId);
+  await adminClient
+    .from("workspaces")
+    .update({
+      onboarding_status: "pending_manual_review",
+      setup_mode: true,
+      live_features_enabled: false,
+      updated_at: now,
+    })
+    .eq("merchant_id", merchantId);
 
   await logAudit("admin_verification_reupload_requested", merchantId, "merchant", {
     actor: "admin",
     new_status: "requires_reupload",
     reason: reason.trim(),
+    fields,
+    live_features_enabled: false,
   });
 
   revalidatePath("/admin/verification");
+  revalidatePath("/admin/merchants");
+  return {
+    success: true,
+    updates,
+    message: fields.length > 0
+      ? `Reupload requested for ${fields.map((field) => field.replace("_status", "").toUpperCase()).join(", ")}.`
+      : "Reupload requested. Merchant must resubmit the requested information.",
+  };
+}
+
+export async function recordPlatformUpdateLogoutAction(merchantId: string, version: number) {
+  const supabase = await createClient();
+  const { data: { user }, error: userError } = await supabase.auth.getUser();
+  if (userError || !user) return { success: false, error: "Unauthorized." };
+
+  const adminClient = getServiceClient();
+  const { data: merchant } = await adminClient
+    .from("merchants")
+    .select("user_id")
+    .eq("id", merchantId)
+    .single();
+
+  const isOwner = merchant?.user_id === user.id;
+  const { data: teamRows } = isOwner
+    ? { data: [] }
+    : await adminClient
+      .from("merchant_team")
+      .select("id")
+      .eq("merchant_id", merchantId)
+      .eq("user_id", user.id)
+      .eq("is_active", true)
+      .limit(1);
+
+  if (!isOwner && (!teamRows || teamRows.length === 0)) {
+    return { success: false, error: "Forbidden: workspace access required." };
+  }
+
+  const { error } = await adminClient
+    .from("merchants")
+    .update({ last_update_logout_version: version, updated_at: new Date().toISOString() })
+    .eq("id", merchantId);
+
+  if (error) return { success: false, error: error.message };
   return { success: true };
 }
 

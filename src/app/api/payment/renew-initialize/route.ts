@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { PaymentService } from "@/lib/payment";
 import { getAppUrl } from "@/lib/server-utils";
-import { resolvePaymentRoute, type PaymentMethod } from "@/lib/services/payment-routing.service";
+import { getPaymentEnvironmentForMerchantEmail, resolvePaymentRoute, type PaymentMethod } from "@/lib/services/payment-routing.service";
 
 /**
  * POST /api/payment/renew-initialize
@@ -55,7 +55,7 @@ export async function POST(request: Request) {
 
     const resolvedEmail = email || user.email || merchant.email || "billing@deraledger.app";
     const method = (paymentMethod || "card") as PaymentMethod;
-    const route = await resolvePaymentRoute("plan_subscription", method);
+    const route = await resolvePaymentRoute("plan_subscription", method, getPaymentEnvironmentForMerchantEmail(resolvedEmail));
     const callback = new URL(`${getAppUrl()}/settings/billing/renew-callback`);
     callback.searchParams.set("provider", route.provider);
     const resolvedCallback = callback.toString();

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { PaymentService } from "@/lib/payment";
-import { resolvePaymentRoute, type PaymentMethod } from "@/lib/services/payment-routing.service";
+import { getPaymentEnvironmentForMerchantEmail, resolvePaymentRoute, type PaymentMethod } from "@/lib/services/payment-routing.service";
 import { isLiveFeatureEnabled } from "@/lib/services/onboarding-flow.service";
 import { getAppUrl } from "@/lib/server-utils";
 
@@ -52,7 +52,7 @@ export async function POST(request: Request) {
     // Fetch the merchant to get the subaccount code
     const { data: merchant, error: merchantError } = await supabase
       .from("merchants")
-      .select("payment_subaccount_code, subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, business_affiliation_status, live_features_enabled, setup_mode")
+      .select("email, payment_subaccount_code, subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, business_affiliation_status, live_features_enabled, setup_mode")
       .eq("id", invoice.merchant_id)
       .single();
 
@@ -65,7 +65,11 @@ export async function POST(request: Request) {
     }
 
     const selectedMethod = (paymentMethod || "card") as PaymentMethod;
-    const route = await resolvePaymentRoute("invoice_payment", selectedMethod);
+    const route = await resolvePaymentRoute(
+      "invoice_payment",
+      selectedMethod,
+      getPaymentEnvironmentForMerchantEmail(merchant.email)
+    );
 
     // Calculate k-factor and total charge
     const kFactor = grandTotal > 0 ? cappedPayment / grandTotal : 0;

@@ -1,9 +1,16 @@
 import { NextResponse } from "next/server";
+import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import {
   getPaymentEnvironment,
+  getPaymentEnvironmentForMerchantEmail,
   listAvailablePaymentMethods,
   type PaymentPurpose,
 } from "@/lib/services/payment-routing.service";
+
+const supabase = createSupabaseClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
 
 function resolvePurpose(kind: string | null): PaymentPurpose | null {
   if (kind === "subscription") return "plan_subscription";
@@ -17,18 +24,37 @@ export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const kind = searchParams.get("kind");
+    const invoiceId = searchParams.get("invoiceId");
     const purpose = resolvePurpose(kind);
 
     if (!purpose) {
       return NextResponse.json({ error: "Invalid checkout kind." }, { status: 400 });
     }
 
-    const availableMethods = await listAvailablePaymentMethods(purpose);
+    let environment = getPaymentEnvironment();
+    if (kind === "invoice" && invoiceId) {
+      const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(invoiceId);
+      const invoiceResult = isUUID
+        ? await supabase.from("invoices").select("merchant_id").eq("id", invoiceId).maybeSingle()
+        : await supabase.from("invoices").select("merchant_id").or(`invoice_hash.eq.${invoiceId},short_link.eq.${invoiceId}`).maybeSingle();
+      const invoice = invoiceResult.data;
+
+      if (invoice?.merchant_id) {
+        const { data: merchant } = await supabase
+          .from("merchants")
+          .select("email")
+          .eq("id", invoice.merchant_id)
+          .maybeSingle();
+        environment = getPaymentEnvironmentForMerchantEmail(merchant?.email);
+      }
+    }
+
+    const availableMethods = await listAvailablePaymentMethods(purpose, environment);
 
     return NextResponse.json({
       kind,
       purpose,
-      environment: getPaymentEnvironment(),
+      environment,
       availableMethods,
     });
   } catch (error) {

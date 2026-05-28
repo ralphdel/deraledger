@@ -73,6 +73,7 @@ export interface Merchant {
   holds_pending_review: boolean;
   platform_version: number;
   last_acknowledged_version?: number;
+  last_update_logout_version?: number;
   created_at: string;
   updated_at: string;
   permissions?: Record<string, boolean>;

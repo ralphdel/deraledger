@@ -8,7 +8,7 @@ import {
   VERIFICATION_DISCLOSURE_VERSION,
   type RelationshipClaim,
 } from "@/lib/services/onboarding-flow.service";
-import { resolvePaymentRoute, type PaymentMethod } from "@/lib/services/payment-routing.service";
+import { getPaymentEnvironmentForMerchantEmail, resolvePaymentRoute, type PaymentMethod } from "@/lib/services/payment-routing.service";
 
 export async function POST(request: Request) {
   try {
@@ -57,7 +57,7 @@ export async function POST(request: Request) {
 
     const appUrl = getAppUrl();
     const method = (paymentMethod || "card") as PaymentMethod;
-    const route = await resolvePaymentRoute("plan_upgrade", method);
+    const route = await resolvePaymentRoute("plan_upgrade", method, getPaymentEnvironmentForMerchantEmail(user.email || merchant.email));
     const callback = new URL(`${appUrl}/settings/upgrade-success`);
     callback.searchParams.set("reference", reference);
     callback.searchParams.set("plan", newPlan);

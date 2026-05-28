@@ -29,6 +29,7 @@ import {
 import type { Merchant } from "@/lib/types";
 
 type ActionMode = "idle" | "reject" | "reupload" | "reset";
+type ReuploadField = "cac_status" | "bvn_status" | "utility_status" | "selfie_status";
 type DirectorVerificationRow = {
   id: string;
   director_name?: string | null;
@@ -71,6 +72,7 @@ export default function VerificationQueuePage() {
   const [selectedMerchant, setSelectedMerchant] = useState<Merchant | null>(null);
   const [reviewNotes, setReviewNotes] = useState("");
   const [actionReason, setActionReason] = useState("");
+  const [reuploadFields, setReuploadFields] = useState<ReuploadField[]>([]);
   const [actionMode, setActionMode] = useState<ActionMode>("idle");
   const [actionLoading, setActionLoading] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
@@ -159,6 +161,19 @@ export default function VerificationQueuePage() {
     setReviewNotes("");
   };
 
+  const reuploadOptions: Array<{ field: ReuploadField; label: string; description: string }> = [
+    { field: "bvn_status", label: "BVN", description: "Identity number or BVN name needs correction." },
+    { field: "selfie_status", label: "Selfie", description: "Face image is unclear or failed matching." },
+    { field: "cac_status", label: "CAC / RC", description: "Business registry document or lookup needs correction." },
+    { field: "utility_status", label: "Address proof", description: "Utility bill or business address evidence needs correction." },
+  ];
+
+  const toggleReuploadField = (field: ReuploadField) => {
+    setReuploadFields((prev) =>
+      prev.includes(field) ? prev.filter((item) => item !== field) : [...prev, field]
+    );
+  };
+
   const handleApprove = async () => {
     if (!selectedMerchant) return;
     setActionLoading(true); setReviewError(null);
@@ -176,8 +191,8 @@ export default function VerificationQueuePage() {
     setActionLoading(true); setReviewError(null);
     const res = await adminRejectVerificationAction(selectedMerchant.id, actionReason.trim());
     if (res.success) {
-      refreshMerchant({ verification_status: "rejected", kyc_rejection_reason: actionReason.trim() });
-      setActionSuccess("Verification rejected. Reason stored in audit log.");
+      refreshMerchant((res.updates || { verification_status: "rejected", kyc_rejection_reason: actionReason.trim() }) as Partial<Merchant>);
+      setActionSuccess(res.message || "Verification rejected. Live payment features remain disabled.");
       setActionMode("idle"); setActionReason("");
     } else setReviewError(res.error || "Rejection failed.");
     setActionLoading(false);
@@ -188,8 +203,8 @@ export default function VerificationQueuePage() {
     setActionLoading(true); setReviewError(null);
     const res = await adminResetVerificationAction(selectedMerchant.id);
     if (res.success) {
-      refreshMerchant({ verification_status: "unverified", cac_status: "unverified", bvn_status: "unverified", utility_status: "unverified", selfie_status: "unverified" });
-      setActionSuccess("Verification reset. Merchant must re-upload all documents.");
+      refreshMerchant((res.updates || { verification_status: "unverified", cac_status: "unverified", bvn_status: "unverified", utility_status: "unverified", selfie_status: "unverified" }) as Partial<Merchant>);
+      setActionSuccess(res.message || "Verification reset. Merchant must restart verification.");
       setActionMode("idle");
     } else setReviewError(res.error || "Reset failed.");
     setActionLoading(false);
@@ -198,11 +213,11 @@ export default function VerificationQueuePage() {
   const handleReupload = async () => {
     if (!selectedMerchant || !actionReason.trim()) return;
     setActionLoading(true); setReviewError(null);
-    const res = await adminRequestReuploadAction(selectedMerchant.id, actionReason.trim());
+    const res = await adminRequestReuploadAction(selectedMerchant.id, actionReason.trim(), reuploadFields);
     if (res.success) {
-      refreshMerchant({ verification_status: "requires_reupload" });
-      setActionSuccess("Reupload request sent. Merchant notified.");
-      setActionMode("idle"); setActionReason("");
+      refreshMerchant((res.updates || { verification_status: "requires_reupload" }) as Partial<Merchant>);
+      setActionSuccess(res.message || "Reupload request saved. Live payment features remain disabled.");
+      setActionMode("idle"); setActionReason(""); setReuploadFields([]);
     } else setReviewError(res.error || "Request failed.");
     setActionLoading(false);
   };
@@ -210,6 +225,7 @@ export default function VerificationQueuePage() {
   const openReview = (m: Merchant) => {
     setSelectedMerchant(m);
     setReviewNotes(""); setActionReason(""); setActionMode("idle");
+    setReuploadFields([]);
     setReviewError(null); setActionSuccess(null);
     setRegistrySnapshot(null);
     setBusinessAffiliations([]);
@@ -696,18 +712,52 @@ export default function VerificationQueuePage() {
 
                       {/* Reason input */}
                       {(actionMode === "reject" || actionMode === "reupload") && (
-                        <div className="space-y-2 bg-red-50 border border-red-200 rounded-xl p-3">
-                          <Label className="text-sm font-semibold text-red-800">
+                        <div className={`space-y-3 rounded-xl p-3 border ${actionMode === "reject" ? "bg-red-50 border-red-200" : "bg-orange-50 border-orange-200"}`}>
+                          <div>
+                            <Label className={`text-sm font-semibold ${actionMode === "reject" ? "text-red-800" : "text-orange-800"}`}>
                             {actionMode === "reject" ? "Rejection Reason (required)" : "Documents needed (required)"}
-                          </Label>
-                          <Textarea
-                            value={actionReason}
-                            onChange={e => setActionReason(e.target.value)}
-                            placeholder={actionMode === "reject" ? "Explain why verification is being rejected..." : "Specify which documents need to be re-uploaded..."}
-                            className="min-h-[80px] border-red-300 bg-white text-sm"
-                          />
-                          {actionMode === "reject" && actionReason.trim().length > 0 && actionReason.trim().length < 10 && (
-                            <p className="text-xs text-red-600">Reason must be at least 10 characters.</p>
+                            </Label>
+                            <Textarea
+                              value={actionReason}
+                              onChange={e => setActionReason(e.target.value)}
+                              placeholder={actionMode === "reject" ? "Explain why verification is being rejected..." : "Example: Re-upload clearer utility bill and retake selfie in good lighting."}
+                              className={`min-h-[80px] bg-white text-sm ${actionMode === "reject" ? "border-red-300" : "border-orange-300"}`}
+                            />
+                            {actionMode === "reject" && actionReason.trim().length > 0 && actionReason.trim().length < 10 && (
+                              <p className="text-xs text-red-600 mt-1">Reason must be at least 10 characters.</p>
+                            )}
+                          </div>
+
+                          {actionMode === "reupload" && (
+                            <div className="space-y-2">
+                              <p className="text-xs font-semibold text-orange-900">Mark affected checks</p>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                {reuploadOptions.map((option) => (
+                                  <label
+                                    key={option.field}
+                                    className={`flex items-start gap-2 rounded-lg border p-2 cursor-pointer transition-colors ${
+                                      reuploadFields.includes(option.field)
+                                        ? "bg-white border-orange-400"
+                                        : "bg-orange-50/50 border-orange-200 hover:bg-white"
+                                    }`}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={reuploadFields.includes(option.field)}
+                                      onChange={() => toggleReuploadField(option.field)}
+                                      className="mt-0.5 h-4 w-4 accent-orange-600"
+                                    />
+                                    <span>
+                                      <span className="block text-xs font-bold text-neutral-900">{option.label}</span>
+                                      <span className="block text-[11px] leading-snug text-neutral-500">{option.description}</span>
+                                    </span>
+                                  </label>
+                                ))}
+                              </div>
+                              <p className="text-[11px] text-orange-700">
+                                Selected checks will be marked rejected and live payment collection will stay locked until the merchant fixes them.
+                              </p>
+                            </div>
                           )}
                         </div>
                       )}
@@ -719,9 +769,9 @@ export default function VerificationQueuePage() {
                           <div>
                             <h4 className="text-sm font-bold text-red-900 mb-1">Danger: Full KYC Reset</h4>
                             <p className="text-xs text-red-700 leading-relaxed">
-                              This action will <strong>permanently delete</strong> all KYC documents, selfies, BVN records, and verification statuses for this merchant. They will be forced to completely re-start the onboarding verification process from scratch.
+                              This action clears the active BVN, selfie, CAC, utility, and authority statuses and returns the merchant to setup mode. Historical logs and previous file references stay in the audit trail.
                             </p>
-                            <p className="text-xs text-red-800 font-semibold mt-2">Are you absolutely sure you want to proceed?</p>
+                            <p className="text-xs text-red-800 font-semibold mt-2">Use this only when the merchant needs a clean verification restart.</p>
                           </div>
                         </div>
                       )}
@@ -748,16 +798,16 @@ export default function VerificationQueuePage() {
                         <Button variant="destructive" className="text-xs h-9" disabled={actionLoading || selectedMerchant?.verification_status === "rejected"} onClick={() => { setActionMode("reject"); setActionReason(""); }}>
                           <XCircle className="h-3.5 w-3.5 mr-1" />Reject
                         </Button>
-                        <Button variant="outline" className="border-orange-300 text-orange-700 hover:bg-orange-50 text-xs h-9" disabled={actionLoading} onClick={() => { setActionMode("reupload"); setActionReason(""); }}>
+                        <Button variant="outline" className="border-orange-300 text-orange-700 hover:bg-orange-50 text-xs h-9" disabled={actionLoading} onClick={() => { setActionMode("reupload"); setActionReason(""); setReuploadFields([]); }}>
                           <UploadCloud className="h-3.5 w-3.5 mr-1" />Reupload
                         </Button>
-                        <Button variant="outline" className="border-neutral-300 text-xs h-9" disabled={actionLoading} onClick={() => setActionMode("reset")}>
+                        <Button variant="outline" className="border-neutral-300 text-xs h-9" disabled={actionLoading} onClick={() => { setActionMode("reset"); setActionReason(""); setReuploadFields([]); }}>
                           <RotateCcw className="h-3.5 w-3.5 mr-1" />Reset
                         </Button>
                       </div>
                     ) : (
                       <div className="flex gap-2 flex-wrap">
-                        <Button variant="outline" className="text-xs h-9" onClick={() => { setActionMode("idle"); setActionReason(""); }}>Cancel</Button>
+                        <Button variant="outline" className="text-xs h-9" onClick={() => { setActionMode("idle"); setActionReason(""); setReuploadFields([]); }}>Cancel</Button>
                         {actionMode === "reject" && (
                           <Button variant="destructive" className="text-xs h-9" disabled={actionLoading || actionReason.trim().length < 10} onClick={handleReject}>
                             {actionLoading ? "Rejecting..." : "Confirm Reject"}

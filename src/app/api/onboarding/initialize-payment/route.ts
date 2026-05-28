@@ -3,7 +3,7 @@ import { PaymentService } from "@/lib/payment";
 import crypto from "crypto";
 import { getAppUrl } from "@/lib/server-utils";
 import { requiresVerificationDisclosure, VERIFICATION_DISCLOSURE_VERSION } from "@/lib/services/onboarding-flow.service";
-import { resolvePaymentRoute, type PaymentMethod } from "@/lib/services/payment-routing.service";
+import { getPaymentEnvironmentForMerchantEmail, resolvePaymentRoute, type PaymentMethod } from "@/lib/services/payment-routing.service";
 
 export async function POST(request: Request) {
   const {
@@ -38,7 +38,7 @@ export async function POST(request: Request) {
 
   try {
     const method = (paymentMethod || "card") as PaymentMethod;
-    const route = await resolvePaymentRoute("plan_subscription", method);
+    const route = await resolvePaymentRoute("plan_subscription", method, getPaymentEnvironmentForMerchantEmail(email));
     const callback = new URL(`${appUrl}/onboarding/payment-callback`);
     callback.searchParams.set("provider", route.provider);
     const result = await PaymentService.initializeTransaction({

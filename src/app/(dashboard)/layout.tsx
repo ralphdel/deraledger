@@ -32,6 +32,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { getMerchant, getActiveSubscription, getNotifications, type AppNotification } from "@/lib/data";
+import { getPlatformUpdateStateAction, recordPlatformUpdateLogoutAction } from "@/lib/actions";
 import { logoutUser } from "@/app/(auth)/actions";
 import { cn } from "@/lib/utils";
 import type { Merchant, Subscription } from "@/lib/types";
@@ -41,6 +42,8 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { PlatformUpdateModal } from "@/components/platform-update-modal";
 import { DeraLedgerLogo } from "@/components/ui/deraledger-logo";
 import { PermissionGuard } from "@/components/PermissionGuard";
+
+const SAFE_SUPERADMIN_EMAIL = "ralphdel14@yahoo.com";
 
 interface NavItem {
   href: string;
@@ -136,6 +139,23 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             await logoutUser();
             window.location.href = "/login?reason=account_removed";
             return;
+          }
+        }
+
+        if (user.email?.toLowerCase() !== SAFE_SUPERADMIN_EMAIL) {
+          const updateState = await getPlatformUpdateStateAction();
+          const currentVersion = updateState.success ? (updateState.currentVersion ?? 1) : 1;
+          const forceLogout = updateState.success ? (updateState.forceLogoutOnUpdate ?? false) : false;
+          const acknowledgedVersion = m.last_acknowledged_version ?? 0;
+          const logoutVersion = m.last_update_logout_version ?? 0;
+
+          if (forceLogout && acknowledgedVersion < currentVersion && logoutVersion < currentVersion) {
+            const recorded = await recordPlatformUpdateLogoutAction(m.id, currentVersion);
+            if (recorded.success) {
+              await logoutUser();
+              window.location.href = "/login?reason=platform_update";
+              return;
+            }
           }
         }
       }
