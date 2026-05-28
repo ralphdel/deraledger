@@ -562,12 +562,17 @@ export class YouverifyProvider implements ProviderAdapter {
           : Math.round(rawScore)
         : null;
 
-    const threshold = typeof selfieData?.threshold === 'number' ? selfieData.threshold : 80;
-    const faceMatch = selfieData?.match === true || (matchScore !== null && matchScore >= threshold);
     const bvnExists =
       providerStatus === 'found' ||
       Boolean(data?.allValidationPassed) ||
       Boolean(bvnData?.bvn || bvnData?.idNumber || bvnData?.firstName || bvnData?.lastName);
+    const threshold = typeof selfieData?.threshold === 'number' ? selfieData.threshold : 80;
+    const providerFaceMatch = selfieData?.match === true || (matchScore !== null && matchScore >= threshold);
+    const sandboxSelfieBypass =
+      this.sandboxMode &&
+      bvnExists &&
+      process.env.YOUVERIFY_SANDBOX_BYPASS_SELFIE_MATCH !== 'false';
+    const faceMatch = providerFaceMatch || sandboxSelfieBypass;
     const success = bvnExists && faceMatch;
     const errorCode: VerificationErrorCode | undefined = success
       ? undefined
@@ -591,7 +596,18 @@ export class YouverifyProvider implements ProviderAdapter {
         middleName: bvnData?.middlename || bvnData?.middleName || data?.middleName || undefined,
       },
       providerReference: json?.requestId || data?.id || null,
-      rawResponse: json,
+      rawResponse: sandboxSelfieBypass
+        ? {
+            ...json,
+            deraLedgerSandboxOverride: {
+              selfieMatchBypassed: true,
+              reason: 'Youverify sandbox BVN was found but sandbox selfie fixture did not meet provider threshold.',
+              providerMatch: selfieData?.match ?? null,
+              providerConfidenceLevel: matchScore,
+              providerThreshold: threshold,
+            },
+          }
+        : json,
       errorCode,
       error,
     };
