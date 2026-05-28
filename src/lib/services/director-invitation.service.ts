@@ -341,15 +341,22 @@ export async function decideDirectorInvitation(params: {
   if (params.decision === "approved" && invite.status !== "verified" && invite.status !== "approved") {
     return { success: false, error: "Director must complete identity verification before approval." };
   }
+  if (params.decision === "approved" && params.metadata?.consentAccepted !== true) {
+    return { success: false, error: "Director consent must be accepted before approval can be recorded." };
+  }
 
   const status = params.decision === "approved" ? "approved" : "rejected";
+  const decisionMetadata = {
+    ...(params.metadata || {}),
+    consentRecordedAt: new Date().toISOString(),
+  };
   await adminClient
     .from("director_invitations")
     .update({
       status,
       decision_at: new Date().toISOString(),
       decision_ip: params.ipAddress || null,
-      decision_metadata: params.metadata || {},
+      decision_metadata: decisionMetadata,
       updated_at: new Date().toISOString(),
     })
     .eq("id", invite.id);

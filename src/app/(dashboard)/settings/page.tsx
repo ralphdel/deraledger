@@ -499,11 +499,37 @@ export default function SettingsPage() {
   const registryDirectors = Array.isArray(registrySnapshot?.directors_json)
     ? registrySnapshot.directors_json
     : [];
+  const authorityApproved =
+    merchant?.business_affiliation_status === "director_approved" ||
+    merchant?.business_affiliation_status === "strong_match";
   const needsDirectorApproval =
     isCorporate &&
-    ["no_match", "rejected"].includes(String(merchant?.business_affiliation_status || "")) ||
-    (isCorporate && merchant?.relationship_claim === "representative_claim");
+    !authorityApproved &&
+    (
+      ["no_match", "rejected"].includes(String(merchant?.business_affiliation_status || "")) ||
+      merchant?.relationship_claim === "representative_claim"
+    );
   const rejectedDirectorInvites = directorInvitations.filter((invite) => invite.status === "rejected");
+  const directorInvitationStatusLabel = (status?: string | null) => {
+    switch (status) {
+      case "sent":
+        return "Invite sent";
+      case "opened":
+        return "Waiting for identity verification";
+      case "verified":
+        return "Identity verified, waiting for director consent";
+      case "approved":
+        return "Director approved";
+      case "rejected":
+        return "Director rejected";
+      case "expired":
+        return "Expired";
+      case "cancelled":
+        return "Cancelled";
+      default:
+        return status?.replace(/_/g, " ") || "Unknown";
+    }
+  };
 
   if (loading) {
     return (
@@ -1066,7 +1092,7 @@ export default function SettingsPage() {
                         {directorInvitations.slice(0, 3).map((invite) => (
                           <div key={invite.id} className="flex items-center justify-between gap-2 rounded-lg bg-white px-3 py-2 text-xs">
                             <span className="truncate font-medium text-neutral-700">{invite.selected_director_name}</span>
-                            <Badge variant="outline" className="text-[9px] capitalize">{invite.status}</Badge>
+                            <Badge variant="outline" className="text-[9px]">{directorInvitationStatusLabel(invite.status)}</Badge>
                           </div>
                         ))}
                       </div>

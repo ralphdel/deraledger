@@ -15,6 +15,9 @@ export async function POST(
     decision,
     ipAddress,
     metadata: {
+      consentAccepted: body.consentAccepted === true,
+      consentVersion: typeof body.consentVersion === "string" ? body.consentVersion : null,
+      consentSummary: typeof body.consentSummary === "string" ? body.consentSummary : null,
       userAgent: request.headers.get("user-agent"),
     },
   });

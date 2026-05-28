@@ -22,6 +22,7 @@ export function isLiveFeatureEnabled(merchant: {
   bvn_status?: string | null;
   selfie_status?: string | null;
   cac_status?: string | null;
+  utility_status?: string | null;
   business_affiliation_status?: string | null;
   live_features_enabled?: boolean | null;
   setup_mode?: boolean | null;
@@ -42,6 +43,7 @@ export function isLiveFeatureEnabled(merchant: {
     merchant.bvn_status === "verified" &&
     merchant.selfie_status === "verified" &&
     merchant.cac_status === "verified" &&
+    merchant.utility_status === "verified" &&
     authorityReady
   );
 }
@@ -53,6 +55,7 @@ export function getLiveFeatureLockReasons(merchant: {
   bvn_status?: string | null;
   selfie_status?: string | null;
   cac_status?: string | null;
+  utility_status?: string | null;
   business_affiliation_status?: string | null;
   setup_mode?: boolean | null;
   live_features_enabled?: boolean | null;
@@ -66,6 +69,7 @@ export function getLiveFeatureLockReasons(merchant: {
 
   if (plan === "corporate") {
     if (merchant.cac_status !== "verified") reasons.push("Business registration verification");
+    if (merchant.utility_status !== "verified") reasons.push("Business document approval");
     const authorityReady =
       merchant.business_affiliation_status === "strong_match" ||
       merchant.business_affiliation_status === "director_approved";
@@ -92,6 +96,7 @@ export function setupStatusForMerchant(merchant: {
   bvn_status?: string | null;
   selfie_status?: string | null;
   cac_status?: string | null;
+  utility_status?: string | null;
   business_affiliation_status?: string | null;
 }): {
   onboarding_status: string;
@@ -105,6 +110,7 @@ export function setupStatusForMerchant(merchant: {
 
   const kycReady = merchant.bvn_status === "verified" && merchant.selfie_status === "verified";
   const kybReady = merchant.cac_status === "verified";
+  const businessDocsReady = merchant.utility_status === "verified";
   const affiliation = merchant.business_affiliation_status || "not_started";
   const authorityReady = affiliation === "strong_match" || affiliation === "director_approved";
 
@@ -112,7 +118,7 @@ export function setupStatusForMerchant(merchant: {
     return { onboarding_status: "active", setup_mode: false, live_features_enabled: true };
   }
 
-  if (plan === "corporate" && merchant.verification_status === "verified" && kycReady && kybReady && authorityReady) {
+  if (plan === "corporate" && merchant.verification_status === "verified" && kycReady && kybReady && businessDocsReady && authorityReady) {
     return { onboarding_status: "active", setup_mode: false, live_features_enabled: true };
   }
 
@@ -125,6 +131,9 @@ export function setupStatusForMerchant(merchant: {
       return { onboarding_status: "pending_kyc", setup_mode: true, live_features_enabled: false };
     }
     if (!kybReady) {
+      return { onboarding_status: "pending_kyb", setup_mode: true, live_features_enabled: false };
+    }
+    if (!businessDocsReady) {
       return { onboarding_status: "pending_kyb", setup_mode: true, live_features_enabled: false };
     }
     if (!authorityReady) {
@@ -154,6 +163,9 @@ export function setupStatusForMerchant(merchant: {
   }
 
   if (!kybReady) {
+    return { onboarding_status: "pending_kyb", setup_mode: true, live_features_enabled: false };
+  }
+  if (!businessDocsReady) {
     return { onboarding_status: "pending_kyb", setup_mode: true, live_features_enabled: false };
   }
 
@@ -275,7 +287,7 @@ export async function enterPaidSetupMode(
 export async function syncMerchantSetupStatus(adminClient: SupabaseClient, merchantId: string) {
   const { data: merchant } = await adminClient
     .from("merchants")
-    .select("subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, business_affiliation_status, setup_mode, live_features_enabled")
+    .select("subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, utility_status, business_affiliation_status, setup_mode, live_features_enabled")
     .eq("id", merchantId)
     .maybeSingle();
 
@@ -303,7 +315,7 @@ export async function syncMerchantSetupStatus(adminClient: SupabaseClient, merch
 export async function ensureWorkspaceForMerchant(adminClient: SupabaseClient, merchantId: string) {
   const { data: merchant } = await adminClient
     .from("merchants")
-    .select("id, user_id, business_name, trading_name, subscription_plan, merchant_tier, onboarding_status, setup_mode, live_features_enabled, bvn_status, selfie_status, cac_status, business_affiliation_status, verification_status")
+    .select("id, user_id, business_name, trading_name, subscription_plan, merchant_tier, onboarding_status, setup_mode, live_features_enabled, bvn_status, selfie_status, cac_status, utility_status, business_affiliation_status, verification_status")
     .eq("id", merchantId)
     .maybeSingle();
 

@@ -26,6 +26,10 @@ type InvitationContext = {
   } | null;
 };
 
+const DIRECTOR_CONSENT_VERSION = "1.0";
+const DIRECTOR_CONSENT_SUMMARY =
+  "Director authorizes the requester to operate this business workspace on DeraLedger after platform verification gates are complete.";
+
 export default function DirectorApprovalPage() {
   const params = useParams<{ token: string }>();
   const token = params?.token;
@@ -126,7 +130,12 @@ export default function DirectorApprovalPage() {
       const res = await fetch(`/api/director-invitations/${token}/decision`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ decision }),
+        body: JSON.stringify({
+          decision,
+          consentAccepted: decision === "approved",
+          consentVersion: decision === "approved" ? DIRECTOR_CONSENT_VERSION : null,
+          consentSummary: decision === "approved" ? DIRECTOR_CONSENT_SUMMARY : null,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not save your decision.");
@@ -253,13 +262,26 @@ export default function DirectorApprovalPage() {
                       Identity verification completed
                     </div>
                     <p className="mt-1 text-xs text-emerald-700">
-                      The BVN and selfie step is locked for this invitation to prevent duplicate verification charges.
+                      The BVN and selfie step is locked for this invitation to prevent duplicate verification charges. Review the authorization details below before you approve this request.
                     </p>
+                  </div>
+                  <div className="rounded-lg border border-neutral-200 bg-white p-4 text-sm text-neutral-700">
+                    <p className="font-bold text-neutral-950">What you are approving</p>
+                    <p className="mt-2">
+                      You are confirming that <strong>{invitation.requesterName || "the requester"}</strong> may operate the
+                      <strong> {invitation.businessName}</strong> workspace on DeraLedger as an account representative.
+                    </p>
+                    <ul className="mt-3 list-disc space-y-1 pl-5 text-xs text-neutral-600">
+                      <li>They may continue business setup, profile completion, and workspace configuration.</li>
+                      <li>They may prepare invoices, payment links, and collection workflows for this business.</li>
+                      <li>Live payment collection will activate only after DeraLedger confirms all required KYC, KYB, document, and admin review gates.</li>
+                      <li>This approval does not bypass platform review, settlement checks, or compliance restrictions.</li>
+                    </ul>
                   </div>
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     <Button onClick={() => decide("approved")} disabled={submitting} className="gap-2 bg-emerald-600 text-white hover:bg-emerald-700">
                       <CheckCircle className="h-4 w-4" />
-                      Approve activation
+                      Agree and continue
                     </Button>
                     <Button onClick={() => decide("rejected")} disabled={submitting} variant="destructive" className="gap-2">
                       <XCircle className="h-4 w-4" />
