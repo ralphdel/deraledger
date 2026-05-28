@@ -52,7 +52,7 @@ export async function POST(request: Request) {
     // Fetch the merchant to get the subaccount code
     const { data: merchant, error: merchantError } = await supabase
       .from("merchants")
-      .select("email, payment_subaccount_code, subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, business_affiliation_status, live_features_enabled, setup_mode")
+      .select("email, payment_subaccount_code, subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, utility_status, business_affiliation_status, live_features_enabled, setup_mode")
       .eq("id", invoice.merchant_id)
       .single();
 

@@ -7,7 +7,7 @@
  */
 
 import type { Merchant } from "@/lib/types";
-import { getLiveFeatureLockReasons, isLiveFeatureEnabled } from "@/lib/services/onboarding-flow.service";
+import { getLiveFeatureLockReasons, isLiveFeatureEnabled, isSuperadminSandboxMerchant } from "@/lib/services/onboarding-flow.service";
 
 // ── Plan limits (mirrors platform_settings in DB) ─────────────────────────────
 export const PLAN_LIMITS = {
@@ -62,7 +62,7 @@ export interface AccessResult {
 }
 
 function liveCollectionEnabled(
-  merchant: Pick<Merchant, "subscription_plan" | "merchant_tier" | "verification_status" | "bvn_status" | "cac_status" | "live_features_enabled" | "setup_mode"> & Pick<Partial<Merchant>, "selfie_status" | "utility_status" | "business_affiliation_status">
+  merchant: Pick<Merchant, "subscription_plan" | "merchant_tier" | "verification_status" | "bvn_status" | "cac_status" | "live_features_enabled" | "setup_mode"> & Pick<Partial<Merchant>, "selfie_status" | "utility_status" | "business_affiliation_status" | "email" | "is_super_admin">
 ): boolean {
   return isLiveFeatureEnabled(merchant);
 }
@@ -73,9 +73,10 @@ function liveCollectionEnabled(
  * For Starter: counts ALL invoices ever created (including archived/deleted soft-counts).
  */
 export function canCreateInvoice(
-  merchant: Pick<Merchant, "subscription_plan" | "merchant_tier">,
+  merchant: Pick<Merchant, "subscription_plan" | "merchant_tier"> & Pick<Partial<Merchant>, "email" | "is_super_admin">,
   currentLifetimeInvoiceCount: number
 ): AccessResult {
+  if (isSuperadminSandboxMerchant(merchant)) return { allowed: true };
   const plan = getPlan(merchant);
   const limits = PLAN_LIMITS[plan];
 
@@ -91,8 +92,9 @@ export function canCreateInvoice(
 
 // ── Gate: Create collection invoice ──────────────────────────────────────────
 export function canCreateCollectionInvoice(
-  merchant: Pick<Merchant, "subscription_plan" | "merchant_tier" | "verification_status" | "bvn_status" | "cac_status" | "live_features_enabled" | "setup_mode"> & Pick<Partial<Merchant>, "selfie_status" | "utility_status" | "business_affiliation_status">
+  merchant: Pick<Merchant, "subscription_plan" | "merchant_tier" | "verification_status" | "bvn_status" | "cac_status" | "live_features_enabled" | "setup_mode"> & Pick<Partial<Merchant>, "selfie_status" | "utility_status" | "business_affiliation_status" | "email" | "is_super_admin">
 ): AccessResult {
+  if (isSuperadminSandboxMerchant(merchant)) return { allowed: true };
   const plan = getPlan(merchant);
   const limits = PLAN_LIMITS[plan];
 

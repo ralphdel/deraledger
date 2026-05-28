@@ -1244,7 +1244,7 @@ export async function createInvoiceAction(data: {
   // Check Starter tier invoice limit (max 5 total invoices)
   const { data: merchantInfo } = await adminClient
     .from("merchants")
-    .select("subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, utility_status, business_affiliation_status, live_features_enabled, setup_mode")
+    .select("email, subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, utility_status, business_affiliation_status, live_features_enabled, setup_mode")
     .eq("id", data.merchant_id)
     .single();
 

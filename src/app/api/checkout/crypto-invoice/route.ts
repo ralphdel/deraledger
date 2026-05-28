@@ -53,7 +53,7 @@ export async function POST(request: Request) {
 
     const { data: merchant, error: merchantError } = await supabase
       .from("merchants")
-      .select("id, subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, business_affiliation_status, payment_provider, payment_subaccount_code, live_features_enabled, setup_mode")
+      .select("id, email, subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, utility_status, business_affiliation_status, payment_provider, payment_subaccount_code, live_features_enabled, setup_mode")
       .eq("id", invoice.merchant_id)
       .single();
 

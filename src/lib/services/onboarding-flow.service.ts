@@ -7,9 +7,21 @@ export type PlanType = "starter" | "individual" | "corporate";
 export type RelationshipClaim = "owner_affiliated_claim" | "representative_claim";
 
 export const VERIFICATION_DISCLOSURE_VERSION = "1.0";
+export const SUPERADMIN_SANDBOX_EMAIL =
+  (process.env.SUPERADMIN_SANDBOX_EMAIL || "ralphdel14@yahoo.com").toLowerCase();
 
 export const LIVE_FEATURE_LOCK_MESSAGE =
   "Live payment collection is disabled until verification is completed. You can continue setting up your workspace.";
+
+export function isSuperadminSandboxMerchant(merchant: {
+  email?: string | null;
+  is_super_admin?: boolean | null;
+}) {
+  return (
+    merchant.is_super_admin === true ||
+    merchant.email?.toLowerCase() === SUPERADMIN_SANDBOX_EMAIL
+  );
+}
 
 export function requiresVerificationDisclosure(plan: string | null | undefined): boolean {
   return plan === "individual" || plan === "corporate";
@@ -26,7 +38,10 @@ export function isLiveFeatureEnabled(merchant: {
   business_affiliation_status?: string | null;
   live_features_enabled?: boolean | null;
   setup_mode?: boolean | null;
+  email?: string | null;
+  is_super_admin?: boolean | null;
 }): boolean {
+  if (isSuperadminSandboxMerchant(merchant)) return true;
   const plan = merchant.subscription_plan || merchant.merchant_tier || "starter";
   if (plan === "starter") return false;
   if (merchant.live_features_enabled !== true) return false;
@@ -59,7 +74,10 @@ export function getLiveFeatureLockReasons(merchant: {
   business_affiliation_status?: string | null;
   setup_mode?: boolean | null;
   live_features_enabled?: boolean | null;
+  email?: string | null;
+  is_super_admin?: boolean | null;
 }): string[] {
+  if (isSuperadminSandboxMerchant(merchant)) return [];
   const plan = merchant.subscription_plan || merchant.merchant_tier || "starter";
   if (plan === "starter") return ["Upgrade to Individual or Business to activate live payment collection."];
 
@@ -98,11 +116,16 @@ export function setupStatusForMerchant(merchant: {
   cac_status?: string | null;
   utility_status?: string | null;
   business_affiliation_status?: string | null;
+  email?: string | null;
+  is_super_admin?: boolean | null;
 }): {
   onboarding_status: string;
   setup_mode: boolean;
   live_features_enabled: boolean;
 } {
+  if (isSuperadminSandboxMerchant(merchant)) {
+    return { onboarding_status: "active", setup_mode: false, live_features_enabled: true };
+  }
   const plan = merchant.subscription_plan || merchant.merchant_tier || "starter";
   if (plan === "starter") {
     return { onboarding_status: "active", setup_mode: false, live_features_enabled: false };

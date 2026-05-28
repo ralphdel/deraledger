@@ -49,6 +49,7 @@ import { MANUAL_CLOSE_REASONS } from "@/lib/types";
 import type { InvoiceWithLineItems, Transaction, Merchant, AuditLog } from "@/lib/types";
 import { formatNaira, getStatusColor, getStatusLabel } from "@/lib/calculations";
 import { RecordPaymentDrawer } from "@/components/RecordPaymentDrawer";
+import { isLiveFeatureEnabled } from "@/lib/services/onboarding-flow.service";
 
 export default function InvoiceDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -238,7 +239,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // Whether the payment link is active
   const isStarter = (merchant?.subscription_plan || merchant?.merchant_tier || "starter") === "starter";
   const limitExceeded = isStarter || (merchant?.monthly_collection_limit ? monthlyCollected >= merchant.monthly_collection_limit : false);
-  const isUnverified = merchant?.verification_status !== "verified";
+  const liveFeaturesActive = merchant ? isLiveFeatureEnabled(merchant) : false;
+  const isUnverified = !liveFeaturesActive;
   const missingSettlement = !merchant?.settlement_account_number;
   
   const isLinkActive = (invoice.status === "open" || invoice.status === "partially_paid") 
