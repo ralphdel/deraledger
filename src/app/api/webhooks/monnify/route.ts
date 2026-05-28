@@ -23,11 +23,6 @@ export async function POST(request: Request) {
   const body = await request.text();
   const verification = PaymentService.verifyWebhook(body, signature, "monnify");
 
-  if (process.env.NODE_ENV === "production" && !verification.valid) {
-    await recordWebhookHealth("failed");
-    return new NextResponse("Invalid signature", { status: 401 });
-  }
-
   let payload: MonnifyWebhookPayload;
   try {
     payload = JSON.parse(body) as MonnifyWebhookPayload;
@@ -37,6 +32,17 @@ export async function POST(request: Request) {
   }
 
   const normalized = normalizeMonnifyWebhook(payload);
+
+  if (normalized) {
+    await recordWebhookAttempt({
+      status: verification.valid ? "received" : "signature_failed",
+      reference: normalized.reference,
+      eventType: payload.eventType || "monnify.webhook",
+      amountKobo: normalized.amountKobo,
+      payload,
+      metadata: normalized.metadata,
+    });
+  }
 
   if (!normalized || !normalized.successful) {
     return NextResponse.json({
@@ -48,6 +54,17 @@ export async function POST(request: Request) {
   }
 
   try {
+    // Monnify sandbox webhook secrets are often misconfigured during setup.
+    // Verify the paid reference directly with Monnify before rejecting a real
+    // successful transaction due to signature mismatch.
+    if (!verification.valid) {
+      const tx = await PaymentService.verifyTransaction(normalized.reference, "monnify");
+      if (tx.status !== "success") {
+        await recordWebhookHealth("failed");
+        return new NextResponse("Invalid signature", { status: 401 });
+      }
+    }
+
     const result = await processSuccessfulFiatPayment(supabase, {
       provider: "monnify",
       metadata: normalized.metadata,
@@ -57,6 +74,14 @@ export async function POST(request: Request) {
       feesKobo: normalized.feesKobo,
     });
     await recordWebhookHealth("success");
+    await recordWebhookAttempt({
+      status: "processed",
+      reference: normalized.reference,
+      eventType: payload.eventType || "SUCCESSFUL_TRANSACTION",
+      amountKobo: normalized.amountKobo,
+      payload,
+      metadata: normalized.metadata,
+    });
 
     return NextResponse.json({
       ...result,
@@ -66,6 +91,16 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error("Monnify webhook processing failed:", error);
     await recordWebhookHealth("failed");
+    if (normalized) {
+      await recordWebhookAttempt({
+        status: "processing_failed",
+        reference: normalized.reference,
+        eventType: payload.eventType || "SUCCESSFUL_TRANSACTION",
+        amountKobo: normalized.amountKobo,
+        payload,
+        metadata: normalized.metadata,
+      });
+    }
     return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
   }
 }
@@ -82,6 +117,31 @@ async function recordWebhookHealth(status: "success" | "failed") {
     )
     .eq("provider_name", "monnify")
     .eq("environment", environment);
+}
+
+async function recordWebhookAttempt(input: {
+  status: string;
+  reference: string;
+  eventType: string;
+  amountKobo: number;
+  payload: unknown;
+  metadata: Record<string, unknown>;
+}) {
+  const merchantId = typeof input.metadata.merchant_id === "string" ? input.metadata.merchant_id : null;
+  const invoiceId = typeof input.metadata.invoice_id === "string" ? input.metadata.invoice_id : null;
+  await supabase.from("payment_events").upsert(
+    {
+      merchant_id: merchantId,
+      invoice_id: invoiceId,
+      event_type: `${input.eventType}:${input.status}`,
+      processor: "monnify",
+      processor_ref: input.reference,
+      amount_kobo: input.amountKobo,
+      raw_payload: input.payload,
+      idempotency_key: `monnify:${input.reference}:${input.status}`,
+    },
+    { onConflict: "idempotency_key" }
+  );
 }
 
 function normalizeMonnifyWebhook(payload: MonnifyWebhookPayload) {

@@ -24,7 +24,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { plan, email, callbackUrl, paymentMethod } = await request.json();
+    const { plan, email, paymentMethod } = await request.json();
 
     if (plan !== "individual" && plan !== "corporate") {
       return NextResponse.json({ error: "Invalid plan for renewal" }, { status: 400 });
@@ -56,7 +56,7 @@ export async function POST(request: Request) {
     const resolvedEmail = email || user.email || merchant.email || "billing@deraledger.app";
     const method = (paymentMethod || "card") as PaymentMethod;
     const route = await resolvePaymentRoute("plan_subscription", method);
-    const callback = new URL(callbackUrl || `${getAppUrl()}/settings/billing/renew-callback`);
+    const callback = new URL(`${getAppUrl()}/settings/billing/renew-callback`);
     callback.searchParams.set("provider", route.provider);
     const resolvedCallback = callback.toString();
 

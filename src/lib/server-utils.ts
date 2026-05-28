@@ -14,14 +14,22 @@
  * 5. http://localhost:3000 (development only — never used in production)
  */
 
-const PRODUCTION_FALLBACK = "https://www.deraledger.com";
+const PRODUCTION_FALLBACK = "https://deraledger.com";
 
 export function getAppUrl(): string {
   const isProduction = process.env.NODE_ENV === "production";
+  const canonicalUrl = process.env.APP_URL || process.env.CANONICAL_APP_URL;
+  if (canonicalUrl) {
+    return canonicalUrl.replace(/\/$/, "");
+  }
 
   // 1. Explicit app URL env var — but ignore if it's localhost in production
   const explicitUrl = process.env.NEXT_PUBLIC_APP_URL;
-  if (explicitUrl && !(isProduction && explicitUrl.includes("localhost"))) {
+  if (
+    explicitUrl &&
+    !(isProduction && explicitUrl.includes("localhost")) &&
+    !(isProduction && explicitUrl.includes(".vercel.app"))
+  ) {
     return explicitUrl.replace(/\/$/, ""); // strip trailing slash
   }
 

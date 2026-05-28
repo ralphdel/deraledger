@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { PaymentService } from "@/lib/payment";
 import { resolvePaymentRoute, type PaymentMethod } from "@/lib/services/payment-routing.service";
+import { getAppUrl } from "@/lib/server-utils";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -82,7 +83,7 @@ export async function POST(request: Request) {
     const chargeAmountKobo = Math.round(chargeAmount * 100);
 
     const reference = `purp_${invoiceId.slice(0, 8)}_${Date.now()}`;
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+    const appUrl = getAppUrl();
 
     const metadata = {
       type: "invoice_payment",
@@ -97,7 +98,6 @@ export async function POST(request: Request) {
     };
 
     if (selectedMethod === "crypto") {
-      const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
       const cryptoResponse = await fetch(`${appUrl}/api/checkout/crypto-invoice`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

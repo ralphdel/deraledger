@@ -70,6 +70,29 @@ export class MonnifyAdapter implements IPaymentProcessor {
     return payload.responseBody;
   }
 
+  private async authorizedGet<T>(path: string) {
+    const accessToken = await this.getAccessToken();
+    const response = await fetch(`${MONNIFY_BASE}${path}`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    const payload = (await response.json().catch(() => ({}))) as {
+      requestSuccessful?: boolean;
+      responseBody?: T;
+      responseMessage?: string;
+    };
+
+    if (!response.ok || payload.requestSuccessful === false || !payload.responseBody) {
+      throw new Error(payload.responseMessage || "Monnify request failed.");
+    }
+
+    return payload.responseBody;
+  }
+
   async initializeTransaction(p: TransactionParams): Promise<TransactionResult> {
     const body: Record<string, unknown> = {
       amount: p.amountKobo / 100,
@@ -102,29 +125,22 @@ export class MonnifyAdapter implements IPaymentProcessor {
   }
 
   async verifyTransaction(reference: string): Promise<Record<string, unknown>> {
-    const accessToken = await this.getAccessToken();
-    const response = await fetch(
-      `${MONNIFY_BASE}/api/v2/transactions/${encodeURIComponent(reference)}`,
-      {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
+    try {
+      const data = await this.authorizedGet<Record<string, unknown>>(
+        `/api/v2/transactions/${encodeURIComponent(reference)}`
+      );
+      return this.normalizeTransaction(data);
+    } catch (transactionReferenceError) {
+      try {
+        const params = new URLSearchParams({ paymentReference: reference });
+        const data = await this.authorizedGet<Record<string, unknown>>(
+          `/api/v2/merchant/transactions/query?${params.toString()}`
+        );
+        return this.normalizeTransaction(data);
+      } catch {
+        throw transactionReferenceError;
       }
-    );
-
-    const payload = (await response.json().catch(() => ({}))) as {
-      requestSuccessful?: boolean;
-      responseBody?: Record<string, unknown>;
-      responseMessage?: string;
-    };
-
-    if (!response.ok || payload.requestSuccessful === false || !payload.responseBody) {
-      throw new Error(payload.responseMessage || "Monnify verification failed.");
     }
-
-    return this.normalizeTransaction(payload.responseBody);
   }
 
   private normalizeTransaction(data: Record<string, unknown>) {
