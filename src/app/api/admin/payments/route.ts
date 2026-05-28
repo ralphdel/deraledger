@@ -21,11 +21,7 @@ export async function GET() {
     supabase.from("payment_providers").select("*").order("environment").order("provider_name"),
     supabase.from("payment_provider_routes").select("*").order("environment").order("payment_purpose"),
     supabase.from("payment_method_configs").select("*").order("environment").order("payment_purpose"),
-    supabase
-      .from("payment_events")
-      .select("id, created_at, event_type, processor, processor_ref, amount_kobo, merchant_id, invoice_id")
-      .order("created_at", { ascending: false })
-      .limit(50),
+    fetchRecentPaymentEvents(),
     supabase
       .from("transactions")
       .select("id, created_at, invoice_id, merchant_id, amount_paid, payment_method, status, paystack_reference")
@@ -54,10 +50,11 @@ export async function GET() {
     providers,
     routes,
     methods,
-    events: eventsRes.error ? [] : eventsRes.data || [],
+    events: eventsRes.data || [],
     transactions: transactionsRes.error ? [] : transactionsRes.data || [],
     diagnostics: {
-      eventsError: eventsRes.error?.message || null,
+      eventsError: eventsRes.error || null,
+      eventsWarning: eventsRes.warning || null,
       transactionsError: transactionsRes.error?.message || null,
     },
   }, {
@@ -65,6 +62,38 @@ export async function GET() {
       "Cache-Control": "no-store",
     },
   });
+}
+
+async function fetchRecentPaymentEvents() {
+  const withCreatedAt = await supabase
+    .from("payment_events")
+    .select("id, created_at, event_type, processor, processor_ref, amount_kobo, merchant_id, invoice_id")
+    .order("created_at", { ascending: false })
+    .limit(50);
+
+  if (!withCreatedAt.error) {
+    return { data: withCreatedAt.data || [], error: null, warning: null };
+  }
+
+  const message = withCreatedAt.error.message;
+  if (!message.includes("created_at")) {
+    return { data: [], error: message, warning: null };
+  }
+
+  const fallback = await supabase
+    .from("payment_events")
+    .select("id, event_type, processor, processor_ref, amount_kobo, merchant_id, invoice_id")
+    .limit(50);
+
+  if (fallback.error) {
+    return { data: [], error: fallback.error.message, warning: message };
+  }
+
+  return {
+    data: (fallback.data || []).map((event) => ({ ...event, created_at: null })),
+    error: null,
+    warning: "payment_events.created_at is missing. Run the payment events timestamp migration to sort provider events by time.",
+  };
 }
 
 export async function POST(request: Request) {

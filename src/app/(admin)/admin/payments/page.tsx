@@ -66,13 +66,14 @@ type PaymentAdminPayload = {
   transactions: PaymentTransactionRow[];
   diagnostics?: {
     eventsError: string | null;
+    eventsWarning?: string | null;
     transactionsError: string | null;
   };
 };
 
 type PaymentEventRow = {
   id: string;
-  created_at: string;
+  created_at: string | null;
   event_type: string;
   processor: string | null;
   processor_ref: string | null;
@@ -366,6 +367,11 @@ export default function AdminPaymentsPage() {
             {data?.diagnostics?.eventsError ? (
               <div className="border-b border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700">
                 Provider event query warning: {data.diagnostics.eventsError}
+              </div>
+            ) : null}
+            {!data?.diagnostics?.eventsError && data?.diagnostics?.eventsWarning ? (
+              <div className="border-b border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700">
+                Provider event schema warning: {data.diagnostics.eventsWarning}
               </div>
             ) : null}
             <Table>
