@@ -7,7 +7,7 @@
  */
 
 import type { Merchant } from "@/lib/types";
-import { isLiveFeatureEnabled } from "@/lib/services/onboarding-flow.service";
+import { getLiveFeatureLockReasons, isLiveFeatureEnabled } from "@/lib/services/onboarding-flow.service";
 
 // ── Plan limits (mirrors platform_settings in DB) ─────────────────────────────
 export const PLAN_LIMITS = {
@@ -62,7 +62,7 @@ export interface AccessResult {
 }
 
 function liveCollectionEnabled(
-  merchant: Pick<Merchant, "subscription_plan" | "merchant_tier" | "verification_status" | "bvn_status" | "cac_status" | "live_features_enabled" | "setup_mode"> & Pick<Partial<Merchant>, "selfie_status" | "business_affiliation_status">
+  merchant: Pick<Merchant, "subscription_plan" | "merchant_tier" | "verification_status" | "bvn_status" | "cac_status" | "live_features_enabled" | "setup_mode"> & Pick<Partial<Merchant>, "selfie_status" | "utility_status" | "business_affiliation_status">
 ): boolean {
   return isLiveFeatureEnabled(merchant);
 }
@@ -91,7 +91,7 @@ export function canCreateInvoice(
 
 // ── Gate: Create collection invoice ──────────────────────────────────────────
 export function canCreateCollectionInvoice(
-  merchant: Pick<Merchant, "subscription_plan" | "merchant_tier" | "verification_status" | "bvn_status" | "cac_status" | "live_features_enabled" | "setup_mode"> & Pick<Partial<Merchant>, "selfie_status" | "business_affiliation_status">
+  merchant: Pick<Merchant, "subscription_plan" | "merchant_tier" | "verification_status" | "bvn_status" | "cac_status" | "live_features_enabled" | "setup_mode"> & Pick<Partial<Merchant>, "selfie_status" | "utility_status" | "business_affiliation_status">
 ): AccessResult {
   const plan = getPlan(merchant);
   const limits = PLAN_LIMITS[plan];
@@ -105,9 +105,12 @@ export function canCreateCollectionInvoice(
   }
 
   if (!liveCollectionEnabled(merchant)) {
+    const reasons = getLiveFeatureLockReasons(merchant);
     return {
       allowed: false,
-      reason: "Live payment collection is disabled until verification is completed. You can continue setting up your workspace.",
+      reason: reasons.length > 0
+        ? `Live payment collection is locked. Remaining requirement: ${reasons.join(", ")}.`
+        : "Live payment collection is disabled until verification is completed. You can continue setting up your workspace.",
     };
   }
 

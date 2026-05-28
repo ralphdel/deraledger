@@ -1239,10 +1239,12 @@ export async function createInvoiceAction(data: {
 }) {
   const adminClient = getServiceClient();
 
+  await syncMerchantSetupStatus(adminClient, data.merchant_id);
+
   // Check Starter tier invoice limit (max 5 total invoices)
   const { data: merchantInfo } = await adminClient
     .from("merchants")
-    .select("subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, business_affiliation_status, live_features_enabled, setup_mode")
+    .select("subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, utility_status, business_affiliation_status, live_features_enabled, setup_mode")
     .eq("id", data.merchant_id)
     .single();
 
