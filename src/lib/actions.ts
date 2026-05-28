@@ -2380,6 +2380,16 @@ export async function adminResetVerificationAction(merchantId: string) {
     })
     .eq("merchant_id", merchantId);
 
+  const resetCleanupResults = await Promise.all([
+    adminClient.from("director_verifications").delete().eq("merchant_id", merchantId),
+    adminClient.from("director_invitations").delete().eq("merchant_id", merchantId),
+    adminClient.from("business_affiliations").delete().eq("merchant_id", merchantId),
+    adminClient.from("business_director_verifications").delete().eq("merchant_id", merchantId),
+  ]);
+  const resetCleanupErrors = resetCleanupResults
+    .map((result) => result.error?.message)
+    .filter(Boolean);
+
   // Audit log preserves what was archived — never deleted
   await logAudit("admin_verification_reset", merchantId, "merchant", {
     actor: "admin",
@@ -2392,6 +2402,8 @@ export async function adminResetVerificationAction(merchantId: string) {
     archived_bvn: merchant?.bvn ? "[redacted]" : null,
     archived_owner_name: merchant?.owner_name ?? null,
     live_features_enabled: false,
+    director_approval_flow_cleared: resetCleanupErrors.length === 0,
+    director_approval_cleanup_errors: resetCleanupErrors,
   });
 
   revalidatePath("/admin/verification");
@@ -3006,21 +3018,41 @@ export async function getDirectorApprovalContextAction(merchantId: string) {
   const guard = await requireMerchantOwner(merchantId);
   if (!guard.permitted) return { success: false, error: guard.error, snapshot: null, invitations: [] };
 
-  const {
-    getLatestRegistrySnapshot,
-    listDirectorInvitations,
-  } = await import("@/lib/services/director-invitation.service");
+  const adminClient = getServiceClient();
+  const { data: merchant, error: merchantError } = await adminClient
+    .from("merchants")
+    .select("business_registry_snapshot_id")
+    .eq("id", merchantId)
+    .maybeSingle();
+
+  if (merchantError) {
+    return { success: false, error: merchantError.message, snapshot: null, invitations: [] };
+  }
+
+  if (!merchant?.business_registry_snapshot_id) {
+    return { success: true, snapshot: null, invitations: [] };
+  }
 
   const [snapshotResult, invitationsResult] = await Promise.all([
-    getLatestRegistrySnapshot(merchantId),
-    listDirectorInvitations(merchantId),
+    adminClient
+      .from("business_registry_snapshots")
+      .select("*")
+      .eq("id", merchant.business_registry_snapshot_id)
+      .maybeSingle(),
+    adminClient
+      .from("director_invitations")
+      .select("*")
+      .eq("merchant_id", merchantId)
+      .eq("registry_snapshot_id", merchant.business_registry_snapshot_id)
+      .neq("status", "cancelled")
+      .order("created_at", { ascending: false }),
   ]);
 
   return {
-    success: snapshotResult.success && invitationsResult.success,
-    error: snapshotResult.error || invitationsResult.error,
-    snapshot: snapshotResult.snapshot,
-    invitations: invitationsResult.invitations,
+    success: !snapshotResult.error && !invitationsResult.error,
+    error: snapshotResult.error?.message || invitationsResult.error?.message,
+    snapshot: snapshotResult.data || null,
+    invitations: invitationsResult.data || [],
   };
 }
 

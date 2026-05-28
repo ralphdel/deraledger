@@ -89,7 +89,7 @@ export async function createDirectorInvitation(params: {
 
   const { data: merchant, error: merchantError } = await adminClient
     .from("merchants")
-    .select("id, user_id, business_name, trading_name, workspace_id, owner_name, business_affiliation_status")
+    .select("id, user_id, business_name, trading_name, workspace_id, owner_name, business_affiliation_status, business_registry_snapshot_id")
     .eq("id", params.merchantId)
     .maybeSingle();
 
@@ -100,9 +100,7 @@ export async function createDirectorInvitation(params: {
   const { data: snapshot, error: snapshotError } = await adminClient
     .from("business_registry_snapshots")
     .select("*")
-    .eq("merchant_id", params.merchantId)
-    .order("created_at", { ascending: false })
-    .limit(1)
+    .eq("id", merchant.business_registry_snapshot_id || "00000000-0000-0000-0000-000000000000")
     .maybeSingle();
 
   if (snapshotError || !snapshot) {
