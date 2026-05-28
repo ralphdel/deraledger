@@ -17,7 +17,7 @@ import {
   canCreateCustomRole,
   canAccessFeature,
 } from "@/lib/services/access-control";
-import { syncMerchantSetupStatus } from "@/lib/services/onboarding-flow.service";
+import { ensureWorkspaceForMerchant, setupStatusForMerchant, syncMerchantSetupStatus } from "@/lib/services/onboarding-flow.service";
 
 // Service role client for admin-level operations
 function getServiceClient() {
@@ -1226,7 +1226,7 @@ export async function createInvoiceAction(data: {
   // Check Starter tier invoice limit (max 5 total invoices)
   const { data: merchantInfo } = await adminClient
     .from("merchants")
-    .select("subscription_plan, merchant_tier, verification_status, live_features_enabled, setup_mode")
+    .select("subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, business_affiliation_status, live_features_enabled, setup_mode")
     .eq("id", data.merchant_id)
     .single();
 
@@ -2160,28 +2160,69 @@ export async function adminApproveVerificationAction(merchantId: string) {
   if (guard.error) return guard.error;
   const adminClient = getServiceClient();
 
+  const { data: merchant, error: fetchError } = await adminClient
+    .from("merchants")
+    .select("subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, business_affiliation_status")
+    .eq("id", merchantId)
+    .single();
+
+  if (fetchError || !merchant) {
+    return { success: false, error: fetchError?.message || "Merchant not found." };
+  }
+
+  const plan = merchant.subscription_plan || merchant.merchant_tier || "starter";
+  const nextFields = setupStatusForMerchant({ ...merchant, verification_status: "verified" });
+  const canActivateNow = nextFields.live_features_enabled === true;
+  const nextVerificationStatus = "verified";
+
+  const updates = {
+    ...nextFields,
+    verification_status: nextVerificationStatus,
+    kyc_reviewed_at: new Date().toISOString(),
+    kyc_rejection_reason: null,
+    updated_at: new Date().toISOString(),
+    ...(canActivateNow ? { live_features_activated_at: new Date().toISOString() } : {}),
+  };
+
   const { error } = await adminClient
     .from("merchants")
-    .update({
-      verification_status: "verified",
-      kyc_reviewed_at: new Date().toISOString(),
-      kyc_rejection_reason: null,
-      updated_at: new Date().toISOString(),
-    })
+    .update(updates)
     .eq("id", merchantId);
 
   if (error) return { success: false, error: error.message };
 
-  await syncMerchantSetupStatus(adminClient, merchantId);
+  if (canActivateNow) {
+    await syncMerchantSetupStatus(adminClient, merchantId);
+  } else {
+    await ensureWorkspaceForMerchant(adminClient, merchantId);
+    await adminClient
+      .from("workspaces")
+      .update({
+        onboarding_status: nextFields.onboarding_status,
+        setup_mode: nextFields.setup_mode,
+        live_features_enabled: nextFields.live_features_enabled,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("merchant_id", merchantId);
+  }
 
   await logAudit("admin_verification_approved", merchantId, "merchant", {
     actor: "admin",
-    new_status: "verified",
+    new_status: nextVerificationStatus,
+    plan,
+    live_features_enabled: canActivateNow,
+    onboarding_status: nextFields.onboarding_status,
   });
 
   revalidatePath("/admin/verification");
   revalidatePath("/admin/merchants");
-  return { success: true };
+  return {
+    success: true,
+    updates,
+    message: canActivateNow
+      ? "Merchant approved and live payment features are active."
+      : "Review approved. Live payment features remain locked until the remaining verification requirement is completed.",
+  };
 }
 
 /**

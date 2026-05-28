@@ -30,6 +30,7 @@ import { calculateInvoiceTotals, formatNaira } from "@/lib/calculations";
 import { createInvoiceAction, createInvoiceAllocationAction, getEligibleDepositInvoicesAction } from "@/lib/actions";
 import { createClient } from "@/lib/supabase/client";
 import { CreateClientModal } from "@/components/CreateClientModal";
+import { isLiveFeatureEnabled } from "@/lib/services/onboarding-flow.service";
 
 interface FormLineItem {
   id: string;
@@ -41,11 +42,7 @@ interface FormLineItem {
 
 function canUseCollectionInvoices(merchant?: Merchant | null): boolean {
   if (!merchant) return false;
-  const plan = merchant.subscription_plan || merchant.merchant_tier || "starter";
-  if (plan === "starter") return false;
-  if (merchant.live_features_enabled === true) return true;
-  if (merchant.setup_mode === true || merchant.live_features_enabled === false) return false;
-  return merchant.verification_status === "verified";
+  return isLiveFeatureEnabled(merchant);
 }
 
 function CreateInvoiceForm() {

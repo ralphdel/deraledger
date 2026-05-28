@@ -7,6 +7,7 @@
  */
 
 import type { Merchant } from "@/lib/types";
+import { isLiveFeatureEnabled } from "@/lib/services/onboarding-flow.service";
 
 // ── Plan limits (mirrors platform_settings in DB) ─────────────────────────────
 export const PLAN_LIMITS = {
@@ -61,13 +62,9 @@ export interface AccessResult {
 }
 
 function liveCollectionEnabled(
-  merchant: Pick<Merchant, "subscription_plan" | "merchant_tier" | "verification_status" | "live_features_enabled" | "setup_mode">
+  merchant: Pick<Merchant, "subscription_plan" | "merchant_tier" | "verification_status" | "bvn_status" | "cac_status" | "live_features_enabled" | "setup_mode"> & Pick<Partial<Merchant>, "selfie_status" | "business_affiliation_status">
 ): boolean {
-  const plan = getPlan(merchant);
-  if (plan === "starter") return false;
-  if (merchant.live_features_enabled === true) return true;
-  if (merchant.setup_mode === true) return false;
-  return merchant.verification_status === "verified";
+  return isLiveFeatureEnabled(merchant);
 }
 
 // ── Gate: Create any invoice ──────────────────────────────────────────────────
@@ -94,7 +91,7 @@ export function canCreateInvoice(
 
 // ── Gate: Create collection invoice ──────────────────────────────────────────
 export function canCreateCollectionInvoice(
-  merchant: Pick<Merchant, "subscription_plan" | "merchant_tier" | "verification_status" | "live_features_enabled" | "setup_mode">
+  merchant: Pick<Merchant, "subscription_plan" | "merchant_tier" | "verification_status" | "bvn_status" | "cac_status" | "live_features_enabled" | "setup_mode"> & Pick<Partial<Merchant>, "selfie_status" | "business_affiliation_status">
 ): AccessResult {
   const plan = getPlan(merchant);
   const limits = PLAN_LIMITS[plan];

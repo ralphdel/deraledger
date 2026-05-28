@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { formatNaira, calculateProportionalPayment, getMinimumPayment } from "@/lib/calculations";
 import type { InvoiceWithLineItems, Merchant } from "@/lib/types";
+import { isLiveFeatureEnabled } from "@/lib/services/onboarding-flow.service";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -270,10 +271,7 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
   }
 
   // Merchant Verification Guard
-  const isMerchantVerified =
-    merchant?.verification_status === "verified" &&
-    merchant?.setup_mode !== true &&
-    merchant?.live_features_enabled !== false;
+  const isMerchantVerified = merchant ? isLiveFeatureEnabled(merchant) : false;
   const hasSettlementAccount = !!merchant?.payment_subaccount_code;
   const isAcceptingPayments = isMerchantVerified && hasSettlementAccount;
 

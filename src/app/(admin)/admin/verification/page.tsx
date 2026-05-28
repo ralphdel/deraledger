@@ -164,8 +164,8 @@ export default function VerificationQueuePage() {
     setActionLoading(true); setReviewError(null);
     const res = await adminApproveVerificationAction(selectedMerchant.id);
     if (res.success) {
-      refreshMerchant({ verification_status: "verified" });
-      setActionSuccess("Merchant approved and marked as verified.");
+      refreshMerchant((res.updates || { verification_status: "verified" }) as Partial<Merchant>);
+      setActionSuccess(res.message || "Merchant approved.");
       setActionMode("idle");
     } else setReviewError(res.error || "Approval failed.");
     setActionLoading(false);

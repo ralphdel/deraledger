@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { PaymentService } from "@/lib/payment";
+import { isLiveFeatureEnabled } from "@/lib/services/onboarding-flow.service";
 import {
   computeCryptoAmount,
   confirmationSettingKeyForRail,
@@ -52,7 +53,7 @@ export async function POST(request: Request) {
 
     const { data: merchant, error: merchantError } = await supabase
       .from("merchants")
-      .select("id, verification_status, payment_provider, payment_subaccount_code, live_features_enabled, setup_mode")
+      .select("id, subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, business_affiliation_status, payment_provider, payment_subaccount_code, live_features_enabled, setup_mode")
       .eq("id", invoice.merchant_id)
       .single();
 
@@ -60,12 +61,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Merchant not found" }, { status: 404 });
     }
 
-    if (
-      merchant.verification_status !== "verified" ||
-      merchant.setup_mode === true ||
-      merchant.live_features_enabled === false ||
-      !merchant.payment_subaccount_code
-    ) {
+    if (!isLiveFeatureEnabled(merchant) || !merchant.payment_subaccount_code) {
       return NextResponse.json(
         { error: "Merchant is not ready to receive settlements." },
         { status: 403 }

@@ -20,6 +20,7 @@ import { getInvoices, getMerchant, getAllTransactions, getAllManualPayments } fr
 import { formatNaira, getStatusColor, getStatusLabel } from "@/lib/calculations";
 import type { InvoiceWithClient, Merchant, Transaction } from "@/lib/types";
 import { PermissionGuard } from "@/components/PermissionGuard";
+import { isLiveFeatureEnabled } from "@/lib/services/onboarding-flow.service";
 
 type TransactionWithInvoice = Transaction & {
   invoices?: InvoiceWithClient | null;
@@ -38,11 +39,7 @@ type ManualPaymentWithInvoice = {
 
 function canUseCollectionInvoices(merchant?: Merchant | null): boolean {
   if (!merchant) return false;
-  const plan = merchant.subscription_plan || merchant.merchant_tier || "starter";
-  if (plan === "starter") return false;
-  if (merchant.live_features_enabled === true) return true;
-  if (merchant.setup_mode === true || merchant.live_features_enabled === false) return false;
-  return merchant.verification_status === "verified";
+  return isLiveFeatureEnabled(merchant);
 }
 
 export default function InvoicesPage() {
