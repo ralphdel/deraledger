@@ -503,6 +503,7 @@ export default function SettingsPage() {
     isCorporate &&
     ["no_match", "rejected"].includes(String(merchant?.business_affiliation_status || "")) ||
     (isCorporate && merchant?.relationship_claim === "representative_claim");
+  const rejectedDirectorInvites = directorInvitations.filter((invite) => invite.status === "rejected");
 
   if (loading) {
     return (
@@ -1020,8 +1021,13 @@ export default function SettingsPage() {
                     <div>
                       <p className="text-xs font-bold text-amber-900">Director approval required</p>
                       <p className="mt-0.5 text-[11px] text-amber-800">
-                        A listed director must verify identity and approve this workspace before live payment collection is enabled.
+                        One listed director must verify identity and approve this workspace before live payment collection is enabled.
                       </p>
+                      {rejectedDirectorInvites.length > 0 && (
+                        <p className="mt-1 text-[11px] font-medium text-red-700">
+                          A previous director rejected the request. Select another listed director or contact support for manual review.
+                        </p>
+                      )}
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-[1fr_1.2fr] gap-2">
                       <select

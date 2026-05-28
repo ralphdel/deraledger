@@ -89,7 +89,7 @@ export async function createDirectorInvitation(params: {
 
   const { data: merchant, error: merchantError } = await adminClient
     .from("merchants")
-    .select("id, user_id, business_name, trading_name, workspace_id, owner_name")
+    .select("id, user_id, business_name, trading_name, workspace_id, owner_name, business_affiliation_status")
     .eq("id", params.merchantId)
     .maybeSingle();
 
@@ -109,6 +109,10 @@ export async function createDirectorInvitation(params: {
     return { success: false, error: "Run business verification first so directors can be selected from the saved registry snapshot." };
   }
 
+  if (merchant.business_affiliation_status === "director_approved") {
+    return { success: false, error: "Director approval has already been completed for this business." };
+  }
+
   const directors = safeDirectorList(snapshot.directors_json);
   const index = Number(params.selectedDirectorRecordId);
   const selected = Number.isFinite(index) ? directors[index] : directors.find((person) => person.name === params.selectedDirectorRecordId);
@@ -122,6 +126,33 @@ export async function createDirectorInvitation(params: {
   const expiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString();
   const businessName = merchant.trading_name || merchant.business_name || "this business";
   const approvalLink = `${getAppUrl()}/director-approval/${token}`;
+  const directorEmail = params.directorEmail.trim().toLowerCase();
+
+  const { data: activeInvites } = await adminClient
+    .from("director_invitations")
+    .select("id, status, selected_director_name, director_email")
+    .eq("merchant_id", params.merchantId)
+    .eq("registry_snapshot_id", snapshot.id)
+    .in("status", ["sent", "opened", "verified", "rejected"]);
+
+  const activeDuplicate = (activeInvites || []).find((invite) =>
+    String(invite.selected_director_name || "").trim().toLowerCase() === selected.name!.trim().toLowerCase() ||
+    String(invite.director_email || "").trim().toLowerCase() === directorEmail
+  );
+
+  if (activeDuplicate) {
+    if (activeDuplicate.status === "rejected") {
+      return {
+        success: false,
+        error: "This director already rejected the approval request. Select another listed director or contact support for manual review.",
+      };
+    }
+
+    return {
+      success: false,
+      error: "An active approval link already exists for this director. Use the existing link, wait for a decision, or cancel it before sending another.",
+    };
+  }
 
   const { data: invite, error: inviteError } = await adminClient
     .from("director_invitations")
@@ -132,7 +163,7 @@ export async function createDirectorInvitation(params: {
       registry_snapshot_id: snapshot.id,
       selected_director_record_id: String(params.selectedDirectorRecordId),
       selected_director_name: selected.name,
-      director_email: params.directorEmail.trim().toLowerCase(),
+      director_email: directorEmail,
       director_phone: params.directorPhone || selected.phone || null,
       token_hash: tokenHash,
       status: "sent",
@@ -146,7 +177,7 @@ export async function createDirectorInvitation(params: {
   }
 
   const emailResult = await sendDirectorInvitationEmail({
-    toEmail: params.directorEmail.trim().toLowerCase(),
+    toEmail: directorEmail,
     directorName: selected.name,
     businessName,
     requesterName: merchant.owner_name,
@@ -342,10 +373,30 @@ export async function decideDirectorInvitation(params: {
       .from("merchants")
       .update({ business_affiliation_status: "director_approved" })
       .eq("id", invite.merchant_id);
+
+    await adminClient
+      .from("director_invitations")
+      .update({ status: "cancelled", updated_at: new Date().toISOString() })
+      .eq("merchant_id", invite.merchant_id)
+      .eq("registry_snapshot_id", invite.registry_snapshot_id)
+      .neq("id", invite.id)
+      .in("status", ["sent", "opened", "verified"]);
   } else {
+    await adminClient.from("business_affiliations").insert({
+      business_workspace_id: invite.business_workspace_id || null,
+      merchant_id: invite.merchant_id,
+      user_id: invite.requester_user_id || null,
+      registry_snapshot_id: invite.registry_snapshot_id,
+      claimed_relationship_type: "representative_claim",
+      status: "rejected",
+      matched_registry_name: invite.selected_director_name,
+      match_score: 0,
+      match_reason: "A listed director verified their identity and rejected this requester.",
+    });
+
     await adminClient
       .from("merchants")
-      .update({ business_affiliation_status: "rejected" })
+      .update({ business_affiliation_status: "no_match" })
       .eq("id", invite.merchant_id);
   }
 
