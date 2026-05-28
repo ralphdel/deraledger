@@ -1573,7 +1573,7 @@ export default function SettingsPage() {
                   <p className="text-xs text-neutral-400">Upgrade to collect online payments and configure payouts.</p>
                 </div>
               ) : (
-                <Link href="/settings/settlement" className="block p-4 border border-purp-200 rounded-lg hover:bg-purp-50 transition-colors group">
+                <Link href="/settings/settlement-accounts" className="block p-4 border border-purp-200 rounded-lg hover:bg-purp-50 transition-colors group">
                   <div className="flex items-center justify-between mb-2">
                     <span className="font-semibold text-purp-900">Settlement Account</span>
                     <ExternalLink className="w-4 h-4 text-purp-300 group-hover:text-purp-700 transition-colors" />

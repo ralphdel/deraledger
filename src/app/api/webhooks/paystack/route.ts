@@ -9,6 +9,7 @@ import {
   VERIFICATION_DISCLOSURE_VERSION,
   type RelationshipClaim,
 } from "@/lib/services/onboarding-flow.service";
+import { upsertSettlementLedgerForTransaction } from "@/lib/services/settlement-ledger.service";
 
 const supabase = createSupabaseClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -716,19 +717,35 @@ async function handleInvoicePayment(
     channel === "card" ? "card" : channel === "bank" ? "bank_transfer" : "ussd";
 
   // Record transaction
-  await supabase.from("transactions").insert({
-    invoice_id: invoiceId,
-    merchant_id: invoice.merchant_id,
-    amount_paid: paymentAmount,
-    k_factor: kFactor,
-    tax_collected: taxCollected,
-    discount_applied: discountApplied,
-    paystack_fee: paystackFee,
-    fee_absorbed_by: invoice.fee_absorption || "business",
-    payment_method: paymentMethod,
-    paystack_reference: reference,
-    status: "success",
-  });
+  const { data: insertedTransaction, error: transactionError } = await supabase
+    .from("transactions")
+    .insert({
+      invoice_id: invoiceId,
+      merchant_id: invoice.merchant_id,
+      amount_paid: paymentAmount,
+      k_factor: kFactor,
+      tax_collected: taxCollected,
+      discount_applied: discountApplied,
+      paystack_fee: paystackFee,
+      fee_absorbed_by: invoice.fee_absorption || "business",
+      payment_method: paymentMethod,
+      payment_rail: paymentMethod,
+      paystack_reference: reference,
+      processor_reference: reference,
+      merchant_net_amount:
+        (invoice.fee_absorption || "business") === "business"
+          ? paymentAmount - paystackFee
+          : paymentAmount,
+      settlement_status: "pending",
+      status: "success",
+    })
+    .select("id")
+    .single();
+
+  if (transactionError) {
+    console.error("Failed to record transaction:", transactionError);
+    return NextResponse.json({ error: "Transaction failed" }, { status: 500 });
+  }
 
   // Record payment_event
   await supabase.from("payment_events").insert({
@@ -741,6 +758,13 @@ async function handleInvoicePayment(
     raw_payload: metadata,
     idempotency_key: reference,
   });
+
+  if (insertedTransaction?.id) {
+    await upsertSettlementLedgerForTransaction(supabase, insertedTransaction.id, {
+      provider: "paystack",
+      rawProviderPayload: metadata,
+    });
+  }
 
   // Audit log
   await supabase.from("audit_logs").insert({

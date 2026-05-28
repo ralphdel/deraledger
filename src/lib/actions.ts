@@ -18,6 +18,7 @@ import {
   canAccessFeature,
 } from "@/lib/services/access-control";
 import { ensureWorkspaceForMerchant, setupStatusForMerchant, syncMerchantSetupStatus } from "@/lib/services/onboarding-flow.service";
+import { upsertProviderNeutralSettlementAccount } from "@/lib/services/settlement-ledger.service";
 
 // Service role client for admin-level operations
 function getServiceClient() {
@@ -756,6 +757,12 @@ export async function adminDeleteMerchantAction(merchantId: string) {
 
     // Also try deleting from team_members if it's a separate table
     await adminClient.from("team_members").delete().eq("merchant_id", merchantId);
+
+    await adminClient.from("settlement_reconciliation_logs").delete().eq("provider_reference", merchantId);
+    await adminClient.from("settlement_records").delete().eq("merchant_id", merchantId);
+    await adminClient.from("payment_records").delete().eq("merchant_id", merchantId);
+    await adminClient.from("merchant_provider_settlement_accounts").delete().eq("merchant_id", merchantId);
+    await adminClient.from("merchant_settlement_accounts").delete().eq("merchant_id", merchantId);
 
     await adminClient.from("transactions").delete().eq("merchant_id", merchantId).throwOnError();
     await adminClient.from("manual_payments").delete().eq("merchant_id", merchantId).throwOnError();
@@ -1602,6 +1609,19 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
 
     if (dbErr) throw dbErr;
 
+    await upsertProviderNeutralSettlementAccount(adminClient, {
+      merchantId,
+      bankName: data.bankName,
+      bankCode: data.bankCode,
+      accountNumber: data.accountNumber,
+      accountName: data.accountName,
+      paystackSubaccountCode: subaccount.subaccountCode,
+      rawProviderResponse: {
+        source: "paystack_subaccount_setup",
+        subaccount,
+      },
+    });
+
     // Log to audit
     await adminClient.from("audit_logs").insert([{
       event_type: "settlement_account_setup",
@@ -1613,6 +1633,7 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
     }]);
 
     revalidatePath("/settings/settlement");
+    revalidatePath("/settings/settlement-accounts");
     return { success: true, data: subaccount };
 
   } catch (error: any) {

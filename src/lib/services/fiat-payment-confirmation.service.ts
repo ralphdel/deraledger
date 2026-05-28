@@ -7,6 +7,9 @@ import {
   VERIFICATION_DISCLOSURE_VERSION,
   type RelationshipClaim,
 } from "@/lib/services/onboarding-flow.service";
+import {
+  upsertSettlementLedgerForTransaction,
+} from "@/lib/services/settlement-ledger.service";
 
 type FiatProvider = "paystack" | "monnify";
 
@@ -603,6 +606,10 @@ async function confirmInvoicePayment(
 
   if (existingTxn) {
     await reconcileExistingTransactionSettlement(supabase, existingTxn, payment);
+    await upsertSettlementLedgerForTransaction(supabase, existingTxn.id, {
+      provider,
+      rawProviderPayload: metadata,
+    });
     return { received: true, already_processed: true };
   }
 
@@ -670,23 +677,27 @@ async function confirmInvoicePayment(
         ? paymentAmount - processorFee
         : paymentAmount;
 
-  const { error: transactionError } = await supabase.from("transactions").insert({
-    invoice_id: invoiceId,
-    merchant_id: invoice.merchant_id,
-    amount_paid: paymentAmount,
-    k_factor: kFactor,
-    tax_collected: taxCollected,
-    discount_applied: discountApplied,
-    paystack_fee: processorFee,
-    fee_absorbed_by: feeAbsorbedBy,
-    payment_method: paymentMethod,
-    payment_rail: paymentMethod,
-    paystack_reference: reference,
-    processor_reference: reference,
-    merchant_net_amount: merchantNetAmount,
-    settlement_status: providerSettlementAmount !== null ? "processing" : "pending",
-    status: "success",
-  });
+  const { data: insertedTransaction, error: transactionError } = await supabase
+    .from("transactions")
+    .insert({
+      invoice_id: invoiceId,
+      merchant_id: invoice.merchant_id,
+      amount_paid: paymentAmount,
+      k_factor: kFactor,
+      tax_collected: taxCollected,
+      discount_applied: discountApplied,
+      paystack_fee: processorFee,
+      fee_absorbed_by: feeAbsorbedBy,
+      payment_method: paymentMethod,
+      payment_rail: paymentMethod,
+      paystack_reference: reference,
+      processor_reference: reference,
+      merchant_net_amount: merchantNetAmount,
+      settlement_status: providerSettlementAmount !== null ? "processing" : "pending",
+      status: "success",
+    })
+    .select("id")
+    .single();
   if (transactionError) {
     throw new Error(`Failed to record invoice transaction: ${transactionError.message}`);
   }
@@ -705,6 +716,13 @@ async function confirmInvoicePayment(
   });
   if (eventError) {
     console.error("Failed to record payment event:", eventError.message);
+  }
+
+  if (insertedTransaction?.id) {
+    await upsertSettlementLedgerForTransaction(supabase, insertedTransaction.id, {
+      provider,
+      rawProviderPayload: metadata,
+    });
   }
 
   await supabase.from("audit_logs").insert({

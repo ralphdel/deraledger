@@ -151,7 +151,7 @@ export default function SettlementSettingsPage() {
     return (
       <div className="max-w-3xl mx-auto space-y-6">
         <div>
-          <h1 className="text-2xl font-bold text-purp-900">Settlement Account</h1>
+          <h1 className="text-2xl font-bold text-purp-900">Settlement Accounts</h1>
           <p className="text-neutral-500 text-sm mt-1">Configure where your funds are disbursed</p>
         </div>
         <Card className="border-2 border-amber-200 bg-amber-50">
@@ -181,9 +181,9 @@ export default function SettlementSettingsPage() {
       </Link>
       
       <div>
-        <h1 className="text-2xl font-bold text-purp-900">Settlement Account</h1>
+        <h1 className="text-2xl font-bold text-purp-900">Settlement Accounts</h1>
         <p className="text-neutral-500 text-sm mt-1">
-          Configure where funds from your Collection Invoices will be disbursed.
+          Configure your merchant settlement account and provider readiness.
         </p>
       </div>
 
@@ -194,7 +194,7 @@ export default function SettlementSettingsPage() {
             <div>
               <h3 className="font-bold text-emerald-900 text-lg">Settlement Account Active</h3>
               <p className="text-emerald-700 text-sm mt-1 max-w-lg">
-                Payments collected via your invoices will be automatically routed to this account.
+                Future invoice collections use this account through active provider settlement mappings.
               </p>
               <div className="mt-4 bg-white/60 border border-emerald-200 rounded-lg p-3">
                 <p className="text-sm font-semibold text-emerald-900">{merchant?.settlement_bank_name}</p>

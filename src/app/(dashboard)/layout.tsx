@@ -56,6 +56,7 @@ const dashboardRoutePermissions: Array<{ path: string; permission: string | stri
   { path: "/settings/billing", permission: "manage_billing", featureLabel: "Billing & Subscription" },
   { path: "/settings/upgrade", permission: "manage_billing", featureLabel: "Plan Upgrades" },
   { path: "/settings/settlement", permission: "manage_settlement_account", featureLabel: "Settlement Account" },
+  { path: "/settings/settlement-accounts", permission: "manage_settlement_account", featureLabel: "Settlement Accounts" },
   { path: "/settings/catalog", permission: "view_item_catalog", featureLabel: "Item Catalog" },
   { path: "/settings/discount-templates", permission: "view_discount_template", featureLabel: "Discount Templates" },
   { path: "/team", permission: "manage_team", featureLabel: "Team Management" },

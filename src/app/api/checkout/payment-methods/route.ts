@@ -6,6 +6,7 @@ import {
   listAvailablePaymentMethods,
   type PaymentPurpose,
 } from "@/lib/services/payment-routing.service";
+import { filterMethodsBySettlementReadiness } from "@/lib/services/settlement-ledger.service";
 
 const supabase = createSupabaseClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -32,6 +33,7 @@ export async function GET(request: Request) {
     }
 
     let environment = getPaymentEnvironment();
+    let merchantId: string | null = null;
     if (kind === "invoice" && invoiceId) {
       const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(invoiceId);
       const invoiceResult = isUUID
@@ -40,6 +42,7 @@ export async function GET(request: Request) {
       const invoice = invoiceResult.data;
 
       if (invoice?.merchant_id) {
+        merchantId = invoice.merchant_id;
         const { data: merchant } = await supabase
           .from("merchants")
           .select("email")
@@ -49,7 +52,11 @@ export async function GET(request: Request) {
       }
     }
 
-    const availableMethods = await listAvailablePaymentMethods(purpose, environment);
+    const routedMethods = await listAvailablePaymentMethods(purpose, environment);
+    const availableMethods =
+      purpose === "invoice_payment" || purpose === "payment_link" || purpose === "crypto_payment"
+        ? await filterMethodsBySettlementReadiness(supabase, merchantId, routedMethods, environment)
+        : routedMethods;
 
     return NextResponse.json({
       kind,
