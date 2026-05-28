@@ -6,6 +6,7 @@
  *   YOUVERIFY_SECRET_KEY - Youverify API key sent as the token header
  *   YOUVERIFY_API_KEY    - Optional alias for YOUVERIFY_SECRET_KEY
  *   YOUVERIFY_APP_ID     - Optional legacy app id, sent only when present
+ *   YOUVERIFY_SANDBOX_SELFIE_URL - Optional sandbox-only matching selfie URL
  */
 
 import type {
@@ -23,12 +24,17 @@ import type {
 
 export class YouverifyProvider implements ProviderAdapter {
   readonly providerName = 'YOUVERIFY' as const;
+  private static readonly DEFAULT_SANDBOX_SELFIE_URL =
+    'https://cdn.youverify.co/1627394241627-dvahka4o4vDxfvQUJgZFo.jpg';
+
   private readonly baseUrl: string;
   private readonly appId: string;
   private readonly secretKey: string;
+  private readonly sandboxMode: boolean;
 
   constructor(options: { sandboxMode?: boolean; baseUrl?: string } = {}) {
     const sandboxMode = options.sandboxMode ?? process.env.VERIFICATION_MODE === 'sandbox';
+    this.sandboxMode = sandboxMode;
     this.baseUrl =
       options.baseUrl ||
       (sandboxMode
@@ -210,7 +216,7 @@ export class YouverifyProvider implements ProviderAdapter {
     // Youverify requires `validations.selfie.image` to be a valid URI.
     // Supabase signed URLs are publicly accessible — use that as primary.
     // base64 is NOT accepted by Youverify's validator.
-    const imageUri = payload.selfieImageUrl || null;
+    const imageUri = this.getBVNSelfieImageUrl(payload.selfieImageUrl);
 
     if (!imageUri) {
       return {
@@ -230,6 +236,7 @@ export class YouverifyProvider implements ProviderAdapter {
     const body = {
       id: payload.bvn,
       isSubjectConsent: true,
+      metadata: payload.customerReference ? { customerReference: payload.customerReference } : undefined,
       validations: {
         selfie: {
           image: imageUri,
@@ -326,6 +333,17 @@ export class YouverifyProvider implements ProviderAdapter {
 
 
   // ── Business (CAC) Verification (Legacy compatibility) ──────────────────────
+
+  private getBVNSelfieImageUrl(selfieImageUrl?: string): string | null {
+    if (!this.sandboxMode) {
+      return selfieImageUrl || null;
+    }
+
+    // Youverify sandbox BVN records compare against fixed sandbox images.
+    // Use the official matching sample image so provider routing, logging,
+    // and activation logic can be tested without false biometric failures.
+    return process.env.YOUVERIFY_SANDBOX_SELFIE_URL || YouverifyProvider.DEFAULT_SANDBOX_SELFIE_URL;
+  }
 
   async verifyBusiness(payload: BusinessVerificationPayload): Promise<BusinessVerificationResult> {
     if (!this.isConfigured()) {
@@ -520,10 +538,23 @@ export class YouverifyProvider implements ProviderAdapter {
 
   private normalizeBVNResponse(json: any): VerificationResult {
     const data = json?.data || json;
-    const bvnData = data?.bvn || data;
-    const selfieData = data?.selfie || data?.faceVerification || {};
+    const response = data?.response || {};
+    const bvnData = data?.bvn || response || data;
+    const selfieData =
+      data?.validations?.selfie?.selfieVerification ||
+      data?.selfie ||
+      data?.faceVerification ||
+      response?.face_details ||
+      {};
+    const providerStatus = String(data?.status || json?.status || '').toLowerCase();
+    const reason = typeof data?.reason === 'string' ? data.reason : '';
 
-    const rawScore = selfieData?.confidence ?? selfieData?.matchScore ?? selfieData?.faceMatchScore ?? null;
+    const rawScore =
+      selfieData?.confidenceLevel ??
+      selfieData?.confidence ??
+      selfieData?.matchScore ??
+      selfieData?.faceMatchScore ??
+      null;
     const matchScore =
       rawScore !== null && typeof rawScore === 'number'
         ? rawScore <= 1
@@ -531,21 +562,38 @@ export class YouverifyProvider implements ProviderAdapter {
           : Math.round(rawScore)
         : null;
 
-    const faceMatch = selfieData?.match === true || (matchScore !== null && matchScore >= 70);
-    const bvnExists = Boolean(bvnData?.bvn || bvnData?.id || json?.status === 'success');
+    const threshold = typeof selfieData?.threshold === 'number' ? selfieData.threshold : 80;
+    const faceMatch = selfieData?.match === true || (matchScore !== null && matchScore >= threshold);
+    const bvnExists =
+      providerStatus === 'found' ||
+      Boolean(data?.allValidationPassed) ||
+      Boolean(bvnData?.bvn || bvnData?.idNumber || bvnData?.firstName || bvnData?.lastName);
+    const success = bvnExists && faceMatch;
+    const errorCode: VerificationErrorCode | undefined = success
+      ? undefined
+      : !bvnExists || providerStatus === 'not_found'
+        ? 'BVN_NOT_FOUND'
+        : 'FACE_MATCH_FAILED';
+    const error = success
+      ? undefined
+      : errorCode === 'BVN_NOT_FOUND'
+        ? reason || 'BVN data not found.'
+        : data?.validations?.validationMessages || 'Selfie does not match the BVN image.';
 
     return {
-      success: bvnExists && faceMatch,
+      success,
       bvnExists,
       faceMatch,
       matchScore,
       returnedName: {
-        firstName: bvnData?.firstname || bvnData?.firstName || undefined,
-        lastName: bvnData?.lastname || bvnData?.lastName || bvnData?.surname || undefined,
-        middleName: bvnData?.middlename || bvnData?.middleName || undefined,
+        firstName: bvnData?.firstname || bvnData?.firstName || data?.firstName || undefined,
+        lastName: bvnData?.lastname || bvnData?.lastName || bvnData?.surname || data?.lastName || undefined,
+        middleName: bvnData?.middlename || bvnData?.middleName || data?.middleName || undefined,
       },
       providerReference: json?.requestId || data?.id || null,
       rawResponse: json,
+      errorCode,
+      error,
     };
   }
 

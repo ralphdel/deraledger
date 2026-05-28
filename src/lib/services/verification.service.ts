@@ -333,7 +333,7 @@ export async function verifyMerchantIdentity(params: {
   try {
     const { data: urlData } = await adminClient.storage
       .from("kyc-documents")
-      .createSignedUrl(params.selfieStoragePath, 3600);
+      .createSignedUrl(params.selfieStoragePath, 86400);
     selfieSignedUrl = urlData?.signedUrl;
   } catch (err: any) {
     console.error("[VerificationService] Selfie signed URL gen failed:", err?.message);
