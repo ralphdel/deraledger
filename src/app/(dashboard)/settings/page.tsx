@@ -502,6 +502,11 @@ export default function SettingsPage() {
   const authorityApproved =
     merchant?.business_affiliation_status === "director_approved" ||
     merchant?.business_affiliation_status === "strong_match";
+  const approvedDirectorInvite = directorInvitations.find((invite) => invite.status === "approved");
+  const approvedDirectorName =
+    approvedDirectorInvite?.selected_director_name ||
+    directors.find((dir) => dir.verification_status === "verified")?.director_name ||
+    null;
   const needsDirectorApproval =
     isCorporate &&
     !authorityApproved &&
@@ -973,15 +978,7 @@ export default function SettingsPage() {
                   <div className="p-6 text-center text-xs text-neutral-400">
                     Loading KYB roster...
                   </div>
-                ) : directors.length === 0 ? (
-                  <div className="p-5 border border-dashed rounded-xl bg-white text-center text-xs text-neutral-400 space-y-1">
-                    <Info className="h-5 w-5 mx-auto text-neutral-300" />
-                    <p className="font-medium text-neutral-600">No directors verified yet</p>
-                    <p className="max-w-xs mx-auto text-[11px]">
-                      Add and verify at least one corporate director/shareholder to complete your Business KYB profile.
-                    </p>
-                  </div>
-                ) : (
+                ) : directors.length > 0 ? (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {directors.map((dir) => (
                       <div key={dir.id} className="p-3 bg-white border rounded-xl flex items-center justify-between gap-3 hover:border-purp-200 transition-colors">
@@ -1008,9 +1005,28 @@ export default function SettingsPage() {
                       </div>
                     ))}
                   </div>
-                )}
+                ) : null}
 
-                {registrySnapshot && (
+                {authorityApproved ? (
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-bold text-emerald-900">Director approved</p>
+                        <p className="mt-1 text-xs text-emerald-800">
+                          {approvedDirectorName
+                            ? `${approvedDirectorName} approved this business workspace.`
+                            : "A listed director approved this business workspace."}
+                        </p>
+                        <p className="mt-1 text-[11px] text-emerald-700">
+                          Authority verification is complete. Live payment collection still depends on the remaining platform checks shown above.
+                        </p>
+                      </div>
+                      <Badge variant="outline" className="border-emerald-200 bg-white text-[10px] font-bold uppercase text-emerald-700">
+                        Director approved
+                      </Badge>
+                    </div>
+                  </div>
+                ) : registrySnapshot ? (
                   <div className="rounded-xl border border-neutral-200 bg-white p-4 space-y-3">
                     <div className="flex items-start justify-between gap-3">
                       <div>
@@ -1040,7 +1056,7 @@ export default function SettingsPage() {
                       <p className="text-xs text-amber-700">The saved registry payload did not include a director list.</p>
                     )}
                   </div>
-                )}
+                ) : null}
 
                 {needsDirectorApproval && registryDirectors.length > 0 && (
                   <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 space-y-3">
@@ -1101,7 +1117,16 @@ export default function SettingsPage() {
                 )}
 
                 {/* Add Director Form or trigger button */}
-                {showVerifyDirectorModal ? (
+                {authorityApproved ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled
+                    className="w-full h-10 border-2 border-emerald-200 bg-emerald-50 text-emerald-700 font-bold text-xs flex gap-1.5 opacity-100 disabled:opacity-100"
+                  >
+                    <CheckCircle className="h-4 w-4" /> Director approval completed
+                  </Button>
+                ) : showVerifyDirectorModal ? (
                   <div className="p-4 bg-purp-50/50 border-2 border-purp-200 border-dashed rounded-xl space-y-3">
                     <span className="text-xs font-bold text-purp-900 block">Add Director / Major Shareholder</span>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

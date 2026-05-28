@@ -201,7 +201,7 @@ export async function getDirectorInvitationByToken(token: string) {
   const tokenHash = hashToken(token);
   const { data: invite, error } = await adminClient
     .from("director_invitations")
-    .select("*, merchants(business_name, trading_name, owner_name, business_registry_snapshot_id), business_registry_snapshots(registered_name, registration_number, directors_json)")
+    .select("*, merchants(business_name, trading_name, owner_name, business_affiliation_status, business_registry_snapshot_id), business_registry_snapshots(registered_name, registration_number, directors_json)")
     .eq("token_hash", tokenHash)
     .maybeSingle();
 
@@ -223,6 +223,23 @@ export async function getDirectorInvitationByToken(token: string) {
       .update({ status: "opened", updated_at: new Date().toISOString() })
       .eq("id", invite.id);
     invite.status = "opened";
+  }
+
+  if (invite.merchants?.business_affiliation_status === "director_approved" && invite.status !== "approved") {
+    await adminClient
+      .from("director_invitations")
+      .update({
+        status: "cancelled",
+        updated_at: new Date().toISOString(),
+        decision_metadata: {
+          staleReason: "Another listed director has already approved this business.",
+          cancelledAt: new Date().toISOString(),
+        },
+      })
+      .eq("id", invite.id);
+    invite.status = "cancelled";
+    invite.latest_director_verification = null;
+    return { success: true, invitation: invite };
   }
 
   const activeRegistrySnapshotId = invite.merchants?.business_registry_snapshot_id || null;
@@ -434,7 +451,6 @@ export async function decideDirectorInvitation(params: {
       .from("director_invitations")
       .update({ status: "cancelled", updated_at: new Date().toISOString() })
       .eq("merchant_id", invite.merchant_id)
-      .eq("registry_snapshot_id", invite.registry_snapshot_id)
       .neq("id", invite.id)
       .in("status", ["sent", "opened", "verified"]);
   } else {
