@@ -129,7 +129,7 @@ async function recordWebhookAttempt(input: {
 }) {
   const merchantId = typeof input.metadata.merchant_id === "string" ? input.metadata.merchant_id : null;
   const invoiceId = typeof input.metadata.invoice_id === "string" ? input.metadata.invoice_id : null;
-  await supabase.from("payment_events").upsert(
+  const { error } = await supabase.from("payment_events").upsert(
     {
       merchant_id: merchantId,
       invoice_id: invoiceId,
@@ -142,6 +142,21 @@ async function recordWebhookAttempt(input: {
     },
     { onConflict: "idempotency_key" }
   );
+  if (error) {
+    console.error("Failed to record Monnify webhook attempt:", error.message);
+    await supabase.from("audit_logs").insert({
+      event_type: "monnify_webhook_event_record_failed",
+      actor_id: null,
+      actor_role: "system",
+      target_id: invoiceId,
+      target_type: invoiceId ? "invoice" : "payment",
+      metadata: {
+        reference: input.reference,
+        status: input.status,
+        error: error.message,
+      },
+    });
+  }
 }
 
 function normalizeMonnifyWebhook(payload: MonnifyWebhookPayload) {

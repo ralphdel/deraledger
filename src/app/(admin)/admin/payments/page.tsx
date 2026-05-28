@@ -64,6 +64,10 @@ type PaymentAdminPayload = {
   methods: PaymentMethodRow[];
   events: PaymentEventRow[];
   transactions: PaymentTransactionRow[];
+  diagnostics?: {
+    eventsError: string | null;
+    transactionsError: string | null;
+  };
 };
 
 type PaymentEventRow = {
@@ -322,6 +326,11 @@ export default function AdminPaymentsPage() {
             <CardTitle className="text-base">Recent Payment Transactions</CardTitle>
           </CardHeader>
           <CardContent className="overflow-x-auto p-0">
+            {data?.diagnostics?.transactionsError ? (
+              <div className="border-b border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700">
+                Transaction log query warning: {data.diagnostics.transactionsError}
+              </div>
+            ) : null}
             <Table>
               <TableHeader>
                 <TableRow className="bg-neutral-50">
@@ -354,6 +363,11 @@ export default function AdminPaymentsPage() {
             <CardTitle className="text-base">Recent Provider Events</CardTitle>
           </CardHeader>
           <CardContent className="overflow-x-auto p-0">
+            {data?.diagnostics?.eventsError ? (
+              <div className="border-b border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700">
+                Provider event query warning: {data.diagnostics.eventsError}
+              </div>
+            ) : null}
             <Table>
               <TableHeader>
                 <TableRow className="bg-neutral-50">

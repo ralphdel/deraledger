@@ -28,7 +28,7 @@ export async function GET() {
       .limit(50),
     supabase
       .from("transactions")
-      .select("id, created_at, invoice_id, merchant_id, amount_paid, payment_method, status, paystack_reference, processor_reference")
+      .select("id, created_at, invoice_id, merchant_id, amount_paid, payment_method, status, paystack_reference")
       .order("created_at", { ascending: false })
       .limit(50),
   ]);
@@ -56,6 +56,10 @@ export async function GET() {
     methods,
     events: eventsRes.error ? [] : eventsRes.data || [],
     transactions: transactionsRes.error ? [] : transactionsRes.data || [],
+    diagnostics: {
+      eventsError: eventsRes.error?.message || null,
+      transactionsError: transactionsRes.error?.message || null,
+    },
   }, {
     headers: {
       "Cache-Control": "no-store",

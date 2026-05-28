@@ -659,7 +659,7 @@ async function confirmInvoicePayment(
   const processorFee = feesKobo ? feesKobo / 100 : Math.min(rawFee, 2000);
   const paymentMethod = normalizePaymentMethod(channel);
 
-  await supabase.from("transactions").insert({
+  const { error: transactionError } = await supabase.from("transactions").insert({
     invoice_id: invoiceId,
     merchant_id: invoice.merchant_id,
     amount_paid: paymentAmount,
@@ -672,8 +672,11 @@ async function confirmInvoicePayment(
     paystack_reference: reference,
     status: "success",
   });
+  if (transactionError) {
+    throw new Error(`Failed to record invoice transaction: ${transactionError.message}`);
+  }
 
-  await supabase.from("payment_events").insert({
+  const { error: eventError } = await supabase.from("payment_events").upsert({
     merchant_id: invoice.merchant_id,
     invoice_id: invoiceId,
     event_type: "charge.success",
@@ -681,8 +684,13 @@ async function confirmInvoicePayment(
     processor_ref: reference,
     amount_kobo: Math.round(paymentAmount * 100),
     raw_payload: metadata,
-    idempotency_key: reference,
+    idempotency_key: `${provider}:${reference}:processed`,
+  }, {
+    onConflict: "idempotency_key",
   });
+  if (eventError) {
+    console.error("Failed to record payment event:", eventError.message);
+  }
 
   await supabase.from("audit_logs").insert({
     event_type: "payment_received",
@@ -699,7 +707,7 @@ async function confirmInvoicePayment(
   });
 
   try {
-    await sendInvoiceReceipt(supabase, invoice, invoiceId, paymentAmount, newOutstanding);
+    await sendInvoiceReceipt(supabase, invoice, invoiceId, reference, paymentAmount, newOutstanding);
   } catch (error) {
     console.error("Failed to send invoice receipt:", error);
   }
@@ -737,6 +745,7 @@ async function sendInvoiceReceipt(
   supabase: SupabaseClient,
   invoice: Record<string, unknown>,
   invoiceId: string,
+  reference: string,
   paymentAmount: number,
   newOutstanding: number
 ) {
@@ -749,6 +758,15 @@ async function sendInvoiceReceipt(
   if (!fullInvoice?.clients?.email) {
     return;
   }
+
+  const { data: transaction } = await supabase
+    .from("transactions")
+    .select("amount_paid")
+    .eq("paystack_reference", reference)
+    .maybeSingle();
+
+  const ledgerPaymentAmount = Number(transaction?.amount_paid ?? paymentAmount);
+  const ledgerOutstanding = Number(fullInvoice.outstanding_balance ?? newOutstanding);
 
   const { data: allocations } = await supabase
     .from("invoice_allocations")
@@ -771,11 +789,11 @@ async function sendInvoiceReceipt(
     fullInvoice.clients.email,
     fullInvoice.clients.full_name || "Valued Client",
     merchantData?.business_name || "Deraledger Merchant",
-    String(invoice.invoice_number || ""),
-    formatNaira(paymentAmount),
-    formatNaira(Math.max(0, newOutstanding)),
-    invoice.pay_by_date
-      ? new Date(invoice.pay_by_date as string).toLocaleDateString("en-GB", {
+    String(fullInvoice.invoice_number || invoice.invoice_number || ""),
+    formatNaira(ledgerPaymentAmount),
+    formatNaira(Math.max(0, ledgerOutstanding)),
+    fullInvoice.pay_by_date
+      ? new Date(fullInvoice.pay_by_date as string).toLocaleDateString("en-GB", {
           day: "numeric",
           month: "short",
           year: "numeric",
