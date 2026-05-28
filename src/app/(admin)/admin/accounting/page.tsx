@@ -151,7 +151,7 @@ export default function AdminAccountingPage() {
       "Payment Rail": (tx.payment_rail || tx.payment_method || "").toUpperCase(),
       "Settlement Status": tx.settlement_status || "settled",
       "Gross Amount (NGN)": Number(tx.amount_paid).toFixed(2),
-      "Platform Fee (NGN)": Number(tx.paystack_fee).toFixed(2),
+      "Provider Fee (NGN)": Number(tx.paystack_fee).toFixed(2),
       "Fee Payer": tx.fee_absorbed_by === "business" ? "Business" : "Customer",
       "Net Settlement (NGN)": getNetAmount(tx).toFixed(2),
       "FX Details": tx.source_amount && tx.fx_rate ? `${tx.source_amount} ${tx.source_currency} @ ${tx.fx_rate}` : "",
@@ -245,7 +245,7 @@ export default function AdminAccountingPage() {
               </div>
             </div>
             <p className="text-2xl font-bold text-neutral-900">{formatNaira(totalFees)}</p>
-            <p className="text-xs text-neutral-500 mt-1">Total Platform Fees</p>
+            <p className="text-xs text-neutral-500 mt-1">Total Provider Fees</p>
           </CardContent>
         </Card>
         <Card className="border shadow-none">

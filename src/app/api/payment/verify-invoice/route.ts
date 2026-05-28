@@ -40,6 +40,7 @@ export async function POST(request: Request) {
           reference: String(tx.reference || reference),
           channel: String(tx.paymentMethod || tx.channel || metadata.payment_method_requested || "card"),
           feesKobo: typeof tx.fees === "number" ? tx.fees : null,
+          settlementAmountKobo: typeof tx.settlementAmount === "number" ? tx.settlementAmount : null,
         });
 
         return NextResponse.json({ success: true, provider: resolvedProvider, ...result });

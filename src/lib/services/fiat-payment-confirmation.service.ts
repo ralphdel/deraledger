@@ -17,6 +17,7 @@ export type SuccessfulFiatPayment = {
   reference: string;
   channel: string;
   feesKobo?: number | null;
+  settlementAmountKobo?: number | null;
 };
 
 export async function processSuccessfulFiatPayment(
@@ -579,7 +580,7 @@ async function confirmInvoicePayment(
   supabase: SupabaseClient,
   payment: SuccessfulFiatPayment
 ) {
-  const { metadata, amountKobo, reference, channel, feesKobo, provider } = payment;
+  const { metadata, amountKobo, reference, channel, feesKobo, settlementAmountKobo, provider } = payment;
   const invoiceId = metadata?.invoice_id as string | undefined;
   const paymentAmount = Number(metadata?.payment_amount);
 
@@ -596,11 +597,12 @@ async function confirmInvoicePayment(
 
   const { data: existingTxn } = await supabase
     .from("transactions")
-    .select("id")
+    .select("id, amount_paid, fee_absorbed_by")
     .eq("paystack_reference", reference)
     .single();
 
   if (existingTxn) {
+    await reconcileExistingTransactionSettlement(supabase, existingTxn, payment);
     return { received: true, already_processed: true };
   }
 
@@ -657,7 +659,16 @@ async function confirmInvoicePayment(
   const discountApplied = Math.round(kFactor * Number(invoice.discount_value) * 100) / 100;
   const rawFee = paymentAmount * 0.015 + 100;
   const processorFee = feesKobo ? feesKobo / 100 : Math.min(rawFee, 2000);
+  const providerSettlementAmount =
+    settlementAmountKobo && settlementAmountKobo > 0 ? settlementAmountKobo / 100 : null;
   const paymentMethod = normalizePaymentMethod(channel);
+  const feeAbsorbedBy = invoice.fee_absorption || "business";
+  const merchantNetAmount =
+    providerSettlementAmount !== null
+      ? providerSettlementAmount
+      : feeAbsorbedBy === "business"
+        ? paymentAmount - processorFee
+        : paymentAmount;
 
   const { error: transactionError } = await supabase.from("transactions").insert({
     invoice_id: invoiceId,
@@ -667,9 +678,13 @@ async function confirmInvoicePayment(
     tax_collected: taxCollected,
     discount_applied: discountApplied,
     paystack_fee: processorFee,
-    fee_absorbed_by: invoice.fee_absorption || "business",
+    fee_absorbed_by: feeAbsorbedBy,
     payment_method: paymentMethod,
+    payment_rail: paymentMethod,
     paystack_reference: reference,
+    processor_reference: reference,
+    merchant_net_amount: merchantNetAmount,
+    settlement_status: providerSettlementAmount !== null ? "processing" : "pending",
     status: "success",
   });
   if (transactionError) {
@@ -713,6 +728,47 @@ async function confirmInvoicePayment(
   }
 
   return { received: true, processed: true };
+}
+
+async function reconcileExistingTransactionSettlement(
+  supabase: SupabaseClient,
+  existingTxn: { id: string; amount_paid?: unknown; fee_absorbed_by?: string | null },
+  payment: SuccessfulFiatPayment
+) {
+  const amountPaid = Number(existingTxn.amount_paid || 0) || payment.amountKobo / 100;
+  const providerSettlementAmount =
+    payment.settlementAmountKobo && payment.settlementAmountKobo > 0
+      ? payment.settlementAmountKobo / 100
+      : null;
+  const processorFee =
+    payment.feesKobo && payment.feesKobo > 0
+      ? payment.feesKobo / 100
+      : providerSettlementAmount !== null
+        ? Math.max(0, amountPaid - providerSettlementAmount)
+        : null;
+
+  if (processorFee === null && providerSettlementAmount === null) {
+    return;
+  }
+
+  const feeAbsorbedBy = existingTxn.fee_absorbed_by || "business";
+  const merchantNetAmount =
+    providerSettlementAmount !== null
+      ? providerSettlementAmount
+      : feeAbsorbedBy === "business"
+        ? amountPaid - Number(processorFee || 0)
+        : amountPaid;
+
+  await supabase
+    .from("transactions")
+    .update({
+      ...(processorFee !== null ? { paystack_fee: processorFee } : {}),
+      merchant_net_amount: merchantNetAmount,
+      processor_reference: payment.reference,
+      payment_rail: normalizePaymentMethod(payment.channel),
+      settlement_status: providerSettlementAmount !== null ? "processing" : "pending",
+    })
+    .eq("id", existingTxn.id);
 }
 
 function normalizePaymentMethod(channel: string) {

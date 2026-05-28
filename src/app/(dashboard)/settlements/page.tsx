@@ -126,7 +126,7 @@ export default function MerchantSettlementsPage() {
       "Payment Rail": (tx.payment_rail || tx.payment_method || "").toUpperCase(),
       "Settlement Status": tx.settlement_status || "settled",
       "Gross Amount (NGN)": Number(tx.amount_paid).toFixed(2),
-      "Platform Fee (NGN)": Number(tx.paystack_fee).toFixed(2),
+      "Provider Fee (NGN)": Number(tx.paystack_fee).toFixed(2),
       "Fee Payer": tx.fee_absorbed_by === "business" ? "Business" : "Customer",
       "Net Settlement (NGN)": getNetAmount(tx).toFixed(2),
       "FX Details": tx.source_amount && tx.fx_rate ? `${tx.source_amount} ${tx.source_currency} @ ${tx.fx_rate}` : "",
@@ -200,7 +200,7 @@ export default function MerchantSettlementsPage() {
                 <div className="w-10 h-10 rounded-lg bg-red-100 border-2 border-red-200 flex items-center justify-center">
                   <Minus className="h-5 w-5 text-red-700" />
                 </div>
-                <p className="text-xs text-neutral-500 font-medium uppercase">Platform Fees</p>
+                <p className="text-xs text-neutral-500 font-medium uppercase">Provider Fees</p>
               </div>
               <p className="text-2xl font-bold text-neutral-900">{formatNaira(totalFees)}</p>
               <p className="text-xs text-neutral-400 mt-1">Deducted before payout</p>

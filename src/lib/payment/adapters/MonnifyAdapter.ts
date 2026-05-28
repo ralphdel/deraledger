@@ -146,6 +146,7 @@ export class MonnifyAdapter implements IPaymentProcessor {
   private normalizeTransaction(data: Record<string, unknown>) {
     const paymentStatus = String(data.paymentStatus || data.status || "").toUpperCase();
     const amountPaid = Number(data.amountPaid ?? data.amount ?? data.totalPayable ?? 0);
+    const settlementAmount = Number(data.settlementAmount ?? 0);
     const rawMetadata = data.metaData ?? data.metadata ?? {};
     const metadata =
       typeof rawMetadata === "string"
@@ -156,6 +157,14 @@ export class MonnifyAdapter implements IPaymentProcessor {
       ...data,
       status: paymentStatus === "PAID" || paymentStatus === "SUCCESS" ? "success" : paymentStatus.toLowerCase(),
       amount: Math.round(amountPaid * 100),
+      fees:
+        settlementAmount > 0 && settlementAmount <= amountPaid
+          ? Math.round((amountPaid - settlementAmount) * 100)
+          : undefined,
+      settlementAmount:
+        settlementAmount > 0 && settlementAmount <= amountPaid
+          ? Math.round(settlementAmount * 100)
+          : undefined,
       metadata,
       reference: data.paymentReference || data.transactionReference || data.reference,
       provider_reference: data.transactionReference || data.paymentReference || data.reference,

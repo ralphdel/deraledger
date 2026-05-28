@@ -72,6 +72,7 @@ export async function POST(request: Request) {
       reference: normalized.reference,
       channel: normalized.channel,
       feesKobo: normalized.feesKobo,
+      settlementAmountKobo: normalized.settlementAmountKobo,
     });
     await recordWebhookHealth("success");
     await recordWebhookAttempt({
@@ -206,6 +207,10 @@ function normalizeMonnifyWebhook(payload: MonnifyWebhookPayload) {
     amountKobo: Math.round(amountPaid * 100),
     channel: paymentMethod,
     feesKobo,
+    settlementAmountKobo:
+      settlementAmount > 0 && settlementAmount <= amountPaid
+        ? Math.round(settlementAmount * 100)
+        : null,
     metadata,
   };
 }
