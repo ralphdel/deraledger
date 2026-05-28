@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Loader2, RefreshCcw, Save, ShieldCheck } from "lucide-react";
+import { Fragment, useEffect, useMemo, useState } from "react";
+import { ChevronDown, ChevronRight, Loader2, RefreshCcw, Save, ShieldCheck } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -80,6 +80,7 @@ type PaymentEventRow = {
   amount_kobo: number | null;
   merchant_id: string | null;
   invoice_id: string | null;
+  raw_payload: Record<string, unknown> | null;
 };
 
 type PaymentTransactionRow = {
@@ -105,6 +106,7 @@ export default function AdminPaymentsPage() {
   const [providers, setProviders] = useState<PaymentProviderRow[]>([]);
   const [routes, setRoutes] = useState<PaymentRouteRow[]>([]);
   const [methods, setMethods] = useState<PaymentMethodRow[]>([]);
+  const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -321,7 +323,7 @@ export default function AdminPaymentsPage() {
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+      <div className="space-y-6">
         <Card className="border shadow-none">
           <CardHeader>
             <CardTitle className="text-base">Recent Payment Transactions</CardTitle>
@@ -361,7 +363,10 @@ export default function AdminPaymentsPage() {
 
         <Card className="border shadow-none">
           <CardHeader>
-            <CardTitle className="text-base">Recent Provider Events</CardTitle>
+            <div className="flex items-center justify-between gap-4">
+              <CardTitle className="text-base">Recent Provider Events</CardTitle>
+              <Badge variant="outline" className="border-2 bg-neutral-50">{recentEvents.length} events</Badge>
+            </div>
           </CardHeader>
           <CardContent className="overflow-x-auto p-0">
             {data?.diagnostics?.eventsError ? (
@@ -377,25 +382,87 @@ export default function AdminPaymentsPage() {
             <Table>
               <TableHeader>
                 <TableRow className="bg-neutral-50">
+                  <TableHead className="w-10"></TableHead>
                   <TableHead>Created</TableHead>
                   <TableHead>Provider</TableHead>
                   <TableHead>Event</TableHead>
+                  <TableHead>Status</TableHead>
                   <TableHead>Amount</TableHead>
                   <TableHead>Reference</TableHead>
+                  <TableHead>Invoice</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {recentEvents.length === 0 ? (
-                  <TableRow><TableCell colSpan={5} className="py-8 text-center text-sm text-neutral-500">No provider webhook events yet.</TableCell></TableRow>
-                ) : recentEvents.map((event) => (
-                  <TableRow key={event.id}>
-                    <TableCell className="text-xs text-neutral-500">{formatDate(event.created_at)}</TableCell>
-                    <TableCell className="capitalize">{event.processor || "-"}</TableCell>
-                    <TableCell>{event.event_type}</TableCell>
-                    <TableCell className="font-medium">{formatNaira(Number(event.amount_kobo || 0) / 100)}</TableCell>
-                    <TableCell className="max-w-[180px] truncate font-mono text-xs">{event.processor_ref || "-"}</TableCell>
-                  </TableRow>
-                ))}
+                  <TableRow><TableCell colSpan={8} className="py-8 text-center text-sm text-neutral-500">No provider webhook events yet.</TableCell></TableRow>
+                ) : recentEvents.map((event) => {
+                  const details = getProviderEventDetails(event);
+                  const isExpanded = expandedEventId === event.id;
+                  return (
+                    <Fragment key={event.id}>
+                      <TableRow key={event.id} className="align-top">
+                        <TableCell>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 w-8 p-0"
+                            onClick={() => setExpandedEventId(isExpanded ? null : event.id)}
+                          >
+                            {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                          </Button>
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap text-xs text-neutral-500">{formatDate(event.created_at)}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="border-2 capitalize">{event.processor || "-"}</Badge>
+                        </TableCell>
+                        <TableCell className="min-w-[220px]">
+                          <p className="font-medium text-neutral-900">{formatEventName(event.event_type)}</p>
+                          <p className="text-xs text-neutral-500">{details.method || "method unknown"}</p>
+                        </TableCell>
+                        <TableCell>
+                          <EventStatusBadge status={details.status} />
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap font-medium">{formatNaira(Number(event.amount_kobo || 0) / 100)}</TableCell>
+                        <TableCell className="min-w-[240px]">
+                          <p className="font-mono text-xs text-neutral-900 break-all">{event.processor_ref || "-"}</p>
+                          {details.providerReference && details.providerReference !== event.processor_ref ? (
+                            <p className="mt-1 font-mono text-[11px] text-neutral-500 break-all">{details.providerReference}</p>
+                          ) : null}
+                        </TableCell>
+                        <TableCell className="min-w-[180px] font-mono text-xs text-neutral-600 break-all">
+                          {event.invoice_id || details.invoiceId || "-"}
+                        </TableCell>
+                      </TableRow>
+                      {isExpanded ? (
+                        <TableRow key={`${event.id}-details`}>
+                          <TableCell colSpan={8} className="bg-neutral-50 p-0">
+                            <div className="grid gap-4 p-4 lg:grid-cols-[320px_1fr]">
+                              <div className="rounded-lg border border-neutral-200 bg-white p-4">
+                                <p className="text-xs font-semibold uppercase text-neutral-500">Event Summary</p>
+                                <dl className="mt-3 space-y-2 text-sm">
+                                  <EventDetail label="Payment ref" value={details.paymentReference || event.processor_ref} />
+                                  <EventDetail label="Provider ref" value={details.providerReference} />
+                                  <EventDetail label="Purpose" value={details.purpose} />
+                                  <EventDetail label="Method" value={details.method} />
+                                  <EventDetail label="Currency" value={details.currency} />
+                                  <EventDetail label="Merchant" value={event.merchant_id || details.merchantId} />
+                                  <EventDetail label="Invoice" value={event.invoice_id || details.invoiceId} />
+                                </dl>
+                              </div>
+                              <div className="rounded-lg border border-neutral-200 bg-white p-4">
+                                <p className="text-xs font-semibold uppercase text-neutral-500">Raw Provider Payload</p>
+                                <pre className="mt-3 max-h-[360px] overflow-auto rounded-md bg-neutral-950 p-4 text-xs leading-relaxed text-neutral-100">
+                                  {JSON.stringify(event.raw_payload || {}, null, 2)}
+                                </pre>
+                              </div>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ) : null}
+                    </Fragment>
+                  );
+                })}
               </TableBody>
             </Table>
           </CardContent>
@@ -527,6 +594,90 @@ function formatDate(value: string | null) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function EventStatusBadge({ status }: { status: string }) {
+  const normalized = status.toLowerCase();
+  const className = normalized.includes("fail")
+    ? "border-red-200 bg-red-50 text-red-700"
+    : normalized.includes("pending") || normalized.includes("received") || normalized.includes("signature")
+      ? "border-amber-200 bg-amber-50 text-amber-700"
+      : "border-emerald-200 bg-emerald-50 text-emerald-700";
+
+  return (
+    <Badge variant="outline" className={`border-2 capitalize ${className}`}>
+      {status.replaceAll("_", " ")}
+    </Badge>
+  );
+}
+
+function EventDetail({ label, value }: { label: string; value: unknown }) {
+  return (
+    <div>
+      <dt className="text-xs text-neutral-500">{label}</dt>
+      <dd className="mt-0.5 break-all font-mono text-xs text-neutral-900">{formatDetailValue(value)}</dd>
+    </div>
+  );
+}
+
+function getProviderEventDetails(event: PaymentEventRow) {
+  const payload = asRecord(event.raw_payload);
+  const eventData = asRecord(payload.eventData) || asRecord(payload.data) || payload;
+  const product = asRecord(eventData.product);
+  const metadata = asRecord(eventData.metaData) || asRecord(eventData.metadata) || payload;
+  const eventStatus = String(eventData.paymentStatus || eventData.status || payload.eventType || event.event_type || "");
+  const eventType = event.event_type.toLowerCase();
+  const status =
+    eventType.includes("processing_failed") || eventType.includes("signature_failed") || eventType.includes("failed")
+      ? lastSegment(event.event_type, ":") || "failed"
+      : eventType.includes("received")
+        ? "received"
+        : eventType.includes("processed") || eventType.includes("success") || eventStatus.toLowerCase().includes("paid")
+          ? "successful"
+          : eventStatus || "unknown";
+
+  return {
+    status,
+    paymentReference: stringValue(eventData.paymentReference) || stringValue(product.reference) || event.processor_ref,
+    providerReference:
+      stringValue(eventData.transactionReference) ||
+      stringValue(eventData.providerReference) ||
+      stringValue(eventData.processorReference),
+    purpose:
+      stringValue(metadata.payment_purpose) ||
+      stringValue(metadata.type) ||
+      stringValue(eventData.paymentDescription),
+    method:
+      stringValue(eventData.paymentMethod) ||
+      stringValue(metadata.payment_method_requested) ||
+      stringValue(metadata.payment_method),
+    currency: stringValue(eventData.currency) || stringValue(eventData.currencyCode),
+    invoiceId: stringValue(metadata.invoice_id),
+    merchantId: stringValue(metadata.merchant_id),
+  };
+}
+
+function formatEventName(value: string) {
+  return value.replaceAll(":", " / ").replaceAll("_", " ");
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function lastSegment(value: string, separator: string) {
+  const parts = value.split(separator);
+  return parts[parts.length - 1];
+}
+
+function formatDetailValue(value: unknown) {
+  if (value === null || value === undefined || value === "") return "-";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
 }
 
 function formatNaira(value: number) {
