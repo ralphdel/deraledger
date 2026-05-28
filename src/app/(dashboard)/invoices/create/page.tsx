@@ -294,7 +294,7 @@ function CreateInvoiceForm() {
               <div className="flex-1">
                 <h3 className={`font-bold ${invoiceType === "record" ? "text-amber-900 dark:text-amber-400" : "text-neutral-700 dark:text-white"}`}>Record Invoice</h3>
                 <p className="text-xs text-neutral-500 dark:text-white/60 mt-1 leading-relaxed">
-                  For offline bookkeeping. Generates a standard receipt without a Paystack portal.
+                  For offline bookkeeping. Generates a standard receipt without an online checkout portal.
                 </p>
               </div>
             </CardContent>

@@ -178,7 +178,7 @@ export default function MerchantDisputeDashboard() {
           <CardContent>
             <div className="flex justify-between items-baseline">
               <span className="text-3xl font-extrabold text-purp-900 dark:text-white">{stats.crypto}</span>
-              <span className="text-xs text-neutral-500">Breet blockchain</span>
+              <span className="text-xs text-neutral-500">Blockchain rail</span>
             </div>
           </CardContent>
         </Card>
@@ -227,7 +227,7 @@ export default function MerchantDisputeDashboard() {
                 <option value="BANK_TRANSFER">Bank Transfer</option>
                 <option value="CARD">Card Payments</option>
                 <option value="WALLET">Internal Wallet</option>
-                <option value="BREET_CRYPTO">Crypto (Breet)</option>
+                <option value="BREET_CRYPTO">Crypto</option>
               </select>
 
               {/* Status filters */}
@@ -337,7 +337,7 @@ export default function MerchantDisputeDashboard() {
         <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5 text-blue-600 dark:text-[#A78BFA]" />
         <div>
           <span className="font-bold block mb-1">Operational Arbitration Policy Notice</span>
-          <span>DeraLedger mediates payment processing discrepancies (failed fiat transfers, double charges, Breet confirmations) to guarantee billing infrastructure integrity. We strictly do not arbitrate agreements regarding commercial service quality or freelancer delivery.</span>
+          <span>DeraLedger mediates payment processing discrepancies (failed fiat transfers, double charges, crypto confirmations) to guarantee billing infrastructure integrity. We strictly do not arbitrate agreements regarding commercial service quality or freelancer delivery.</span>
         </div>
       </div>
     </div>

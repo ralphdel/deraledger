@@ -30,7 +30,7 @@ export function TrustSection() {
                 <UserCheck className="h-5 w-5 text-[#A78BFA] flex-shrink-0" />
                 <div>
                   <h4 className="font-bold text-white text-sm tracking-tight">Identity Vetting</h4>
-                  <p className="text-xs text-white/50 mt-1 leading-relaxed">Secure BVN & corporate CAC validation structures.</p>
+                  <p className="text-xs text-white/50 mt-1 leading-relaxed">Secure identity and business validation structures.</p>
                 </div>
               </div>
               <div className="flex gap-3">
@@ -66,7 +66,7 @@ export function TrustSection() {
               </blockquote>
               <div className="mt-6 border-t border-white/[0.06] pt-6 flex items-center justify-between">
                 <div>
-                  <p className="text-xs font-bold text-white uppercase tracking-wider">Collections Powered via Paystack</p>
+                  <p className="text-xs font-bold text-white uppercase tracking-wider">Secure Online Collections</p>
                   <p className="text-[10px] text-white/40 mt-0.5">Enterprise-grade secure processing.</p>
                 </div>
                 <span className="rounded bg-white/5 border border-white/10 px-2.5 py-1 text-[10px] font-bold text-white/70 tracking-wide font-mono uppercase">

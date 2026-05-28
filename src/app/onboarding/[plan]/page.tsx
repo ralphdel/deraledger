@@ -92,7 +92,7 @@ const PLAN_CONFIG: Record<PlanId, PlanConfig> = {
     price: "NGN 20,000/month",
     checkoutLabel: "Pay NGN 20,000",
     priceKobo: 2000000,
-    verification: "CAC & Director required",
+    verification: "Business & authority checks required",
     formDescription:
       "Create a verified business workspace for unlimited collections, advanced access control, and audit visibility.",
     footnote:
@@ -374,7 +374,7 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
                 <div className="space-y-1.5">
                   <Label htmlFor="registeredName" className="text-white">Registered Business Name</Label>
                   <p className="text-xs text-white/50">
-                    Official CAC-registered name for business verification.
+                    Official registered name for business verification.
                   </p>
                   <label className="flex items-center gap-3 rounded-lg border border-white/10 bg-[#12061F]/50 p-3">
                     <input
@@ -416,7 +416,7 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
                     onChange={(e) => setBusinessType(e.target.value)}
                     className="h-11 w-full rounded-md border border-white/10 bg-[#12061F] px-3 py-2 text-sm text-white focus:border-[#7B2FF7] focus:ring-1 focus:ring-[#7B2FF7] outline-none"
                   >
-                    <option value="sole_proprietorship">Sole Proprietorship / Business Name (BN)</option>
+                    <option value="sole_proprietorship">Sole Proprietorship / Registered Business Name</option>
                     <option value="ltd">Private Limited Company (LTD)</option>
                     <option value="plc">Public Limited Company (PLC)</option>
                     <option value="llp">Limited Liability Partnership (LLP)</option>
@@ -433,7 +433,7 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
                 let ownerHelp = "This name should match your BVN verification details.";
 
                 if (planId === "corporate") {
-                  ownerHelp = "This name must match the CAC registry details for verification.";
+                  ownerHelp = "This name must match the official business registry details for verification.";
                   if (relationshipClaim === "representative_claim") {
                     ownerLabel = "Account Representative Full Name";
                     ownerHelp = "Enter your own legal name. A listed director or owner will verify and approve the business separately.";
@@ -498,7 +498,7 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
                       />
                       <span>
                         <span className="block text-sm font-medium text-white">I am a Director, Owner, Shareholder, or Proprietor</span>
-                        <span className="block text-xs text-white/50">We will match your verified identity against the CAC registry record.</span>
+                        <span className="block text-xs text-white/50">We will match your verified identity against the official business registry record.</span>
                       </span>
                     </label>
                     <label

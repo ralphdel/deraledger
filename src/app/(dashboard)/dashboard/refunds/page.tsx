@@ -393,9 +393,9 @@ export default function MerchantRefundRequests() {
                     onChange={(e) => setRail(e.target.value)}
                     className="w-full bg-neutral-50 dark:bg-[#12061F] border border-purp-200 dark:border-white/10 rounded-lg px-2.5 py-1.5 text-xs focus:outline-none dark:text-white"
                   >
-                    <option value="BANK_TRANSFER">Bank Reversal (Paystack)</option>
-                    <option value="CARD">Card Reversal (Paystack)</option>
-                    <option value="BREET_CRYPTO">Crypto Reversal (Breet Compliance Queue)</option>
+                    <option value="BANK_TRANSFER">Bank Reversal</option>
+                    <option value="CARD">Card Reversal</option>
+                    <option value="BREET_CRYPTO">Crypto Reversal Compliance Queue</option>
                   </select>
                 </div>
 

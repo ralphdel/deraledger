@@ -7,7 +7,7 @@ export function TeamOperations() {
     {
       role: "Finance Manager",
       permission: "Full Financial Access",
-      details: "Approve large collections, verify CAC records, manage treasury settlements, and view detailed balance analytics.",
+      details: "Approve large collections, verify business records, manage treasury settlements, and view detailed balance analytics.",
       color: "border-[#6D28FF] bg-[#6D28FF]/5 text-[#A78BFA]",
     },
     {

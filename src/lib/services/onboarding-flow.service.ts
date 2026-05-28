@@ -46,6 +46,45 @@ export function isLiveFeatureEnabled(merchant: {
   );
 }
 
+export function getLiveFeatureLockReasons(merchant: {
+  subscription_plan?: string | null;
+  merchant_tier?: string | null;
+  verification_status?: string | null;
+  bvn_status?: string | null;
+  selfie_status?: string | null;
+  cac_status?: string | null;
+  business_affiliation_status?: string | null;
+  setup_mode?: boolean | null;
+  live_features_enabled?: boolean | null;
+}): string[] {
+  const plan = merchant.subscription_plan || merchant.merchant_tier || "starter";
+  if (plan === "starter") return ["Upgrade to Individual or Business to activate live payment collection."];
+
+  const reasons: string[] = [];
+  if (merchant.bvn_status !== "verified") reasons.push("Identity number verification");
+  if (merchant.selfie_status !== "verified") reasons.push("Selfie face match");
+
+  if (plan === "corporate") {
+    if (merchant.cac_status !== "verified") reasons.push("Business registration verification");
+    const authorityReady =
+      merchant.business_affiliation_status === "strong_match" ||
+      merchant.business_affiliation_status === "director_approved";
+    if (!authorityReady) {
+      const affiliation = merchant.business_affiliation_status || "not_started";
+      if (affiliation === "partial_match" || affiliation === "manual_review") {
+        reasons.push("Admin review of business authority match");
+      } else {
+        reasons.push("Director/shareholder authority approval");
+      }
+    }
+  }
+
+  if (merchant.verification_status !== "verified") reasons.push("Final admin approval");
+  if (reasons.length === 0 && merchant.setup_mode === true) reasons.push("Setup mode release");
+  if (reasons.length === 0 && merchant.live_features_enabled !== true) reasons.push("Live payment feature activation");
+  return reasons;
+}
+
 export function setupStatusForMerchant(merchant: {
   subscription_plan?: string | null;
   merchant_tier?: string | null;

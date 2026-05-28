@@ -23,13 +23,13 @@ import {
   submitDojahKycAction,
   verifyRcNumberAction,
   submitKycAction,
-  getActiveVerificationProviderKeyAction,
   getDirectorApprovalContextAction,
   createDirectorInvitationAction,
 } from "@/lib/actions";
 import { CreateClientModal } from "@/components/CreateClientModal";
 import { LivenessCamera } from "@/components/kyc/liveness-camera";
 import { createClient } from "@/lib/supabase/client";
+import { getLiveFeatureLockReasons, isLiveFeatureEnabled } from "@/lib/services/onboarding-flow.service";
 import type { Merchant } from "@/lib/types";
 
 const CURRENT_PLATFORM_VERSION = 1;
@@ -82,7 +82,6 @@ export default function SettingsPage() {
   const [kycSuccess, setKycSuccess] = useState(false);
   const [kycError, setKycError] = useState<string | null>(null);
   const [upgradingPlan, setUpgradingPlan] = useState<string | null>(null);
-  const [activeProvider, setActiveProvider] = useState<string | null>(null);
 
   // Logo state
   const [uploadingLogo, setUploadingLogo] = useState(false);
@@ -268,9 +267,6 @@ export default function SettingsPage() {
       setLoading(false);
     });
 
-    getActiveVerificationProviderKeyAction().then(res => {
-      if (res.success) setActiveProvider(res.provider);
-    });
   }, []);
 
   const handleSave = async () => {
@@ -322,7 +318,7 @@ export default function SettingsPage() {
   const handleVerifyRcNumber = async () => {
     const normalizedCacNumber = cacNumber.trim().toUpperCase().replace(/[\s-]/g, "");
     if (!normalizedCacNumber || normalizedCacNumber.length < 5) {
-      setRcError("Please enter a valid RC Number (e.g. RC-123456).");
+      setRcError("Please enter a valid business registration number.");
       return;
     }
     if (!merchant?.id) return;
@@ -333,12 +329,12 @@ export default function SettingsPage() {
       (businessName.trim() && businessName.trim() !== savedBusinessName) ||
       (ownerName.trim() && ownerName.trim() !== savedOwnerName)
     ) {
-      setRcError("You have unsaved profile changes. Please click 'Save Profile' in the profile identity section before verifying your RC Number.");
+      setRcError("You have unsaved profile changes. Please click 'Save Profile' in the profile identity section before verifying your business registration.");
       return;
     }
 
     if (!savedBusinessName || !savedOwnerName) {
-      setRcError("Please complete your Business Profile and profile identity details, then click 'Save Profile' before verifying your RC Number.");
+      setRcError("Please complete your Business Profile and profile identity details, then click 'Save Profile' before verifying your business registration.");
       return;
     }
 
@@ -352,10 +348,10 @@ export default function SettingsPage() {
         await loadDirectorApprovalContext(merchant.id);
         setRcError(null);
       } else {
-        setRcError(res.error || "Failed to verify RC Number.");
+        setRcError(res.error || "Failed to verify business registration.");
       }
     } catch (e) {
-      setRcError(e instanceof Error ? e.message : "An unexpected error occurred verifying your RC Number.");
+      setRcError(e instanceof Error ? e.message : "An unexpected error occurred verifying your business registration.");
     } finally {
       setRcSubmitting(false);
     }
@@ -376,13 +372,13 @@ export default function SettingsPage() {
       return;
     }
 
-    // Corporate accounts must verify RC number first, then upload both evidence files
+    // Corporate accounts must verify business registration first, then upload both evidence files.
     if (isCorporate && !merchant?.cac_number) {
-      setKycError("Please verify your RC Number first before submitting.");
+      setKycError("Please verify your business registration first before submitting.");
       return;
     }
     if (isCorporate && (!cacFile && !merchant?.cac_document_url)) {
-      setKycError("Business accounts require a CAC Certificate upload.");
+      setKycError("Business accounts require a registration document upload.");
       return;
     }
     if (isCorporate && !utilityFile && !merchant?.utility_document_url) {
@@ -462,6 +458,12 @@ export default function SettingsPage() {
   const isStarter = effectiveTier === "starter";
   const isIndividual = effectiveTier === "individual";
   const isCorporate = effectiveTier === "corporate";
+  const liveFeaturesActive = merchant ? isLiveFeatureEnabled(merchant) : false;
+  const liveFeatureLockReasons = merchant ? getLiveFeatureLockReasons(merchant) : [];
+  const nextLiveUnlockStep = liveFeatureLockReasons[0] || null;
+  const lockReasonText = liveFeatureLockReasons.length > 0
+    ? liveFeatureLockReasons.join(", ")
+    : "final activation";
 
   let ownerLabel = "Owner's Full Name";
   if (isCorporate) {
@@ -553,31 +555,41 @@ export default function SettingsPage() {
           {/* Tier Informational Banner */}
           {(merchant?.subscription_plan || merchant?.merchant_tier) === "corporate" ? (
             <div className="flex items-start gap-3 p-4 bg-emerald-50 border border-emerald-200 rounded-lg mb-4">
-              {effectiveVerificationStatus === "verified" && (merchant?.cac_document_url || merchant?.cac_number) ? (
+              {liveFeaturesActive ? (
                 <CheckCircle className="h-5 w-5 text-emerald-600 mt-0.5 flex-shrink-0" />
               ) : (
-                <Shield className="h-5 w-5 text-emerald-600 mt-0.5 flex-shrink-0" />
+                <Lock className="h-5 w-5 text-amber-600 mt-0.5 flex-shrink-0" />
               )}
               <div>
                 <p className="text-sm font-semibold text-emerald-800">Business Account</p>
                 <p className="text-sm text-emerald-700 mt-1">
-                  {effectiveVerificationStatus === "verified" && (merchant?.cac_document_url || merchant?.cac_number)
-                    ? "Your account is fully verified. You have access to unlimited monthly collections and payment links."
-                    : "Please complete your verification below — submit your BVN, CAC Number, CAC Certificate, and Utility Bill to activate unlimited collections."}
+                  {liveFeaturesActive
+                    ? "Your business is fully verified. Unlimited monthly collections and payment links are active."
+                    : `Live payment collection is still locked. Remaining requirement: ${lockReasonText}.`}
                 </p>
+                {!liveFeaturesActive && nextLiveUnlockStep && (
+                  <p className="text-xs text-amber-700 mt-2">Next step: {nextLiveUnlockStep}.</p>
+                )}
               </div>
             </div>
           ) : (merchant?.subscription_plan || merchant?.merchant_tier) === "individual" ? (
             <div className="flex items-start justify-between gap-3 p-4 bg-blue-50 border border-blue-200 rounded-lg mb-4 flex-col md:flex-row">
               <div className="flex gap-3">
-                <Shield className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
+                {liveFeaturesActive ? (
+                  <Shield className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
+                ) : (
+                  <Lock className="h-5 w-5 text-amber-600 mt-0.5 flex-shrink-0" />
+                )}
                 <div>
                   <p className="text-sm font-semibold text-blue-800">Individual / Collections Account</p>
                   <p className="text-sm text-blue-700 mt-1">
-                    {effectiveVerificationStatus === "verified"
+                    {liveFeaturesActive
                       ? "Your account is verified. You can collect up to NGN 5,000,000 per month. Upgrade to Business to unlock unlimited collections and advanced team controls."
-                      : "Please complete your BVN verification below to activate your NGN 5,000,000 monthly collection limit. Upgrade to Business to unlock unlimited collections."}
+                      : `Live payment collection is still locked. Remaining requirement: ${lockReasonText}.`}
                   </p>
+                  {!liveFeaturesActive && nextLiveUnlockStep && (
+                    <p className="text-xs text-amber-700 mt-2">Next step: {nextLiveUnlockStep}.</p>
+                  )}
                 </div>
               </div>
               <Link href="/settings/upgrade/corporate">
@@ -659,7 +671,7 @@ export default function SettingsPage() {
                     <li>Provide your <strong>{ownerLabel}</strong> — required for BVN verification.</li>
                   )}
                   {businessNameMissing && (
-                    <li>Provide your <strong>Registered Business Name</strong> — required for CAC / RC Number verification.</li>
+                    <li>Provide your <strong>Registered Business Name</strong> — required for business registration verification.</li>
                   )}
                   {businessAddressMissing && (
                     <li>Provide your <strong>Business Address (Street, City, State, Country)</strong>.</li>
@@ -791,17 +803,17 @@ export default function SettingsPage() {
               </div>
             )}
 
-            {/* CAC Number — Corporate only */}
+            {/* Business registration number - Corporate only */}
             {isCorporate ? (
               <div className="space-y-2">
                 <Label className="text-sm font-medium flex items-center gap-2">
                   <FileCheck className="h-4 w-4 text-purp-700" />
-                  RC Number Verification
+                  Business Registration Verification
                 </Label>
                 <div className="flex items-center gap-3">
                   <Input
                     type="text"
-                    placeholder="RC-123456"
+                    placeholder="Registration number"
                     value={merchant?.cac_number || cacNumber}
                     onChange={(e) => setCacNumber(e.target.value)}
                     className="border-2 border-purp-200 bg-white h-11 max-w-xs font-mono"
@@ -813,11 +825,11 @@ export default function SettingsPage() {
                       disabled={rcSubmitting || !cacNumber || cacNumber.length < 5}
                       className="bg-purp-900 hover:bg-purp-800 text-white h-11 px-6"
                     >
-                      {rcSubmitting ? "Verifying..." : "Verify RC"}
+                      {rcSubmitting ? "Verifying..." : "Verify Registration"}
                     </Button>
                   ) : (
                     <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700 text-xs py-1.5 px-3 whitespace-nowrap">
-                      <CheckCircle className="mr-1.5 h-3.5 w-3.5" /> RC Verified
+                      <CheckCircle className="mr-1.5 h-3.5 w-3.5" /> Registration Verified
                     </Badge>
                   )}
                 </div>
@@ -830,14 +842,12 @@ export default function SettingsPage() {
                 {!merchant?.cac_number && (
                   <div className="space-y-1.5 max-w-sm">
                     <p className="text-xs text-neutral-500">
-                      Your RC number will be instantly verified against the corporate registry to ensure it matches your business name.
+                      Your registration number will be verified against the official business registry to ensure it matches your business name.
                     </p>
-                    {activeProvider === "YOUVERIFY" && (
-                      <div className="bg-amber-50 border border-amber-200 text-amber-700 px-2.5 py-1.5 rounded text-xs flex gap-1.5 items-start mt-2">
-                        <AlertTriangle className="h-4 w-4 shrink-0" />
-                        <span><strong>Note:</strong> Youverify requires the prefix (e.g. RC, BN, IT) to be added to the verification number.</span>
-                      </div>
-                    )}
+                    <div className="bg-amber-50 border border-amber-200 text-amber-700 px-2.5 py-1.5 rounded text-xs flex gap-1.5 items-start mt-2">
+                      <AlertTriangle className="h-4 w-4 shrink-0" />
+                      <span><strong>Tip:</strong> Enter the number exactly as issued, including any registration prefix where applicable.</span>
+                    </div>
                   </div>
                 )}
               </div>
@@ -845,17 +855,17 @@ export default function SettingsPage() {
               <div className="relative p-4 bg-neutral-50 border border-neutral-200 rounded-lg opacity-60">
                 <div className="flex items-center gap-2 text-sm text-neutral-500">
                   <Lock className="h-4 w-4" />
-                  <span>CAC Number — <strong>Available on Business plan</strong></span>
+                  <span>Business registration verification — <strong>Available on Business plan</strong></span>
                 </div>
               </div>
             ) : null}
 
-            {/* CAC Certificate — Corporate only */}
+            {/* Business registration document - Corporate only */}
             {isCorporate ? (
               <div className="space-y-2">
                 <Label className="text-sm font-medium flex items-center gap-2">
                   <FileCheck className="h-4 w-4 text-purp-700" />
-                  CAC Certificate
+                  Business Registration Document
                   {renderStatusBadge(merchant?.cac_status)}
                 </Label>
                 <div className="flex items-center gap-3">
@@ -877,7 +887,7 @@ export default function SettingsPage() {
               <div className="relative p-4 bg-neutral-50 border border-neutral-200 rounded-lg opacity-60">
                 <div className="flex items-center gap-2 text-sm text-neutral-500">
                   <Lock className="h-4 w-4" />
-                  <span>CAC Certificate — <strong>Available on Business plan</strong></span>
+                  <span>Business registration document — <strong>Available on Business plan</strong></span>
                 </div>
               </div>
             ) : null}
@@ -924,7 +934,7 @@ export default function SettingsPage() {
                       Corporate Directors & Shareholder KYB
                     </Label>
                     <p className="text-xs text-neutral-500 mt-0.5">
-                      Verify legal identities of business directors and stakeholders as required by CAC regulation.
+                      Verify legal identities of business directors and stakeholders for account authority checks.
                     </p>
                   </div>
                   <Badge variant="secondary" className="bg-purp-100 text-purp-700 font-bold text-xs border-0">
@@ -977,7 +987,7 @@ export default function SettingsPage() {
                   <div className="rounded-xl border border-neutral-200 bg-white p-4 space-y-3">
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <p className="text-xs font-bold text-neutral-900">Saved CAC registry snapshot</p>
+                        <p className="text-xs font-bold text-neutral-900">Saved business registry snapshot</p>
                         <p className="mt-0.5 text-[11px] text-neutral-500">
                           {registrySnapshot.registered_name || "Registered business"} - {registrySnapshot.registration_number}
                         </p>
@@ -1218,14 +1228,14 @@ export default function SettingsPage() {
           {isCorporate && (
             <div className="space-y-2">
               <Label className="text-sm font-medium">Business Type <span className="text-red-500">*</span></Label>
-              <p className="text-xs text-neutral-500">Select your registered business type according to CAC standards.</p>
+              <p className="text-xs text-neutral-500">Select your registered business type according to official registry standards.</p>
               <select
                 value={businessType}
                 onChange={(e) => (!isOwnerNameLocked || !merchant?.business_type) && setBusinessType(e.target.value)}
                 disabled={isOwnerNameLocked && !!merchant?.business_type}
                 className="w-full h-11 rounded-md border-2 border-purp-200 bg-purp-50 px-3 py-2 text-sm text-neutral-900 focus:border-purp-500 focus:ring-purp-500 outline-none disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <option value="sole_proprietorship">Sole Proprietorship / Business Name (BN)</option>
+                <option value="sole_proprietorship">Sole Proprietorship / Registered Business Name</option>
                 <option value="ltd">Private Limited Company (LTD)</option>
                 <option value="plc">Public Limited Company (PLC)</option>
                 <option value="llp">Limited Liability Partnership (LLP)</option>
@@ -1241,11 +1251,11 @@ export default function SettingsPage() {
                 <Label className="text-sm font-medium">Registered Business Name <span className="text-red-500">*</span></Label>
                 {!!merchant?.cac_number && (
                   <span className="inline-flex items-center gap-1 text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 rounded px-1.5 py-0.5">
-                    🔒 RC Verified
+                    Registration Verified
                   </span>
                 )}
               </div>
-              <p className="text-xs text-neutral-500">The official name registered with CAC. Used to verify your CAC certificate and RC Number.</p>
+              <p className="text-xs text-neutral-500">The official registered name used for business registration checks and supporting documents.</p>
               <div className="flex items-center gap-3 p-3 bg-purp-50/50 border border-purp-200 rounded-lg">
                 <input
                   type="checkbox"
@@ -1276,7 +1286,7 @@ export default function SettingsPage() {
                 />
               )}
               {businessNameMissing && (
-                <p className="text-xs text-red-500 font-medium">⚠ Required — CAC/RC verification is blocked until this is provided.</p>
+                <p className="text-xs text-red-500 font-medium">Required — business registration verification is blocked until this is provided.</p>
               )}
             </div>
           )}
@@ -1454,10 +1464,10 @@ export default function SettingsPage() {
       <Card className="border-2 border-purp-200 shadow-none">
         <CardHeader className="pb-4">
           <CardTitle className="text-base font-bold text-purp-900">
-            Paystack Fee Settings
+            Payment Fee Settings
           </CardTitle>
           <p className="text-xs text-neutral-500 mt-1">
-            Set who absorbs the Paystack processing fee by default. This can be overridden per invoice.
+            Set who absorbs the processing fee by default. This can be overridden per invoice.
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -1475,7 +1485,7 @@ export default function SettingsPage() {
           </div>
           <div className="bg-purp-50 border border-purp-200 rounded-lg p-4 text-sm">
             <p className="text-neutral-500">
-              <strong className="text-purp-900">Current Fee Structure:</strong> Paystack charges
+              <strong className="text-purp-900">Current Fee Structure:</strong> Online payment processing charges
               1.5% + ₦100 per transaction, capped at ₦2,000.
             </p>
           </div>

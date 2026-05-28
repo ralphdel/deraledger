@@ -24,7 +24,7 @@ type UpgradePlanId = "individual" | "corporate";
 
 // CAMA 2020 Nigeria — 7 official business registration structures
 const CAMA_TYPES = [
-  { value: "sole_proprietorship", label: "Sole Proprietorship / Business Name (BN)", ownerLabel: "Sole Proprietor / Business Owner Full Name" },
+  { value: "sole_proprietorship", label: "Sole Proprietorship / Registered Business Name", ownerLabel: "Sole Proprietor / Business Owner Full Name" },
   { value: "ltd",                 label: "Private Limited Company (LTD)",             ownerLabel: "Director or Shareholder Full Name" },
   { value: "plc",                 label: "Public Limited Company (PLC)",              ownerLabel: "Director or Shareholder Full Name" },
   { value: "llp",                 label: "Limited Liability Partnership (LLP)",        ownerLabel: "Designated Partner or Partner Full Name" },
@@ -88,7 +88,7 @@ const PLAN_CONFIG: Record<UpgradePlanId, UpgradePlanConfig> = {
     interval: "/month",
     workflow: "Operational collections infrastructure for growing businesses",
     collectionLimit: "Unlimited monthly collections",
-    verification: "CAC & Director required",
+    verification: "Business & authority checks required",
     icon: Building2,
     features: [
       "Unlimited collections",
@@ -101,7 +101,7 @@ const PLAN_CONFIG: Record<UpgradePlanId, UpgradePlanConfig> = {
       "Advanced operational workflows",
     ],
     requirements: [
-      "CAC registration details and supporting business documents.",
+      "Business registration details and supporting business documents.",
       "Director or highest shareholder verification.",
       "A valid business settlement bank account.",
     ],
@@ -294,7 +294,7 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
                         Business Registration Type <span className="text-red-400">*</span>
                       </Label>
                       <p className="text-xs text-white/50">
-                        Select your CAC registration structure. This determines the verification documents required.
+                        Select your business registration structure. This determines the verification documents required.
                       </p>
                       <select
                         value={businessType}
@@ -402,7 +402,7 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
                       {plan === "corporate"
                         ? relationshipClaim === "representative_claim"
                           ? "Enter your own legal name. A listed director or owner will verify and approve the business separately."
-                          : `This name will be used for ${getOwnerLabel(businessType, plan, relationshipClaim).toLowerCase()} verification against CAC and BVN records.`
+                          : `This name will be used for ${getOwnerLabel(businessType, plan, relationshipClaim).toLowerCase()} verification against official business and identity records.`
                         : "This name should match your BVN details. Verification will be completed in your account settings after upgrade."}
                     </p>
                   </div>
@@ -417,7 +417,7 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
                         className="h-11 border-white/10 bg-[#12061F] text-white/70 opacity-80 cursor-not-allowed"
                       />
                       <p className="text-xs text-white/50">
-                        Your CAC-registered business name can be updated from Settings after upgrade.
+                        Your registered business name can be updated from Settings after upgrade.
                       </p>
                     </div>
                   )}
@@ -455,7 +455,7 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
                 </span>
               </Button>
               <p className="text-center text-xs text-white/40 pt-2">
-                Secured by Paystack. You will be redirected to complete payment.
+                Secure checkout. You will be redirected to complete payment.
               </p>
             </CardContent>
           </Card>

@@ -75,9 +75,9 @@ const plans = [
     id: "corporate",
     name: "Business",
     href: "/onboarding/corporate",
-    price: "CAC Verified",
+    price: "Business Verified",
     priceNote: "",
-    verification: "CAC & Director required",
+    verification: "Business & authority checks required",
     bestFor: "Operational collections infrastructure for growing businesses",
     icon: Building2,
     highlight: false,
@@ -106,7 +106,7 @@ const workflowNotes = [
   },
   {
     title: "Collect with payment links",
-    description: "Enable Paystack-powered collection invoices after the right verification step.",
+    description: "Enable secure online collection invoices after the right verification step.",
     icon: CreditCard,
   },
   {
@@ -281,8 +281,8 @@ export default function OnboardingPage() {
             </div>
             <h2 className="text-3xl font-bold text-white">Verification follows the workflow.</h2>
             <p className="mx-auto mt-4 max-w-2xl text-base leading-relaxed text-white/60">
-              Starter opens immediately. Individual collections require BVN verification. Business
-              workspaces use CAC and director verification for higher trust and unlimited collections.
+              Starter opens immediately. Individual collections require identity verification. Business
+              workspaces use business and authority checks for higher trust and unlimited collections.
             </p>
             <div className="mt-8 flex flex-wrap justify-center gap-4 text-sm font-semibold text-white">
               <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-5 py-2.5 backdrop-blur-sm">
@@ -291,7 +291,7 @@ export default function OnboardingPage() {
               </span>
               <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-5 py-2.5 backdrop-blur-sm">
                 <ShieldCheck className="h-4 w-4 text-[#B58CFF]" />
-                Paystack-powered payments
+                Secure online payments
               </span>
             </div>
           </div>

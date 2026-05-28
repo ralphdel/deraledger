@@ -26,7 +26,7 @@ const PLAN_CONFIG: Record<string, {
   },
   corporate: {
     label: "Business", price: "NGN 20,000", priceKobo: 2000000, interval: "/month",
-    verification: "CAC & Director required",
+    verification: "Business & authority checks required",
     features: ["Unlimited collection invoices", "Custom Role-Based Access (RBAC)", "Grouped receivables", "Advanced analytics", "No watermark", "White-label invoices"],
     icon: Building2, color: "from-[#0B0314] to-[#12061F]",
   },
@@ -158,7 +158,7 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
       }
 
       const pop = (window as Window & { PaystackPop?: { setup: (opts: Record<string, unknown>) => { openIframe: () => void } } }).PaystackPop;
-      if (!pop) throw new Error("Paystack not loaded. Please refresh and try again.");
+      if (!pop) throw new Error("Payment checkout could not load. Please refresh and try again.");
 
       const reference = data.reference;
       const handler = pop.setup({
@@ -395,7 +395,7 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
                 <div className="rounded-xl border-2 border-amber-100 bg-amber-50 p-6 text-center">
                   <Bitcoin className="h-10 w-10 text-amber-500 mx-auto mb-3" />
                   <p className="font-semibold text-amber-900 mb-1">Crypto Payments — Coming Soon</p>
-                  <p className="text-xs text-amber-700">BTC, USDT, and ETH via Breet are being activated. Use Card & Bank or Bank Transfer for now.</p>
+                  <p className="text-xs text-amber-700">BTC, USDT, and ETH payments are being activated. Use Card & Bank or Bank Transfer for now.</p>
                 </div>
               ) : cryptoDetails ? (
                 <div className="rounded-xl border-2 border-orange-100 bg-orange-50 p-5 space-y-4">

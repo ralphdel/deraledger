@@ -15,7 +15,7 @@ export function TrustBar() {
       icon: Layers,
     },
     {
-      label: "Paystack Integrated",
+      label: "Payment Integrated",
       sub: "PCI-DSS compliant payments",
       icon: Landmark,
     },

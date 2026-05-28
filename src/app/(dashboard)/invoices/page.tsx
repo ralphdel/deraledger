@@ -284,7 +284,7 @@ export default function InvoicesPage() {
       {typeFilter === "collection" && (
         <div className="bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 text-blue-800 dark:text-blue-400 text-sm p-3 rounded-lg flex items-start gap-2">
           <CreditCard className="h-4 w-4 mt-0.5 shrink-0" />
-          <p><strong>Collection Invoices:</strong> Live invoices that include a secure Paystack payment portal for your clients to pay online.</p>
+          <p><strong>Collection Invoices:</strong> Live invoices that include a secure online payment portal for your clients to pay online.</p>
         </div>
       )}
 

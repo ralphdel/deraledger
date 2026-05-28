@@ -208,7 +208,7 @@ const slides = [
             </div>
             <h3 className="font-bold text-sm text-neutral-950">Sequential KYC Verification</h3>
             <p className="text-xs text-neutral-600 leading-relaxed mt-1">
-              Rigid BVN verification, CAC registry checking, and selfie identity matching powered by Dojah API to prevent spam billing.
+              Layered identity verification, business registry checking, and selfie matching help prevent spam billing.
             </p>
           </div>
 
@@ -218,7 +218,7 @@ const slides = [
             </div>
             <h3 className="font-bold text-sm text-neutral-950">Secure Settlements</h3>
             <p className="text-xs text-neutral-600 leading-relaxed mt-1">
-              Automated Paystack subaccount routing ensures collections are directly deposited to your verified business settlements account.
+              Automated payment routing ensures collections are directly deposited to your verified business settlement account.
             </p>
           </div>
 
@@ -489,7 +489,7 @@ const slides = [
             <div className="space-y-3.5 mt-8">
               <div className="flex items-center gap-3 text-xs text-neutral-400">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                <span>Secure payments processed via Paystack integration</span>
+                <span>Secure payments processed through trusted payment infrastructure</span>
               </div>
               <div className="flex items-center gap-3 text-xs text-neutral-400">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />

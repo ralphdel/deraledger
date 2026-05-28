@@ -16,7 +16,7 @@ const FAQ_ITEMS = [
   {
     category: "crypto",
     question: "How long does a crypto payment take to reflect on my invoice?",
-    answer: "Crypto transactions processed via the Breet-powered rail typically credit in under 30 minutes. DeraLedger requires a set number of blockchain confirmations (dependent on the network utilized, e.g., Bitcoin or stablecoins) before automatically confirming the invoice as paid."
+    answer: "Crypto transactions processed through the crypto payment rail typically credit in under 30 minutes. DeraLedger requires a set number of blockchain confirmations, depending on the network used, before automatically confirming the invoice as paid."
   },
   {
     category: "crypto",
@@ -124,7 +124,7 @@ export default function DisputeResolutionPage() {
             </h1>
             
             <p className="text-neutral-400 text-base sm:text-lg lg:text-xl max-w-3xl mx-auto leading-relaxed mb-10">
-              We provide structured transaction verification, instant billing reconciliation, and prompt refund operations across fiat, bank transfers, and Breet-powered crypto rails.
+              We provide structured transaction verification, instant billing reconciliation, and prompt refund operations across fiat, bank transfers, and crypto rails.
             </p>
 
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
@@ -315,11 +315,11 @@ export default function DisputeResolutionPage() {
               <div className="max-w-3xl relative z-10 space-y-6">
                 <div className="inline-flex items-center gap-2 px-3 py-1 bg-white/5 border border-white/10 text-xs font-semibold text-[#A78BFA] rounded-full">
                   <Bitcoin className="w-3.5 h-3.5" />
-                  <span>Breet Crypto Integration Partner</span>
+                  <span>Crypto Payment Protection</span>
                 </div>
 
                 <h2 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold tracking-tight text-white leading-tight">
-                  Breet-Powered Crypto Payment Protection
+                  Crypto Payment Protection
                 </h2>
 
                 <p className="text-neutral-300 text-sm sm:text-base leading-relaxed">
@@ -516,7 +516,7 @@ export default function DisputeResolutionPage() {
                   <span>Immutable Audit Logging</span>
                 </div>
                 <p className="text-xs text-neutral-400 leading-relaxed">
-                  Every resolution step, merchant authorization, refund state, and Breet verification event is recorded permanently in our secure database for CBN-compliant trace retention.
+                  Every resolution step, merchant authorization, refund state, and crypto verification event is recorded permanently in our secure database for CBN-compliant trace retention.
                 </p>
               </div>
 

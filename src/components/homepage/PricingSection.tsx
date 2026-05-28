@@ -42,7 +42,7 @@ const plans = [
   {
     name: "Business",
     href: "/onboarding/corporate",
-    price: "CAC Verified",
+    price: "Business Verified",
     bestFor: "Collections infrastructure for growing teams",
     verification: "Corporate vetting required",
     cta: "Set up business",

@@ -162,7 +162,7 @@ export default function CustomerDisputeLodging() {
                     >
                       <option value="BANK_TRANSFER">Bank Transfer (Fiat)</option>
                       <option value="CARD">Card Payment (Fiat)</option>
-                      <option value="BREET_CRYPTO">Crypto Settlement (Breet)</option>
+                      <option value="BREET_CRYPTO">Crypto Settlement</option>
                       <option value="WALLET">Internal Wallet Balance</option>
                     </select>
                   </div>
@@ -220,7 +220,7 @@ export default function CustomerDisputeLodging() {
                   <textarea
                     id="description"
                     rows={3}
-                    placeholder="Provide details about debits, delayed confirmations, Breet wallet references..."
+                    placeholder="Provide details about debits, delayed confirmations, crypto wallet references..."
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
                     required

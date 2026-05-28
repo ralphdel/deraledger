@@ -152,11 +152,11 @@ export default function PurpBotPage() {
       if (merchant?.verification_status === "verified") {
         statusDetails = `Your account is fully **Verified** via our instant **KYC Check** and currently on **Tier: ${merchant.merchant_tier.toUpperCase()}**. You have full access to Deraledger's features and your payment limits correspond to your tier.`;
       } else {
-        const cacStatus = merchant?.cac_status || "Unverified";
+        const businessStatus = merchant?.cac_status || "Unverified";
         const bvnStatus = merchant?.bvn_status || "Unverified";
         const utilStatus = merchant?.utility_status || "Unverified";
         
-        statusDetails = `Your account is currently on **Tier: ${merchant?.merchant_tier?.toUpperCase() || 'STARTER'}** and your overall verification status is **${merchant?.verification_status?.toUpperCase() || 'UNVERIFIED'}**.\n\nHere is your specific document status:\n• CAC: **${cacStatus}**\n• BVN: **${bvnStatus}**\n• Utility Bill: **${utilStatus}**\n\nTo upgrade to Tier 1 (₦500k limit) or Tier 2 (Unlimited), please go to **Settings > Account Verification** and submit any unverified documents. Thanks to the automated KYC check, verification is often instant or takes up to 24 hours.`;
+        statusDetails = `Your account is currently on **Tier: ${merchant?.merchant_tier?.toUpperCase() || 'STARTER'}** and your overall verification status is **${merchant?.verification_status?.toUpperCase() || 'UNVERIFIED'}**.\n\nHere is your specific document status:\n- Business Registration: **${businessStatus}**\n- Identity Number: **${bvnStatus}**\n- Utility Bill: **${utilStatus}**\n\nTo upgrade to Tier 1 (NGN 500k limit) or Tier 2 (Unlimited), please go to **Settings > Account Verification** and submit any unverified documents. Automated verification is often instant or takes up to 24 hours.`;
       }
       
       return {
@@ -300,7 +300,7 @@ export default function PurpBotPage() {
     // Settlement queries
     if (q.includes("settlement") || q.includes("payout") || q.includes("bank account") || q.includes("disburse")) {
       return {
-        content: `**Settlement Account** — this is the bank account where Paystack disburses funds from your Collection Invoices.\n\n• Only the **Owner** role can add or change the settlement account.\n• Configure it at **Settings > Settlement Account**.\n• Account must be verified (Paystack subaccount creation) before payouts begin.\n• A **1.5% + ₦100 Paystack fee** (capped at ₦2,000) is deducted per transaction in live mode.\n• In test mode, fees show as ₦0 — this is expected.`,
+        content: `**Settlement Account** - this is the bank account where funds from your Collection Invoices are settled.\n\n- Only the **Owner** role can add or change the settlement account.\n- Configure it at **Settings > Settlement Account**.\n- Account must be verified before payouts begin.\n- A payment processing fee is deducted per transaction in live mode.\n- In test mode, fees show as NGN 0 - this is expected.`,
         citations: ["Settlement Settings"],
       };
     }
@@ -364,7 +364,7 @@ export default function PurpBotPage() {
     if (q.includes("fee") || q.includes("paystack") || q.includes("charge")) {
       const totalFees = transactions.filter((t) => t.status === "success").reduce((s, t) => s + Number(t.paystack_fee), 0);
       return {
-        content: `Total Paystack fees across all successful transactions: **${formatNaira(totalFees)}**.\n\nYour default fee absorption setting is **"${merchant?.fee_absorption_default || "business"}"** (${merchant?.fee_absorption_default === "business" ? "you absorb fees" : "customer absorbs fees"}).`,
+        content: `Total processing fees across all successful transactions: **${formatNaira(totalFees)}**.\n\nYour default fee absorption setting is **"${merchant?.fee_absorption_default || "business"}"** (${merchant?.fee_absorption_default === "business" ? "you absorb fees" : "customer absorbs fees"}).`,
         citations: ["Fee Summary"],
       };
     }

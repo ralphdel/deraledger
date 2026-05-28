@@ -552,7 +552,7 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
         </div>
 
         <div className="mt-8 text-xs text-purp-200 flex items-center gap-1 opacity-75">
-          <ShieldCheck className="w-4 h-4" /> Secure payment powered by Paystack
+          <ShieldCheck className="w-4 h-4" /> Secure online payment
         </div>
         <div className="mt-3 text-[10px] text-purp-300 opacity-60 leading-relaxed">
           Deraledger facilitates billing and payment infrastructure but is not party to agreements between merchants and customers.

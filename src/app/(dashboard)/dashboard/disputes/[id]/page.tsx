@@ -49,13 +49,13 @@ const FALLBACK_DETAIL_DISPUTES: Record<string, any> = {
     priority: "CRITICAL",
     sla: "12m remaining",
     description: "Sent stablecoin USDT on Ethereum network. Blockchain TX shows over 35 confirmations, but DeraLedger is not verifying the invoice.",
-    payment_reference: "BREET-TX-90281048",
+    payment_reference: "CRYPTO-TX-90281048",
     tx_hash: "0x8fae3256fb7d102e3b6a9a0e817cfa29a1b802611e9a26374a8109d9e6e8e811",
     created_at: "2026-05-20T14:45:00Z",
     evidence: "https://purpledger.vercel.app/demo-crypto-evidence.png",
     timeline: [
       { event: "Dispute Opened", actor: "Customer", date: "2026-05-20T14:45:00Z", note: "Stablecoin payment verification failure logged." },
-      { event: "Verification Started", actor: "Crypto Engine", date: "2026-05-20T14:46:10Z", note: "Breet blockchain API verification query initiated." },
+      { event: "Verification Started", actor: "Crypto Engine", date: "2026-05-20T14:46:10Z", note: "Blockchain payment verification query initiated." },
       { event: "Reviewing State", actor: "Admin Agent", date: "2026-05-20T15:00:00Z", note: "Assigned to treasury representative for wallet match." },
     ]
   }

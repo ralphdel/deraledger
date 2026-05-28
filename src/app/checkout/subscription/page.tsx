@@ -240,7 +240,7 @@ function SubscriptionCheckoutContent() {
       }
 
       const pop = (window as Window & { PaystackPop?: { setup: (opts: Record<string, unknown>) => { openIframe: () => void } } }).PaystackPop;
-      if (!pop) throw new Error("Paystack not loaded. Please refresh.");
+      if (!pop) throw new Error("Payment checkout could not load. Please refresh.");
 
       const handler = pop.setup({
         key: process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY,
@@ -447,7 +447,7 @@ function SubscriptionCheckoutContent() {
                   </div>
                 </div>
                 <p className="text-xs text-white/50 mb-4">
-                  Click below — Paystack will generate a dedicated virtual account number for this transaction.
+                  Click below to generate a dedicated virtual account number for this transaction.
                 </p>
                 <Button
                   onClick={() => void handleFiatPayment("bank_transfer")}
@@ -494,7 +494,7 @@ function SubscriptionCheckoutContent() {
                   <Bitcoin className="h-10 w-10 text-amber-500 mx-auto mb-3" />
                   <p className="font-semibold text-amber-900 mb-1">Crypto Payments — Coming Soon</p>
                   <p className="text-xs text-amber-700">
-                    BTC, USDT, and ETH subscription payments via Breet are being activated.
+                    BTC, USDT, and ETH subscription payments are being activated.
                     Use Card &amp; Bank or Bank Transfer for now.
                   </p>
                 </div>
