@@ -43,6 +43,7 @@ type SettlementRow = {
   settlement_mode?: string | null;
   settlement_owner?: string | null;
   payout_action_required?: boolean | null;
+  provider_settlement_batch_id?: string | null;
   provider_fee_source?: string | null;
   expected_settlement_source?: string | null;
   provider_settlement_reference?: string | null;
@@ -68,6 +69,13 @@ type SettlementRow = {
     environment?: string | null;
     provider_subaccount_code?: string | null;
     provider_split_reference?: string | null;
+  } | null;
+  provider_settlement_batches?: {
+    provider_batch_reference?: string | null;
+    actual_settlement_total?: number | null;
+    settlement_status?: string | null;
+    settled_at?: string | null;
+    provider_reported_settled_at?: string | null;
   } | null;
 };
 
@@ -98,6 +106,9 @@ export default function AdminAccountingPage() {
   const [providerReference, setProviderReference] = useState("");
   const [notes, setNotes] = useState("");
   const [actionLoading, setActionLoading] = useState(false);
+  const [checkedIds, setCheckedIds] = useState<string[]>([]);
+  const [batchModalOpen, setBatchModalOpen] = useState(false);
+  const [batchSettledAt, setBatchSettledAt] = useState(() => new Date().toISOString().slice(0, 16));
 
   const fetchRows = async () => {
     setLoading(true);
@@ -134,6 +145,31 @@ export default function AdminAccountingPage() {
       return values.some((value) => String(value || "").toLowerCase().includes(needle));
     });
   }, [rows, search]);
+
+  const selectedRows = useMemo(
+    () => filteredRows.filter((row) => checkedIds.includes(row.id)),
+    [filteredRows, checkedIds]
+  );
+
+  const selectedExpectedTotal = useMemo(
+    () => selectedRows.reduce((sum, row) => sum + Number(row.expected_settlement || 0), 0),
+    [selectedRows]
+  );
+
+  const toggleChecked = (row: SettlementRow) => {
+    if (row.provider_settlement_batch_id) return;
+    setCheckedIds((current) => current.includes(row.id)
+      ? current.filter((id) => id !== row.id)
+      : [...current, row.id]);
+  };
+
+  const openBatchModal = () => {
+    setProviderReference("");
+    setActualSettlement(selectedExpectedTotal ? String(selectedExpectedTotal) : "");
+    setNotes("");
+    setBatchSettledAt(new Date().toISOString().slice(0, 16));
+    setBatchModalOpen(true);
+  };
 
   const openRow = (row: SettlementRow) => {
     setSelected(row);
@@ -181,8 +217,35 @@ export default function AdminAccountingPage() {
       Owner: row.settlement_owner || "",
       Mode: row.settlement_mode || "",
       "Settlement Account": maskAccount(row.merchant_settlement_accounts),
+      "Provider Batch": row.provider_settlement_batches?.provider_batch_reference || "",
+      "Batch Settled At": row.provider_settlement_batches?.settled_at || row.provider_settlement_batches?.provider_reported_settled_at || "",
       Reference: row.provider_settlement_reference || row.payment_records?.provider_reference || "",
     })), "Deraledger_Payments_Settlements");
+  };
+
+  const runBatchAction = async () => {
+    setActionLoading(true);
+    const res = await fetch("/api/admin/payments-settlements", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "record_provider_batch",
+        settlementIds: checkedIds,
+        actualSettlement,
+        providerSettlementReference: providerReference,
+        settledAt: batchSettledAt ? new Date(batchSettledAt).toISOString() : undefined,
+        notes,
+      }),
+    });
+    const payload = await res.json().catch(() => ({}));
+    setActionLoading(false);
+    if (!res.ok) {
+      alert(payload.error || "Provider batch action failed.");
+      return;
+    }
+    setBatchModalOpen(false);
+    setCheckedIds([]);
+    await fetchRows();
   };
 
   return (
@@ -198,6 +261,9 @@ export default function AdminAccountingPage() {
           </Button>
           <Button variant="outline" className="border-2 gap-2" onClick={handleDownload} disabled={filteredRows.length === 0}>
             <Download className="h-4 w-4" /> CSV
+          </Button>
+          <Button className="bg-neutral-900 hover:bg-neutral-800 text-white gap-2" onClick={openBatchModal} disabled={selectedRows.length === 0}>
+            <Banknote className="h-4 w-4" /> Record Batch
           </Button>
         </div>
       </div>
@@ -241,6 +307,7 @@ export default function AdminAccountingPage() {
             <Table>
               <TableHeader>
                 <TableRow className="bg-neutral-50">
+                  <TableHead className="w-[44px]" />
                   <TableHead>Merchant</TableHead>
                   <TableHead>Provider</TableHead>
                   <TableHead>Settlement Account</TableHead>
@@ -256,15 +323,35 @@ export default function AdminAccountingPage() {
                 {filteredRows.map((row) => (
                   <TableRow key={row.id}>
                     <TableCell>
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-neutral-300"
+                        checked={checkedIds.includes(row.id)}
+                        disabled={Boolean(row.provider_settlement_batch_id)}
+                        onChange={() => toggleChecked(row)}
+                        aria-label="Select settlement for provider batch"
+                      />
+                    </TableCell>
+                    <TableCell>
                       <p className="font-semibold text-sm text-neutral-900">{row.merchants?.business_name || "Unknown"}</p>
                       <p className="text-xs text-neutral-500">{row.payment_records?.provider_reference || row.provider_settlement_reference}</p>
+                      {row.provider_settlement_batches?.provider_batch_reference && (
+                        <p className="text-xs text-emerald-700 mt-1">Batch {row.provider_settlement_batches.provider_batch_reference}</p>
+                      )}
                     </TableCell>
                     <TableCell>
                       <Badge variant="outline" className="capitalize border-2">{row.provider_name}</Badge>
                       <p className="text-xs text-neutral-500 mt-1">{row.payment_method || "method unknown"}</p>
                     </TableCell>
                     <TableCell className="text-sm">{maskAccount(row.merchant_settlement_accounts)}</TableCell>
-                    <TableCell><StatusBadge status={row.settlement_status} /></TableCell>
+                    <TableCell>
+                      <StatusBadge status={row.settlement_status} />
+                      {row.provider_settlement_batches?.settled_at && (
+                        <p className="text-xs text-emerald-700 mt-1">
+                          Settled {new Date(row.provider_settlement_batches.settled_at).toLocaleDateString("en-NG")}
+                        </p>
+                      )}
+                    </TableCell>
                     <TableCell>
                       <Badge variant="outline" className="border-2 text-xs">{label(row.settlement_owner || "provider")}</Badge>
                       {row.settlement_mode === "treasury_payout_required" && <p className="text-xs text-amber-700 mt-1">Treasury action required</p>}
@@ -310,6 +397,31 @@ export default function AdminAccountingPage() {
                 <Button variant="outline" className="border-2 border-amber-300 text-amber-700" disabled={actionLoading} onClick={() => runAction("mark_manual_review")}>Manual Review</Button>
                 <Button variant="outline" className="border-2 border-blue-300 text-blue-700" disabled={actionLoading} onClick={() => runAction("record_actual_settlement")}>Record Actual</Button>
                 <Button className="bg-emerald-700 hover:bg-emerald-800 text-white" disabled={actionLoading} onClick={() => runAction("mark_completed")}>Mark Completed</Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {batchModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl border w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <div className="p-5 border-b">
+              <h2 className="font-bold text-lg">Record Provider Settlement Batch</h2>
+              <p className="text-sm text-neutral-500">{selectedRows.length} settlement records selected</p>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <Info label="Selected expected total" value={formatNaira(selectedExpectedTotal)} />
+                <Info label="Settlement account" value={selectedRows[0] ? maskAccount(selectedRows[0].merchant_settlement_accounts) : "No account"} />
+              </div>
+              <Input value={actualSettlement} onChange={(event) => setActualSettlement(event.target.value)} placeholder="Actual batch amount credited" className="border-2" />
+              <Input value={providerReference} onChange={(event) => setProviderReference(event.target.value)} placeholder="Provider batch/reference" className="border-2" />
+              <Input type="datetime-local" value={batchSettledAt} onChange={(event) => setBatchSettledAt(event.target.value)} className="border-2" />
+              <Textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Batch reconciliation notes" className="border-2 min-h-[100px]" />
+              <div className="flex flex-wrap gap-2 justify-end">
+                <Button variant="outline" className="border-2" onClick={() => setBatchModalOpen(false)}>Cancel</Button>
+                <Button className="bg-neutral-900 hover:bg-neutral-800 text-white" disabled={actionLoading} onClick={runBatchAction}>Save Batch</Button>
               </div>
             </div>
           </div>

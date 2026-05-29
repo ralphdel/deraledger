@@ -17,7 +17,8 @@ export async function GET() {
       *,
       payment_records(*),
       merchant_settlement_accounts(bank_name,account_number,account_name,currency),
-      merchant_provider_settlement_accounts(provider_name,status,environment)
+      merchant_provider_settlement_accounts(provider_name,status,environment),
+      provider_settlement_batches(provider_batch_reference,actual_settlement_total,settlement_status,settled_at,provider_reported_settled_at)
     `)
     .eq("merchant_id", merchantId)
     .order("created_at", { ascending: false })

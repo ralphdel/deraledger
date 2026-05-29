@@ -35,6 +35,7 @@ type SettlementRow = {
   settlement_status: string;
   settlement_mode?: string | null;
   settlement_owner?: string | null;
+  provider_settlement_batch_id?: string | null;
   provider_fee_source?: string | null;
   expected_settlement_source?: string | null;
   provider_settlement_reference?: string | null;
@@ -48,6 +49,13 @@ type SettlementRow = {
     account_number?: string | null;
     account_name?: string | null;
     currency?: string | null;
+  } | null;
+  provider_settlement_batches?: {
+    provider_batch_reference?: string | null;
+    actual_settlement_total?: number | null;
+    settlement_status?: string | null;
+    settled_at?: string | null;
+    provider_reported_settled_at?: string | null;
   } | null;
 };
 
@@ -138,6 +146,8 @@ export default function MerchantSettlementsPage() {
       "Expected Settlement": row.expected_settlement ?? "",
       "Actual Settlement": row.actual_settlement ?? "",
       Status: row.settlement_status,
+      "Provider Batch": row.provider_settlement_batches?.provider_batch_reference || "",
+      "Batch Settled At": row.provider_settlement_batches?.settled_at || row.provider_settlement_batches?.provider_reported_settled_at || "",
       "Settlement Account": maskAccount(row.merchant_settlement_accounts),
     })), `Deraledger_Settlements_${labelText}`);
   };
@@ -219,11 +229,19 @@ export default function MerchantSettlementsPage() {
                       <TableCell>
                         <Badge variant="outline" className="capitalize border-2">{row.provider_name}</Badge>
                         <p className="text-xs text-neutral-500 mt-1">{row.payment_method || "payment"}</p>
+                        {row.provider_settlement_batches?.provider_batch_reference && (
+                          <p className="text-xs text-emerald-700 mt-1">Batch {row.provider_settlement_batches.provider_batch_reference}</p>
+                        )}
                       </TableCell>
                       <TableCell className="text-sm">{maskAccount(row.merchant_settlement_accounts)}</TableCell>
                       <TableCell>
                         <StatusBadge status={row.settlement_status} />
                         {row.settlement_status === "manual_review" && <p className="text-xs text-amber-700 mt-1">Settlement is under review.</p>}
+                        {row.provider_settlement_batches?.settled_at && (
+                          <p className="text-xs text-emerald-700 mt-1">
+                            Settled {new Date(row.provider_settlement_batches.settled_at).toLocaleDateString("en-NG")}
+                          </p>
+                        )}
                       </TableCell>
                       <TableCell className="text-right font-medium">{formatNaira(Number(row.gross_amount || 0))}</TableCell>
                       <TableCell className="text-right font-medium">{row.expected_settlement === null || row.expected_settlement === undefined ? "Under review" : formatNaira(Number(row.expected_settlement))}</TableCell>
