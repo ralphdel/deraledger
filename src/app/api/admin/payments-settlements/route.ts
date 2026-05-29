@@ -101,7 +101,13 @@ export async function PATCH(request: Request) {
     updates.settlement_owner = "manual_review";
     updates.reconciliation_notes = notes || "Marked for manual review by admin.";
   } else if (action === "record_actual_settlement") {
-    const actualSettlement = Number(body.actualSettlement);
+    const actualSettlementInput = body.actualSettlement === undefined || body.actualSettlement === null
+      ? ""
+      : String(body.actualSettlement).trim();
+    if (!actualSettlementInput) {
+      return NextResponse.json({ error: "Actual settlement amount is required." }, { status: 400 });
+    }
+    const actualSettlement = Number(actualSettlementInput);
     if (!Number.isFinite(actualSettlement) || actualSettlement < 0) {
       return NextResponse.json({ error: "Enter a valid actual settlement amount." }, { status: 400 });
     }
@@ -120,15 +126,26 @@ export async function PATCH(request: Request) {
     updates.settled_at = updates.settlement_status === "completed" ? new Date().toISOString() : current.settled_at;
     reconciliationStatus = updates.settlement_status === "completed" ? "matched" : "mismatch";
   } else if (action === "mark_completed") {
+    const expectedSettlement = current.expected_settlement === null || current.expected_settlement === undefined
+      ? null
+      : Number(current.expected_settlement);
+    const actualSettlementInput = body.actualSettlement === undefined || body.actualSettlement === null
+      ? ""
+      : String(body.actualSettlement).trim();
+    if (expectedSettlement === null && !actualSettlementInput) {
+      return NextResponse.json({
+        error: "This settlement has no provider-reported expected amount. Enter the actual settlement before marking completed.",
+      }, { status: 400 });
+    }
     const actualSettlement =
-      body.actualSettlement !== undefined && body.actualSettlement !== null && body.actualSettlement !== ""
-        ? Number(body.actualSettlement)
-        : Number(current.expected_settlement || current.gross_amount || 0);
+      actualSettlementInput
+        ? Number(actualSettlementInput)
+        : Number(expectedSettlement || 0);
+    if (!Number.isFinite(actualSettlement) || actualSettlement < 0) {
+      return NextResponse.json({ error: "Enter a valid actual settlement amount." }, { status: 400 });
+    }
     updates.actual_settlement = actualSettlement;
-    updates.settlement_difference =
-      current.expected_settlement === null || current.expected_settlement === undefined
-        ? null
-        : actualSettlement - Number(current.expected_settlement);
+    updates.settlement_difference = expectedSettlement === null ? null : actualSettlement - expectedSettlement;
     updates.settlement_status = "completed";
     updates.settlement_owner = "provider";
     updates.settled_at = new Date().toISOString();
@@ -193,7 +210,10 @@ async function recordProviderBatch(body: Record<string, unknown>) {
     ? body.providerSettlementReference.trim()
     : "";
   const notes = typeof body.notes === "string" ? body.notes.trim() : "";
-  const actualSettlementTotal = Number(body.actualSettlement);
+  const actualSettlementInput = body.actualSettlement === undefined || body.actualSettlement === null
+    ? ""
+    : String(body.actualSettlement).trim();
+  const actualSettlementTotal = Number(actualSettlementInput);
   const settledAtInput = typeof body.settledAt === "string" && body.settledAt
     ? new Date(body.settledAt)
     : new Date();
@@ -203,6 +223,9 @@ async function recordProviderBatch(body: Record<string, unknown>) {
   }
   if (!providerBatchReference) {
     return NextResponse.json({ error: "Provider batch/reference is required." }, { status: 400 });
+  }
+  if (!actualSettlementInput) {
+    return NextResponse.json({ error: "Actual batch amount credited is required." }, { status: 400 });
   }
   if (!Number.isFinite(actualSettlementTotal) || actualSettlementTotal < 0) {
     return NextResponse.json({ error: "Enter a valid actual settlement total." }, { status: 400 });

@@ -76,9 +76,10 @@ export default function MerchantSettlementsPage() {
   const [rows, setRows] = useState<SettlementRow[]>([]);
   const [summary, setSummary] = useState<ApiResponse["summary"] | null>(null);
   const [loading, setLoading] = useState(true);
-  const todayStr = new Date().toISOString().split("T")[0];
+  const todayStr = formatDateInput(new Date());
   const [fromDate, setFromDate] = useState(todayStr);
   const [toDate, setToDate] = useState(todayStr);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     getMerchant().then((m) => setMerchant(m));
@@ -92,6 +93,10 @@ export default function MerchantSettlementsPage() {
       if (res.ok) {
         setRows(payload.rows || []);
         setSummary(payload.summary || null);
+        setError("");
+      } else {
+        setRows([]);
+        setError(payload.error || "Failed to load settlements.");
       }
       setLoading(false);
     };
@@ -99,8 +104,8 @@ export default function MerchantSettlementsPage() {
   }, []);
 
   const visibleRows = useMemo(() => {
-    const start = new Date(`${fromDate}T00:00:00.000Z`).getTime();
-    const end = new Date(`${toDate}T23:59:59.999Z`).getTime();
+    const start = new Date(`${fromDate}T00:00:00`).getTime();
+    const end = new Date(`${toDate}T23:59:59.999`).getTime();
     return rows.filter((row) => {
       const created = new Date(row.created_at).getTime();
       return created >= start && created <= end;
@@ -119,18 +124,17 @@ export default function MerchantSettlementsPage() {
 
   const applyPreset = (preset: string) => {
     const now = new Date();
-    const pad = (n: number) => String(n).padStart(2, "0");
-    const fmt = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
     if (preset === "today") { setFromDate(todayStr); setToDate(todayStr); }
     else if (preset === "week") {
       const start = new Date(now); start.setDate(now.getDate() - now.getDay());
-      setFromDate(fmt(start)); setToDate(todayStr);
+      setFromDate(formatDateInput(start)); setToDate(todayStr);
     } else if (preset === "month") {
-      setFromDate(`${now.getFullYear()}-${pad(now.getMonth() + 1)}-01`); setToDate(todayStr);
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      setFromDate(formatDateInput(monthStart)); setToDate(todayStr);
     } else if (preset === "last_month") {
       const lm = new Date(now.getFullYear(), now.getMonth() - 1, 1);
       const lme = new Date(now.getFullYear(), now.getMonth(), 0);
-      setFromDate(fmt(lm)); setToDate(fmt(lme));
+      setFromDate(formatDateInput(lm)); setToDate(formatDateInput(lme));
     }
   };
 
@@ -207,6 +211,8 @@ export default function MerchantSettlementsPage() {
               <div className="flex items-center justify-center py-12 text-neutral-500">
                 <Loader2 className="h-5 w-5 animate-spin mr-2" /> Loading settlements...
               </div>
+            ) : error ? (
+              <div className="text-center py-12 text-red-600">{error}</div>
             ) : visibleRows.length === 0 ? (
               <div className="text-center py-12 text-neutral-500">No settlements found for this period.</div>
             ) : (
@@ -283,4 +289,9 @@ function maskAccount(account?: SettlementRow["merchant_settlement_accounts"]) {
   if (!account) return "Settlement account unavailable";
   const last4 = account.account_number?.slice(-4) || "----";
   return `${account.bank_name || "Bank"} ****${last4}`;
+}
+
+function formatDateInput(date: Date) {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
