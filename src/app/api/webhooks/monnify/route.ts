@@ -73,6 +73,7 @@ export async function POST(request: Request) {
       channel: normalized.channel,
       feesKobo: normalized.feesKobo,
       settlementAmountKobo: normalized.settlementAmountKobo,
+      rawProviderPayload: payload as Record<string, unknown>,
     });
     await recordWebhookHealth("success");
     await recordWebhookAttempt({

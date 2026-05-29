@@ -10,6 +10,7 @@ import {
   type RelationshipClaim,
 } from "@/lib/services/onboarding-flow.service";
 import { upsertSettlementLedgerForTransaction } from "@/lib/services/settlement-ledger.service";
+import { calculateProviderReportedSettlement } from "@/lib/services/provider-settlement-calculation.service";
 
 const supabase = createSupabaseClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -34,7 +35,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ received: true });
   }
 
-  const { metadata, amount, reference, channel, fees } = event.data;
+  const paystackData = event.data || {};
+  const { metadata, amount, reference, channel, fees } = paystackData;
   const paymentType: string = metadata?.type ?? "invoice_payment";
 
   // ── Branch: subscription payment vs invoice payment ──────────────────────
@@ -50,7 +52,7 @@ export async function POST(request: Request) {
     return handleSubscriptionRenewal(metadata, amount, reference);
   }
 
-  return handleInvoicePayment(metadata, amount, reference, channel, fees);
+  return handleInvoicePayment(metadata, amount, reference, channel, fees, paystackData);
 }
 
 // ── Subscription Renewal Handler ─────────────────────────────────────────────
@@ -639,7 +641,8 @@ async function handleInvoicePayment(
   _amount: number,
   reference: string,
   channel: string,
-  fees?: number
+  fees?: number,
+  rawProviderPayload?: Record<string, unknown>
 ) {
   const invoiceId: string = metadata?.invoice_id as string;
   const paymentAmount: number = Number(metadata?.payment_amount);
@@ -707,11 +710,12 @@ async function handleInvoicePayment(
     (currentOutstanding > 0 ? paymentAmount / currentOutstanding : 0);
   const taxCollected = Math.round(kFactor * Number(invoice.tax_value) * 100) / 100;
   const discountApplied = Math.round(kFactor * Number(invoice.discount_value) * 100) / 100;
-  const rawFee = paymentAmount * 0.015 + 100;
-  // We ALWAYS record the actual fee Paystack took.
-  // The fee_absorbed_by column tells us whether this fee was subtracted from the customer's total or the merchant's net.
-  // If Paystack provides the exact fee in the webhook (fees is in kobo), use it!
-  const paystackFee = fees ? (fees / 100) : Math.min(rawFee, 2000);
+  const feeAbsorbedBy = invoice.fee_absorption || "business";
+  const settlement = calculateProviderReportedSettlement({
+    grossAmount: paymentAmount,
+    feePayer: feeAbsorbedBy,
+    providerFeesKobo: typeof fees === "number" ? fees : null,
+  });
   
   const paymentMethod =
     channel === "card" ? "card" : channel === "bank" ? "bank_transfer" : "ussd";
@@ -726,17 +730,14 @@ async function handleInvoicePayment(
       k_factor: kFactor,
       tax_collected: taxCollected,
       discount_applied: discountApplied,
-      paystack_fee: paystackFee,
-      fee_absorbed_by: invoice.fee_absorption || "business",
+      paystack_fee: settlement.providerFee ?? 0,
+      fee_absorbed_by: feeAbsorbedBy,
       payment_method: paymentMethod,
       payment_rail: paymentMethod,
       paystack_reference: reference,
       processor_reference: reference,
-      merchant_net_amount:
-        (invoice.fee_absorption || "business") === "business"
-          ? paymentAmount - paystackFee
-          : paymentAmount,
-      settlement_status: "pending",
+      merchant_net_amount: settlement.expectedSettlement,
+      settlement_status: settlement.settlementStatus,
       status: "success",
     })
     .select("id")
@@ -755,14 +756,14 @@ async function handleInvoicePayment(
     processor: "paystack",
     processor_ref: reference,
     amount_kobo: Math.round(paymentAmount * 100),
-    raw_payload: metadata,
+    raw_payload: rawProviderPayload || metadata,
     idempotency_key: reference,
   });
 
   if (insertedTransaction?.id) {
     await upsertSettlementLedgerForTransaction(supabase, insertedTransaction.id, {
       provider: "paystack",
-      rawProviderPayload: metadata,
+      rawProviderPayload: rawProviderPayload || metadata,
     });
   }
 

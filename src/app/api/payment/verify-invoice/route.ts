@@ -41,6 +41,7 @@ export async function POST(request: Request) {
           channel: String(tx.paymentMethod || tx.channel || metadata.payment_method_requested || "card"),
           feesKobo: typeof tx.fees === "number" ? tx.fees : null,
           settlementAmountKobo: typeof tx.settlementAmount === "number" ? tx.settlementAmount : null,
+          rawProviderPayload: tx as Record<string, unknown>,
         });
 
         return NextResponse.json({ success: true, provider: resolvedProvider, ...result });

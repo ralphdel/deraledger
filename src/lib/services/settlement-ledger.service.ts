@@ -297,9 +297,18 @@ export async function upsertSettlementLedgerFromTransaction(
   const amountPaid = Number(transaction.amount_paid || 0);
   const providerFee = Number(transaction.paystack_fee || 0);
   const feeAbsorbedBy = transaction.fee_absorbed_by || "business";
-  const expectedSettlement = Number(transaction.merchant_net_amount || 0) || (
-    feeAbsorbedBy === "business" ? amountPaid - providerFee : amountPaid
-  );
+  const merchantNetAmount =
+    transaction.merchant_net_amount === null || transaction.merchant_net_amount === undefined
+      ? null
+      : Number(transaction.merchant_net_amount);
+  const expectedSettlement =
+    Number.isFinite(Number(merchantNetAmount)) && merchantNetAmount !== null
+      ? Number(merchantNetAmount)
+      : transaction.settlement_status === "manual_review"
+        ? null
+        : feeAbsorbedBy === "business"
+          ? amountPaid - providerFee
+          : amountPaid;
   const paymentMethod = transaction.payment_rail || transaction.payment_method || "card";
   const createdAt = transaction.created_at || new Date().toISOString();
 
@@ -312,6 +321,13 @@ export async function upsertSettlementLedgerFromTransaction(
     .maybeSingle();
 
   const rawPayload = options?.rawProviderPayload || event?.raw_payload || null;
+  const settlementSources = inferSettlementSources({
+    provider,
+    rawPayload,
+    providerFee,
+    expectedSettlement,
+    settlementStatus: transaction.settlement_status,
+  });
   const { data: merchant } = await supabase
     .from("merchants")
     .select("id, email")
@@ -382,6 +398,8 @@ export async function upsertSettlementLedgerFromTransaction(
         fee_payer: feeAbsorbedBy === "customer" ? "customer_pays_fee" : "merchant_pays_fee",
         settlement_status: settlementStatus,
         provider_settlement_reference: providerReference,
+        provider_fee_source: settlementSources.providerFeeSource,
+        expected_settlement_source: settlementSources.expectedSettlementSource,
         raw_settlement_payload: rawPayload,
       },
       { onConflict: "payment_record_id" }
@@ -390,6 +408,52 @@ export async function upsertSettlementLedgerFromTransaction(
   if (settlementError && !SETTLEMENT_TABLE_MISSING_CODES.has(settlementError.code || "")) {
     console.error("Failed to upsert settlement record:", settlementError.message);
   }
+}
+
+function inferSettlementSources(input: {
+  provider: PaymentProvider;
+  rawPayload: Record<string, unknown> | null;
+  providerFee: number;
+  expectedSettlement: number | null;
+  settlementStatus?: string | null;
+}) {
+  const hasSettlementAmount =
+    input.provider === "monnify" &&
+    Boolean(
+      getNestedValue(input.rawPayload, ["eventData", "settlementAmount"]) ??
+      getNestedValue(input.rawPayload, ["settlementAmount"])
+    );
+  const hasProviderFee =
+    input.providerFee > 0 ||
+    Boolean(getNestedValue(input.rawPayload, ["fees"]) ?? getNestedValue(input.rawPayload, ["data", "fees"]));
+
+  if (hasSettlementAmount) {
+    return {
+      providerFeeSource: "provider_settlement_amount",
+      expectedSettlementSource: "provider_settlement_amount",
+    };
+  }
+
+  if (hasProviderFee && input.expectedSettlement !== null) {
+    return {
+      providerFeeSource: "provider_fee",
+      expectedSettlementSource: "provider_fee",
+    };
+  }
+
+  return {
+    providerFeeSource: "provider_missing",
+    expectedSettlementSource: "provider_missing",
+  };
+}
+
+function getNestedValue(payload: Record<string, unknown> | null, path: string[]) {
+  let current: unknown = payload;
+  for (const key of path) {
+    if (!current || typeof current !== "object") return undefined;
+    current = (current as Record<string, unknown>)[key];
+  }
+  return current;
 }
 
 async function hasLegacySettlementReadiness(

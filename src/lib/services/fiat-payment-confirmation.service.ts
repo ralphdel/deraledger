@@ -10,6 +10,7 @@ import {
 import {
   upsertSettlementLedgerForTransaction,
 } from "@/lib/services/settlement-ledger.service";
+import { calculateProviderReportedSettlement } from "@/lib/services/provider-settlement-calculation.service";
 
 type FiatProvider = "paystack" | "monnify";
 
@@ -21,6 +22,7 @@ export type SuccessfulFiatPayment = {
   channel: string;
   feesKobo?: number | null;
   settlementAmountKobo?: number | null;
+  rawProviderPayload?: Record<string, unknown> | null;
 };
 
 export async function processSuccessfulFiatPayment(
@@ -664,18 +666,14 @@ async function confirmInvoicePayment(
     (currentOutstanding > 0 ? paymentAmount / currentOutstanding : 0);
   const taxCollected = Math.round(kFactor * Number(invoice.tax_value) * 100) / 100;
   const discountApplied = Math.round(kFactor * Number(invoice.discount_value) * 100) / 100;
-  const rawFee = paymentAmount * 0.015 + 100;
-  const processorFee = feesKobo ? feesKobo / 100 : Math.min(rawFee, 2000);
-  const providerSettlementAmount =
-    settlementAmountKobo && settlementAmountKobo > 0 ? settlementAmountKobo / 100 : null;
   const paymentMethod = normalizePaymentMethod(channel);
   const feeAbsorbedBy = invoice.fee_absorption || "business";
-  const merchantNetAmount =
-    providerSettlementAmount !== null
-      ? providerSettlementAmount
-      : feeAbsorbedBy === "business"
-        ? paymentAmount - processorFee
-        : paymentAmount;
+  const settlement = calculateProviderReportedSettlement({
+    grossAmount: paymentAmount,
+    feePayer: feeAbsorbedBy,
+    providerFeesKobo: feesKobo,
+    providerSettlementAmountKobo: settlementAmountKobo,
+  });
 
   const { data: insertedTransaction, error: transactionError } = await supabase
     .from("transactions")
@@ -686,14 +684,14 @@ async function confirmInvoicePayment(
       k_factor: kFactor,
       tax_collected: taxCollected,
       discount_applied: discountApplied,
-      paystack_fee: processorFee,
+      paystack_fee: settlement.providerFee ?? 0,
       fee_absorbed_by: feeAbsorbedBy,
       payment_method: paymentMethod,
       payment_rail: paymentMethod,
       paystack_reference: reference,
       processor_reference: reference,
-      merchant_net_amount: merchantNetAmount,
-      settlement_status: providerSettlementAmount !== null ? "processing" : "pending",
+      merchant_net_amount: settlement.expectedSettlement,
+      settlement_status: settlement.settlementStatus,
       status: "success",
     })
     .select("id")
@@ -709,7 +707,7 @@ async function confirmInvoicePayment(
     processor: provider,
     processor_ref: reference,
     amount_kobo: Math.round(paymentAmount * 100),
-    raw_payload: metadata,
+    raw_payload: payment.rawProviderPayload || metadata,
     idempotency_key: `${provider}:${reference}:processed`,
   }, {
     onConflict: "idempotency_key",
@@ -721,7 +719,7 @@ async function confirmInvoicePayment(
   if (insertedTransaction?.id) {
     await upsertSettlementLedgerForTransaction(supabase, insertedTransaction.id, {
       provider,
-      rawProviderPayload: metadata,
+      rawProviderPayload: payment.rawProviderPayload || metadata,
     });
   }
 
@@ -784,7 +782,7 @@ async function reconcileExistingTransactionSettlement(
       merchant_net_amount: merchantNetAmount,
       processor_reference: payment.reference,
       payment_rail: normalizePaymentMethod(payment.channel),
-      settlement_status: providerSettlementAmount !== null ? "processing" : "pending",
+      settlement_status: "processing",
     })
     .eq("id", existingTxn.id);
 }
