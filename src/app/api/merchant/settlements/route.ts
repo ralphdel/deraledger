@@ -52,6 +52,8 @@ export async function GET() {
     rows = await loadTransactionFallbackRows(supabase, merchantId);
   }
 
+  rows = await hydrateMissingSettlementAccounts(supabase, merchantId, rows);
+
   return NextResponse.json({
     rows,
     summary: {
@@ -118,6 +120,33 @@ async function resolveCurrentMerchantId(supabase: Awaited<ReturnType<typeof crea
     .maybeSingle();
 
   return (teamRow?.merchant_id as string | undefined) || null;
+}
+
+async function hydrateMissingSettlementAccounts(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  merchantId: string,
+  rows: any[]
+) {
+  if (rows.length === 0 || rows.every((row) => row.merchant_settlement_accounts)) {
+    return rows;
+  }
+
+  const { data: account } = await supabase
+    .from("merchant_settlement_accounts")
+    .select("bank_name,account_number,account_name,currency")
+    .eq("merchant_id", merchantId)
+    .eq("is_default", true)
+    .eq("status", "active")
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!account) return rows;
+
+  return rows.map((row) => ({
+    ...row,
+    merchant_settlement_accounts: row.merchant_settlement_accounts || account,
+  }));
 }
 
 async function loadTransactionFallbackRows(

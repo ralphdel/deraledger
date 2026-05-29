@@ -143,8 +143,7 @@ export default function MerchantSettlementsPage() {
     const labelText = fromDate === toDate ? fromDate : `${fromDate}_to_${toDate}`;
     downloadCSV(visibleRows.map((row) => ({
       Date: new Date(getSettlementActivityDate(row)).toLocaleString("en-NG"),
-      Provider: row.provider_name,
-      Method: row.payment_method || "",
+      "Payment Method": labelPaymentMethod(row.payment_method),
       "Payment Reference": row.payment_records?.provider_reference || row.provider_settlement_reference || "",
       "Gross Amount": row.gross_amount ?? "",
       "Provider Fee": row.provider_fee ?? "",
@@ -221,10 +220,11 @@ export default function MerchantSettlementsPage() {
                 <TableHeader>
                   <TableRow className="bg-neutral-50">
                     <TableHead>Time</TableHead>
-                    <TableHead>Provider</TableHead>
+                    <TableHead>Payment Method</TableHead>
                     <TableHead>Settlement Account</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="text-right">Gross</TableHead>
+                    <TableHead className="text-right">Fee</TableHead>
                     <TableHead className="text-right">Expected</TableHead>
                     <TableHead className="text-right">Settled</TableHead>
                   </TableRow>
@@ -234,8 +234,7 @@ export default function MerchantSettlementsPage() {
                     <TableRow key={row.id}>
                       <TableCell className="text-sm text-neutral-600">{new Date(getSettlementActivityDate(row)).toLocaleString("en-NG", { dateStyle: "medium", timeStyle: "short" })}</TableCell>
                       <TableCell>
-                        <Badge variant="outline" className="capitalize border-2">{row.provider_name}</Badge>
-                        <p className="text-xs text-neutral-500 mt-1">{row.payment_method || "payment"}</p>
+                        <Badge variant="outline" className="capitalize border-2">{labelPaymentMethod(row.payment_method)}</Badge>
                         {row.provider_settlement_batches?.provider_batch_reference && (
                           <p className="text-xs text-emerald-700 mt-1">Batch {row.provider_settlement_batches.provider_batch_reference}</p>
                         )}
@@ -251,6 +250,7 @@ export default function MerchantSettlementsPage() {
                         )}
                       </TableCell>
                       <TableCell className="text-right font-medium">{formatNaira(Number(row.gross_amount || 0))}</TableCell>
+                      <TableCell className="text-right font-medium">{formatNaira(Number(row.provider_fee || 0))}</TableCell>
                       <TableCell className="text-right font-medium">{row.expected_settlement === null || row.expected_settlement === undefined ? "Under review" : formatNaira(Number(row.expected_settlement))}</TableCell>
                       <TableCell className="text-right font-medium">{row.actual_settlement === null || row.actual_settlement === undefined ? "-" : formatNaira(Number(row.actual_settlement))}</TableCell>
                     </TableRow>
@@ -295,6 +295,12 @@ function maskAccount(account?: SettlementRow["merchant_settlement_accounts"]) {
 function formatDateInput(date: Date) {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function labelPaymentMethod(method?: string | null) {
+  if (!method) return "Payment";
+  if (method === "bank_transfer") return "Bank transfer";
+  return method.replaceAll("_", " ");
 }
 
 function getSettlementActivityDate(row: SettlementRow) {
