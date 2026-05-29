@@ -375,6 +375,7 @@ export async function upsertSettlementLedgerFromTransaction(
     transaction.settlement_status,
     Boolean(settlementRefs.accountId && settlementRefs.providerMappingId)
   );
+  const settlementOwner = settlementStatus === "manual_review" ? "manual_review" : "provider";
 
   const { error: settlementError } = await supabase
     .from("settlement_records")
@@ -397,6 +398,9 @@ export async function upsertSettlementLedgerFromTransaction(
         settlement_difference: null,
         fee_payer: feeAbsorbedBy === "customer" ? "customer_pays_fee" : "merchant_pays_fee",
         settlement_status: settlementStatus,
+        settlement_mode: "provider_direct",
+        settlement_owner: settlementOwner,
+        payout_action_required: false,
         provider_settlement_reference: providerReference,
         provider_fee_source: settlementSources.providerFeeSource,
         expected_settlement_source: settlementSources.expectedSettlementSource,

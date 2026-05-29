@@ -1,12 +1,21 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-  DollarSign, Download, CalendarDays, TrendingUp, Minus, Banknote, Loader2, Building2,
+  AlertTriangle,
+  Banknote,
+  CheckCircle2,
+  Download,
+  Eye,
+  Loader2,
+  Minus,
+  RefreshCw,
+  Search,
+  TrendingUp,
 } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -14,338 +23,339 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { createClient } from "@/lib/supabase/client";
+import { Textarea } from "@/components/ui/textarea";
 import { formatNaira } from "@/lib/calculations";
 import { downloadCSV } from "@/lib/csv";
 
-interface AdminTx {
+type SettlementRow = {
   id: string;
   created_at: string;
-  merchant_id: string;
-  merchant_name: string;
-  invoice_id: string;
-  invoice_number: string;
-  amount_paid: number;
-  paystack_fee: number;
-  fee_absorbed_by: string;
-  payment_method: string;
-  payment_rail?: string | null;
-  settlement_status?: string | null;
-  source_currency?: string | null;
-  source_amount?: number | null;
-  fx_rate?: number | null;
-  merchant_net_amount?: number | null;
-  paystack_reference: string | null;
-  processor_reference?: string | null;
-}
+  provider_name: string;
+  payment_method: string | null;
+  gross_amount: number | null;
+  provider_fee: number | null;
+  platform_fee: number | null;
+  expected_settlement: number | null;
+  actual_settlement: number | null;
+  settlement_difference: number | null;
+  fee_payer: string | null;
+  settlement_status: string;
+  settlement_mode?: string | null;
+  settlement_owner?: string | null;
+  payout_action_required?: boolean | null;
+  provider_fee_source?: string | null;
+  expected_settlement_source?: string | null;
+  provider_settlement_reference?: string | null;
+  settled_at?: string | null;
+  reconciliation_notes?: string | null;
+  payment_records?: {
+    provider_reference?: string | null;
+    internal_reference?: string | null;
+    payment_purpose?: string | null;
+  } | null;
+  merchants?: {
+    business_name?: string | null;
+    email?: string | null;
+  } | null;
+  merchant_settlement_accounts?: {
+    bank_name?: string | null;
+    account_number?: string | null;
+    account_name?: string | null;
+    currency?: string | null;
+  } | null;
+  merchant_provider_settlement_accounts?: {
+    status?: string | null;
+    environment?: string | null;
+    provider_subaccount_code?: string | null;
+    provider_split_reference?: string | null;
+  } | null;
+};
 
-interface MerchantOption {
-  id: string;
-  business_name: string;
-}
+type ApiResponse = {
+  rows: SettlementRow[];
+  summary: {
+    grossAmount: number;
+    providerFees: number;
+    platformFees: number;
+    expectedSettlement: number;
+    actualSettlement: number;
+    manualReviewCount: number;
+  };
+};
+
+const STATUS_OPTIONS = ["all", "pending", "processing", "completed", "manual_review", "failed", "disputed"];
+const PROVIDERS = ["all", "paystack", "monnify", "breet"];
 
 export default function AdminAccountingPage() {
-  const [transactions, setTransactions] = useState<AdminTx[]>([]);
-  const [merchants, setMerchants] = useState<MerchantOption[]>([]);
+  const [rows, setRows] = useState<SettlementRow[]>([]);
+  const [summary, setSummary] = useState<ApiResponse["summary"] | null>(null);
   const [loading, setLoading] = useState(true);
-  const todayStr = new Date().toISOString().split("T")[0];
-  const [fromDate, setFromDate] = useState(todayStr);
-  const [toDate, setToDate] = useState(todayStr);
-  const [merchantFilter, setMerchantFilter] = useState("all");
-  const [merchantSearch, setMerchantSearch] = useState("");
+  const [provider, setProvider] = useState("all");
+  const [status, setStatus] = useState("all");
+  const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState<SettlementRow | null>(null);
+  const [actualSettlement, setActualSettlement] = useState("");
+  const [providerReference, setProviderReference] = useState("");
+  const [notes, setNotes] = useState("");
+  const [actionLoading, setActionLoading] = useState(false);
 
-  const applyPreset = (preset: string) => {
-    const now = new Date();
-    const pad = (n: number) => String(n).padStart(2, "0");
-    const fmt = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-    if (preset === "today") { setFromDate(todayStr); setToDate(todayStr); }
-    else if (preset === "week") {
-      const start = new Date(now); start.setDate(now.getDate() - now.getDay());
-      setFromDate(fmt(start)); setToDate(todayStr);
-    } else if (preset === "month") {
-      setFromDate(`${now.getFullYear()}-${pad(now.getMonth() + 1)}-01`); setToDate(todayStr);
-    } else if (preset === "last_month") {
-      const lm = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      const lme = new Date(now.getFullYear(), now.getMonth(), 0);
-      setFromDate(fmt(lm)); setToDate(fmt(lme));
-    }
+  const fetchRows = async () => {
+    setLoading(true);
+    const params = new URLSearchParams({ limit: "250" });
+    if (provider !== "all") params.set("provider", provider);
+    if (status !== "all") params.set("settlement_status", status);
+    const res = await fetch(`/api/admin/payments-settlements?${params.toString()}`, { cache: "no-store" });
+    const payload = await res.json();
+    if (!res.ok) throw new Error(payload.error || "Failed to load settlements.");
+    setRows(payload.rows || []);
+    setSummary(payload.summary || null);
+    setLoading(false);
   };
 
   useEffect(() => {
-    const sb = createClient();
-    sb.from("merchants")
-      .select("id, business_name")
-      .order("business_name")
-      .then(({ data }) => setMerchants((data || []) as MerchantOption[]));
-  }, []);
-
-  useEffect(() => {
-    const fetchTx = async () => {
-      setLoading(true);
-      const sb = createClient();
-      const dayStart = `${fromDate}T00:00:00.000Z`;
-      const dayEnd = `${toDate}T23:59:59.999Z`;
-
-      let query = sb
-        .from("transactions")
-        .select("id, created_at, merchant_id, invoice_id, amount_paid, paystack_fee, fee_absorbed_by, payment_method, payment_rail, settlement_status, source_currency, source_amount, fx_rate, merchant_net_amount, paystack_reference, processor_reference")
-        .eq("status", "success")
-        .gte("created_at", dayStart)
-        .lte("created_at", dayEnd)
-        .order("created_at", { ascending: false });
-
-      if (merchantFilter !== "all") {
-        query = query.eq("merchant_id", merchantFilter);
-      }
-
-      const { data } = await query;
-      const txRows = (data || []) as AdminTx[];
-
-      if (txRows.length > 0) {
-        const invoiceIds = [...new Set(txRows.map((tx) => tx.invoice_id))];
-        const { data: invoices } = await sb.from("invoices").select("id, invoice_number").in("id", invoiceIds);
-        const invoiceMap: Record<string, string> = {};
-        (invoices || []).forEach((inv) => { invoiceMap[String(inv.id)] = String(inv.invoice_number); });
-
-        const merchantMap: Record<string, string> = {};
-        merchants.forEach((merchant) => { merchantMap[merchant.id] = merchant.business_name; });
-
-        txRows.forEach((tx) => {
-          tx.invoice_number = invoiceMap[tx.invoice_id] || "-";
-          tx.merchant_name = merchantMap[tx.merchant_id] || tx.merchant_id.slice(0, 8);
-        });
-      }
-
-      setTransactions(txRows);
+    fetchRows().catch((error) => {
+      console.error(error);
       setLoading(false);
-    };
-    fetchTx();
-  }, [fromDate, toDate, merchantFilter, merchants]);
+    });
+  }, [provider, status]);
 
-  function getNetAmount(tx: AdminTx) {
-    if (typeof tx.merchant_net_amount === "number") {
-      return Number(tx.merchant_net_amount);
+  const filteredRows = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    if (!needle) return rows;
+    return rows.filter((row) => {
+      const values = [
+        row.merchants?.business_name,
+        row.merchants?.email,
+        row.payment_records?.provider_reference,
+        row.provider_settlement_reference,
+        row.merchant_settlement_accounts?.account_name,
+        row.merchant_settlement_accounts?.bank_name,
+      ];
+      return values.some((value) => String(value || "").toLowerCase().includes(needle));
+    });
+  }, [rows, search]);
+
+  const openRow = (row: SettlementRow) => {
+    setSelected(row);
+    setActualSettlement(row.actual_settlement !== null && row.actual_settlement !== undefined ? String(row.actual_settlement) : "");
+    setProviderReference(row.provider_settlement_reference || "");
+    setNotes(row.reconciliation_notes || "");
+  };
+
+  const runAction = async (action: "mark_manual_review" | "record_actual_settlement" | "mark_completed") => {
+    if (!selected) return;
+    setActionLoading(true);
+    const res = await fetch("/api/admin/payments-settlements", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        settlementId: selected.id,
+        action,
+        actualSettlement,
+        providerSettlementReference: providerReference,
+        notes,
+      }),
+    });
+    const payload = await res.json().catch(() => ({}));
+    setActionLoading(false);
+    if (!res.ok) {
+      alert(payload.error || "Settlement action failed.");
+      return;
     }
-    const fee = tx.fee_absorbed_by === "business" ? Number(tx.paystack_fee) : 0;
-    return Number(tx.amount_paid) - fee;
-  }
-
-  const totalGMV = transactions.reduce((sum, tx) => sum + Number(tx.amount_paid), 0);
-  const totalFees = transactions.reduce((sum, tx) => sum + Number(tx.paystack_fee), 0);
-  const totalMerchantFees = transactions.reduce((sum, tx) => {
-    return sum + (tx.fee_absorbed_by === "business" ? Number(tx.paystack_fee) : 0);
-  }, 0);
-  const totalSettlement = transactions.reduce((sum, tx) => sum + getNetAmount(tx), 0);
+    setSelected(null);
+    await fetchRows();
+  };
 
   const handleDownload = () => {
-    const label = fromDate === toDate ? fromDate : `${fromDate}_to_${toDate}`;
-    const suffix = merchantFilter !== "all"
-      ? `_${merchants.find((merchant) => merchant.id === merchantFilter)?.business_name?.replace(/\s+/g, "_") || merchantFilter.slice(0, 8)}`
-      : "_Global";
-
-    const csvData = transactions.map((tx) => ({
-      Date: new Date(tx.created_at).toLocaleString("en-NG"),
-      Merchant: tx.merchant_name,
-      Invoice: tx.invoice_number,
-      Method: tx.payment_method,
-      "Payment Rail": (tx.payment_rail || tx.payment_method || "").toUpperCase(),
-      "Settlement Status": tx.settlement_status || "settled",
-      "Gross Amount (NGN)": Number(tx.amount_paid).toFixed(2),
-      "Provider Fee (NGN)": Number(tx.paystack_fee).toFixed(2),
-      "Fee Payer": tx.fee_absorbed_by === "business" ? "Business" : "Customer",
-      "Net Settlement (NGN)": getNetAmount(tx).toFixed(2),
-      "FX Details": tx.source_amount && tx.fx_rate ? `${tx.source_amount} ${tx.source_currency} @ ${tx.fx_rate}` : "",
-      Reference: tx.processor_reference || tx.paystack_reference || "",
-    }));
-    downloadCSV(csvData, `Deraledger_Accounting${suffix}_${label}`);
+    downloadCSV(filteredRows.map((row) => ({
+      Date: new Date(row.created_at).toLocaleString("en-NG"),
+      Merchant: row.merchants?.business_name || row.merchants?.email || "",
+      Provider: row.provider_name,
+      Method: row.payment_method || "",
+      "Gross Amount": row.gross_amount ?? "",
+      "Provider Fee": row.provider_fee ?? "",
+      "Expected Settlement": row.expected_settlement ?? "",
+      "Actual Settlement": row.actual_settlement ?? "",
+      Difference: row.settlement_difference ?? "",
+      Status: row.settlement_status,
+      Owner: row.settlement_owner || "",
+      Mode: row.settlement_mode || "",
+      "Settlement Account": maskAccount(row.merchant_settlement_accounts),
+      Reference: row.provider_settlement_reference || row.payment_records?.provider_reference || "",
+    })), "Deraledger_Payments_Settlements");
   };
-
-  const isToday = fromDate === todayStr && toDate === todayStr;
-  const filteredMerchantList = merchants.filter((merchant) =>
-    merchant.business_name.toLowerCase().includes(merchantSearch.toLowerCase())
-  );
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-neutral-900">Accounting & Settlements</h1>
-          <p className="text-neutral-500 text-sm mt-1">Platform-wide treasury, collection, and settlement tracking.</p>
+          <h1 className="text-2xl font-bold text-neutral-900">Payments & Settlements</h1>
+          <p className="text-neutral-500 text-sm mt-1">Track payment success, expected settlement, provider ownership, and reconciliation status.</p>
         </div>
-        <Button variant="outline" className="border-2 gap-2" onClick={handleDownload} disabled={transactions.length === 0}>
-          <Download className="h-4 w-4" /> Download CSV
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" className="border-2 gap-2" onClick={() => fetchRows()}>
+            <RefreshCw className="h-4 w-4" /> Refresh
+          </Button>
+          <Button variant="outline" className="border-2 gap-2" onClick={handleDownload} disabled={filteredRows.length === 0}>
+            <Download className="h-4 w-4" /> CSV
+          </Button>
+        </div>
       </div>
 
-      <div className="flex flex-col gap-3">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 flex-wrap">
-          <div className="flex items-center gap-2">
-            <CalendarDays className="h-4 w-4 text-neutral-500" />
-            <span className="text-sm text-neutral-600 font-medium">From</span>
-            <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="w-[160px] border-2 bg-white" />
-            <span className="text-sm text-neutral-600 font-medium">To</span>
-            <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="w-[160px] border-2 bg-white" />
-          </div>
-          <div className="flex items-center gap-2">
-            {(["today", "week", "month", "last_month"] as const).map((preset) => (
-              <button
-                key={preset}
-                onClick={() => applyPreset(preset)}
-                className={`px-3 py-1.5 text-xs font-semibold rounded-full border-2 transition-colors ${
-                  preset === "today" && isToday ? "bg-neutral-900 text-white border-neutral-900" : "border-neutral-200 text-neutral-700 hover:bg-neutral-50"
-                }`}
-              >
-                {preset === "today" ? "Today" : preset === "week" ? "This Week" : preset === "month" ? "This Month" : "Last Month"}
-              </button>
-            ))}
-            {isToday && <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 border-2 text-xs">Live</Badge>}
-          </div>
-        </div>
-        <Select value={merchantFilter} onValueChange={(value) => value && setMerchantFilter(value)}>
-          <SelectTrigger className="w-[260px] border-2 bg-white text-sm">
-            <div className="flex items-center gap-2">
-              <Building2 className="h-4 w-4 text-neutral-400" />
-              <SelectValue placeholder="All Merchants" />
-            </div>
-          </SelectTrigger>
-          <SelectContent className="max-h-[300px]">
-            <div className="p-2 sticky top-0 bg-white border-b">
-              <Input
-                placeholder="Search merchants..."
-                value={merchantSearch}
-                onChange={(e) => setMerchantSearch(e.target.value)}
-                className="h-8 text-sm border-2"
-              />
-            </div>
-            <SelectItem value="all">All Merchants</SelectItem>
-            {filteredMerchantList.map((merchant) => (
-              <SelectItem key={merchant.id} value={merchant.id}>{merchant.business_name}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card className="border shadow-none">
-          <CardContent className="p-5">
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-10 h-10 rounded-lg bg-blue-100 border-2 border-blue-200 flex items-center justify-center">
-                <TrendingUp className="h-5 w-5 text-blue-700" />
-              </div>
-            </div>
-            <p className="text-2xl font-bold text-neutral-900">{formatNaira(totalGMV)}</p>
-            <p className="text-xs text-neutral-500 mt-1">Gross Volume ({transactions.length} txns)</p>
-          </CardContent>
-        </Card>
-        <Card className="border shadow-none">
-          <CardContent className="p-5">
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-10 h-10 rounded-lg bg-red-100 border-2 border-red-200 flex items-center justify-center">
-                <Minus className="h-5 w-5 text-red-700" />
-              </div>
-            </div>
-            <p className="text-2xl font-bold text-neutral-900">{formatNaira(totalFees)}</p>
-            <p className="text-xs text-neutral-500 mt-1">Total Provider Fees</p>
-          </CardContent>
-        </Card>
-        <Card className="border shadow-none">
-          <CardContent className="p-5">
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-10 h-10 rounded-lg bg-amber-100 border-2 border-amber-200 flex items-center justify-center">
-                <DollarSign className="h-5 w-5 text-amber-700" />
-              </div>
-            </div>
-            <p className="text-2xl font-bold text-neutral-900">{formatNaira(totalMerchantFees)}</p>
-            <p className="text-xs text-neutral-500 mt-1">Merchant-Absorbed Fees</p>
-          </CardContent>
-        </Card>
-        <Card className="border shadow-none border-emerald-200">
-          <CardContent className="p-5">
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-10 h-10 rounded-lg bg-emerald-100 border-2 border-emerald-200 flex items-center justify-center">
-                <Banknote className="h-5 w-5 text-emerald-700" />
-              </div>
-            </div>
-            <p className="text-2xl font-bold text-emerald-700">{formatNaira(totalSettlement)}</p>
-            <p className="text-xs text-neutral-500 mt-1">Expected Merchant Settlement</p>
-          </CardContent>
-        </Card>
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+        <SummaryCard icon={TrendingUp} label="Gross Collected" value={formatNaira(summary?.grossAmount || 0)} />
+        <SummaryCard icon={Minus} label="Provider Fees" value={formatNaira(summary?.providerFees || 0)} />
+        <SummaryCard icon={Banknote} label="Expected Settlement" value={formatNaira(summary?.expectedSettlement || 0)} />
+        <SummaryCard icon={CheckCircle2} label="Actual Settled" value={formatNaira(summary?.actualSettlement || 0)} />
+        <SummaryCard icon={AlertTriangle} label="Manual Review" value={String(summary?.manualReviewCount || 0)} />
       </div>
 
       <Card className="border shadow-none">
         <CardHeader className="pb-3">
-          <CardTitle className="text-base font-bold text-neutral-900">Transaction Ledger</CardTitle>
+          <div className="flex flex-col lg:flex-row gap-3 lg:items-center lg:justify-between">
+            <CardTitle className="text-base font-bold text-neutral-900">Settlement Operations</CardTitle>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-400" />
+                <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search merchant/reference" className="pl-9 border-2 w-full sm:w-[260px]" />
+              </div>
+              <Select value={provider} onValueChange={(value) => value && setProvider(value)}>
+                <SelectTrigger className="border-2 w-full sm:w-[150px]"><SelectValue /></SelectTrigger>
+                <SelectContent>{PROVIDERS.map((item) => <SelectItem key={item} value={item}>{label(item)}</SelectItem>)}</SelectContent>
+              </Select>
+              <Select value={status} onValueChange={(value) => value && setStatus(value)}>
+                <SelectTrigger className="border-2 w-full sm:w-[170px]"><SelectValue /></SelectTrigger>
+                <SelectContent>{STATUS_OPTIONS.map((item) => <SelectItem key={item} value={item}>{label(item)}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+          </div>
         </CardHeader>
         <CardContent className="p-0 overflow-x-auto">
           {loading ? (
             <div className="flex items-center justify-center py-12 text-neutral-500">
-              <Loader2 className="h-5 w-5 animate-spin mr-2" /> Loading...
+              <Loader2 className="h-5 w-5 animate-spin mr-2" /> Loading settlements...
             </div>
-          ) : transactions.length === 0 ? (
-            <div className="text-center py-12 text-neutral-500">
-              <DollarSign className="h-10 w-10 mx-auto mb-2 text-neutral-300" />
-              <p className="text-sm">No transactions on this date</p>
-            </div>
+          ) : filteredRows.length === 0 ? (
+            <div className="text-center py-12 text-neutral-500">No settlement records found.</div>
           ) : (
             <Table>
               <TableHeader>
-                <TableRow className="bg-neutral-50 hover:bg-neutral-50">
-                  <TableHead className="font-bold text-neutral-900 text-xs uppercase">Time</TableHead>
-                  <TableHead className="font-bold text-neutral-900 text-xs uppercase">Merchant</TableHead>
-                  <TableHead className="font-bold text-neutral-900 text-xs uppercase">Invoice</TableHead>
-                  <TableHead className="font-bold text-neutral-900 text-xs uppercase">Payment Rail</TableHead>
-                  <TableHead className="font-bold text-neutral-900 text-xs uppercase">Settlement</TableHead>
-                  <TableHead className="font-bold text-neutral-900 text-xs uppercase text-right">Gross</TableHead>
-                  <TableHead className="font-bold text-neutral-900 text-xs uppercase text-right">Fee</TableHead>
-                  <TableHead className="font-bold text-neutral-900 text-xs uppercase">Fee Payer</TableHead>
-                  <TableHead className="font-bold text-neutral-900 text-xs uppercase text-right">Net</TableHead>
+                <TableRow className="bg-neutral-50">
+                  <TableHead>Merchant</TableHead>
+                  <TableHead>Provider</TableHead>
+                  <TableHead>Settlement Account</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Owner</TableHead>
+                  <TableHead className="text-right">Gross</TableHead>
+                  <TableHead className="text-right">Expected</TableHead>
+                  <TableHead className="text-right">Actual</TableHead>
+                  <TableHead />
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {transactions.map((tx) => (
-                  <TableRow key={tx.id} className="border-b hover:bg-neutral-50">
-                    <TableCell className="text-sm text-neutral-600">
-                      {new Date(tx.created_at).toLocaleTimeString("en-NG", { hour: "2-digit", minute: "2-digit" })}
-                    </TableCell>
-                    <TableCell className="text-sm font-medium text-neutral-900">{tx.merchant_name}</TableCell>
-                    <TableCell className="text-sm text-neutral-600">{tx.invoice_number}</TableCell>
+                {filteredRows.map((row) => (
+                  <TableRow key={row.id}>
                     <TableCell>
-                      <Badge variant="outline" className="text-xs capitalize border-2 bg-neutral-50">
-                        {(tx.payment_rail || tx.payment_method) === "bank_transfer" ? "Bank" : (tx.payment_rail || tx.payment_method)}
-                      </Badge>
+                      <p className="font-semibold text-sm text-neutral-900">{row.merchants?.business_name || "Unknown"}</p>
+                      <p className="text-xs text-neutral-500">{row.payment_records?.provider_reference || row.provider_settlement_reference}</p>
                     </TableCell>
-                    <TableCell className="text-xs text-neutral-600">
-                      <div className="space-y-1">
-                        <Badge variant="outline" className="text-[10px] uppercase border-2 bg-neutral-50">
-                          {(tx.settlement_status || "settled").replaceAll("_", " ")}
-                        </Badge>
-                        {tx.source_amount && tx.fx_rate ? (
-                          <div>{tx.source_amount} {tx.source_currency} @ {formatNaira(Number(tx.fx_rate))}</div>
-                        ) : null}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-sm text-right font-medium">{formatNaira(Number(tx.amount_paid))}</TableCell>
-                    <TableCell className="text-sm text-right text-red-600">{formatNaira(Number(tx.paystack_fee))}</TableCell>
                     <TableCell>
-                      <Badge variant="outline" className={`text-xs border-2 ${tx.fee_absorbed_by === "business" ? "bg-amber-50 text-amber-700 border-amber-200" : "bg-neutral-50 text-neutral-500 border-neutral-200"}`}>
-                        {tx.fee_absorbed_by === "business" ? "Merchant" : "Customer"}
-                      </Badge>
+                      <Badge variant="outline" className="capitalize border-2">{row.provider_name}</Badge>
+                      <p className="text-xs text-neutral-500 mt-1">{row.payment_method || "method unknown"}</p>
                     </TableCell>
-                    <TableCell className="text-sm text-right font-bold text-emerald-700">{formatNaira(getNetAmount(tx))}</TableCell>
+                    <TableCell className="text-sm">{maskAccount(row.merchant_settlement_accounts)}</TableCell>
+                    <TableCell><StatusBadge status={row.settlement_status} /></TableCell>
+                    <TableCell>
+                      <Badge variant="outline" className="border-2 text-xs">{label(row.settlement_owner || "provider")}</Badge>
+                      {row.settlement_mode === "treasury_payout_required" && <p className="text-xs text-amber-700 mt-1">Treasury action required</p>}
+                    </TableCell>
+                    <TableCell className="text-right font-medium">{formatNaira(Number(row.gross_amount || 0))}</TableCell>
+                    <TableCell className="text-right font-medium">
+                      {row.expected_settlement === null || row.expected_settlement === undefined ? "Review" : formatNaira(Number(row.expected_settlement))}
+                      <p className="text-[10px] text-neutral-400">{label(row.expected_settlement_source || "")}</p>
+                    </TableCell>
+                    <TableCell className="text-right font-medium">{row.actual_settlement === null || row.actual_settlement === undefined ? "-" : formatNaira(Number(row.actual_settlement))}</TableCell>
+                    <TableCell className="text-right">
+                      <Button variant="outline" size="sm" className="border-2 gap-1" onClick={() => openRow(row)}>
+                        <Eye className="h-3.5 w-3.5" /> Review
+                      </Button>
+                    </TableCell>
                   </TableRow>
                 ))}
-                <TableRow className="bg-neutral-50 border-t-2 hover:bg-neutral-50">
-                  <TableCell colSpan={5} className="font-bold text-sm text-neutral-900">Total</TableCell>
-                  <TableCell className="text-right font-bold text-sm">{formatNaira(totalGMV)}</TableCell>
-                  <TableCell className="text-right font-bold text-sm text-red-600">{formatNaira(totalFees)}</TableCell>
-                  <TableCell />
-                  <TableCell className="text-right font-bold text-sm text-emerald-700">{formatNaira(totalSettlement)}</TableCell>
-                </TableRow>
               </TableBody>
             </Table>
           )}
         </CardContent>
       </Card>
+
+      {selected && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl border w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <div className="p-5 border-b">
+              <h2 className="font-bold text-lg">Settlement Review</h2>
+              <p className="text-sm text-neutral-500">{selected.merchants?.business_name} · {selected.provider_name}</p>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <Info label="Gross" value={formatNaira(Number(selected.gross_amount || 0))} />
+                <Info label="Expected" value={selected.expected_settlement === null || selected.expected_settlement === undefined ? "Manual review" : formatNaira(Number(selected.expected_settlement))} />
+                <Info label="Fee source" value={label(selected.provider_fee_source || "provider_missing")} />
+                <Info label="Settlement account" value={maskAccount(selected.merchant_settlement_accounts)} />
+              </div>
+              <Input value={actualSettlement} onChange={(event) => setActualSettlement(event.target.value)} placeholder="Actual settlement amount" className="border-2" />
+              <Input value={providerReference} onChange={(event) => setProviderReference(event.target.value)} placeholder="Provider settlement reference" className="border-2" />
+              <Textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Reconciliation notes" className="border-2 min-h-[100px]" />
+              <div className="flex flex-wrap gap-2 justify-end">
+                <Button variant="outline" className="border-2" onClick={() => setSelected(null)}>Cancel</Button>
+                <Button variant="outline" className="border-2 border-amber-300 text-amber-700" disabled={actionLoading} onClick={() => runAction("mark_manual_review")}>Manual Review</Button>
+                <Button variant="outline" className="border-2 border-blue-300 text-blue-700" disabled={actionLoading} onClick={() => runAction("record_actual_settlement")}>Record Actual</Button>
+                <Button className="bg-emerald-700 hover:bg-emerald-800 text-white" disabled={actionLoading} onClick={() => runAction("mark_completed")}>Mark Completed</Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
+}
+
+function SummaryCard({ icon: Icon, label: text, value }: { icon: any; label: string; value: string }) {
+  return (
+    <Card className="border shadow-none">
+      <CardContent className="p-5">
+        <Icon className="h-5 w-5 text-neutral-500 mb-3" />
+        <p className="text-xl font-bold text-neutral-900">{value}</p>
+        <p className="text-xs text-neutral-500 mt-1">{text}</p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const className =
+    status === "completed" ? "bg-emerald-50 text-emerald-700 border-emerald-200" :
+    status === "manual_review" ? "bg-amber-50 text-amber-700 border-amber-200" :
+    status === "failed" || status === "disputed" ? "bg-red-50 text-red-700 border-red-200" :
+    "bg-blue-50 text-blue-700 border-blue-200";
+  return <Badge variant="outline" className={`border-2 capitalize ${className}`}>{label(status)}</Badge>;
+}
+
+function Info({ label: text, value }: { label: string; value: string }) {
+  return (
+    <div className="border rounded-md p-3">
+      <p className="text-xs text-neutral-500">{text}</p>
+      <p className="font-semibold text-neutral-900">{value}</p>
+    </div>
+  );
+}
+
+function maskAccount(account?: SettlementRow["merchant_settlement_accounts"]) {
+  if (!account) return "No account";
+  const last4 = account.account_number?.slice(-4) || "----";
+  return `${account.bank_name || "Bank"} ****${last4} · ${account.account_name || "Account"}`;
+}
+
+function label(value: string) {
+  if (!value) return "-";
+  return value.replaceAll("_", " ");
 }
