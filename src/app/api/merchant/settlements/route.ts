@@ -135,18 +135,39 @@ async function hydrateMissingSettlementAccounts(
     .from("merchant_settlement_accounts")
     .select("bank_name,account_number,account_name,currency")
     .eq("merchant_id", merchantId)
-    .eq("is_default", true)
-    .eq("status", "active")
+    .neq("status", "disabled")
+    .order("is_default", { ascending: false })
     .order("updated_at", { ascending: false })
     .limit(1)
     .maybeSingle();
 
-  if (!account) return rows;
+  const hydratedAccount = account || await loadLegacySettlementAccount(supabase, merchantId);
+  if (!hydratedAccount) return rows;
 
   return rows.map((row) => ({
     ...row,
-    merchant_settlement_accounts: row.merchant_settlement_accounts || account,
+    merchant_settlement_accounts: row.merchant_settlement_accounts || hydratedAccount,
   }));
+}
+
+async function loadLegacySettlementAccount(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  merchantId: string
+) {
+  const { data: merchant } = await supabase
+    .from("merchants")
+    .select("settlement_bank_name,settlement_account_number,settlement_account_name")
+    .eq("id", merchantId)
+    .maybeSingle();
+
+  if (!merchant?.settlement_account_number) return null;
+
+  return {
+    bank_name: merchant.settlement_bank_name || "Settlement bank",
+    account_number: merchant.settlement_account_number,
+    account_name: merchant.settlement_account_name || "Settlement account",
+    currency: "NGN",
+  };
 }
 
 async function loadTransactionFallbackRows(
