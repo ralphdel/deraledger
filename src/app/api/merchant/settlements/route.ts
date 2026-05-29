@@ -127,8 +127,88 @@ async function hydrateMissingSettlementAccounts(
   merchantId: string,
   rows: any[]
 ) {
-  if (rows.length === 0 || rows.every((row) => row.merchant_settlement_accounts)) {
-    return rows;
+  if (rows.length === 0) return rows;
+
+  const normalizedRows = rows.map((row) => ({
+    ...row,
+    payment_records: normalizeEmbeddedRow(row.payment_records),
+    merchant_settlement_accounts: normalizeEmbeddedRow(row.merchant_settlement_accounts),
+    merchant_provider_settlement_accounts: normalizeEmbeddedRow(row.merchant_provider_settlement_accounts),
+    provider_settlement_batches: normalizeEmbeddedRow(row.provider_settlement_batches),
+  }));
+
+  if (normalizedRows.every((row) => row.merchant_settlement_accounts)) {
+    return normalizedRows;
+  }
+
+  const accountById = new Map<string, Record<string, unknown>>();
+  const settlementAccountIds = Array.from(
+    new Set(
+      normalizedRows
+        .filter((row) => !row.merchant_settlement_accounts && row.settlement_account_id)
+        .map((row) => String(row.settlement_account_id))
+    )
+  );
+
+  if (settlementAccountIds.length > 0) {
+    const { data: accounts } = await supabase
+      .from("merchant_settlement_accounts")
+      .select("id,bank_name,account_number,account_name,currency")
+      .in("id", settlementAccountIds);
+
+    for (const account of accounts || []) {
+      if (account?.id) accountById.set(String(account.id), account);
+    }
+  }
+
+  const providerMappingIds = Array.from(
+    new Set(
+      normalizedRows
+        .filter((row) => !row.merchant_settlement_accounts && !row.settlement_account_id && row.provider_settlement_account_id)
+        .map((row) => String(row.provider_settlement_account_id))
+    )
+  );
+
+  if (providerMappingIds.length > 0) {
+    const { data: mappings } = await supabase
+      .from("merchant_provider_settlement_accounts")
+      .select("id,settlement_account_id")
+      .in("id", providerMappingIds);
+
+    const derivedAccountIds = Array.from(
+      new Set(
+        (mappings || [])
+          .map((mapping) => mapping.settlement_account_id)
+          .filter(Boolean)
+          .map((id) => String(id))
+      )
+    );
+
+    const missingDerivedIds = derivedAccountIds.filter((id) => !accountById.has(id));
+    if (missingDerivedIds.length > 0) {
+      const { data: derivedAccounts } = await supabase
+        .from("merchant_settlement_accounts")
+        .select("id,bank_name,account_number,account_name,currency")
+        .in("id", missingDerivedIds);
+
+      for (const account of derivedAccounts || []) {
+        if (account?.id) accountById.set(String(account.id), account);
+      }
+    }
+
+    for (const mapping of mappings || []) {
+      const accountId = mapping?.settlement_account_id ? String(mapping.settlement_account_id) : null;
+      if (!accountId) continue;
+      const resolvedAccount = accountById.get(accountId);
+      if (!resolvedAccount) continue;
+
+      normalizedRows.forEach((row) => {
+        if (!row.merchant_settlement_accounts && String(row.provider_settlement_account_id || "") === String(mapping.id)) {
+          row.merchant_settlement_accounts = resolvedAccount;
+          row.settlement_account_id = row.settlement_account_id || accountId;
+        }
+      });
+    }
   }
 
   const { data: account } = await supabase
@@ -142,11 +222,14 @@ async function hydrateMissingSettlementAccounts(
     .maybeSingle();
 
   const hydratedAccount = account || await loadLegacySettlementAccount(supabase, merchantId);
-  if (!hydratedAccount) return rows;
+  if (!hydratedAccount) return normalizedRows;
 
-  return rows.map((row) => ({
+  return normalizedRows.map((row) => ({
     ...row,
-    merchant_settlement_accounts: row.merchant_settlement_accounts || hydratedAccount,
+    merchant_settlement_accounts:
+      row.merchant_settlement_accounts ||
+      (row.settlement_account_id ? accountById.get(String(row.settlement_account_id)) : null) ||
+      hydratedAccount,
   }));
 }
 
@@ -245,4 +328,9 @@ function inferProviderName(transaction: Record<string, unknown>) {
   if (reference.includes("paystack")) return "paystack";
 
   return transaction.processor_reference ? "monnify" : "paystack";
+}
+
+function normalizeEmbeddedRow(value: unknown) {
+  if (Array.isArray(value)) return value[0] || null;
+  return value || null;
 }
