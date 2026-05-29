@@ -43,6 +43,7 @@ type SettlementRow = {
   payment_records?: {
     provider_reference?: string | null;
     payment_purpose?: string | null;
+    paid_at?: string | null;
   } | null;
   merchant_settlement_accounts?: {
     bank_name?: string | null;
@@ -107,8 +108,8 @@ export default function MerchantSettlementsPage() {
     const start = new Date(`${fromDate}T00:00:00`).getTime();
     const end = new Date(`${toDate}T23:59:59.999`).getTime();
     return rows.filter((row) => {
-      const created = new Date(row.created_at).getTime();
-      return created >= start && created <= end;
+      const activityDate = getSettlementActivityDate(row);
+      return activityDate >= start && activityDate <= end;
     });
   }, [rows, fromDate, toDate]);
 
@@ -141,7 +142,7 @@ export default function MerchantSettlementsPage() {
   const handleDownload = () => {
     const labelText = fromDate === toDate ? fromDate : `${fromDate}_to_${toDate}`;
     downloadCSV(visibleRows.map((row) => ({
-      Date: new Date(row.created_at).toLocaleString("en-NG"),
+      Date: new Date(getSettlementActivityDate(row)).toLocaleString("en-NG"),
       Provider: row.provider_name,
       Method: row.payment_method || "",
       "Payment Reference": row.payment_records?.provider_reference || row.provider_settlement_reference || "",
@@ -231,7 +232,7 @@ export default function MerchantSettlementsPage() {
                 <TableBody>
                   {visibleRows.map((row) => (
                     <TableRow key={row.id}>
-                      <TableCell className="text-sm text-neutral-600">{new Date(row.created_at).toLocaleString("en-NG", { dateStyle: "medium", timeStyle: "short" })}</TableCell>
+                      <TableCell className="text-sm text-neutral-600">{new Date(getSettlementActivityDate(row)).toLocaleString("en-NG", { dateStyle: "medium", timeStyle: "short" })}</TableCell>
                       <TableCell>
                         <Badge variant="outline" className="capitalize border-2">{row.provider_name}</Badge>
                         <p className="text-xs text-neutral-500 mt-1">{row.payment_method || "payment"}</p>
@@ -294,4 +295,12 @@ function maskAccount(account?: SettlementRow["merchant_settlement_accounts"]) {
 function formatDateInput(date: Date) {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function getSettlementActivityDate(row: SettlementRow) {
+  return new Date(
+    row.payment_records?.paid_at ||
+    row.settled_at ||
+    row.created_at
+  ).getTime();
 }

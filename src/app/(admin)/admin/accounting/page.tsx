@@ -29,6 +29,7 @@ import { downloadCSV } from "@/lib/csv";
 
 type SettlementRow = {
   id: string;
+  merchant_id?: string | null;
   created_at: string;
   provider_name: string;
   payment_method: string | null;
@@ -100,12 +101,15 @@ export default function AdminAccountingPage() {
   const [loading, setLoading] = useState(true);
   const [provider, setProvider] = useState("all");
   const [status, setStatus] = useState("all");
+  const [merchantFilter, setMerchantFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<SettlementRow | null>(null);
   const [actualSettlement, setActualSettlement] = useState("");
   const [providerReference, setProviderReference] = useState("");
   const [notes, setNotes] = useState("");
   const [actionLoading, setActionLoading] = useState(false);
+  const [actionError, setActionError] = useState("");
+  const [batchError, setBatchError] = useState("");
   const [checkedIds, setCheckedIds] = useState<string[]>([]);
   const [batchModalOpen, setBatchModalOpen] = useState(false);
   const [batchSettledAt, setBatchSettledAt] = useState(() => new Date().toISOString().slice(0, 16));
@@ -134,6 +138,7 @@ export default function AdminAccountingPage() {
     const needle = search.trim().toLowerCase();
     if (!needle) return rows;
     return rows.filter((row) => {
+      if (merchantFilter !== "all" && getMerchantKey(row) !== merchantFilter) return false;
       const values = [
         row.merchants?.business_name,
         row.merchants?.email,
@@ -144,7 +149,17 @@ export default function AdminAccountingPage() {
       ];
       return values.some((value) => String(value || "").toLowerCase().includes(needle));
     });
-  }, [rows, search]);
+  }, [rows, search, merchantFilter]);
+
+  const merchantOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    rows.forEach((row) => {
+      const key = getMerchantKey(row);
+      if (!key || key === "unknown") return;
+      map.set(key, row.merchants?.business_name || row.merchants?.email || "Unknown merchant");
+    });
+    return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+  }, [rows]);
 
   const selectedRows = useMemo(
     () => filteredRows.filter((row) => checkedIds.includes(row.id)),
@@ -167,6 +182,7 @@ export default function AdminAccountingPage() {
     setProviderReference("");
     setActualSettlement(selectedExpectedTotal ? String(selectedExpectedTotal) : "");
     setNotes("");
+    setBatchError("");
     setBatchSettledAt(new Date().toISOString().slice(0, 16));
     setBatchModalOpen(true);
   };
@@ -176,10 +192,12 @@ export default function AdminAccountingPage() {
     setActualSettlement(row.actual_settlement !== null && row.actual_settlement !== undefined ? String(row.actual_settlement) : "");
     setProviderReference(row.provider_settlement_reference || "");
     setNotes(row.reconciliation_notes || "");
+    setActionError("");
   };
 
   const runAction = async (action: "mark_manual_review" | "record_actual_settlement" | "mark_completed") => {
     if (!selected) return;
+    setActionError("");
     setActionLoading(true);
     const res = await fetch("/api/admin/payments-settlements", {
       method: "PATCH",
@@ -195,7 +213,7 @@ export default function AdminAccountingPage() {
     const payload = await res.json().catch(() => ({}));
     setActionLoading(false);
     if (!res.ok) {
-      alert(payload.error || "Settlement action failed.");
+      setActionError(payload.error || "Settlement action failed.");
       return;
     }
     setSelected(null);
@@ -224,6 +242,7 @@ export default function AdminAccountingPage() {
   };
 
   const runBatchAction = async () => {
+    setBatchError("");
     setActionLoading(true);
     const res = await fetch("/api/admin/payments-settlements", {
       method: "PATCH",
@@ -240,7 +259,7 @@ export default function AdminAccountingPage() {
     const payload = await res.json().catch(() => ({}));
     setActionLoading(false);
     if (!res.ok) {
-      alert(payload.error || "Provider batch action failed.");
+      setBatchError(payload.error || "Provider batch action failed.");
       return;
     }
     setBatchModalOpen(false);
@@ -292,6 +311,13 @@ export default function AdminAccountingPage() {
               <Select value={status} onValueChange={(value) => value && setStatus(value)}>
                 <SelectTrigger className="border-2 w-full sm:w-[170px]"><SelectValue /></SelectTrigger>
                 <SelectContent>{STATUS_OPTIONS.map((item) => <SelectItem key={item} value={item}>{label(item)}</SelectItem>)}</SelectContent>
+              </Select>
+              <Select value={merchantFilter} onValueChange={(value) => value && setMerchantFilter(value)}>
+                <SelectTrigger className="border-2 w-full sm:w-[210px]"><SelectValue placeholder="Merchant" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All merchants</SelectItem>
+                  {merchantOptions.map(([key, name]) => <SelectItem key={key} value={key}>{name}</SelectItem>)}
+                </SelectContent>
               </Select>
             </div>
           </div>
@@ -392,6 +418,7 @@ export default function AdminAccountingPage() {
               <Input value={actualSettlement} onChange={(event) => setActualSettlement(event.target.value)} placeholder="Actual settlement amount" className="border-2" />
               <Input value={providerReference} onChange={(event) => setProviderReference(event.target.value)} placeholder="Provider settlement reference" className="border-2" />
               <Textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Reconciliation notes" className="border-2 min-h-[100px]" />
+              {actionError && <InlineError message={actionError} />}
               <div className="flex flex-wrap gap-2 justify-end">
                 <Button variant="outline" className="border-2" onClick={() => setSelected(null)}>Cancel</Button>
                 <Button variant="outline" className="border-2 border-amber-300 text-amber-700" disabled={actionLoading} onClick={() => runAction("mark_manual_review")}>Manual Review</Button>
@@ -419,6 +446,7 @@ export default function AdminAccountingPage() {
               <Input value={providerReference} onChange={(event) => setProviderReference(event.target.value)} placeholder="Provider batch/reference" className="border-2" />
               <Input type="datetime-local" value={batchSettledAt} onChange={(event) => setBatchSettledAt(event.target.value)} className="border-2" />
               <Textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Batch reconciliation notes" className="border-2 min-h-[100px]" />
+              {batchError && <InlineError message={batchError} />}
               <div className="flex flex-wrap gap-2 justify-end">
                 <Button variant="outline" className="border-2" onClick={() => setBatchModalOpen(false)}>Cancel</Button>
                 <Button className="bg-neutral-900 hover:bg-neutral-800 text-white" disabled={actionLoading} onClick={runBatchAction}>Save Batch</Button>
@@ -461,6 +489,15 @@ function Info({ label: text, value }: { label: string; value: string }) {
   );
 }
 
+function InlineError({ message }: { message: string }) {
+  return (
+    <div className="flex gap-2 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+      <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+      <span>{message}</span>
+    </div>
+  );
+}
+
 function maskAccount(account?: SettlementRow["merchant_settlement_accounts"]) {
   if (!account) return "No account";
   const last4 = account.account_number?.slice(-4) || "----";
@@ -470,4 +507,8 @@ function maskAccount(account?: SettlementRow["merchant_settlement_accounts"]) {
 function label(value: string) {
   if (!value) return "-";
   return value.replaceAll("_", " ");
+}
+
+function getMerchantKey(row: SettlementRow) {
+  return row.merchant_id || row.merchants?.email || row.merchants?.business_name || "unknown";
 }

@@ -42,7 +42,31 @@ export async function GET(request: Request) {
   if (feePayer && feePayer !== "all") query = query.eq("fee_payer", feePayer);
   if (merchantId && merchantId !== "all") query = query.eq("merchant_id", merchantId);
 
-  const { data, error } = await query;
+  let { data, error } = await query;
+
+  if (error) {
+    let fallbackQuery = supabase
+      .from("settlement_records")
+      .select(`
+        *,
+        payment_records(*),
+        merchants(business_name,email),
+        merchant_settlement_accounts(bank_name,account_number,account_name,currency),
+        merchant_provider_settlement_accounts(provider_account_reference,provider_subaccount_code,provider_split_reference,status,environment)
+      `)
+      .order("created_at", { ascending: false })
+      .limit(limit);
+
+    if (provider && provider !== "all") fallbackQuery = fallbackQuery.eq("provider_name", provider);
+    if (paymentMethod && paymentMethod !== "all") fallbackQuery = fallbackQuery.eq("payment_method", paymentMethod);
+    if (settlementStatus && settlementStatus !== "all") fallbackQuery = fallbackQuery.eq("settlement_status", settlementStatus);
+    if (feePayer && feePayer !== "all") fallbackQuery = fallbackQuery.eq("fee_payer", feePayer);
+    if (merchantId && merchantId !== "all") fallbackQuery = fallbackQuery.eq("merchant_id", merchantId);
+
+    const fallback = await fallbackQuery;
+    data = fallback.data;
+    error = fallback.error;
+  }
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });

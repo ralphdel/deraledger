@@ -4,6 +4,7 @@ import type {
   PaymentEnvironment,
   PaymentProvider,
 } from "@/lib/services/payment-routing.service";
+import { calculateProviderReportedSettlement } from "@/lib/services/provider-settlement-calculation.service";
 
 type SettlementProvider = PaymentProvider | "future_provider";
 
@@ -295,20 +296,7 @@ export async function upsertSettlementLedgerFromTransaction(
   const provider = options?.provider || (await inferProviderForTransaction(supabase, transaction));
   const providerReference = transaction.processor_reference || transaction.paystack_reference || transaction.id;
   const amountPaid = Number(transaction.amount_paid || 0);
-  const providerFee = Number(transaction.paystack_fee || 0);
   const feeAbsorbedBy = transaction.fee_absorbed_by || "business";
-  const merchantNetAmount =
-    transaction.merchant_net_amount === null || transaction.merchant_net_amount === undefined
-      ? null
-      : Number(transaction.merchant_net_amount);
-  const expectedSettlement =
-    Number.isFinite(Number(merchantNetAmount)) && merchantNetAmount !== null
-      ? Number(merchantNetAmount)
-      : transaction.settlement_status === "manual_review"
-        ? null
-        : feeAbsorbedBy === "business"
-          ? amountPaid - providerFee
-          : amountPaid;
   const paymentMethod = transaction.payment_rail || transaction.payment_method || "card";
   const createdAt = transaction.created_at || new Date().toISOString();
 
@@ -321,13 +309,14 @@ export async function upsertSettlementLedgerFromTransaction(
     .maybeSingle();
 
   const rawPayload = options?.rawProviderPayload || event?.raw_payload || null;
-  const settlementSources = inferSettlementSources({
-    provider,
-    rawPayload,
-    providerFee,
-    expectedSettlement,
-    settlementStatus: transaction.settlement_status,
+  const providerReportedSettlement = calculateProviderReportedSettlement({
+    grossAmount: amountPaid,
+    feePayer: feeAbsorbedBy,
+    providerFeesKobo: extractProviderFeeKobo(provider, rawPayload, transaction),
+    providerSettlementAmountKobo: extractProviderSettlementAmountKobo(provider, rawPayload),
   });
+  const providerFee = providerReportedSettlement.providerFee ?? Number(transaction.paystack_fee || 0);
+  const expectedSettlement = providerReportedSettlement.expectedSettlement;
   const { data: merchant } = await supabase
     .from("merchants")
     .select("id, email")
@@ -371,10 +360,9 @@ export async function upsertSettlementLedgerFromTransaction(
     environment,
   });
 
-  const settlementStatus = normalizeSettlementStatus(
-    transaction.settlement_status,
-    Boolean(settlementRefs.accountId && settlementRefs.providerMappingId)
-  );
+  const settlementStatus = !settlementRefs.accountId || !settlementRefs.providerMappingId
+    ? "manual_review"
+    : providerReportedSettlement.settlementStatus;
   const settlementOwner = settlementStatus === "manual_review" ? "manual_review" : "provider";
 
   const { error: settlementError } = await supabase
@@ -402,8 +390,8 @@ export async function upsertSettlementLedgerFromTransaction(
         settlement_owner: settlementOwner,
         payout_action_required: false,
         provider_settlement_reference: providerReference,
-        provider_fee_source: settlementSources.providerFeeSource,
-        expected_settlement_source: settlementSources.expectedSettlementSource,
+        provider_fee_source: providerReportedSettlement.providerFeeSource,
+        expected_settlement_source: providerReportedSettlement.expectedSettlementSource,
         raw_settlement_payload: rawPayload,
       },
       { onConflict: "payment_record_id" }
@@ -414,43 +402,6 @@ export async function upsertSettlementLedgerFromTransaction(
   }
 }
 
-function inferSettlementSources(input: {
-  provider: PaymentProvider;
-  rawPayload: Record<string, unknown> | null;
-  providerFee: number;
-  expectedSettlement: number | null;
-  settlementStatus?: string | null;
-}) {
-  const hasSettlementAmount =
-    input.provider === "monnify" &&
-    Boolean(
-      getNestedValue(input.rawPayload, ["eventData", "settlementAmount"]) ??
-      getNestedValue(input.rawPayload, ["settlementAmount"])
-    );
-  const hasProviderFee =
-    input.providerFee > 0 ||
-    Boolean(getNestedValue(input.rawPayload, ["fees"]) ?? getNestedValue(input.rawPayload, ["data", "fees"]));
-
-  if (hasSettlementAmount) {
-    return {
-      providerFeeSource: "provider_settlement_amount",
-      expectedSettlementSource: "provider_settlement_amount",
-    };
-  }
-
-  if (hasProviderFee && input.expectedSettlement !== null) {
-    return {
-      providerFeeSource: "provider_fee",
-      expectedSettlementSource: "provider_fee",
-    };
-  }
-
-  return {
-    providerFeeSource: "provider_missing",
-    expectedSettlementSource: "provider_missing",
-  };
-}
-
 function getNestedValue(payload: Record<string, unknown> | null, path: string[]) {
   let current: unknown = payload;
   for (const key of path) {
@@ -458,6 +409,36 @@ function getNestedValue(payload: Record<string, unknown> | null, path: string[])
     current = (current as Record<string, unknown>)[key];
   }
   return current;
+}
+
+function extractProviderSettlementAmountKobo(provider: PaymentProvider, payload: Record<string, unknown> | null) {
+  if (provider !== "monnify") return null;
+  const settlementAmount = Number(
+    getNestedValue(payload, ["eventData", "settlementAmount"]) ??
+    getNestedValue(payload, ["settlementAmount"]) ??
+    0
+  );
+  return Number.isFinite(settlementAmount) && settlementAmount > 0
+    ? Math.round(settlementAmount * 100)
+    : null;
+}
+
+function extractProviderFeeKobo(
+  provider: PaymentProvider,
+  payload: Record<string, unknown> | null,
+  transaction: TransactionRow
+) {
+  const payloadFee = Number(
+    getNestedValue(payload, ["data", "fees"]) ??
+    getNestedValue(payload, ["fees"]) ??
+    0
+  );
+  if (Number.isFinite(payloadFee) && payloadFee > 0) return Math.round(payloadFee);
+
+  const transactionFee = Number(transaction.paystack_fee || 0);
+  if (provider === "paystack" && transactionFee > 0) return Math.round(transactionFee * 100);
+
+  return null;
 }
 
 async function hasLegacySettlementReadiness(

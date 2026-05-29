@@ -11,7 +11,7 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from("settlement_records")
     .select(`
       *,
@@ -23,6 +23,23 @@ export async function GET() {
     .eq("merchant_id", merchantId)
     .order("created_at", { ascending: false })
     .limit(100);
+
+  if (error) {
+    const fallback = await supabase
+      .from("settlement_records")
+      .select(`
+        *,
+        payment_records(*),
+        merchant_settlement_accounts(bank_name,account_number,account_name,currency),
+        merchant_provider_settlement_accounts(provider_name,status,environment)
+      `)
+      .eq("merchant_id", merchantId)
+      .order("created_at", { ascending: false })
+      .limit(100);
+
+    data = fallback.data;
+    error = fallback.error;
+  }
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
