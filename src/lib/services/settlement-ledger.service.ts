@@ -308,7 +308,7 @@ export async function upsertSettlementLedgerFromTransaction(
     .limit(1)
     .maybeSingle();
 
-  const rawPayload = options?.rawProviderPayload || event?.raw_payload || null;
+  const rawPayload = chooseBestProviderPayload(provider, options?.rawProviderPayload || null, event?.raw_payload || null);
   const providerReportedSettlement = calculateProviderReportedSettlement({
     grossAmount: amountPaid,
     feePayer: feeAbsorbedBy,
@@ -360,7 +360,7 @@ export async function upsertSettlementLedgerFromTransaction(
     environment,
   });
 
-  const settlementStatus = !settlementRefs.accountId || !settlementRefs.providerMappingId
+  const settlementStatus = !settlementRefs.accountId
     ? "manual_review"
     : providerReportedSettlement.settlementStatus;
   const settlementOwner = settlementStatus === "manual_review" ? "manual_review" : "provider";
@@ -409,6 +409,30 @@ function getNestedValue(payload: Record<string, unknown> | null, path: string[])
     current = (current as Record<string, unknown>)[key];
   }
   return current;
+}
+
+function chooseBestProviderPayload(
+  provider: PaymentProvider,
+  preferred: Record<string, unknown> | null,
+  fallback: Record<string, unknown> | null
+) {
+  if (hasProviderSettlementSignal(provider, preferred)) return preferred;
+  if (hasProviderSettlementSignal(provider, fallback)) return fallback;
+  return preferred || fallback || null;
+}
+
+function hasProviderSettlementSignal(provider: PaymentProvider, payload: Record<string, unknown> | null) {
+  if (!payload) return false;
+  if (provider === "monnify") {
+    return Boolean(
+      getNestedValue(payload, ["eventData", "settlementAmount"]) ??
+      getNestedValue(payload, ["settlementAmount"])
+    );
+  }
+  return Boolean(
+    getNestedValue(payload, ["data", "fees"]) ??
+    getNestedValue(payload, ["fees"])
+  );
 }
 
 function extractProviderSettlementAmountKobo(provider: PaymentProvider, payload: Record<string, unknown> | null) {

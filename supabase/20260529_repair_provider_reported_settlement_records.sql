@@ -13,21 +13,34 @@ WITH settlement_payloads AS (
     sr.fee_payer,
     sr.settlement_account_id,
     sr.provider_settlement_account_id,
-    COALESCE(pr.raw_provider_payload, sr.raw_settlement_payload, '{}'::jsonb) AS payload,
+    COALESCE(pe.raw_payload, pr.raw_provider_payload, sr.raw_settlement_payload, '{}'::jsonb) AS payload,
     COALESCE(
+      pe.raw_payload #>> '{eventData,settlementAmount}',
       pr.raw_provider_payload #>> '{eventData,settlementAmount}',
       sr.raw_settlement_payload #>> '{eventData,settlementAmount}',
+      pe.raw_payload #>> '{settlementAmount}',
       pr.raw_provider_payload #>> '{settlementAmount}',
       sr.raw_settlement_payload #>> '{settlementAmount}'
     ) AS provider_settlement_amount_text,
     COALESCE(
+      pe.raw_payload #>> '{data,fees}',
       pr.raw_provider_payload #>> '{data,fees}',
       sr.raw_settlement_payload #>> '{data,fees}',
+      pe.raw_payload #>> '{fees}',
       pr.raw_provider_payload #>> '{fees}',
       sr.raw_settlement_payload #>> '{fees}'
     ) AS provider_fee_kobo_text
   FROM public.settlement_records sr
   LEFT JOIN public.payment_records pr ON pr.id = sr.payment_record_id
+  LEFT JOIN LATERAL (
+    SELECT raw_payload
+    FROM public.payment_events pe
+    WHERE pe.processor_ref = pr.provider_reference
+       OR pe.processor_ref = pr.internal_reference
+       OR pe.processor_ref = sr.provider_settlement_reference
+    ORDER BY pe.created_at DESC NULLS LAST
+    LIMIT 1
+  ) pe ON true
   WHERE sr.settlement_status <> 'completed'
     AND sr.provider_settlement_batch_id IS NULL
 ),
@@ -83,7 +96,6 @@ calculated AS (
       ELSE 'provider_missing'
     END AS settlement_source,
     CASE
-      WHEN settlement_account_id IS NULL OR provider_settlement_account_id IS NULL THEN 'manual_review'
       WHEN (
         provider_name = 'monnify'
         AND provider_settlement_amount IS NOT NULL
@@ -124,7 +136,11 @@ SET
   expected_settlement_source = calculated.settlement_source,
   reconciliation_notes = CASE
     WHEN calculated.next_status = 'processing'
-      THEN 'Repaired from stored provider payload; awaiting provider settlement confirmation.'
+      THEN CASE
+        WHEN sr.provider_settlement_account_id IS NULL
+          THEN 'Repaired from provider payload; expected settlement calculated. Provider mapping should be checked before live routing.'
+        ELSE 'Repaired from stored provider payload; awaiting provider settlement confirmation.'
+      END
     ELSE sr.reconciliation_notes
   END,
   updated_at = now()

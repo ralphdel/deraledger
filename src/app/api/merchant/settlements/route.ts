@@ -146,6 +146,7 @@ async function loadTransactionFallbackRows(
           ? grossAmount
           : Math.max(0, grossAmount - providerFee)
         : Number(transaction.merchant_net_amount);
+    const hasExpectedSettlement = Number.isFinite(expectedSettlement) && expectedSettlement >= 0;
 
     return {
       id: `transaction-${transaction.id}`,
@@ -162,9 +163,9 @@ async function loadTransactionFallbackRows(
       actual_settlement: null,
       settlement_difference: null,
       fee_payer: transaction.fee_absorbed_by === "customer" ? "customer_pays_fee" : "merchant_pays_fee",
-      settlement_status: transaction.settlement_status || "processing",
+      settlement_status: hasExpectedSettlement ? "processing" : (transaction.settlement_status || "manual_review"),
       settlement_mode: "provider_direct",
-      settlement_owner: transaction.settlement_status === "manual_review" ? "manual_review" : "provider",
+      settlement_owner: hasExpectedSettlement ? "provider" : "manual_review",
       provider_fee_source: providerFee > 0 ? "provider_fee" : "legacy_transaction",
       expected_settlement_source: transaction.merchant_net_amount !== null && transaction.merchant_net_amount !== undefined
         ? "legacy_transaction"
