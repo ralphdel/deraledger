@@ -12,7 +12,7 @@ import {
 } from "@/lib/services/settlement-ledger.service";
 import { calculateProviderReportedSettlement } from "@/lib/services/provider-settlement-calculation.service";
 
-type FiatProvider = "paystack" | "monnify";
+type FiatProvider = "paystack" | "monnify" | "breet";
 
 export type SuccessfulFiatPayment = {
   provider: FiatProvider;

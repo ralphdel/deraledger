@@ -535,13 +535,14 @@ async function handlePlanWebhook(input: {
   }
 
   const metadata = asRecord(session.metadata);
+  const onboardingSessionId = stringValue(session.payment_session_reference);
   const confirmation = await processSuccessfulFiatPayment(supabase, {
     provider: "breet",
     metadata: {
       ...metadata,
       type: metadata.type || (session.payment_purpose === "plan_upgrade" ? "subscription_upgrade" : "subscription"),
       merchant_id: session.merchant_id || metadata.merchant_id || null,
-      session_id: session.payment_session_reference || metadata.session_id || null,
+      session_id: onboardingSessionId || stringValue(metadata.session_id) || null,
       plan: session.plan_id || metadata.plan || null,
       new_plan: session.plan_id || metadata.new_plan || null,
       email: metadata.email || null,
@@ -558,7 +559,7 @@ async function handlePlanWebhook(input: {
   const merchantId =
     stringValue(session.merchant_id) ||
     stringValue(metadata.merchant_id) ||
-    (await resolveMerchantFromOnboardingSession(session.payment_session_reference)) ||
+    (await resolveMerchantFromOnboardingSession(onboardingSessionId)) ||
     null;
 
   const paymentRecord = await supabase

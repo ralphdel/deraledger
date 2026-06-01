@@ -5,6 +5,20 @@ import { normalizeMerchantFacingPaymentMethod } from "@/lib/services/breet-crypt
 
 export const dynamic = "force-dynamic";
 
+type SettlementAccountRow = Record<string, unknown> & {
+  settlement_account_id?: string | null;
+  provider_settlement_account_id?: string | null;
+  merchant_settlement_accounts?: Record<string, unknown> | null;
+  merchant_provider_settlement_accounts?: Record<string, unknown> | null;
+  provider_settlement_batches?: Record<string, unknown> | null;
+  settlement_status?: string | null;
+  expected_settlement?: number | null;
+  actual_settlement?: number | null;
+  gross_amount?: number | null;
+  provider_fee?: number | null;
+  platform_fee?: number | null;
+};
+
 export async function GET() {
   const supabase = await createClient();
   const merchantId = await resolveCurrentMerchantId(supabase);
@@ -126,16 +140,16 @@ async function resolveCurrentMerchantId(supabase: Awaited<ReturnType<typeof crea
 async function hydrateMissingSettlementAccounts(
   supabase: Awaited<ReturnType<typeof createClient>>,
   merchantId: string,
-  rows: Array<Record<string, unknown>>
+  rows: SettlementAccountRow[]
 ) {
   if (rows.length === 0) return rows;
 
-  const normalizedRows = rows.map((row) => ({
+  const normalizedRows: SettlementAccountRow[] = rows.map((row) => ({
     ...row,
-    payment_records: normalizeEmbeddedRow(row.payment_records),
-    merchant_settlement_accounts: normalizeEmbeddedRow(row.merchant_settlement_accounts),
-    merchant_provider_settlement_accounts: normalizeEmbeddedRow(row.merchant_provider_settlement_accounts),
-    provider_settlement_batches: normalizeEmbeddedRow(row.provider_settlement_batches),
+    payment_records: normalizeEmbeddedRow(row.payment_records) as Record<string, unknown> | null,
+    merchant_settlement_accounts: normalizeEmbeddedRow(row.merchant_settlement_accounts) as Record<string, unknown> | null,
+    merchant_provider_settlement_accounts: normalizeEmbeddedRow(row.merchant_provider_settlement_accounts) as Record<string, unknown> | null,
+    provider_settlement_batches: normalizeEmbeddedRow(row.provider_settlement_batches) as Record<string, unknown> | null,
   }));
 
   if (normalizedRows.every((row) => row.merchant_settlement_accounts)) {
