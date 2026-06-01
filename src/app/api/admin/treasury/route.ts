@@ -13,13 +13,26 @@ const CONFIG_KEYS = [
   "crypto_btc_ngn_rate",
   "crypto_eth_ngn_rate",
   "crypto_session_ttl_minutes",
+  "crypto_rate_lock_minutes",
   "crypto_rate_slippage_bps",
   "crypto_underpayment_tolerance_bps",
+  "crypto_manual_review_threshold_bps",
   "crypto_platform_fee_bps",
+  "crypto_overpayment_action",
+  "crypto_settlement_currency",
   "crypto_btc_confirmations",
   "crypto_eth_confirmations",
   "crypto_usdt_confirmations",
   "crypto_usdc_confirmations",
+  "breet_settlement_mode",
+  "breet_invoice_crypto_enabled",
+  "breet_subscription_crypto_enabled",
+  "breet_webhook_url",
+  "breet_supported_assets",
+  "breet_supported_networks",
+  "breet_treasury_settlement_account_reference",
+  "breet_treasury_settlement_account_label",
+  "breet_live_enabled",
 ];
 
 export async function GET() {
@@ -35,6 +48,7 @@ export async function GET() {
     webhooksRes,
     settingsRes,
     sessionsRes,
+    cryptoSessionsRes,
     merchantRes,
   ] = await Promise.all([
     supabase.from("merchant_wallets").select("*").order("updated_at", { ascending: false }).limit(100),
@@ -43,6 +57,7 @@ export async function GET() {
     supabase.from("treasury_webhook_logs").select("*").order("created_at", { ascending: false }).limit(100),
     supabase.from("platform_settings").select("key, value").in("key", CONFIG_KEYS),
     supabase.from("payment_sessions").select("*").order("created_at", { ascending: false }).limit(100),
+    supabase.from("crypto_payment_sessions").select("*").order("created_at", { ascending: false }).limit(100),
     supabase.from("merchants").select("id, business_name").limit(500),
   ]);
 
@@ -61,6 +76,18 @@ export async function GET() {
     ...session,
     merchant_name: merchantMap[session.merchant_id] || session.merchant_id,
   }));
+  const cryptoPaymentSessions = (cryptoSessionsRes.data || []).map((session) => ({
+    ...session,
+    merchant_name: session.merchant_id ? merchantMap[session.merchant_id] || session.merchant_id : null,
+    reference: session.internal_reference,
+    wallet_address:
+      typeof session.raw_payload === "object" && session.raw_payload
+        ? String((session.raw_payload as Record<string, unknown>).address || (session.raw_payload as Record<string, unknown>).destinationAddress || "")
+        : "",
+    confirmation_count: 0,
+    expected_confirmations: 0,
+    status: session.crypto_status || session.payment_status || "pending",
+  }));
   const webhookLogs = (webhooksRes.data || []).map((log) => ({
     ...log,
     merchant_name: log.merchant_id ? merchantMap[log.merchant_id] || log.merchant_id : null,
@@ -74,7 +101,9 @@ export async function GET() {
     settledAmount: wallets.reduce((sum, wallet) => sum + Number(wallet.total_settled || 0), 0),
     failedPayouts: settlementBatches.filter((batch) => batch.status === "failed").length,
     webhookFailures: webhookLogs.filter((log) => log.status === "failed").length,
-    underReviewCount: paymentSessions.filter((session) => session.status === "UNDER_REVIEW").length,
+    underReviewCount: [...paymentSessions, ...cryptoPaymentSessions].filter((session) =>
+      ["UNDER_REVIEW", "manual_review", "crypto_underpaid", "crypto_overpaid"].includes(String(session.status || session.crypto_status || ""))
+    ).length,
     queueDepth: settlementBatches.filter((batch) => ["queued", "processing", "held"].includes(batch.status)).length,
   };
 
@@ -84,7 +113,7 @@ export async function GET() {
     wallets,
     treasuryTransactions,
     settlementBatches,
-    paymentSessions,
+    paymentSessions: [...paymentSessions, ...cryptoPaymentSessions],
     webhookLogs,
     settings,
   });

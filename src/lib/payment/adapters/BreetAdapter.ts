@@ -77,6 +77,10 @@ export class BreetAdapter {
     };
   }
 
+  async initializePayment(params: CryptoDepositAddressParams): Promise<CryptoDepositAddressResult> {
+    return this.generateAddress(params);
+  }
+
   async fetchTransaction(transactionId: string): Promise<CryptoTransactionResult> {
     const raw = await this.request<Record<string, unknown>>(
       "GET",
@@ -92,6 +96,34 @@ export class BreetAdapter {
       amountInUSD: typeof raw.amountInUSD === "number" ? raw.amountInUSD : undefined,
       txHash: raw.txHash ? String(raw.txHash) : undefined,
       raw,
+    };
+  }
+
+  normalizePaymentResponse(raw: Record<string, unknown>, fallbackLabel?: string) {
+    return {
+      provider: "breet",
+      paymentMethod: "crypto",
+      providerReference: String(raw.id || raw.reference || raw.transactionId || ""),
+      internalReference: fallbackLabel || String(raw.label || raw.reference || raw.id || ""),
+      cryptoAsset: String(raw.asset || raw.currency || raw.coin || ""),
+      cryptoNetwork: String(raw.network || raw.chain || raw.protocol || ""),
+      cryptoAmountReceived: typeof raw.cryptoAmount === "number" ? raw.cryptoAmount : typeof raw.amount === "number" ? raw.amount : null,
+      convertedNgnAmount: typeof raw.amountInNGN === "number" ? raw.amountInNGN : typeof raw.ngnAmount === "number" ? raw.ngnAmount : null,
+      conversionRate: typeof raw.exchangeRate === "number" ? raw.exchangeRate : typeof raw.rate === "number" ? raw.rate : null,
+      providerFee: typeof raw.providerFee === "number" ? raw.providerFee : null,
+      settlementFee: typeof raw.settlementFee === "number" ? raw.settlementFee : null,
+      settlementStatus: String(raw.settlementStatus || raw.status || ""),
+      raw,
+    };
+  }
+
+  getProviderHealth() {
+    return {
+      provider: "breet",
+      configured: this.isConfigured(),
+      webhookConfigured: Boolean(this.webhookSecret),
+      environment: this.env,
+      baseUrl: this.baseUrl,
     };
   }
 

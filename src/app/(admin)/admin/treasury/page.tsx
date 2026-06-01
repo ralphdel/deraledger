@@ -52,13 +52,26 @@ const SETTING_LABELS: Record<string, string> = {
   crypto_btc_ngn_rate: "BTC / NGN Rate",
   crypto_eth_ngn_rate: "ETH / NGN Rate",
   crypto_session_ttl_minutes: "Session TTL Minutes",
+  crypto_rate_lock_minutes: "Rate Lock Minutes",
   crypto_rate_slippage_bps: "FX Slippage BPS",
   crypto_underpayment_tolerance_bps: "Underpayment Tolerance BPS",
+  crypto_manual_review_threshold_bps: "Manual Review Threshold BPS",
   crypto_platform_fee_bps: "Platform Fee BPS",
+  crypto_overpayment_action: "Overpayment Action",
+  crypto_settlement_currency: "Settlement Currency",
   crypto_btc_confirmations: "BTC Confirmations",
   crypto_eth_confirmations: "ETH Confirmations",
   crypto_usdt_confirmations: "USDT Confirmations",
   crypto_usdc_confirmations: "USDC Confirmations",
+  breet_settlement_mode: "Breet Settlement Mode",
+  breet_invoice_crypto_enabled: "Invoice Crypto Enabled",
+  breet_subscription_crypto_enabled: "Subscription Crypto Enabled",
+  breet_webhook_url: "Breet Webhook URL",
+  breet_supported_assets: "Supported Assets",
+  breet_supported_networks: "Supported Networks",
+  breet_treasury_settlement_account_reference: "Treasury Settlement Ref",
+  breet_treasury_settlement_account_label: "Treasury Settlement Label",
+  breet_live_enabled: "Breet Live Enabled",
 };
 
 export default function AdminTreasuryPage() {
@@ -419,8 +432,18 @@ export default function AdminTreasuryPage() {
                     <TableRow key={session.id}>
                       <TableCell className="font-medium">{session.merchant_name || session.merchant_id}</TableCell>
                       <TableCell className="text-xs">{session.reference}</TableCell>
-                      <TableCell><Badge variant="outline" className="uppercase border-2 bg-neutral-50">{session.status}</Badge></TableCell>
-                      <TableCell className="text-xs">{session.wallet_address}</TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className="uppercase border-2 bg-neutral-50">{session.crypto_status || session.status}</Badge>
+                        {session.settlement_mode ? (
+                          <p className="text-[11px] text-neutral-500 mt-1">{session.settlement_mode.replaceAll("_", " ")}</p>
+                        ) : null}
+                      </TableCell>
+                      <TableCell className="text-xs">
+                        {session.wallet_address || "-"}
+                        {session.webhook_status ? (
+                          <p className="text-[11px] text-neutral-500 mt-1">Webhook: {session.webhook_status}</p>
+                        ) : null}
+                      </TableCell>
                       <TableCell>{session.confirmation_count}/{session.expected_confirmations}</TableCell>
                       <TableCell>{new Date(session.expires_at).toLocaleString("en-NG")}</TableCell>
                     </TableRow>

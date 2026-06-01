@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
+import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { PaymentService } from "@/lib/payment";
+import { canUseBreetCryptoCheckout } from "@/lib/services/breet-crypto.service";
+import { getPaymentEnvironment } from "@/lib/services/payment-routing.service";
+import { computeCryptoAmount, defaultNetworkForRail, rateSettingKeyForRail } from "@/lib/treasury";
 import crypto from "crypto";
 
 /**
@@ -8,16 +12,12 @@ import crypto from "crypto";
  * Generates a Breet crypto deposit address for new merchant subscription.
  * Feature-flagged: returns a "coming_soon" response until Breet credentials are configured.
  */
+const supabase = createSupabaseClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
+
 export async function POST(request: Request) {
-  const BREET_ENABLED = Boolean(process.env.BREET_APP_ID && process.env.BREET_APP_SECRET);
-
-  if (!BREET_ENABLED) {
-    return NextResponse.json(
-      { error: "Crypto payments are not yet enabled. Please use Card & Bank or Bank Transfer." },
-      { status: 503 }
-    );
-  }
-
   try {
     const { email, plan, sessionId, amountKobo } = await request.json();
 
@@ -25,21 +25,73 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Missing required fields." }, { status: 400 });
     }
 
+    const environment = getPaymentEnvironment();
+    const eligibility = await canUseBreetCryptoCheckout({
+      supabase,
+      purpose: "plan_subscription",
+      environment,
+    });
+
+    if (!eligibility.allowed) {
+      return NextResponse.json({ error: eligibility.reason || "Crypto payments are not yet enabled. Please use Card & Bank or Bank Transfer." }, { status: 403 });
+    }
+
     const reference = `CRYPTO-SUB-${plan.toUpperCase()}-${crypto.randomBytes(5).toString("hex").toUpperCase()}`;
     const fiatAmount = amountKobo / 100;
+    const { data: settings } = await supabase
+      .from("platform_settings")
+      .select("key, value")
+      .in("key", [rateSettingKeyForRail("USDT"), "crypto_session_ttl_minutes"]);
+    const settingsMap = new Map((settings || []).map((row) => [row.key, row.value]));
+    const exchangeRate = Number(settingsMap.get(rateSettingKeyForRail("USDT")) || 1650);
+    const cryptoAmount = computeCryptoAmount(fiatAmount, exchangeRate);
+    const ttlMinutes = Number(settingsMap.get("crypto_session_ttl_minutes") || 30);
 
-    const result = await PaymentService.generateCryptoDepositAddress({
+    const result = await PaymentService.initializeCryptoPayment({
       assetId: "USDT",
       label: reference,
+    });
+
+    await supabase.from("crypto_payment_sessions").insert({
+      merchant_id: null,
+      user_id: null,
+      business_id: null,
+      plan_id: plan,
+      payment_purpose: "plan_subscription",
+      provider_name: "breet",
+      internal_reference: reference,
+      provider_reference: result.id || reference,
+      payment_method: "crypto",
+      expected_ngn_amount: fiatAmount,
+      crypto_asset: result.asset || "USDT",
+      crypto_network: (typeof result.raw?.network === "string" ? result.raw.network : null) || defaultNetworkForRail("USDT"),
+      crypto_amount_expected: cryptoAmount,
+      settlement_mode: eligibility.settlementMode,
+      crypto_status: "crypto_payment_initialized",
+      settlement_status: "pending",
+      webhook_status: "pending",
+      payment_status: "pending",
+      payment_session_reference: sessionId,
+      expires_at: new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString(),
+      metadata: {
+        email,
+        plan,
+        session_id: sessionId,
+        type: "subscription",
+        settlement_mode: eligibility.settlementMode,
+        exchange_rate: exchangeRate,
+      },
+      raw_payload: result.raw || {},
     });
 
     return NextResponse.json({
       success: true,
       cryptoAddress: result.address,
-      cryptoNetwork: result.asset || "TRC20",
+      cryptoNetwork: (typeof result.raw?.network === "string" ? result.raw.network : null) || defaultNetworkForRail("USDT"),
       cryptoCoin: result.asset || "USDT",
       fiatAmount,
       reference,
+      settlementMode: eligibility.settlementMode,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to generate crypto address.";

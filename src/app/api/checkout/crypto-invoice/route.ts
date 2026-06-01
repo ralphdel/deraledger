@@ -2,7 +2,8 @@ import crypto from "crypto";
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { PaymentService } from "@/lib/payment";
-import { isLiveFeatureEnabled } from "@/lib/services/onboarding-flow.service";
+import { canUseBreetCryptoCheckout } from "@/lib/services/breet-crypto.service";
+import { getPaymentEnvironmentForMerchantEmail } from "@/lib/services/payment-routing.service";
 import {
   computeCryptoAmount,
   confirmationSettingKeyForRail,
@@ -53,7 +54,7 @@ export async function POST(request: Request) {
 
     const { data: merchant, error: merchantError } = await supabase
       .from("merchants")
-      .select("id, email, subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, utility_status, business_affiliation_status, payment_provider, payment_subaccount_code, live_features_enabled, setup_mode")
+      .select("id, email, subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, utility_status, business_affiliation_status, payment_provider, live_features_enabled, setup_mode")
       .eq("id", invoice.merchant_id)
       .single();
 
@@ -61,23 +62,21 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Merchant not found" }, { status: 404 });
     }
 
-    if (!isLiveFeatureEnabled(merchant) || !merchant.payment_subaccount_code) {
-      return NextResponse.json(
-        { error: "Merchant is not ready to receive settlements." },
-        { status: 403 }
-      );
+    const environment = getPaymentEnvironmentForMerchantEmail(merchant.email);
+    const eligibility = await canUseBreetCryptoCheckout({
+      supabase,
+      purpose: "invoice_payment",
+      merchantId: merchant.id,
+      environment,
+    });
+
+    if (!eligibility.allowed) {
+      return NextResponse.json({ error: eligibility.reason || "Crypto settlement setup is incomplete for this merchant." }, { status: 403 });
     }
 
     const outstanding = Number(invoice.outstanding_balance);
     if (paymentAmount > outstanding + 0.01) {
       return NextResponse.json({ error: "Payment exceeds outstanding balance" }, { status: 400 });
-    }
-
-    if (!process.env.BREET_APP_ID || !process.env.BREET_APP_SECRET) {
-      return NextResponse.json(
-        { error: "Crypto rail is not configured on this environment." },
-        { status: 503 }
-      );
     }
 
     const keys = [
@@ -111,13 +110,17 @@ export async function POST(request: Request) {
       label: `merchant:${merchant.id}|invoice:${invoice.id}|session:${paymentSessionId}|ref:${reference}`,
     });
 
-    const network = addressResult.asset || defaultNetworkForRail(rail);
+    const network = (typeof addressResult.raw?.network === "string" ? addressResult.raw.network : null) || defaultNetworkForRail(rail);
 
     const { error: sessionError } = await supabase.from("payment_sessions").insert({
       id: paymentSessionId,
       invoice_id: invoice.id,
       merchant_id: merchant.id,
       payment_rail: rail,
+      provider_name: "breet",
+      payment_purpose: "invoice_payment",
+      payment_method: "crypto",
+      settlement_mode: eligibility.settlementMode,
       source_currency: rail,
       destination_currency: "NGN",
       amount_ngn: paymentAmount,
@@ -130,9 +133,20 @@ export async function POST(request: Request) {
       expected_confirmations: expectedConfirmations,
       reference,
       provider_reference: addressResult.id || null,
+      crypto_status: "crypto_payment_initialized",
+      provider_fee: 0,
+      settlement_fee: 0,
+      expected_settlement_ngn: paymentAmount,
+      actual_settlement_ngn: null,
+      webhook_status: "pending",
       metadata: {
         invoice_number: invoice.invoice_number,
         client_email: invoice.clients?.email || null,
+        purpose: "invoice_payment",
+        settlement_mode: eligibility.settlementMode,
+        settlement_destination: eligibility.settlementMode === "provider_direct"
+          ? "merchant_verified_settlement_account"
+          : "deraledger_treasury",
       },
       expires_at: expiresAt,
     });
@@ -149,6 +163,7 @@ export async function POST(request: Request) {
         payment_status: "AWAITING_CONFIRMATION",
         crypto_deposit_address: addressResult.address,
         crypto_asset: rail,
+        payment_method: "crypto",
         updated_at: new Date().toISOString(),
       })
       .eq("id", invoice.id);

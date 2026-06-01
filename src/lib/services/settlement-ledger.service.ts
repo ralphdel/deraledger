@@ -3,8 +3,13 @@ import type {
   AvailablePaymentMethod,
   PaymentEnvironment,
   PaymentProvider,
+  PaymentPurpose,
 } from "@/lib/services/payment-routing.service";
 import { calculateProviderReportedSettlement } from "@/lib/services/provider-settlement-calculation.service";
+import {
+  canUseBreetCryptoCheckout,
+  normalizeMerchantFacingPaymentMethod,
+} from "@/lib/services/breet-crypto.service";
 
 type SettlementProvider = PaymentProvider | "future_provider";
 
@@ -177,7 +182,8 @@ export async function filterMethodsBySettlementReadiness(
   supabase: SupabaseClient,
   merchantId: string | null | undefined,
   methods: AvailablePaymentMethod[],
-  environment: PaymentEnvironment
+  environment: PaymentEnvironment,
+  purpose?: PaymentPurpose
 ) {
   if (!merchantId) return methods;
   if (methods.length === 0) return methods;
@@ -199,12 +205,19 @@ export async function filterMethodsBySettlementReadiness(
   const cryptoChecks = await Promise.all(
     cryptoMethods.map(async (method) => ({
       method,
-      ready: await isProviderSettlementReady(supabase, {
-        merchantId,
-        provider: method.provider,
-        environment,
-        requireCryptoMapping: true,
-      }),
+      ready: method.provider === "breet"
+        ? (await canUseBreetCryptoCheckout({
+            supabase,
+            purpose: purpose || "invoice_payment",
+            merchantId,
+            environment,
+          })).allowed
+        : await isProviderSettlementReady(supabase, {
+            merchantId,
+            provider: method.provider,
+            environment,
+            requireCryptoMapping: true,
+          }),
     }))
   );
 
@@ -297,7 +310,9 @@ export async function upsertSettlementLedgerFromTransaction(
   const providerReference = transaction.processor_reference || transaction.paystack_reference || transaction.id;
   const amountPaid = Number(transaction.amount_paid || 0);
   const feeAbsorbedBy = transaction.fee_absorbed_by || "business";
-  const paymentMethod = transaction.payment_rail || transaction.payment_method || "card";
+  const paymentMethod = normalizeMerchantFacingPaymentMethod(
+    transaction.payment_method || transaction.payment_rail || "card"
+  );
   const createdAt = transaction.created_at || new Date().toISOString();
 
   const { data: event } = await supabase
@@ -539,12 +554,4 @@ async function resolveSettlementReferences(
     accountId: account.id as string,
     providerMappingId: (mapping?.id as string | undefined) || null,
   };
-}
-
-function normalizeSettlementStatus(status: string | null | undefined, hasSettlementMapping: boolean) {
-  if (!hasSettlementMapping) return "manual_review";
-  if (status === "failed" || status === "disputed" || status === "manual_review") return status;
-  if (status === "processing") return "processing";
-  if (status === "pending") return "pending";
-  return "pending";
 }

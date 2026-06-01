@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
+import { normalizeMerchantFacingPaymentMethod } from "@/lib/services/breet-crypto.service";
 
 export const dynamic = "force-dynamic";
 
@@ -125,7 +126,7 @@ async function resolveCurrentMerchantId(supabase: Awaited<ReturnType<typeof crea
 async function hydrateMissingSettlementAccounts(
   supabase: Awaited<ReturnType<typeof createClient>>,
   merchantId: string,
-  rows: any[]
+  rows: Array<Record<string, unknown>>
 ) {
   if (rows.length === 0) return rows;
 
@@ -286,7 +287,7 @@ async function loadTransactionFallbackRows(
       created_at: transaction.created_at,
       merchant_id: transaction.merchant_id,
       provider_name: inferProviderName(transaction),
-      payment_method: transaction.payment_rail || transaction.payment_method || "payment",
+      payment_method: normalizeMerchantFacingPaymentMethod(transaction.payment_method || transaction.payment_rail || "payment"),
       gross_amount: grossAmount,
       provider_fee: providerFee,
       platform_fee: 0,
@@ -322,6 +323,9 @@ async function loadTransactionFallbackRows(
 function inferProviderName(transaction: Record<string, unknown>) {
   const paymentProvider = String(transaction.payment_provider || "").toLowerCase();
   if (paymentProvider) return paymentProvider;
+
+  const paymentMethod = String(transaction.payment_method || transaction.payment_rail || "").toLowerCase();
+  if (["crypto", "usdt", "usdc", "btc", "eth"].includes(paymentMethod)) return "breet";
 
   const reference = String(transaction.processor_reference || transaction.paystack_reference || "").toLowerCase();
   if (reference.includes("mnfy")) return "monnify";

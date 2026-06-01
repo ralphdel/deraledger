@@ -46,7 +46,7 @@ export default function AdminCryptoOpsCenter() {
             confirmationsVal = 2;
           } else if (tx.status === "FAILED") {
             statusText = "CHAIN_MISMATCH";
-            settlementText = "HELD_IN_TREASURY";
+            settlementText = "MANUAL_REVIEW_REQUIRED";
             confirmationsVal = 120;
             requiredVal = 15;
           }
@@ -110,7 +110,7 @@ export default function AdminCryptoOpsCenter() {
           confirmationsVal = 2;
         } else if (data.status === "FAILED") {
           statusText = "CHAIN_MISMATCH";
-          settlementText = "HELD_IN_TREASURY";
+          settlementText = "MANUAL_REVIEW_REQUIRED";
           confirmationsVal = 120;
           requiredVal = 15;
         }

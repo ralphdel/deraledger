@@ -10,6 +10,7 @@ import {
   Minus,
   TrendingUp,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -60,22 +61,9 @@ type SettlementRow = {
   } | null;
 };
 
-type ApiResponse = {
-  rows: SettlementRow[];
-  summary: {
-    totalCollected: number;
-    totalProviderFees: number;
-    expectedSettlement: number;
-    settledAmount: number;
-    pendingSettlement: number;
-    failedSettlement: number;
-  };
-};
-
 export default function MerchantSettlementsPage() {
   const [merchant, setMerchant] = useState<(Merchant & { permissions?: Record<string, boolean>; currentUserRole?: string }) | null>(null);
   const [rows, setRows] = useState<SettlementRow[]>([]);
-  const [summary, setSummary] = useState<ApiResponse["summary"] | null>(null);
   const [loading, setLoading] = useState(true);
   const todayStr = formatDateInput(new Date());
   const [fromDate, setFromDate] = useState(todayStr);
@@ -93,7 +81,6 @@ export default function MerchantSettlementsPage() {
       const payload = await res.json();
       if (res.ok) {
         setRows(payload.rows || []);
-        setSummary(payload.summary || null);
         setError("");
       } else {
         setRows([]);
@@ -265,7 +252,7 @@ export default function MerchantSettlementsPage() {
   );
 }
 
-function SummaryCard({ icon: Icon, label, value }: { icon: any; label: string; value: string }) {
+function SummaryCard({ icon: Icon, label, value }: { icon: LucideIcon; label: string; value: string }) {
   return (
     <Card className="border shadow-none">
       <CardContent className="p-5">
@@ -299,6 +286,8 @@ function formatDateInput(date: Date) {
 
 function labelPaymentMethod(method?: string | null) {
   if (!method) return "Payment";
+  const normalized = method.toLowerCase();
+  if (["crypto", "usdt", "usdc", "btc", "eth"].includes(normalized)) return "Crypto";
   if (method === "bank_transfer") return "Bank transfer";
   return method.replaceAll("_", " ");
 }

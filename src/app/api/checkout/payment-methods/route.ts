@@ -55,7 +55,7 @@ export async function GET(request: Request) {
     const routedMethods = await listAvailablePaymentMethods(purpose, environment);
     const availableMethods =
       purpose === "invoice_payment" || purpose === "payment_link" || purpose === "crypto_payment"
-        ? await filterMethodsBySettlementReadiness(supabase, merchantId, routedMethods, environment)
+        ? await filterMethodsBySettlementReadiness(supabase, merchantId, routedMethods, environment, purpose)
         : routedMethods;
 
     return NextResponse.json({
