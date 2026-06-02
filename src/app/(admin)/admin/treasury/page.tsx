@@ -64,6 +64,8 @@ const SETTING_LABELS: Record<string, string> = {
   crypto_usdt_confirmations: "USDT Confirmations",
   crypto_usdc_confirmations: "USDC Confirmations",
   breet_settlement_mode: "Breet Settlement Mode",
+  breet_auto_settlement_enabled: "Platform Auto-Settlement Enabled",
+  breet_merchant_auto_settlement_enabled: "Merchant Auto-Settlement Enabled",
   breet_invoice_crypto_enabled: "Invoice Crypto Enabled",
   breet_subscription_crypto_enabled: "Subscription Crypto Enabled",
   breet_webhook_url: "Breet Webhook URL",
@@ -71,6 +73,13 @@ const SETTING_LABELS: Record<string, string> = {
   breet_supported_networks: "Supported Networks",
   breet_treasury_settlement_account_reference: "Treasury Settlement Ref",
   breet_treasury_settlement_account_label: "Treasury Settlement Label",
+  breet_platform_bank_id: "Platform Bank ID",
+  breet_platform_bank_code: "Platform Bank Code",
+  breet_platform_bank_name: "Platform Bank Name",
+  breet_platform_account_number: "Platform Account Number",
+  breet_platform_account_name: "Platform Account Name",
+  breet_default_receive_currency: "Default Receive Currency",
+  breet_sandbox_force_platform_settlement: "Force Platform Settlement in Sandbox",
   breet_live_enabled: "Breet Live Enabled",
 };
 

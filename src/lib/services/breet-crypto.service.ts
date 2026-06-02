@@ -4,7 +4,8 @@ import {
   getSettlementEnvironment,
 } from "@/lib/services/settlement-ledger.service";
 
-export type BreetSettlementMode = "provider_direct" | "treasury_manual" | "disabled";
+export type BreetSettlementMode = "breet_auto_settlement" | "platform_auto_settlement" | "treasury_manual" | "disabled";
+export type BreetSettlementModeV2 = BreetSettlementMode;
 
 export type CryptoPaymentLifecycleStatus =
   | "crypto_payment_initialized"
@@ -24,6 +25,8 @@ export type CryptoPaymentLifecycleStatus =
 
 export const BREET_PLATFORM_SETTING_KEYS = [
   "breet_settlement_mode",
+  "breet_auto_settlement_enabled",
+  "breet_merchant_auto_settlement_enabled",
   "breet_invoice_crypto_enabled",
   "breet_subscription_crypto_enabled",
   "breet_webhook_url",
@@ -31,6 +34,13 @@ export const BREET_PLATFORM_SETTING_KEYS = [
   "breet_supported_networks",
   "breet_treasury_settlement_account_reference",
   "breet_treasury_settlement_account_label",
+  "breet_platform_bank_id",
+  "breet_platform_bank_code",
+  "breet_platform_bank_name",
+  "breet_platform_account_number",
+  "breet_platform_account_name",
+  "breet_default_receive_currency",
+  "breet_sandbox_force_platform_settlement",
   "breet_live_enabled",
   "crypto_session_ttl_minutes",
   "crypto_rate_lock_minutes",
@@ -41,7 +51,9 @@ export const BREET_PLATFORM_SETTING_KEYS = [
 ] as const;
 
 export type BreetRuntimeConfig = {
-  settlementMode: BreetSettlementMode;
+  settlementMode: BreetSettlementModeV2;
+  merchantAutoSettlementEnabled: boolean;
+  platformAutoSettlementEnabled: boolean;
   invoiceCryptoEnabled: boolean;
   subscriptionCryptoEnabled: boolean;
   webhookUrl: string | null;
@@ -49,6 +61,7 @@ export type BreetRuntimeConfig = {
   supportedNetworks: string[];
   treasurySettlementAccountReference: string | null;
   treasurySettlementAccountLabel: string | null;
+  platformSettlementBankAccount: BreetSettlementBankAccount | null;
   liveEnabled: boolean;
   sessionTtlMinutes: number;
   rateLockMinutes: number;
@@ -57,6 +70,21 @@ export type BreetRuntimeConfig = {
   overpaymentAction: "manual_review" | "accept" | "reject";
   settlementCurrency: string;
 };
+
+export type BreetSettlementBankAccount = {
+  bank_name?: string | null;
+  bank_code?: string | null;
+  bank_id?: string | null;
+  account_number?: string | null;
+  account_name?: string | null;
+  currency?: string | null;
+  verification_status?: string | null;
+  status?: string | null;
+  is_default?: boolean | null;
+  raw_verification_payload?: Record<string, unknown> | null;
+};
+
+export type BreetProviderMode = "invoice" | "platform";
 
 function settingValue(settings: Map<string, string>, key: string, fallback = "") {
   const value = settings.get(key);
@@ -75,9 +103,10 @@ function parseBooleanSetting(settings: Map<string, string>, key: string, fallbac
   return fallback;
 }
 
-export function normalizeBreetSettlementMode(value?: string | null): BreetSettlementMode {
+export function normalizeBreetSettlementMode(value?: string | null): BreetSettlementModeV2 {
   const normalized = String(value || "disabled").toLowerCase();
-  if (normalized === "provider_direct") return "provider_direct";
+  if (normalized === "provider_direct" || normalized === "breet_auto_settlement") return "breet_auto_settlement";
+  if (normalized === "platform_auto_settlement") return "platform_auto_settlement";
   if (normalized === "treasury_manual") return "treasury_manual";
   return "disabled";
 }
@@ -163,6 +192,56 @@ export function buildBreetWebhookIdempotencyKey(providerReference: string, event
   return reference ? `breet:${reference}:${event}` : null;
 }
 
+export function buildSettlementBankPayload(bankAccount: BreetSettlementBankAccount) {
+  const currency = String(bankAccount.currency || "NGN").toUpperCase();
+  return {
+    bank_name: bankAccount.bank_name || null,
+    bank_code: bankAccount.bank_code || bankAccount.bank_id || null,
+    bank_id: bankAccount.bank_id || bankAccount.bank_code || null,
+    account_number: bankAccount.account_number || null,
+    account_name: bankAccount.account_name || null,
+    currency,
+    settlement_currency: currency,
+  };
+}
+
+export function validateSettlementAccountForBreet(
+  bankAccount: BreetSettlementBankAccount,
+  options?: { requireDefault?: boolean }
+) {
+  const verificationStatus = String(bankAccount.verification_status || "").toLowerCase();
+  const status = String(bankAccount.status || "").toLowerCase();
+  const currency = String(bankAccount.currency || "NGN").toUpperCase();
+
+  if (!bankAccount.bank_name || (!bankAccount.bank_code && !bankAccount.bank_id) || !bankAccount.account_number || !bankAccount.account_name) {
+    return { valid: false, reason: "Settlement account is incomplete." } as const;
+  }
+
+  if (currency !== "NGN") {
+    return { valid: false, reason: "Settlement account currency must be NGN." } as const;
+  }
+
+  if (verificationStatus !== "verified") {
+    return { valid: false, reason: "Settlement account is not verified." } as const;
+  }
+
+  if (status && status !== "active") {
+    return { valid: false, reason: "Settlement account is not active." } as const;
+  }
+
+  if (options?.requireDefault && !bankAccount.is_default) {
+    return { valid: false, reason: "Settlement account is not the default account." } as const;
+  }
+
+  return { valid: true } as const;
+}
+
+function readEnvBoolean(value: string | undefined, fallback = false) {
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return fallback;
+}
+
 export async function loadBreetRuntimeConfig(supabase: SupabaseClient): Promise<BreetRuntimeConfig> {
   const { data } = await supabase
     .from("platform_settings")
@@ -170,8 +249,32 @@ export async function loadBreetRuntimeConfig(supabase: SupabaseClient): Promise<
     .in("key", BREET_PLATFORM_SETTING_KEYS as unknown as string[]);
 
   const map = new Map((data || []).map((row) => [row.key, String(row.value || "")]));
+  const envMerchantAutoSettlement = readEnvBoolean(process.env.BREET_MERCHANT_AUTO_SETTLEMENT_ENABLED, true);
+  const envPlatformAutoSettlement = readEnvBoolean(process.env.BREET_AUTO_SETTLEMENT_ENABLED, true);
+  const envForcePlatformSettlement = readEnvBoolean(process.env.BREET_SANDBOX_FORCE_PLATFORM_SETTLEMENT, false);
+  const envFallbackMode =
+    envMerchantAutoSettlement ? "breet_auto_settlement" :
+    envPlatformAutoSettlement ? "platform_auto_settlement" :
+    "disabled";
+  const platformBankAccount = {
+    bank_name: settingValue(map, "breet_platform_bank_name", process.env.BREET_PLATFORM_BANK_NAME || "") || null,
+    bank_code: settingValue(map, "breet_platform_bank_code", process.env.BREET_PLATFORM_BANK_CODE || "") || null,
+    bank_id: settingValue(map, "breet_platform_bank_id", "") || null,
+    account_number: settingValue(map, "breet_platform_account_number", process.env.BREET_PLATFORM_ACCOUNT_NUMBER || "") || null,
+    account_name: settingValue(map, "breet_platform_account_name", process.env.BREET_PLATFORM_ACCOUNT_NAME || "") || null,
+    currency: settingValue(map, "breet_default_receive_currency", process.env.BREET_DEFAULT_RECEIVE_CURRENCY || "NGN") || "NGN",
+    verification_status: "verified",
+    status: "active",
+    is_default: true,
+  } satisfies BreetSettlementBankAccount;
+
   return {
-    settlementMode: normalizeBreetSettlementMode(settingValue(map, "breet_settlement_mode", "disabled")),
+    settlementMode: normalizeBreetSettlementMode(settingValue(map, "breet_settlement_mode", envFallbackMode)),
+    merchantAutoSettlementEnabled: parseBooleanSetting(map, "breet_merchant_auto_settlement_enabled", envMerchantAutoSettlement),
+    platformAutoSettlementEnabled:
+      envForcePlatformSettlement ||
+      parseBooleanSetting(map, "breet_auto_settlement_enabled", envPlatformAutoSettlement) ||
+      parseBooleanSetting(map, "breet_sandbox_force_platform_settlement", false),
     invoiceCryptoEnabled: parseBooleanSetting(map, "breet_invoice_crypto_enabled", false),
     subscriptionCryptoEnabled: parseBooleanSetting(map, "breet_subscription_crypto_enabled", false),
     webhookUrl: settingValue(map, "breet_webhook_url", "") || null,
@@ -187,6 +290,11 @@ export async function loadBreetRuntimeConfig(supabase: SupabaseClient): Promise<
       settingValue(map, "breet_treasury_settlement_account_reference", "") || null,
     treasurySettlementAccountLabel:
       settingValue(map, "breet_treasury_settlement_account_label", "") || null,
+    platformSettlementBankAccount: platformBankAccount.bank_name &&
+      platformBankAccount.account_number &&
+      platformBankAccount.account_name
+      ? platformBankAccount
+      : null,
     liveEnabled: parseBooleanSetting(map, "breet_live_enabled", false),
     sessionTtlMinutes: parseNumberSetting(map, "crypto_session_ttl_minutes", 30),
     rateLockMinutes: parseNumberSetting(map, "crypto_rate_lock_minutes", 15),
@@ -210,6 +318,62 @@ export function isBreetWebhookConfigured(config?: Pick<BreetRuntimeConfig, "webh
 
 export function getBreetSettlementMode(config: Pick<BreetRuntimeConfig, "settlementMode">) {
   return config.settlementMode;
+}
+
+export async function getSupportedAssets(supabase?: SupabaseClient) {
+  if (!supabase) {
+    return ["USDT", "USDC", "BTC", "ETH"];
+  }
+
+  const { data } = await supabase
+    .from("platform_settings")
+    .select("value")
+    .eq("key", "breet_supported_assets")
+    .maybeSingle();
+
+  const raw = String(data?.value || "USDT,USDC,BTC,ETH");
+  return raw
+    .split(",")
+    .map((value) => value.trim().toUpperCase())
+    .filter(Boolean);
+}
+
+export async function getSupportedNetworks(supabase?: SupabaseClient) {
+  if (!supabase) {
+    return ["TRON", "ETHEREUM", "BITCOIN"];
+  }
+
+  const { data } = await supabase
+    .from("platform_settings")
+    .select("value")
+    .eq("key", "breet_supported_networks")
+    .maybeSingle();
+
+  const raw = String(data?.value || "TRON,ETHEREUM,BITCOIN");
+  return raw
+    .split(",")
+    .map((value) => value.trim().toUpperCase())
+    .filter(Boolean);
+}
+
+export function buildBreetSettlementAccountSnapshot(
+  bankAccount: BreetSettlementBankAccount,
+  overrides?: { recipientType?: "merchant" | "platform"; settlementMode?: BreetSettlementModeV2 }
+) {
+  return {
+    recipient_type: overrides?.recipientType || "merchant",
+    settlement_mode: overrides?.settlementMode || "breet_auto_settlement",
+    bank_name: bankAccount.bank_name || null,
+    bank_code: bankAccount.bank_code || bankAccount.bank_id || null,
+    bank_id: bankAccount.bank_id || bankAccount.bank_code || null,
+    account_number: bankAccount.account_number || null,
+    account_name: bankAccount.account_name || null,
+    currency: String(bankAccount.currency || "NGN").toUpperCase(),
+  };
+}
+
+export function mapBreetStatusToLocalStatus(status?: string | null) {
+  return normalizeCryptoLifecycleStatus(status);
 }
 
 export async function canUseBreetCryptoCheckout(input: {
@@ -241,11 +405,22 @@ export async function canUseBreetCryptoCheckout(input: {
     return { allowed: false, reason: "Breet settlement mode is disabled.", settlementMode: config.settlementMode, config } as const;
   }
 
-  if (config.settlementMode === "treasury_manual" && !config.treasurySettlementAccountReference) {
+  const effectiveMode = resolveBreetSettlementModeForPurpose(input.purpose, config.settlementMode);
+
+  if (effectiveMode === "treasury_manual" && !config.treasurySettlementAccountReference) {
     return {
       allowed: false,
       reason: "Treasury/manual settlement is not configured.",
-      settlementMode: config.settlementMode,
+      settlementMode: effectiveMode,
+      config,
+    } as const;
+  }
+
+  if (effectiveMode === "treasury_manual" && !config.platformSettlementBankAccount) {
+    return {
+      allowed: false,
+      reason: "Treasury/manual settlement bank account is not configured.",
+      settlementMode: effectiveMode,
       config,
     } as const;
   }
@@ -255,21 +430,37 @@ export async function canUseBreetCryptoCheckout(input: {
       return { allowed: false, reason: "Crypto payments are disabled for invoice checkout.", settlementMode: config.settlementMode, config } as const;
     }
 
-    if (config.settlementMode === "provider_direct") {
-      if (!input.merchantId) {
-        return { allowed: false, reason: "Crypto settlement setup is incomplete for this merchant.", settlementMode: config.settlementMode, config } as const;
-      }
+    if (config.settlementMode !== "treasury_manual" && !config.merchantAutoSettlementEnabled) {
+      return {
+        allowed: false,
+        reason: "Merchant crypto auto-settlement is disabled.",
+        settlementMode: effectiveMode,
+        config,
+      } as const;
+    }
 
-      const ready = await isProviderSettlementReady(input.supabase, {
-        merchantId: input.merchantId,
-        provider: "breet",
-        environment: input.environment,
-        requireCryptoMapping: true,
-      });
+    if (effectiveMode === "treasury_manual" && config.settlementMode !== "treasury_manual") {
+      return {
+        allowed: false,
+        reason: "Crypto settlement setup is incomplete for this merchant.",
+        settlementMode: effectiveMode,
+        config,
+      } as const;
+    }
 
-      if (!ready) {
-        return { allowed: false, reason: "Crypto settlement setup is incomplete for this merchant.", settlementMode: config.settlementMode, config } as const;
-      }
+    if (!input.merchantId) {
+      return { allowed: false, reason: "Crypto settlement setup is incomplete for this merchant.", settlementMode: config.settlementMode, config } as const;
+    }
+
+    const ready = await isProviderSettlementReady(input.supabase, {
+      merchantId: input.merchantId,
+      provider: "breet",
+      environment: input.environment,
+      requireCryptoMapping: true,
+    });
+
+    if (!ready) {
+      return { allowed: false, reason: "Crypto settlement setup is incomplete for this merchant.", settlementMode: config.settlementMode, config } as const;
     }
 
   }
@@ -278,9 +469,70 @@ export async function canUseBreetCryptoCheckout(input: {
     if (!config.subscriptionCryptoEnabled) {
       return { allowed: false, reason: "Crypto payments are disabled for subscription checkout.", settlementMode: config.settlementMode, config } as const;
     }
+
+    if (config.settlementMode !== "treasury_manual" && !config.platformAutoSettlementEnabled) {
+      return {
+        allowed: false,
+        reason: "Platform crypto auto-settlement is disabled.",
+        settlementMode: effectiveMode,
+        config,
+      } as const;
+    }
+
+    if (effectiveMode === "breet_auto_settlement") {
+      return {
+        allowed: false,
+        reason: "Merchant settlement mode cannot be used for platform crypto payments.",
+        settlementMode: effectiveMode,
+        config,
+      } as const;
+    }
+
+    if (effectiveMode === "platform_auto_settlement") {
+      const platformConfigured =
+        Boolean(config.platformSettlementBankAccount?.bank_name) &&
+        Boolean(config.platformSettlementBankAccount?.account_number) &&
+        Boolean(config.platformSettlementBankAccount?.account_name) &&
+        String(config.platformSettlementBankAccount?.currency || "NGN").toUpperCase() === "NGN";
+
+      if (!platformConfigured) {
+        return {
+          allowed: false,
+          reason: "Platform settlement account is not configured.",
+          settlementMode: effectiveMode,
+          config,
+        } as const;
+      }
+    }
   }
 
-  return { allowed: true, settlementMode: config.settlementMode, config } as const;
+  return { allowed: true, settlementMode: effectiveMode, config } as const;
+}
+
+export function resolveBreetSettlementModeForPurpose(
+  purpose: "invoice_payment" | "payment_link" | "crypto_payment" | "plan_subscription" | "plan_upgrade",
+  currentMode: BreetSettlementModeV2
+) {
+  if (currentMode === "treasury_manual" || currentMode === "disabled") return currentMode;
+
+  if (purpose === "invoice_payment" || purpose === "payment_link" || purpose === "crypto_payment") {
+    return "breet_auto_settlement";
+  }
+
+  return "platform_auto_settlement";
+}
+
+export function getSettlementRecipientTypeForPurpose(
+  purpose: "invoice_payment" | "payment_link" | "crypto_payment" | "plan_subscription" | "plan_upgrade"
+) {
+  return purpose === "invoice_payment" || purpose === "payment_link" || purpose === "crypto_payment"
+    ? "merchant"
+    : "platform";
+}
+
+export function isAutoSettlementMode(mode?: string | null) {
+  const normalized = normalizeBreetSettlementMode(mode);
+  return normalized === "breet_auto_settlement" || normalized === "platform_auto_settlement";
 }
 
 export function getBreetProviderHealth() {

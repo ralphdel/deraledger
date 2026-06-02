@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { PaymentService } from "@/lib/payment";
-import { canUseBreetCryptoCheckout } from "@/lib/services/breet-crypto.service";
+import {
+  buildBreetSettlementAccountSnapshot,
+  buildSettlementBankPayload,
+  canUseBreetCryptoCheckout,
+  validateSettlementAccountForBreet,
+} from "@/lib/services/breet-crypto.service";
 import { getPaymentEnvironment } from "@/lib/services/payment-routing.service";
 import { computeCryptoAmount, defaultNetworkForRail, rateSettingKeyForRail } from "@/lib/treasury";
 import crypto from "crypto";
@@ -51,6 +56,24 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: eligibility.reason || "Crypto payments are not yet enabled. Please use Card & Bank or Bank Transfer." }, { status: 403 });
     }
 
+    const settlementMode = eligibility.settlementMode;
+    const settlementRecipientType = "platform" as const;
+    const platformSettlementAccount = eligibility.config.platformSettlementBankAccount;
+
+    if (!platformSettlementAccount) {
+      return NextResponse.json({ error: "Platform settlement account is not configured." }, { status: 403 });
+    }
+
+    const validation = validateSettlementAccountForBreet(platformSettlementAccount);
+    if (!validation.valid) {
+      return NextResponse.json({ error: "Platform settlement account is not configured." }, { status: 403 });
+    }
+
+    const settlementAccountSnapshot = buildBreetSettlementAccountSnapshot(platformSettlementAccount, {
+      recipientType: settlementRecipientType,
+      settlementMode,
+    });
+
     const amountNgn = newPlan === "corporate" ? 20000 : 5000;
     const reference = `CRYPTO-UPG-${newPlan.toUpperCase()}-${crypto.randomBytes(5).toString("hex").toUpperCase()}`;
     const { data: settings } = await supabase
@@ -62,9 +85,13 @@ export async function POST(request: Request) {
     const cryptoAmount = computeCryptoAmount(amountNgn, exchangeRate);
     const ttlMinutes = Number(settingsMap.get("crypto_session_ttl_minutes") || 30);
 
-    const result = await PaymentService.initializeCryptoPayment({
+    const result = await PaymentService.generatePlatformPaymentAddress({
       assetId: "USDT",
       label: reference,
+      settlementBank: buildSettlementBankPayload(platformSettlementAccount),
+      settlementMode,
+      settlementRecipientType,
+      paymentType: "upgrade",
     });
 
     await supabase.from("crypto_payment_sessions").insert({
@@ -81,18 +108,24 @@ export async function POST(request: Request) {
       crypto_asset: result.asset || "USDT",
       crypto_network: (typeof result.raw?.network === "string" ? result.raw.network : null) || defaultNetworkForRail("USDT"),
       crypto_amount_expected: cryptoAmount,
-      settlement_mode: eligibility.settlementMode,
+      settlement_mode: settlementMode,
+      settlement_recipient_type: settlementRecipientType,
       crypto_status: "crypto_payment_initialized",
       settlement_status: "pending",
       webhook_status: "pending",
       payment_status: "pending",
       payment_session_reference: merchant.id,
+      provider_wallet_id: result.vaultId || result.id || null,
+      settlement_account_reference: process.env.BREET_PLATFORM_BANK_CODE || null,
+      settlement_account_snapshot: settlementAccountSnapshot,
       expires_at: new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString(),
       metadata: {
         merchant_id: merchant.id,
         new_plan: newPlan,
         type: "subscription_upgrade",
-        settlement_mode: eligibility.settlementMode,
+        settlement_mode: settlementMode,
+        settlement_recipient_type: settlementRecipientType,
+        settlement_account_snapshot: settlementAccountSnapshot,
         exchange_rate: exchangeRate,
       },
       raw_payload: result.raw || {},
@@ -105,7 +138,8 @@ export async function POST(request: Request) {
       cryptoCoin: result.asset || "USDT",
       fiatAmount: amountNgn,
       reference,
-      settlementMode: eligibility.settlementMode,
+      settlementMode,
+      settlementRecipientType,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to generate crypto address.";

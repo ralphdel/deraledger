@@ -64,7 +64,13 @@ export class BreetAdapter {
     const raw = await this.request<Record<string, unknown>>(
       "POST",
       `/trades/sell/assets/${encodeURIComponent(params.assetId)}/generate-address`,
-      { label: params.label }
+      {
+        label: params.label,
+        payment_type: params.paymentType || "invoice",
+        settlement_mode: params.settlementMode || "breet_auto_settlement",
+        settlement_recipient_type: params.settlementRecipientType || "merchant",
+        settlement_bank: params.settlementBank || null,
+      }
     );
 
     return {
@@ -79,6 +85,18 @@ export class BreetAdapter {
 
   async initializePayment(params: CryptoDepositAddressParams): Promise<CryptoDepositAddressResult> {
     return this.generateAddress(params);
+  }
+
+  async generateInvoicePaymentAddress(params: CryptoDepositAddressParams): Promise<CryptoDepositAddressResult> {
+    return this.generateAddress({ ...params, paymentType: "invoice", settlementRecipientType: "merchant" });
+  }
+
+  async generatePlatformPaymentAddress(params: CryptoDepositAddressParams): Promise<CryptoDepositAddressResult> {
+    return this.generateAddress({
+      ...params,
+      paymentType: params.paymentType || "subscription",
+      settlementRecipientType: "platform",
+    });
   }
 
   async fetchTransaction(transactionId: string): Promise<CryptoTransactionResult> {
@@ -117,6 +135,10 @@ export class BreetAdapter {
     };
   }
 
+  normalizeWebhookPayload(payload: Record<string, unknown>) {
+    return this.normalizePaymentResponse(payload, typeof payload.label === "string" ? payload.label : undefined);
+  }
+
   getProviderHealth() {
     return {
       provider: "breet",
@@ -137,5 +159,10 @@ export class BreetAdapter {
     }
 
     return { valid: true };
+  }
+
+  verifyWebhookSignature(request: Request): WebhookVerificationResult {
+    const secretHeader = request.headers.get("x-webhook-secret") || request.headers.get("x-breet-webhook-secret");
+    return this.verifyWebhook(secretHeader);
   }
 }

@@ -8,6 +8,7 @@ import type {
 import { calculateProviderReportedSettlement } from "@/lib/services/provider-settlement-calculation.service";
 import {
   canUseBreetCryptoCheckout,
+  normalizeBreetSettlementMode,
   normalizeMerchantFacingPaymentMethod,
 } from "@/lib/services/breet-crypto.service";
 
@@ -279,6 +280,7 @@ export async function upsertSettlementLedgerForTransaction(
   transactionId: string,
   options?: {
     provider?: PaymentProvider;
+    settlementMode?: string | null;
     rawProviderPayload?: Record<string, unknown> | null;
   }
 ) {
@@ -301,6 +303,7 @@ export async function upsertSettlementLedgerFromTransaction(
   transaction: TransactionRow,
   options?: {
     provider?: PaymentProvider;
+    settlementMode?: string | null;
     rawProviderPayload?: Record<string, unknown> | null;
   }
 ) {
@@ -313,6 +316,11 @@ export async function upsertSettlementLedgerFromTransaction(
   const paymentMethod = normalizeMerchantFacingPaymentMethod(
     transaction.payment_method || transaction.payment_rail || "card"
   );
+  const settlementMode = options?.settlementMode
+    ? normalizeBreetSettlementMode(options.settlementMode)
+    : provider === "breet"
+      ? "breet_auto_settlement"
+      : "provider_direct";
   const createdAt = transaction.created_at || new Date().toISOString();
 
   const { data: event } = await supabase
@@ -378,7 +386,9 @@ export async function upsertSettlementLedgerFromTransaction(
   const settlementStatus = !settlementRefs.accountId
     ? "manual_review"
     : providerReportedSettlement.settlementStatus;
-  const settlementOwner = settlementStatus === "manual_review" ? "manual_review" : "provider";
+  const settlementOwner = settlementStatus === "manual_review" || settlementMode === "treasury_manual"
+    ? "manual_review"
+    : "provider";
 
   const { error: settlementError } = await supabase
     .from("settlement_records")
@@ -391,6 +401,8 @@ export async function upsertSettlementLedgerFromTransaction(
         provider_settlement_account_id: settlementRefs.providerMappingId,
         provider_name: provider,
         payment_method: paymentMethod,
+        settlement_recipient_type: "merchant",
+        settlement_currency: "NGN",
         gross_amount: amountPaid,
         provider_fee: providerFee,
         platform_fee: 0,
@@ -401,9 +413,9 @@ export async function upsertSettlementLedgerFromTransaction(
         settlement_difference: null,
         fee_payer: feeAbsorbedBy === "customer" ? "customer_pays_fee" : "merchant_pays_fee",
         settlement_status: settlementStatus,
-        settlement_mode: "provider_direct",
+        settlement_mode: settlementMode,
         settlement_owner: settlementOwner,
-        payout_action_required: false,
+        payout_action_required: settlementOwner !== "provider",
         provider_settlement_reference: providerReference,
         provider_fee_source: providerReportedSettlement.providerFeeSource,
         expected_settlement_source: providerReportedSettlement.expectedSettlementSource,

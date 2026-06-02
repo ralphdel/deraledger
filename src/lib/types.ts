@@ -205,7 +205,8 @@ export interface PaymentSession {
   provider_name?: string | null;
   payment_purpose?: string | null;
   payment_method?: string | null;
-  settlement_mode?: "provider_direct" | "treasury_manual" | "disabled" | null;
+  settlement_mode?: "breet_auto_settlement" | "platform_auto_settlement" | "treasury_manual" | "disabled" | null;
+  settlement_recipient_type?: "merchant" | "platform" | null;
   crypto_status?: string | null;
   source_currency: string;
   destination_currency: string;
@@ -216,12 +217,15 @@ export interface PaymentSession {
   exchange_rate: number;
   wallet_address: string;
   wallet_provider_id: string | null;
+  provider_wallet_id?: string | null;
   network: string | null;
   status: string;
   provider_fee?: number | null;
   settlement_fee?: number | null;
   expected_settlement_ngn?: number | null;
   actual_settlement_ngn?: number | null;
+  settlement_account_reference?: string | null;
+  settlement_account_snapshot?: Record<string, unknown> | null;
   webhook_status?: string | null;
   manual_review_reason?: string | null;
   confirmation_count: number;

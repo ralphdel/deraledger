@@ -2,7 +2,12 @@ import crypto from "crypto";
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { PaymentService } from "@/lib/payment";
-import { canUseBreetCryptoCheckout } from "@/lib/services/breet-crypto.service";
+import {
+  buildBreetSettlementAccountSnapshot,
+  buildSettlementBankPayload,
+  canUseBreetCryptoCheckout,
+  validateSettlementAccountForBreet,
+} from "@/lib/services/breet-crypto.service";
 import { getPaymentEnvironmentForMerchantEmail } from "@/lib/services/payment-routing.service";
 import {
   computeCryptoAmount,
@@ -21,6 +26,37 @@ const supabase = createClient(
 function parseNumericSetting(value: string | null | undefined, fallback: number) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+type MerchantSettlementAccount = {
+  id: string;
+  bank_name: string;
+  bank_code: string | null;
+  account_number: string;
+  account_name: string;
+  currency: string | null;
+  is_default: boolean;
+  verification_status: string;
+  status: string;
+  raw_verification_payload: Record<string, unknown> | null;
+};
+
+async function loadMerchantSettlementAccount(merchantId: string) {
+  const { data, error } = await supabase
+    .from("merchant_settlement_accounts")
+    .select("id, bank_name, bank_code, account_number, account_name, currency, is_default, verification_status, status, raw_verification_payload")
+    .eq("merchant_id", merchantId)
+    .eq("is_default", true)
+    .eq("status", "active")
+    .eq("verification_status", "verified")
+    .order("created_at", { ascending: false })
+    .maybeSingle();
+
+  if (error || !data) {
+    return null;
+  }
+
+  return data as MerchantSettlementAccount;
 }
 
 export async function POST(request: Request) {
@@ -79,6 +115,47 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Payment exceeds outstanding balance" }, { status: 400 });
     }
 
+    const settlementMode = eligibility.settlementMode;
+    const settlementRecipientType = settlementMode === "treasury_manual" ? "platform" : "merchant";
+    const merchantSettlementAccount = settlementRecipientType === "merchant"
+      ? await loadMerchantSettlementAccount(merchant.id)
+      : null;
+    const platformSettlementAccount = settlementRecipientType === "platform"
+      ? eligibility.config.platformSettlementBankAccount
+      : null;
+
+    if (settlementRecipientType === "merchant") {
+      if (!merchantSettlementAccount) {
+        return NextResponse.json(
+          { error: "Crypto payment is unavailable because the merchant settlement account is not fully configured." },
+          { status: 403 }
+        );
+      }
+
+      const validation = validateSettlementAccountForBreet(merchantSettlementAccount, { requireDefault: true });
+      if (!validation.valid) {
+        return NextResponse.json(
+          { error: "Crypto payment is unavailable because the merchant settlement account is not fully configured." },
+          { status: 403 }
+        );
+      }
+    }
+
+    if (settlementRecipientType === "platform" && !platformSettlementAccount) {
+      return NextResponse.json(
+        { error: "Crypto settlement setup is unavailable for treasury/manual mode." },
+        { status: 403 }
+      );
+    }
+
+    const settlementBank = settlementRecipientType === "merchant"
+      ? merchantSettlementAccount!
+      : platformSettlementAccount!;
+    const settlementAccountSnapshot = buildBreetSettlementAccountSnapshot(settlementBank, {
+      recipientType: settlementRecipientType,
+      settlementMode,
+    });
+
     const keys = [
       rateSettingKeyForRail(rail),
       confirmationSettingKeyForRail(rail),
@@ -105,9 +182,13 @@ export async function POST(request: Request) {
     const paymentSessionId = crypto.randomUUID();
     const reference = `INV-CRYPTO-${invoice.id.slice(0, 8).toUpperCase()}-${Date.now()}`;
 
-    const addressResult = await PaymentService.generateCryptoDepositAddress({
+    const addressResult = await PaymentService.generateInvoicePaymentAddress({
       assetId: rail,
       label: `merchant:${merchant.id}|invoice:${invoice.id}|session:${paymentSessionId}|ref:${reference}`,
+      settlementBank: buildSettlementBankPayload(settlementBank),
+      settlementMode,
+      settlementRecipientType,
+      paymentType: "invoice",
     });
 
     const network = (typeof addressResult.raw?.network === "string" ? addressResult.raw.network : null) || defaultNetworkForRail(rail);
@@ -120,14 +201,15 @@ export async function POST(request: Request) {
       provider_name: "breet",
       payment_purpose: "invoice_payment",
       payment_method: "crypto",
-      settlement_mode: eligibility.settlementMode,
+      settlement_mode: settlementMode,
+      settlement_recipient_type: settlementRecipientType,
       source_currency: rail,
       destination_currency: "NGN",
       amount_ngn: paymentAmount,
       amount_crypto: cryptoAmount,
       exchange_rate: exchangeRate,
       wallet_address: addressResult.address,
-      wallet_provider_id: addressResult.id || null,
+      wallet_provider_id: addressResult.vaultId || addressResult.id || null,
       network,
       status: "PENDING",
       expected_confirmations: expectedConfirmations,
@@ -139,14 +221,20 @@ export async function POST(request: Request) {
       expected_settlement_ngn: paymentAmount,
       actual_settlement_ngn: null,
       webhook_status: "pending",
+      settlement_account_reference: settlementRecipientType === "merchant"
+        ? merchantSettlementAccount?.id || null
+        : eligibility.config.treasurySettlementAccountReference || null,
+      settlement_account_snapshot: settlementAccountSnapshot,
       metadata: {
         invoice_number: invoice.invoice_number,
         client_email: invoice.clients?.email || null,
         purpose: "invoice_payment",
-        settlement_mode: eligibility.settlementMode,
-        settlement_destination: eligibility.settlementMode === "provider_direct"
+        settlement_mode: settlementMode,
+        settlement_recipient_type: settlementRecipientType,
+        settlement_destination: settlementRecipientType === "merchant"
           ? "merchant_verified_settlement_account"
-          : "deraledger_treasury",
+          : "deraledger_platform_settlement_account",
+        settlement_account_snapshot: settlementAccountSnapshot,
       },
       expires_at: expiresAt,
     });
@@ -184,6 +272,8 @@ export async function POST(request: Request) {
         exchange_rate: exchangeRate,
         wallet_address: addressResult.address,
         reference,
+        settlement_mode: settlementMode,
+        settlement_recipient_type: settlementRecipientType,
       },
     });
 
@@ -199,6 +289,8 @@ export async function POST(request: Request) {
       exchangeRate,
       reference,
       expiresAt,
+      settlementMode,
+      settlementRecipientType,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to initialize crypto checkout.";

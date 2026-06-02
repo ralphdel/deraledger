@@ -57,6 +57,10 @@ export interface WebhookVerificationResult {
 export interface CryptoDepositAddressParams {
   assetId: string;
   label: string;
+  settlementBank?: Record<string, unknown> | null;
+  paymentType?: "invoice" | "subscription" | "upgrade";
+  settlementMode?: string;
+  settlementRecipientType?: "merchant" | "platform";
 }
 
 export interface CryptoDepositAddressResult {

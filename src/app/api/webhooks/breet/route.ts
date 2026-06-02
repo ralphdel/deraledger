@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { PaymentService } from "@/lib/payment";
 import { processSuccessfulFiatPayment } from "@/lib/services/fiat-payment-confirmation.service";
+import { upsertSettlementLedgerForTransaction } from "@/lib/services/settlement-ledger.service";
 import {
   buildBreetWebhookIdempotencyKey,
   mapBreetEventToCryptoStatus,
@@ -181,8 +182,7 @@ async function findPlanSession(context: {
 
 export async function POST(request: Request) {
   const rawBody = await request.text();
-  const secret = request.headers.get("x-webhook-secret");
-  const verification = PaymentService.verifyBreetWebhook(secret);
+  const verification = PaymentService.verifyBreetWebhookSignature(request);
 
   if (!verification.valid) {
     await updateProviderWebhookHealth("failed");
@@ -325,7 +325,7 @@ async function handleInvoiceWebhook(input: {
   const toleranceBps = Number(settings.get("crypto_underpayment_tolerance_bps") || "100");
   const expectedConfirmations = Number(settings.get(`crypto_${rail.toLowerCase()}_confirmations`) || "12");
   const platformFeeBps = Number(settings.get("crypto_platform_fee_bps") || "0");
-  const platformFee = Number(((expectedNgN * platformFeeBps) / 10_000).toFixed(2));
+  const platformFee = Number(((receivedNgN * platformFeeBps) / 10_000).toFixed(2));
   const settlementMode = normalizeBreetSettlementMode(String(session.settlement_mode || "treasury_manual"));
   const lifecycleStatus = normalizeCryptoLifecycleStatus(
     mapBreetEventToCryptoStatus(eventType, stringValue(payload.status), payload)
@@ -372,10 +372,10 @@ async function handleInvoiceWebhook(input: {
     p_exchange_rate: Number(session.exchange_rate || 0),
     p_payment_rail: rail,
     p_source_currency: rail,
-    p_gross_ngn: expectedNgN,
+    p_gross_ngn: receivedNgN,
     p_platform_fee: platformFee,
     p_network_fee: 0,
-    p_merchant_net_ngn: Number((expectedNgN - platformFee).toFixed(2)),
+    p_merchant_net_ngn: Number((receivedNgN - platformFee).toFixed(2)),
     p_confirmation_count: confirmationCount,
     p_expected_confirmations: expectedConfirmations,
     p_raw_payload: payload,
@@ -405,7 +405,7 @@ async function handleInvoiceWebhook(input: {
       converted_ngn_amount: receivedNgN,
       provider_fee: platformFee,
       settlement_fee: 0,
-      expected_settlement_ngn: expectedNgN - platformFee,
+      expected_settlement_ngn: receivedNgN - platformFee,
       actual_settlement_ngn: receivedNgN - platformFee,
       settlement_mode: settlementMode,
       crypto_status: lifecycleStatus,
@@ -428,6 +428,20 @@ async function handleInvoiceWebhook(input: {
     raw_payload: payload,
     idempotency_key: idempotencyKey || null,
   });
+
+  const { data: transactionRow } = await supabase
+    .from("transactions")
+    .select("id")
+    .eq("processor_reference", providerReference || txHash || session.reference)
+    .maybeSingle();
+
+  if (transactionRow?.id) {
+    await upsertSettlementLedgerForTransaction(supabase, transactionRow.id, {
+      provider: "breet",
+      settlementMode,
+      rawProviderPayload: payload,
+    });
+  }
 
   await recordWebhookLog({
     eventType,
@@ -594,19 +608,21 @@ async function handlePlanWebhook(input: {
         provider_settlement_account_id: null,
         provider_name: "breet",
         payment_method: "crypto",
+        settlement_recipient_type: "platform",
+        settlement_currency: "NGN",
         gross_amount: convertedNgN,
         provider_fee: Number(session.provider_fee || 0),
         platform_fee: 0,
         customer_fee: 0,
         merchant_fee: 0,
         expected_settlement: convertedNgN,
-        actual_settlement: settlementMode === "provider_direct" ? convertedNgN : null,
+        actual_settlement: convertedNgN,
         settlement_difference: null,
         fee_payer: "merchant_pays_fee",
-        settlement_status: settlementMode === "provider_direct" ? "completed" : "manual_review",
+        settlement_status: "completed",
         settlement_mode: settlementMode,
-        settlement_owner: settlementMode === "provider_direct" ? "provider" : "deraledger_treasury",
-        payout_action_required: settlementMode !== "provider_direct",
+        settlement_owner: "provider",
+        payout_action_required: false,
         provider_settlement_reference: providerReference || session.provider_reference || session.internal_reference,
         provider_fee_source: "breet_payload",
         expected_settlement_source: "crypto_session",
@@ -624,7 +640,7 @@ async function handlePlanWebhook(input: {
       converted_ngn_amount: convertedNgN,
       settlement_mode: settlementMode,
       crypto_status: mapBreetEventToCryptoStatus(eventType, stringValue(payload.status), payload),
-      settlement_status: settlementMode === "provider_direct" ? "completed" : "manual_review",
+      settlement_status: "completed",
       webhook_status: "processed",
       raw_webhook_payload: payload,
       payment_status: "successful",

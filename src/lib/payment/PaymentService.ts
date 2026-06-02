@@ -115,6 +115,14 @@ export const PaymentService = {
     return getBreetProcessor().generateAddress(p);
   },
 
+  generateInvoicePaymentAddress(p: CryptoDepositAddressParams): Promise<CryptoDepositAddressResult> {
+    return getBreetProcessor().generateInvoicePaymentAddress(p);
+  },
+
+  generatePlatformPaymentAddress(p: CryptoDepositAddressParams): Promise<CryptoDepositAddressResult> {
+    return getBreetProcessor().generatePlatformPaymentAddress(p);
+  },
+
   initializeCryptoPayment(p: CryptoDepositAddressParams): Promise<CryptoDepositAddressResult> {
     return getBreetProcessor().initializePayment(p);
   },
@@ -127,8 +135,16 @@ export const PaymentService = {
     return getBreetProcessor().normalizePaymentResponse(raw, fallbackLabel);
   },
 
+  normalizeBreetWebhookPayload(raw: Record<string, unknown>) {
+    return getBreetProcessor().normalizeWebhookPayload(raw);
+  },
+
   verifyBreetWebhook(secretHeader: string | null): WebhookVerificationResult {
     return getBreetProcessor().verifyWebhook(secretHeader);
+  },
+
+  verifyBreetWebhookSignature(request: Request): WebhookVerificationResult {
+    return getBreetProcessor().verifyWebhookSignature(request);
   },
 
   getBreetProviderHealth() {

@@ -25,6 +25,8 @@ const CONFIG_KEYS = [
   "crypto_usdt_confirmations",
   "crypto_usdc_confirmations",
   "breet_settlement_mode",
+  "breet_auto_settlement_enabled",
+  "breet_merchant_auto_settlement_enabled",
   "breet_invoice_crypto_enabled",
   "breet_subscription_crypto_enabled",
   "breet_webhook_url",
@@ -32,6 +34,13 @@ const CONFIG_KEYS = [
   "breet_supported_networks",
   "breet_treasury_settlement_account_reference",
   "breet_treasury_settlement_account_label",
+  "breet_platform_bank_id",
+  "breet_platform_bank_code",
+  "breet_platform_bank_name",
+  "breet_platform_account_number",
+  "breet_platform_account_name",
+  "breet_default_receive_currency",
+  "breet_sandbox_force_platform_settlement",
   "breet_live_enabled",
 ];
 
@@ -80,10 +89,11 @@ export async function GET() {
     ...session,
     merchant_name: session.merchant_id ? merchantMap[session.merchant_id] || session.merchant_id : null,
     reference: session.internal_reference,
-    wallet_address:
+    wallet_address: session.wallet_address || (
       typeof session.raw_payload === "object" && session.raw_payload
         ? String((session.raw_payload as Record<string, unknown>).address || (session.raw_payload as Record<string, unknown>).destinationAddress || "")
-        : "",
+        : ""
+    ),
     confirmation_count: 0,
     expected_confirmations: 0,
     status: session.crypto_status || session.payment_status || "pending",
