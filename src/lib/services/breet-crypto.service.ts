@@ -313,7 +313,9 @@ export function isBreetRuntimeConfigured() {
 }
 
 export function isBreetWebhookConfigured(config?: Pick<BreetRuntimeConfig, "webhookUrl">) {
-  return Boolean(process.env.BREET_WEBHOOK_SECRET || config?.webhookUrl);
+  // The current Breet webhook path verifies a shared-secret request header.
+  // A configured callback URL alone is not enough to safely accept checkout.
+  return Boolean(process.env.BREET_WEBHOOK_SECRET);
 }
 
 export function getBreetSettlementMode(config: Pick<BreetRuntimeConfig, "settlementMode">) {
