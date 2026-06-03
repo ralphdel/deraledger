@@ -312,7 +312,7 @@ export function isBreetRuntimeConfigured() {
   return Boolean(process.env.BREET_APP_ID && process.env.BREET_APP_SECRET);
 }
 
-export function isBreetWebhookConfigured(config?: Pick<BreetRuntimeConfig, "webhookUrl">) {
+export function isBreetWebhookConfigured() {
   // The current Breet webhook path verifies a shared-secret request header.
   // A configured callback URL alone is not enough to safely accept checkout.
   return Boolean(process.env.BREET_WEBHOOK_SECRET);
@@ -390,7 +390,7 @@ export async function canUseBreetCryptoCheckout(input: {
     return { allowed: false, reason: "Breet credentials are incomplete.", settlementMode: config.settlementMode, config } as const;
   }
 
-  if (!isBreetWebhookConfigured(config)) {
+  if (!isBreetWebhookConfigured()) {
     return { allowed: false, reason: "Breet webhook is not configured.", settlementMode: config.settlementMode, config } as const;
   }
 

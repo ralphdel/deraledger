@@ -10,7 +10,6 @@ import {
   Loader2,
   RefreshCcw,
   ShieldAlert,
-  Wallet,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -22,28 +21,137 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { formatNaira } from "@/lib/calculations";
-import type { MerchantWallet, PaymentSession, SettlementBatch, TreasuryTransaction, TreasuryWebhookLog } from "@/lib/types";
 
 type TreasurySummary = {
   totalCryptoInflow: number;
-  pendingSettlements: number;
-  lockedSettlements: number;
+  pendingAutoSettlements: number;
   settledAmount: number;
-  failedPayouts: number;
+  failedSettlements: number;
   webhookFailures: number;
   underReviewCount: number;
   queueDepth: number;
+  reconciliationDelta: number;
+};
+
+type MerchantOption = { id: string; business_name: string };
+
+type SessionRow = {
+  id: string;
+  merchant_id?: string | null;
+  merchant_name?: string | null;
+  reference?: string | null;
+  internal_reference?: string | null;
+  provider_reference?: string | null;
+  payment_purpose?: string | null;
+  settlement_mode?: string | null;
+  settlement_recipient_type?: string | null;
+  expected_settlement_ngn?: number | null;
+  expected_ngn_amount?: number | null;
+  settlement_account_snapshot?: {
+    bank_name?: string | null;
+    account_number?: string | null;
+    account_name?: string | null;
+    currency?: string | null;
+  } | null;
+  wallet_address?: string | null;
+  webhook_status?: string | null;
+  crypto_status?: string | null;
+  payment_status?: string | null;
+  status?: string | null;
+  expires_at?: string | null;
+  confirmation_count?: number | null;
+  expected_confirmations?: number | null;
+  created_at: string;
+};
+
+type WebhookRow = {
+  id: string;
+  merchant_id?: string | null;
+  merchant_name?: string | null;
+  event_type: string;
+  status: string;
+  processor_reference?: string | null;
+  error_message?: string | null;
+  created_at: string;
+};
+
+type SettlementRecordRow = {
+  id: string;
+  merchant_id?: string | null;
+  merchant_name?: string | null;
+  settlement_mode?: string | null;
+  settlement_recipient_type?: string | null;
+  settlement_status?: string | null;
+  settlement_currency?: string | null;
+  expected_settlement?: number | null;
+  actual_settlement?: number | null;
+  settlement_difference?: number | null;
+  provider_settlement_reference?: string | null;
+  created_at: string;
+};
+
+type TreasuryTransactionRow = {
+  id: string;
+  merchant_id?: string | null;
+  merchant_name?: string | null;
+  payment_rail?: string | null;
+  source_currency?: string | null;
+  source_amount?: number | null;
+  gross_ngn?: number | null;
+  merchant_net_ngn?: number | null;
+  status?: string | null;
+  settlement_reference?: string | null;
+  created_at: string;
+};
+
+type SettlementBatchRow = {
+  id: string;
+  merchant_id?: string | null;
+  merchant_name?: string | null;
+  payout_provider?: string | null;
+  status: string;
+  total_amount?: number | null;
+  created_at: string;
+};
+
+type ConfigStatus = {
+  settlementMode: "breet_auto_settlement" | "platform_auto_settlement" | "treasury_manual" | "disabled";
+  liveEnabled: boolean;
+  webhookConfigured: boolean;
+  invoiceCryptoEnabled: boolean;
+  subscriptionCryptoEnabled: boolean;
+  merchantAutoSettlementEnabled: boolean;
+  platformAutoSettlementEnabled: boolean;
+  platformSettlementBankAccount: {
+    bank_name?: string | null;
+    bank_code?: string | null;
+    account_number?: string | null;
+    account_name?: string | null;
+    currency?: string | null;
+  } | null;
+  supportedAssets: string[];
+  supportedNetworks: string[];
+  manualTreasuryEnabled: boolean;
+  manualQueueFunctionAvailable: boolean;
+  manualPayoutProviders: string[];
 };
 
 type TreasuryPayload = {
   summary: TreasurySummary;
-  merchants: { id: string; business_name: string }[];
-  wallets: MerchantWallet[];
-  treasuryTransactions: (TreasuryTransaction & { merchant_name?: string })[];
-  settlementBatches: (SettlementBatch & { merchant_name?: string })[];
-  paymentSessions: (PaymentSession & { merchant_name?: string })[];
-  webhookLogs: (TreasuryWebhookLog & { merchant_name?: string | null })[];
+  merchants: MerchantOption[];
+  treasuryTransactions: TreasuryTransactionRow[];
+  settlementBatches: SettlementBatchRow[];
+  paymentSessions: SessionRow[];
+  settlementRecords: SettlementRecordRow[];
+  webhookLogs: WebhookRow[];
   settings: Record<string, string>;
+  configStatus: ConfigStatus;
+  providerHealth: {
+    configured: boolean;
+    webhookConfigured: boolean;
+    env: string;
+    baseUrl: string;
+  };
 };
 
 const SETTING_LABELS: Record<string, string> = {
@@ -102,8 +210,10 @@ export default function AdminTreasuryPage() {
       setLoading(false);
       return;
     }
+
     setData(payload);
     setSettingsDraft(payload.settings);
+    setPayoutProvider(payload.configStatus.manualPayoutProviders[0] || "paystack");
     setLoading(false);
   }
 
@@ -114,16 +224,19 @@ export default function AdminTreasuryPage() {
     return () => window.clearTimeout(timer);
   }, []);
 
-  const filteredBatches = useMemo(() => {
-    if (!data) return [];
-    if (merchantFilter === "all") return data.settlementBatches;
-    return data.settlementBatches.filter((batch) => batch.merchant_id === merchantFilter);
-  }, [data, merchantFilter]);
+  const mode = data?.configStatus.settlementMode || "disabled";
+  const manualTreasuryEnabled = data?.configStatus.manualTreasuryEnabled || false;
 
   const filteredSessions = useMemo(() => {
     if (!data) return [];
     if (merchantFilter === "all") return data.paymentSessions;
     return data.paymentSessions.filter((session) => session.merchant_id === merchantFilter);
+  }, [data, merchantFilter]);
+
+  const filteredWebhooks = useMemo(() => {
+    if (!data) return [];
+    if (merchantFilter === "all") return data.webhookLogs;
+    return data.webhookLogs.filter((log) => log.merchant_id === merchantFilter);
   }, [data, merchantFilter]);
 
   const filteredTransactions = useMemo(() => {
@@ -132,11 +245,25 @@ export default function AdminTreasuryPage() {
     return data.treasuryTransactions.filter((tx) => tx.merchant_id === merchantFilter);
   }, [data, merchantFilter]);
 
-  const filteredWebhooks = useMemo(() => {
+  const filteredSettlements = useMemo(() => {
     if (!data) return [];
-    if (merchantFilter === "all") return data.webhookLogs;
-    return data.webhookLogs.filter((log) => log.merchant_id === merchantFilter);
+    if (merchantFilter === "all") return data.settlementRecords;
+    return data.settlementRecords.filter((row) => row.merchant_id === merchantFilter);
   }, [data, merchantFilter]);
+
+  const filteredBatches = useMemo(() => {
+    if (!data) return [];
+    if (merchantFilter === "all") return data.settlementBatches;
+    return data.settlementBatches.filter((batch) => batch.merchant_id === merchantFilter);
+  }, [data, merchantFilter]);
+
+  const reviewSessions = useMemo(
+    () => filteredSessions.filter((session) =>
+      ["manual_review", "crypto_underpaid", "crypto_overpaid", "crypto_expired", "crypto_settlement_failed", "failed", "UNDER_REVIEW"]
+        .includes(String(session.crypto_status || session.status || session.payment_status || ""))
+    ),
+    [filteredSessions]
+  );
 
   async function queueSettlements() {
     setBusy("queue");
@@ -154,7 +281,7 @@ export default function AdminTreasuryPage() {
     if (!res.ok) {
       setFeedback(payload.error || "Failed to queue settlements.");
     } else {
-      setFeedback(`Queued ${payload.result?.created_batches ?? 0} settlement batch(es).`);
+      setFeedback(`Queued ${payload.result?.created_batches ?? 0} manual settlement batch(es).`);
       await loadTreasury();
     }
     setBusy(null);
@@ -211,19 +338,37 @@ export default function AdminTreasuryPage() {
     return <div className="text-sm text-red-600">{feedback || "Treasury console unavailable."}</div>;
   }
 
+  const pendingLabel =
+    mode === "platform_auto_settlement"
+      ? "Pending Platform Settlements"
+      : "Pending Auto-Settlements";
+
   const summaryCards = [
     { label: "Crypto Inflow", value: formatNaira(data.summary.totalCryptoInflow), icon: Coins, tone: "bg-blue-100 text-blue-700 border-blue-200" },
-    { label: "Pending Settlements", value: formatNaira(data.summary.pendingSettlements), icon: Clock3, tone: "bg-amber-100 text-amber-700 border-amber-200" },
-    { label: "Locked Payouts", value: formatNaira(data.summary.lockedSettlements), icon: Wallet, tone: "bg-purple-100 text-purple-700 border-purple-200" },
+    { label: pendingLabel, value: String(data.summary.pendingAutoSettlements), icon: Clock3, tone: "bg-amber-100 text-amber-700 border-amber-200" },
     { label: "Settled", value: formatNaira(data.summary.settledAmount), icon: CheckCircle2, tone: "bg-emerald-100 text-emerald-700 border-emerald-200" },
+    { label: "Failed Settlements", value: String(data.summary.failedSettlements), icon: AlertTriangle, tone: "bg-red-100 text-red-700 border-red-200" },
+    { label: "Webhook Failures", value: String(data.summary.webhookFailures), icon: ShieldAlert, tone: "bg-red-100 text-red-700 border-red-200" },
+    { label: "Under Review", value: String(data.summary.underReviewCount), icon: ShieldAlert, tone: "bg-amber-100 text-amber-700 border-amber-200" },
+    { label: "Reconciliation Delta", value: formatNaira(data.summary.reconciliationDelta), icon: Coins, tone: "bg-slate-100 text-slate-700 border-slate-200" },
+    ...(manualTreasuryEnabled
+      ? [{ label: "Queue Depth", value: String(data.summary.queueDepth), icon: ArrowRightLeft, tone: "bg-purple-100 text-purple-700 border-purple-200" }]
+      : []),
   ];
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-neutral-900">Treasury Console</h1>
-          <p className="text-neutral-500 text-sm mt-1">Operate Breet-backed collections, payout queues, webhook monitoring, and treasury controls.</p>
+          <div className="flex items-center gap-3 flex-wrap">
+            <h1 className="text-2xl font-bold text-neutral-900">Treasury Console</h1>
+            <Badge variant="outline" className="border-2 capitalize">
+              {mode.replaceAll("_", " ")}
+            </Badge>
+          </div>
+          <p className="text-neutral-500 text-sm mt-1">
+            Monitor Breet crypto collections, auto-settlement status, webhook events, and reconciliation.
+          </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <Select value={merchantFilter} onValueChange={(val) => setMerchantFilter(val || "all")}>
@@ -237,22 +382,8 @@ export default function AdminTreasuryPage() {
               ))}
             </SelectContent>
           </Select>
-          <Select value={payoutProvider} onValueChange={(val) => setPayoutProvider(val || "paystack")}>
-            <SelectTrigger className="w-[160px] border-2 bg-white">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="paystack">Paystack</SelectItem>
-              <SelectItem value="fincra">Fincra</SelectItem>
-              <SelectItem value="monnify">Monnify</SelectItem>
-            </SelectContent>
-          </Select>
           <Button variant="outline" className="gap-2 border-2" onClick={() => void loadTreasury()}>
             <RefreshCcw className="h-4 w-4" /> Refresh
-          </Button>
-          <Button className="gap-2 bg-purp-900 hover:bg-purp-800" disabled={busy === "queue"} onClick={() => void queueSettlements()}>
-            {busy === "queue" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRightLeft className="h-4 w-4" />}
-            Queue Settlements
           </Button>
         </div>
       </div>
@@ -261,7 +392,7 @@ export default function AdminTreasuryPage() {
         <div className="rounded-xl border border-neutral-200 bg-white px-4 py-3 text-sm text-neutral-700">{feedback}</div>
       ) : null}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         {summaryCards.map((card) => (
           <Card key={card.label} className="border shadow-none">
             <CardContent className="p-5">
@@ -277,80 +408,92 @@ export default function AdminTreasuryPage() {
         ))}
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card className="border shadow-none">
-          <CardContent className="p-4">
-            <p className="text-xs uppercase text-neutral-500 font-medium">Queue Depth</p>
-            <p className="text-xl font-bold text-neutral-900 mt-2">{data.summary.queueDepth}</p>
+          <CardHeader>
+            <CardTitle className="text-base">Breet Mode Status</CardTitle>
+          </CardHeader>
+          <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+            <Info label="Breet Settlement Mode" value={labelMode(mode)} />
+            <Info label="Breet Live Enabled" value={boolLabel(data.configStatus.liveEnabled)} />
+            <Info label="Webhook Configured" value={boolLabel(data.configStatus.webhookConfigured)} />
+            <Info label="Invoice Crypto Enabled" value={boolLabel(data.configStatus.invoiceCryptoEnabled)} />
+            <Info label="Subscription Crypto Enabled" value={boolLabel(data.configStatus.subscriptionCryptoEnabled)} />
+            <Info label="Merchant Auto-Settlement" value={boolLabel(data.configStatus.merchantAutoSettlementEnabled)} />
+            <Info label="Platform Auto-Settlement" value={boolLabel(data.configStatus.platformAutoSettlementEnabled)} />
+            <Info label="Provider Runtime" value={`${data.providerHealth.configured ? "Configured" : "Missing"} (${data.providerHealth.env})`} />
           </CardContent>
         </Card>
+
         <Card className="border shadow-none">
-          <CardContent className="p-4">
-            <p className="text-xs uppercase text-neutral-500 font-medium">Failed Payouts</p>
-            <p className="text-xl font-bold text-red-600 mt-2">{data.summary.failedPayouts}</p>
-          </CardContent>
-        </Card>
-        <Card className="border shadow-none">
-          <CardContent className="p-4">
-            <p className="text-xs uppercase text-neutral-500 font-medium">Webhook Failures</p>
-            <p className="text-xl font-bold text-red-600 mt-2">{data.summary.webhookFailures}</p>
-          </CardContent>
-        </Card>
-        <Card className="border shadow-none">
-          <CardContent className="p-4">
-            <p className="text-xs uppercase text-neutral-500 font-medium">Under Review</p>
-            <p className="text-xl font-bold text-amber-600 mt-2">{data.summary.underReviewCount}</p>
+          <CardHeader>
+            <CardTitle className="text-base">Settlement Configuration</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            <Info label="Supported Assets" value={data.configStatus.supportedAssets.join(", ") || "Not set"} />
+            <Info label="Supported Networks" value={data.configStatus.supportedNetworks.join(", ") || "Not set"} />
+            <Info label="Platform Settlement Bank" value={formatBankSnapshot(data.configStatus.platformSettlementBankAccount)} />
+            <Info label="Webhook Secret Path" value={data.configStatus.webhookConfigured ? "Shared-secret request verification active" : "Missing"} />
           </CardContent>
         </Card>
       </div>
 
-      <Tabs defaultValue="queue" className="space-y-4">
+      {mode === "disabled" ? (
+        <Card className="border shadow-none">
+          <CardContent className="p-5 text-sm text-neutral-600">
+            Breet crypto is currently disabled. No operational actions are available until Breet is enabled.
+          </CardContent>
+        </Card>
+      ) : null}
+
+      <Tabs defaultValue="sessions" className="space-y-4">
         <TabsList className="bg-white border">
-          <TabsTrigger value="queue">Queue</TabsTrigger>
-          <TabsTrigger value="ledger">Ledger</TabsTrigger>
+          <TabsTrigger value="sessions">Sessions</TabsTrigger>
+          <TabsTrigger value="settlements">Settlements</TabsTrigger>
           <TabsTrigger value="webhooks">Webhooks</TabsTrigger>
+          <TabsTrigger value="fallback">Fallback</TabsTrigger>
           <TabsTrigger value="config">Config</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="queue">
+        <TabsContent value="sessions" className="space-y-4">
           <Card className="border shadow-none">
             <CardHeader>
-              <CardTitle className="text-base">Settlement Queue Manager</CardTitle>
+              <CardTitle className="text-base">Recent Breet Crypto Sessions</CardTitle>
             </CardHeader>
             <CardContent className="p-0 overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow className="bg-neutral-50">
                     <TableHead>Merchant</TableHead>
-                    <TableHead>Provider</TableHead>
+                    <TableHead>Purpose</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Amount</TableHead>
+                    <TableHead>Recipient</TableHead>
+                    <TableHead>Expected NGN</TableHead>
+                    <TableHead>Wallet / Ref</TableHead>
                     <TableHead>Created</TableHead>
-                    <TableHead>Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredBatches.length === 0 ? (
-                    <TableRow><TableCell colSpan={6} className="text-center py-10 text-neutral-500">No settlement batches yet.</TableCell></TableRow>
-                  ) : filteredBatches.map((batch) => (
-                    <TableRow key={batch.id}>
-                      <TableCell className="font-medium">{batch.merchant_name || batch.merchant_id}</TableCell>
-                      <TableCell className="capitalize">{batch.payout_provider || "-"}</TableCell>
+                  {filteredSessions.length === 0 ? (
+                    <TableRow><TableCell colSpan={7} className="text-center py-10 text-neutral-500">No Breet crypto sessions yet.</TableCell></TableRow>
+                  ) : filteredSessions.map((session) => (
+                    <TableRow key={session.id}>
+                      <TableCell className="font-medium">{session.merchant_name || "-"}</TableCell>
+                      <TableCell className="text-xs">{labelValue(session.payment_purpose)}</TableCell>
                       <TableCell>
-                        <Badge variant="outline" className="uppercase border-2 bg-neutral-50">{batch.status}</Badge>
+                        <StatusBadge status={String(session.crypto_status || session.status || session.payment_status || "pending")} />
+                        <p className="text-[11px] text-neutral-500 mt-1">{labelValue(session.settlement_mode)}</p>
                       </TableCell>
-                      <TableCell className="text-right">{formatNaira(Number(batch.total_amount))}</TableCell>
-                      <TableCell>{new Date(batch.created_at).toLocaleString("en-NG")}</TableCell>
-                      <TableCell>
-                        <div className="flex gap-2 flex-wrap">
-                          <Button size="sm" variant="outline" disabled={busy === `hold:${batch.id}`} onClick={() => void updateBatch(batch.id, "hold")}>Hold</Button>
-                          <Button size="sm" variant="outline" disabled={busy === `release:${batch.id}`} onClick={() => void updateBatch(batch.id, "release")}>Release</Button>
-                          <Button size="sm" variant="outline" disabled={busy === `retry:${batch.id}`} onClick={() => void updateBatch(batch.id, "retry")}>Retry</Button>
-                          <Button size="sm" variant="outline" disabled={busy === `settled:${batch.id}`} onClick={() => void updateBatch(batch.id, "settled")}>Settle</Button>
-                          <Button size="sm" variant="outline" disabled={busy === `fail:${batch.id}`} onClick={() => void updateBatch(batch.id, "fail")}>Fail</Button>
-                          <Button size="sm" variant="outline" disabled={busy === `reverse:${batch.id}`} onClick={() => void updateBatch(batch.id, "reverse")}>Reverse</Button>
-                        </div>
+                      <TableCell className="text-xs">
+                        {labelValue(session.settlement_recipient_type)}
+                        <p className="text-[11px] text-neutral-500 mt-1">{maskSettlementAccount(session.settlement_account_snapshot)}</p>
                       </TableCell>
+                      <TableCell>{formatNaira(Number(session.expected_settlement_ngn || session.expected_ngn_amount || 0))}</TableCell>
+                      <TableCell className="text-xs">
+                        {session.wallet_address || "-"}
+                        <p className="text-[11px] text-neutral-500 mt-1">{session.provider_reference || session.reference || session.internal_reference || "-"}</p>
+                      </TableCell>
+                      <TableCell className="text-xs">{new Date(session.created_at).toLocaleString("en-NG")}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -358,30 +501,76 @@ export default function AdminTreasuryPage() {
             </CardContent>
           </Card>
 
-          <Card className="border shadow-none mt-4">
+          <Card className="border shadow-none">
             <CardHeader>
-              <CardTitle className="text-base">Merchant Wallets</CardTitle>
+              <CardTitle className="text-base">Manual Review Queue</CardTitle>
             </CardHeader>
-            <CardContent className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-              {data.wallets.map((wallet) => (
-                <div key={wallet.id} className="rounded-xl border border-neutral-200 bg-white p-4">
-                  <div className="flex items-center justify-between">
-                    <p className="font-semibold text-neutral-900">{data.merchants.find((merchant) => merchant.id === wallet.merchant_id)?.business_name || wallet.merchant_id}</p>
-                    <Badge variant="outline">{wallet.currency}</Badge>
-                  </div>
-                  <div className="space-y-2 mt-4 text-sm">
-                    <div className="flex justify-between"><span className="text-neutral-500">Available</span><span>{formatNaira(Number(wallet.available_balance))}</span></div>
-                    <div className="flex justify-between"><span className="text-neutral-500">Pending</span><span>{formatNaira(Number(wallet.pending_balance))}</span></div>
-                    <div className="flex justify-between"><span className="text-neutral-500">Locked</span><span>{formatNaira(Number(wallet.locked_balance))}</span></div>
-                    <div className="flex justify-between font-semibold"><span className="text-neutral-500">Settled Total</span><span>{formatNaira(Number(wallet.total_settled))}</span></div>
-                  </div>
-                </div>
-              ))}
+            <CardContent className="p-0 overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-neutral-50">
+                    <TableHead>Merchant</TableHead>
+                    <TableHead>Purpose</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Recipient</TableHead>
+                    <TableHead>Reference</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {reviewSessions.length === 0 ? (
+                    <TableRow><TableCell colSpan={5} className="text-center py-10 text-neutral-500">No sessions currently under manual review.</TableCell></TableRow>
+                  ) : reviewSessions.map((session) => (
+                    <TableRow key={session.id}>
+                      <TableCell className="font-medium">{session.merchant_name || "-"}</TableCell>
+                      <TableCell className="text-xs">{labelValue(session.payment_purpose)}</TableCell>
+                      <TableCell><StatusBadge status={String(session.crypto_status || session.status || session.payment_status || "pending")} /></TableCell>
+                      <TableCell className="text-xs">{labelValue(session.settlement_recipient_type)}</TableCell>
+                      <TableCell className="text-xs">{session.provider_reference || session.reference || session.internal_reference || "-"}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             </CardContent>
           </Card>
         </TabsContent>
 
-        <TabsContent value="ledger">
+        <TabsContent value="settlements" className="space-y-4">
+          <Card className="border shadow-none">
+            <CardHeader>
+              <CardTitle className="text-base">Settlement Records</CardTitle>
+            </CardHeader>
+            <CardContent className="p-0 overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-neutral-50">
+                    <TableHead>Merchant</TableHead>
+                    <TableHead>Mode</TableHead>
+                    <TableHead>Recipient</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Expected</TableHead>
+                    <TableHead>Actual</TableHead>
+                    <TableHead>Delta</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredSettlements.length === 0 ? (
+                    <TableRow><TableCell colSpan={7} className="text-center py-10 text-neutral-500">No Breet settlement records yet.</TableCell></TableRow>
+                  ) : filteredSettlements.map((row) => (
+                    <TableRow key={row.id}>
+                      <TableCell className="font-medium">{row.merchant_name || "-"}</TableCell>
+                      <TableCell className="text-xs">{labelValue(row.settlement_mode)}</TableCell>
+                      <TableCell className="text-xs">{labelValue(row.settlement_recipient_type)}</TableCell>
+                      <TableCell><StatusBadge status={String(row.settlement_status || "pending")} /></TableCell>
+                      <TableCell>{formatNaira(Number(row.expected_settlement || 0))}</TableCell>
+                      <TableCell>{row.actual_settlement === null || row.actual_settlement === undefined ? "-" : formatNaira(Number(row.actual_settlement))}</TableCell>
+                      <TableCell>{row.settlement_difference === null || row.settlement_difference === undefined ? "-" : formatNaira(Number(row.settlement_difference))}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+
           <Card className="border shadow-none">
             <CardHeader>
               <CardTitle className="text-base">Treasury Ledger</CardTitle>
@@ -401,60 +590,16 @@ export default function AdminTreasuryPage() {
                 </TableHeader>
                 <TableBody>
                   {filteredTransactions.length === 0 ? (
-                    <TableRow><TableCell colSpan={7} className="text-center py-10 text-neutral-500">No treasury transactions yet.</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={7} className="text-center py-10 text-neutral-500">No Breet treasury transactions yet.</TableCell></TableRow>
                   ) : filteredTransactions.map((tx) => (
                     <TableRow key={tx.id}>
                       <TableCell className="font-medium">{tx.merchant_name || tx.merchant_id}</TableCell>
                       <TableCell className="uppercase">{tx.payment_rail || "-"}</TableCell>
-                      <TableCell><Badge variant="outline" className="uppercase border-2 bg-neutral-50">{tx.status}</Badge></TableCell>
+                      <TableCell><StatusBadge status={String(tx.status || "pending")} /></TableCell>
                       <TableCell>{tx.source_amount || 0} {tx.source_currency || ""}</TableCell>
                       <TableCell className="text-right">{formatNaira(Number(tx.gross_ngn || 0))}</TableCell>
                       <TableCell className="text-right">{formatNaira(Number(tx.merchant_net_ngn || 0))}</TableCell>
                       <TableCell className="text-xs">{tx.settlement_reference || "-"}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-
-          <Card className="border shadow-none mt-4">
-            <CardHeader>
-              <CardTitle className="text-base">Payment Sessions</CardTitle>
-            </CardHeader>
-            <CardContent className="p-0 overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-neutral-50">
-                    <TableHead>Merchant</TableHead>
-                    <TableHead>Reference</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Wallet</TableHead>
-                    <TableHead>Confirmations</TableHead>
-                    <TableHead>Expiry</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredSessions.length === 0 ? (
-                    <TableRow><TableCell colSpan={6} className="text-center py-10 text-neutral-500">No payment sessions yet.</TableCell></TableRow>
-                  ) : filteredSessions.map((session) => (
-                    <TableRow key={session.id}>
-                      <TableCell className="font-medium">{session.merchant_name || session.merchant_id}</TableCell>
-                      <TableCell className="text-xs">{session.reference}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className="uppercase border-2 bg-neutral-50">{session.crypto_status || session.status}</Badge>
-                        {session.settlement_mode ? (
-                          <p className="text-[11px] text-neutral-500 mt-1">{session.settlement_mode.replaceAll("_", " ")}</p>
-                        ) : null}
-                      </TableCell>
-                      <TableCell className="text-xs">
-                        {session.wallet_address || "-"}
-                        {session.webhook_status ? (
-                          <p className="text-[11px] text-neutral-500 mt-1">Webhook: {session.webhook_status}</p>
-                        ) : null}
-                      </TableCell>
-                      <TableCell>{session.confirmation_count}/{session.expected_confirmations}</TableCell>
-                      <TableCell>{new Date(session.expires_at).toLocaleString("en-NG")}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -466,53 +611,124 @@ export default function AdminTreasuryPage() {
         <TabsContent value="webhooks">
           <Card className="border shadow-none">
             <CardHeader>
-              <CardTitle className="text-base">Webhook Monitoring</CardTitle>
+              <CardTitle className="text-base">Recent Breet Webhook Events</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="rounded-xl border border-red-200 bg-red-50 p-4">
-                  <div className="flex items-center gap-2 text-red-700 font-semibold"><AlertTriangle className="h-4 w-4" /> Failures</div>
-                  <p className="text-2xl font-bold text-red-700 mt-2">{data.summary.webhookFailures}</p>
-                </div>
-                <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
-                  <div className="flex items-center gap-2 text-amber-700 font-semibold"><ShieldAlert className="h-4 w-4" /> Under Review</div>
-                  <p className="text-2xl font-bold text-amber-700 mt-2">{data.summary.underReviewCount}</p>
-                </div>
-                <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
-                  <div className="flex items-center gap-2 text-emerald-700 font-semibold"><CheckCircle2 className="h-4 w-4" /> Processed</div>
-                  <p className="text-2xl font-bold text-emerald-700 mt-2">{filteredWebhooks.filter((log) => log.status === "processed").length}</p>
-                </div>
-              </div>
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="bg-neutral-50">
-                      <TableHead>Time</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Merchant</TableHead>
-                      <TableHead>Event</TableHead>
-                      <TableHead>Reference</TableHead>
-                      <TableHead>Error</TableHead>
+            <CardContent className="p-0 overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-neutral-50">
+                    <TableHead>Time</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Merchant</TableHead>
+                    <TableHead>Event</TableHead>
+                    <TableHead>Reference</TableHead>
+                    <TableHead>Error</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredWebhooks.length === 0 ? (
+                    <TableRow><TableCell colSpan={6} className="text-center py-10 text-neutral-500">No Breet webhook logs yet.</TableCell></TableRow>
+                  ) : filteredWebhooks.map((log) => (
+                    <TableRow key={log.id}>
+                      <TableCell className="text-xs">{new Date(log.created_at).toLocaleString("en-NG")}</TableCell>
+                      <TableCell><StatusBadge status={log.status} /></TableCell>
+                      <TableCell>{log.merchant_name || "-"}</TableCell>
+                      <TableCell>{log.event_type}</TableCell>
+                      <TableCell className="text-xs">{log.processor_reference || "-"}</TableCell>
+                      <TableCell className="text-xs text-red-600">{log.error_message || "-"}</TableCell>
                     </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filteredWebhooks.length === 0 ? (
-                      <TableRow><TableCell colSpan={6} className="text-center py-10 text-neutral-500">No webhook logs yet.</TableCell></TableRow>
-                    ) : filteredWebhooks.map((log) => (
-                      <TableRow key={log.id}>
-                        <TableCell>{new Date(log.created_at).toLocaleString("en-NG")}</TableCell>
-                        <TableCell><Badge variant="outline" className="uppercase border-2 bg-neutral-50">{log.status}</Badge></TableCell>
-                        <TableCell>{log.merchant_name || "-"}</TableCell>
-                        <TableCell>{log.event_type}</TableCell>
-                        <TableCell className="text-xs">{log.processor_reference || "-"}</TableCell>
-                        <TableCell className="text-xs text-red-600">{log.error_message || "-"}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+                  ))}
+                </TableBody>
+              </Table>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="fallback" className="space-y-4">
+          {!manualTreasuryEnabled ? (
+            <Card className="border shadow-none">
+              <CardContent className="p-5 text-sm text-neutral-600">
+                Manual treasury settlement is disabled. Breet payments are expected to auto-settle through Breet.
+              </CardContent>
+            </Card>
+          ) : (
+            <>
+              <Card className="border-amber-200 bg-amber-50 shadow-none">
+                <CardHeader>
+                  <CardTitle className="text-base text-amber-900">Manual Treasury Fallback</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4 text-sm text-amber-900">
+                  <p>DeraLedger is temporarily responsible for treasury settlement in this mode.</p>
+                  {!data.configStatus.manualQueueFunctionAvailable ? (
+                    <p>The manual queue function is not available in this environment, so queue actions are blocked.</p>
+                  ) : null}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {data.configStatus.manualQueueFunctionAvailable ? (
+                      <>
+                        <Select value={payoutProvider} onValueChange={(val) => setPayoutProvider(val || "paystack")}>
+                          <SelectTrigger className="w-[180px] border-2 bg-white">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {data.configStatus.manualPayoutProviders.map((provider) => (
+                              <SelectItem key={provider} value={provider}>{labelValue(provider)}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Button className="gap-2 bg-purp-900 hover:bg-purp-800" disabled={busy === "queue"} onClick={() => void queueSettlements()}>
+                          {busy === "queue" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRightLeft className="h-4 w-4" />}
+                          Queue Settlement
+                        </Button>
+                      </>
+                    ) : null}
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="border shadow-none">
+                <CardHeader>
+                  <CardTitle className="text-base">Manual Settlement Batches</CardTitle>
+                </CardHeader>
+                <CardContent className="p-0 overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-neutral-50">
+                        <TableHead>Merchant</TableHead>
+                        <TableHead>Provider</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead className="text-right">Amount</TableHead>
+                        <TableHead>Created</TableHead>
+                        <TableHead>Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {filteredBatches.length === 0 ? (
+                        <TableRow><TableCell colSpan={6} className="text-center py-10 text-neutral-500">No manual settlement batches yet.</TableCell></TableRow>
+                      ) : filteredBatches.map((batch) => (
+                        <TableRow key={batch.id}>
+                          <TableCell className="font-medium">{batch.merchant_name || batch.merchant_id}</TableCell>
+                          <TableCell className="capitalize">{batch.payout_provider || "-"}</TableCell>
+                          <TableCell><StatusBadge status={batch.status} /></TableCell>
+                          <TableCell className="text-right">{formatNaira(Number(batch.total_amount || 0))}</TableCell>
+                          <TableCell className="text-xs">{new Date(batch.created_at).toLocaleString("en-NG")}</TableCell>
+                          <TableCell>
+                            <div className="flex gap-2 flex-wrap">
+                              <Button size="sm" variant="outline" disabled={busy === `hold:${batch.id}`} onClick={() => void updateBatch(batch.id, "hold")}>Hold</Button>
+                              <Button size="sm" variant="outline" disabled={busy === `release:${batch.id}`} onClick={() => void updateBatch(batch.id, "release")}>Release</Button>
+                              <Button size="sm" variant="outline" disabled={busy === `retry:${batch.id}`} onClick={() => void updateBatch(batch.id, "retry")}>Retry</Button>
+                              <Button size="sm" variant="outline" disabled={busy === `settled:${batch.id}`} onClick={() => void updateBatch(batch.id, "settled")}>Settle</Button>
+                              <Button size="sm" variant="outline" disabled={busy === `fail:${batch.id}`} onClick={() => void updateBatch(batch.id, "fail")}>Fail</Button>
+                              <Button size="sm" variant="outline" disabled={busy === `reverse:${batch.id}`} onClick={() => void updateBatch(batch.id, "reverse")}>Reverse</Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            </>
+          )}
         </TabsContent>
 
         <TabsContent value="config">
@@ -535,7 +751,7 @@ export default function AdminTreasuryPage() {
               </div>
               <div className="flex items-center justify-between rounded-xl border border-neutral-200 bg-neutral-50 p-4">
                 <div className="text-sm text-neutral-600">
-                  Use these placeholders now, then replace them with your live Breet rate/signature settings as soon as the account review is approved.
+                  Configure Breet rates, assets, settlement mode, webhook endpoint, and platform settlement account details here.
                 </div>
                 <Button onClick={() => void saveSettings()} disabled={busy === "settings"} className="bg-purp-900 hover:bg-purp-800">
                   {busy === "settings" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save Settings"}
@@ -547,4 +763,56 @@ export default function AdminTreasuryPage() {
       </Tabs>
     </div>
   );
+}
+
+function Info({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-neutral-200 p-3">
+      <p className="text-xs uppercase text-neutral-500">{label}</p>
+      <p className="font-semibold text-neutral-900 mt-1">{value}</p>
+    </div>
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const normalized = status.toLowerCase();
+  const className =
+    normalized.includes("complete") || normalized.includes("settled") || normalized === "processed"
+      ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+      : normalized.includes("manual") || normalized.includes("review") || normalized.includes("underpaid") || normalized.includes("overpaid")
+        ? "bg-amber-50 text-amber-700 border-amber-200"
+        : normalized.includes("fail") || normalized.includes("expired")
+          ? "bg-red-50 text-red-700 border-red-200"
+          : "bg-blue-50 text-blue-700 border-blue-200";
+
+  return (
+    <Badge variant="outline" className={`border-2 capitalize ${className}`}>
+      {labelValue(status)}
+    </Badge>
+  );
+}
+
+function boolLabel(value: boolean) {
+  return value ? "Enabled" : "Disabled";
+}
+
+function labelMode(value: string) {
+  return value.replaceAll("_", " ");
+}
+
+function labelValue(value?: string | null) {
+  if (!value) return "-";
+  return value.replaceAll("_", " ");
+}
+
+function maskSettlementAccount(snapshot?: SessionRow["settlement_account_snapshot"] | null) {
+  if (!snapshot?.account_number) return snapshot?.bank_name || "Settlement account";
+  return `${snapshot.bank_name || "Bank"} ****${snapshot.account_number.slice(-4)}`;
+}
+
+function formatBankSnapshot(
+  bank: ConfigStatus["platformSettlementBankAccount"]
+) {
+  if (!bank?.bank_name || !bank.account_number || !bank.account_name) return "Not configured";
+  return `${bank.bank_name} ****${bank.account_number.slice(-4)} · ${bank.account_name} (${bank.currency || "NGN"})`;
 }

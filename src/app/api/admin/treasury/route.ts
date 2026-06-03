@@ -1,11 +1,27 @@
 import { NextResponse } from "next/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { requireAdminPortalSession } from "@/lib/admin-portal-auth";
+import {
+  getBreetProviderHealth,
+  loadBreetRuntimeConfig,
+} from "@/lib/services/breet-crypto.service";
 
 const supabase = createSupabaseClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
+
+const MANUAL_PAYOUT_PROVIDERS = ["paystack", "monnify", "fincra"] as const;
+
+type ManualPayoutProvider = (typeof MANUAL_PAYOUT_PROVIDERS)[number];
+
+type BreetSettlementRecordRow = {
+  merchant_id?: string | null;
+  actual_settlement?: number | string | null;
+  amount_settled?: number | string | null;
+  settlement_difference?: number | string | null;
+  [key: string]: unknown;
+};
 
 const CONFIG_KEYS = [
   "crypto_usdt_ngn_rate",
@@ -50,6 +66,13 @@ export async function GET() {
     return NextResponse.json({ error: guard.error }, { status: guard.status });
   }
 
+  const runtimeConfig = await loadBreetRuntimeConfig(supabase);
+  const providerHealth = getBreetProviderHealth();
+  const manualTreasuryEnabled = runtimeConfig.settlementMode === "treasury_manual";
+  const manualQueueFunctionAvailable = manualTreasuryEnabled
+    ? await hasManualQueueFunction()
+    : false;
+
   const [
     walletRes,
     treasuryRes,
@@ -58,15 +81,17 @@ export async function GET() {
     settingsRes,
     sessionsRes,
     cryptoSessionsRes,
+    settlementRes,
     merchantRes,
   ] = await Promise.all([
     supabase.from("merchant_wallets").select("*").order("updated_at", { ascending: false }).limit(100),
     supabase.from("treasury_transactions").select("*").order("created_at", { ascending: false }).limit(100),
     supabase.from("settlement_batches").select("*").order("created_at", { ascending: false }).limit(100),
-    supabase.from("treasury_webhook_logs").select("*").order("created_at", { ascending: false }).limit(100),
+    supabase.from("treasury_webhook_logs").select("*").eq("provider", "breet").order("created_at", { ascending: false }).limit(100),
     supabase.from("platform_settings").select("key, value").in("key", CONFIG_KEYS),
-    supabase.from("payment_sessions").select("*").order("created_at", { ascending: false }).limit(100),
-    supabase.from("crypto_payment_sessions").select("*").order("created_at", { ascending: false }).limit(100),
+    supabase.from("payment_sessions").select("*").eq("provider_name", "breet").order("created_at", { ascending: false }).limit(100),
+    supabase.from("crypto_payment_sessions").select("*").eq("provider_name", "breet").order("created_at", { ascending: false }).limit(100),
+    supabase.from("settlement_records").select("*").eq("provider_name", "breet").order("created_at", { ascending: false }).limit(100),
     supabase.from("merchants").select("id, business_name").limit(500),
   ]);
 
@@ -103,29 +128,66 @@ export async function GET() {
     merchant_name: log.merchant_id ? merchantMap[log.merchant_id] || log.merchant_id : null,
   }));
   const settings = Object.fromEntries((settingsRes.data || []).map((row) => [row.key, row.value]));
+  const breetSettlementRecords = ((settlementRes.data as BreetSettlementRecordRow[] | null) || []).map((record) => ({
+    ...record,
+    merchant_name: merchantMap[String(record.merchant_id || "")] || record.merchant_id,
+  }));
+  const recentWebhookLogs = webhooksRes.error ? [] : webhookLogs;
+  const pendingAutoSettlements = [...paymentSessions, ...cryptoPaymentSessions].filter((session) =>
+    ["pending", "PENDING", "AWAITING_CONFIRMATION", "SETTLEMENT_PENDING", "crypto_payment_waiting", "crypto_payment_detected", "crypto_payment_confirming", "crypto_settlement_pending"].includes(
+      String(session.status || session.crypto_status || session.payment_status || "")
+    )
+  ).length;
+  const failedSettlements = [...paymentSessions, ...cryptoPaymentSessions].filter((session) =>
+    ["failed", "FAILED", "crypto_expired", "crypto_settlement_failed"].includes(
+      String(session.status || session.crypto_status || session.payment_status || "")
+    )
+  ).length;
+  const settledAmount = breetSettlementRecords.reduce((sum, record) => sum + Number(record.actual_settlement || record.amount_settled || 0), 0);
+  const reconciliationDelta = breetSettlementRecords.reduce((sum, record) => sum + Math.abs(Number(record.settlement_difference || 0)), 0);
+  const manualQueueDepth = manualTreasuryEnabled
+    ? settlementBatches.filter((batch) => ["queued", "processing", "held"].includes(batch.status)).length
+    : 0;
 
   const summary = {
     totalCryptoInflow: treasuryTransactions.reduce((sum, tx) => sum + Number(tx.gross_ngn || 0), 0),
-    pendingSettlements: wallets.reduce((sum, wallet) => sum + Number(wallet.pending_balance || 0), 0),
-    lockedSettlements: wallets.reduce((sum, wallet) => sum + Number(wallet.locked_balance || 0), 0),
-    settledAmount: wallets.reduce((sum, wallet) => sum + Number(wallet.total_settled || 0), 0),
-    failedPayouts: settlementBatches.filter((batch) => batch.status === "failed").length,
-    webhookFailures: webhookLogs.filter((log) => log.status === "failed").length,
+    pendingAutoSettlements,
+    settledAmount,
+    failedSettlements,
+    webhookFailures: recentWebhookLogs.filter((log) => log.status === "failed").length,
     underReviewCount: [...paymentSessions, ...cryptoPaymentSessions].filter((session) =>
       ["UNDER_REVIEW", "manual_review", "crypto_underpaid", "crypto_overpaid"].includes(String(session.status || session.crypto_status || ""))
     ).length,
-    queueDepth: settlementBatches.filter((batch) => ["queued", "processing", "held"].includes(batch.status)).length,
+    queueDepth: manualQueueDepth,
+    reconciliationDelta,
   };
 
   return NextResponse.json({
     summary,
     merchants,
-    wallets,
+    wallets: manualTreasuryEnabled ? wallets : [],
     treasuryTransactions,
-    settlementBatches,
+    settlementBatches: manualTreasuryEnabled ? settlementBatches : [],
     paymentSessions: [...paymentSessions, ...cryptoPaymentSessions],
-    webhookLogs,
+    settlementRecords: breetSettlementRecords,
+    webhookLogs: recentWebhookLogs,
     settings,
+    configStatus: {
+      settlementMode: runtimeConfig.settlementMode,
+      liveEnabled: runtimeConfig.liveEnabled,
+      webhookConfigured: providerHealth.webhookConfigured,
+      invoiceCryptoEnabled: runtimeConfig.invoiceCryptoEnabled,
+      subscriptionCryptoEnabled: runtimeConfig.subscriptionCryptoEnabled,
+      merchantAutoSettlementEnabled: runtimeConfig.merchantAutoSettlementEnabled,
+      platformAutoSettlementEnabled: runtimeConfig.platformAutoSettlementEnabled,
+      platformSettlementBankAccount: runtimeConfig.platformSettlementBankAccount,
+      supportedAssets: runtimeConfig.supportedAssets,
+      supportedNetworks: runtimeConfig.supportedNetworks,
+      manualTreasuryEnabled,
+      manualQueueFunctionAvailable,
+      manualPayoutProviders: manualTreasuryEnabled ? [...MANUAL_PAYOUT_PROVIDERS] : [],
+    },
+    providerHealth,
   });
 }
 
@@ -144,9 +206,28 @@ export async function POST(request: Request) {
   }
 
   if (body.action === "queue_settlements") {
+    const runtimeConfig = await loadBreetRuntimeConfig(supabase);
+    if (runtimeConfig.settlementMode !== "treasury_manual") {
+      return NextResponse.json({
+        error: "Manual settlement queue is disabled because Breet auto-settlement is active.",
+      }, { status: 409 });
+    }
+
+    const provider = isManualPayoutProvider(body.payoutProvider) ? body.payoutProvider : null;
+    if (!provider) {
+      return NextResponse.json({ error: "Invalid manual payout provider." }, { status: 400 });
+    }
+
+    const functionExists = await hasManualQueueFunction();
+    if (!functionExists) {
+      return NextResponse.json({
+        error: "Manual treasury settlement is enabled, but the queue function is not available in this environment.",
+      }, { status: 409 });
+    }
+
     const { data, error } = await supabase.rpc("queue_pending_crypto_settlements", {
       p_merchant_id: body.merchantId || null,
-      p_payout_provider: body.payoutProvider || "paystack",
+      p_payout_provider: provider,
     });
 
     if (error) {
@@ -172,4 +253,25 @@ export async function POST(request: Request) {
   }
 
   return NextResponse.json({ error: "Unsupported action" }, { status: 400 });
+}
+
+function isManualPayoutProvider(value: unknown): value is ManualPayoutProvider {
+  return typeof value === "string" && MANUAL_PAYOUT_PROVIDERS.includes(value as ManualPayoutProvider);
+}
+
+async function hasManualQueueFunction() {
+  const { data, error } = await supabase
+    .schema("information_schema")
+    .from("routines")
+    .select("routine_name")
+    .eq("routine_schema", "public")
+    .eq("routine_name", "queue_pending_crypto_settlements")
+    .limit(1);
+
+  if (error) {
+    console.error("Failed to check queue_pending_crypto_settlements availability:", error.message);
+    return false;
+  }
+
+  return Boolean(data && data.length > 0);
 }
