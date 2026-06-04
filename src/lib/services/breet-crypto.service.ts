@@ -29,6 +29,7 @@ export const BREET_PLATFORM_SETTING_KEYS = [
   "breet_merchant_auto_settlement_enabled",
   "breet_invoice_crypto_enabled",
   "breet_subscription_crypto_enabled",
+  "breet_min_auto_settlement_ngn",
   "breet_webhook_url",
   "breet_supported_assets",
   "breet_supported_networks",
@@ -50,12 +51,17 @@ export const BREET_PLATFORM_SETTING_KEYS = [
   "crypto_settlement_currency",
 ] as const;
 
+export const DEFAULT_BREET_MIN_AUTO_SETTLEMENT_NGN = 2500;
+export const BREET_MIN_AMOUNT_ERROR_MESSAGE =
+  "Crypto payments are available for amounts from \u20A62,500 and above. Please use another payment method for smaller amounts.";
+
 export type BreetRuntimeConfig = {
   settlementMode: BreetSettlementModeV2;
   merchantAutoSettlementEnabled: boolean;
   platformAutoSettlementEnabled: boolean;
   invoiceCryptoEnabled: boolean;
   subscriptionCryptoEnabled: boolean;
+  minimumAutoSettlementNgn: number;
   webhookUrl: string | null;
   supportedAssets: string[];
   supportedNetworks: string[];
@@ -254,6 +260,15 @@ export function getConfiguredBreetApiEnvironment(): BreetApiEnvironment {
   return normalizeBreetApiEnvironment(process.env.BREET_ENV || process.env.PAYMENT_ENVIRONMENT);
 }
 
+export function getBreetMinimumAutoSettlementNgn() {
+  const parsed = Number(process.env.BREET_MIN_AUTO_SETTLEMENT_NGN);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_BREET_MIN_AUTO_SETTLEMENT_NGN;
+}
+
+export function isBelowBreetMinimumAmount(amountNgn: number, minimumAmountNgn: number) {
+  return Number.isFinite(amountNgn) && amountNgn < minimumAmountNgn;
+}
+
 export async function loadBreetRuntimeConfig(supabase: SupabaseClient): Promise<BreetRuntimeConfig> {
   const { data } = await supabase
     .from("platform_settings")
@@ -264,6 +279,7 @@ export async function loadBreetRuntimeConfig(supabase: SupabaseClient): Promise<
   const envMerchantAutoSettlement = readEnvBoolean(process.env.BREET_MERCHANT_AUTO_SETTLEMENT_ENABLED, true);
   const envPlatformAutoSettlement = readEnvBoolean(process.env.BREET_AUTO_SETTLEMENT_ENABLED, true);
   const envForcePlatformSettlement = readEnvBoolean(process.env.BREET_SANDBOX_FORCE_PLATFORM_SETTLEMENT, false);
+  const envMinimumAutoSettlement = getBreetMinimumAutoSettlementNgn();
   const envFallbackMode =
     envMerchantAutoSettlement ? "breet_auto_settlement" :
     envPlatformAutoSettlement ? "platform_auto_settlement" :
@@ -289,6 +305,11 @@ export async function loadBreetRuntimeConfig(supabase: SupabaseClient): Promise<
       parseBooleanSetting(map, "breet_sandbox_force_platform_settlement", false),
     invoiceCryptoEnabled: parseBooleanSetting(map, "breet_invoice_crypto_enabled", false),
     subscriptionCryptoEnabled: parseBooleanSetting(map, "breet_subscription_crypto_enabled", false),
+    minimumAutoSettlementNgn: parseNumberSetting(
+      map,
+      "breet_min_auto_settlement_ngn",
+      envMinimumAutoSettlement
+    ),
     webhookUrl: settingValue(map, "breet_webhook_url", "") || null,
     supportedAssets: settingValue(map, "breet_supported_assets", "USDT,USDC,BTC,ETH")
       .split(",")

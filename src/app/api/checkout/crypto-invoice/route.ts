@@ -3,9 +3,11 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { PaymentService } from "@/lib/payment";
 import {
+  BREET_MIN_AMOUNT_ERROR_MESSAGE,
   buildBreetSettlementAccountSnapshot,
   buildSettlementBankPayload,
   canUseBreetCryptoCheckout,
+  isBelowBreetMinimumAmount,
   validateSettlementAccountForBreet,
 } from "@/lib/services/breet-crypto.service";
 import { getPaymentEnvironmentForMerchantEmail } from "@/lib/services/payment-routing.service";
@@ -26,6 +28,10 @@ const supabase = createClient(
 function parseNumericSetting(value: string | null | undefined, fallback: number) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function roundCurrency(value: number) {
+  return Math.round(value * 100) / 100;
 }
 
 type MerchantSettlementAccount = {
@@ -110,9 +116,20 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: eligibility.reason || "Crypto settlement setup is incomplete for this merchant." }, { status: 403 });
     }
 
-    const outstanding = Number(invoice.outstanding_balance);
+    const outstanding = roundCurrency(Number(invoice.outstanding_balance || 0));
     if (paymentAmount > outstanding + 0.01) {
       return NextResponse.json({ error: "Payment exceeds outstanding balance" }, { status: 400 });
+    }
+
+    const intendedPaymentAmount = roundCurrency(paymentAmount);
+    const minimumAutoSettlementNgn = eligibility.config.minimumAutoSettlementNgn;
+
+    if (isBelowBreetMinimumAmount(outstanding, minimumAutoSettlementNgn)) {
+      return NextResponse.json({ error: BREET_MIN_AMOUNT_ERROR_MESSAGE }, { status: 403 });
+    }
+
+    if (isBelowBreetMinimumAmount(intendedPaymentAmount, minimumAutoSettlementNgn)) {
+      return NextResponse.json({ error: BREET_MIN_AMOUNT_ERROR_MESSAGE }, { status: 403 });
     }
 
     const settlementMode = eligibility.settlementMode;
@@ -177,7 +194,7 @@ export async function POST(request: Request) {
       defaultConfirmationsForRail(rail)
     );
     const ttlMinutes = parseNumericSetting(settingsMap.get("crypto_session_ttl_minutes"), 30);
-    const cryptoAmount = computeCryptoAmount(paymentAmount, exchangeRate);
+    const cryptoAmount = computeCryptoAmount(intendedPaymentAmount, exchangeRate);
     const expiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString();
     const paymentSessionId = crypto.randomUUID();
     const reference = `INV-CRYPTO-${invoice.id.slice(0, 8).toUpperCase()}-${Date.now()}`;
@@ -205,7 +222,7 @@ export async function POST(request: Request) {
       settlement_recipient_type: settlementRecipientType,
       source_currency: rail,
       destination_currency: "NGN",
-      amount_ngn: paymentAmount,
+      amount_ngn: intendedPaymentAmount,
       amount_crypto: cryptoAmount,
       exchange_rate: exchangeRate,
       wallet_address: addressResult.address,
@@ -218,7 +235,7 @@ export async function POST(request: Request) {
       crypto_status: "crypto_payment_initialized",
       provider_fee: 0,
       settlement_fee: 0,
-      expected_settlement_ngn: paymentAmount,
+      expected_settlement_ngn: intendedPaymentAmount,
       actual_settlement_ngn: null,
       webhook_status: "pending",
       settlement_account_reference: settlementRecipientType === "merchant"
@@ -267,7 +284,7 @@ export async function POST(request: Request) {
         actor_merchant_id: merchant.id,
         payment_session_id: paymentSessionId,
         payment_rail: rail,
-        amount_ngn: paymentAmount,
+        amount_ngn: intendedPaymentAmount,
         amount_crypto: cryptoAmount,
         exchange_rate: exchangeRate,
         wallet_address: addressResult.address,
@@ -284,13 +301,14 @@ export async function POST(request: Request) {
       cryptoAddress: addressResult.address,
       cryptoNetwork: network,
       cryptoCoin: rail,
-      fiatAmount: paymentAmount,
+      fiatAmount: intendedPaymentAmount,
       cryptoAmount,
       exchangeRate,
       reference,
       expiresAt,
       settlementMode,
       settlementRecipientType,
+      minimumAutoSettlementNgn,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to initialize crypto checkout.";

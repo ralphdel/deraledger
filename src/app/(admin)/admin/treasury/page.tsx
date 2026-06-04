@@ -120,6 +120,7 @@ type ConfigStatus = {
   webhookConfigured: boolean;
   invoiceCryptoEnabled: boolean;
   subscriptionCryptoEnabled: boolean;
+  minimumAutoSettlementNgn: number;
   merchantAutoSettlementEnabled: boolean;
   platformAutoSettlementEnabled: boolean;
   platformSettlementBankAccount: {
@@ -176,6 +177,7 @@ const SETTING_LABELS: Record<string, string> = {
   breet_merchant_auto_settlement_enabled: "Merchant Auto-Settlement Enabled",
   breet_invoice_crypto_enabled: "Invoice Crypto Enabled",
   breet_subscription_crypto_enabled: "Subscription Crypto Enabled",
+  breet_min_auto_settlement_ngn: "Minimum Auto-Settlement Amount (NGN)",
   breet_webhook_url: "Breet Webhook URL",
   breet_supported_assets: "Supported Assets",
   breet_supported_networks: "Supported Networks",
@@ -419,6 +421,7 @@ export default function AdminTreasuryPage() {
             <Info label="Webhook Configured" value={boolLabel(data.configStatus.webhookConfigured)} />
             <Info label="Invoice Crypto Enabled" value={boolLabel(data.configStatus.invoiceCryptoEnabled)} />
             <Info label="Subscription Crypto Enabled" value={boolLabel(data.configStatus.subscriptionCryptoEnabled)} />
+            <Info label="Minimum Auto-Settlement Amount" value={formatNaira(data.configStatus.minimumAutoSettlementNgn || 0)} />
             <Info label="Merchant Auto-Settlement" value={boolLabel(data.configStatus.merchantAutoSettlementEnabled)} />
             <Info label="Platform Auto-Settlement" value={boolLabel(data.configStatus.platformAutoSettlementEnabled)} />
             <Info label="Provider Runtime" value={`${data.providerHealth.configured ? "Configured" : "Missing"} (${data.providerHealth.env})`} />

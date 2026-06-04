@@ -2,9 +2,11 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { PaymentService } from "@/lib/payment";
 import {
+  BREET_MIN_AMOUNT_ERROR_MESSAGE,
   buildBreetSettlementAccountSnapshot,
   buildSettlementBankPayload,
   canUseBreetCryptoCheckout,
+  isBelowBreetMinimumAmount,
   validateSettlementAccountForBreet,
 } from "@/lib/services/breet-crypto.service";
 import { getPaymentEnvironment } from "@/lib/services/payment-routing.service";
@@ -59,6 +61,12 @@ export async function POST(request: Request) {
     const settlementMode = eligibility.settlementMode;
     const settlementRecipientType = "platform" as const;
     const platformSettlementAccount = eligibility.config.platformSettlementBankAccount;
+    const amountNgn = newPlan === "corporate" ? 20000 : 5000;
+    const minimumAutoSettlementNgn = eligibility.config.minimumAutoSettlementNgn;
+
+    if (isBelowBreetMinimumAmount(amountNgn, minimumAutoSettlementNgn)) {
+      return NextResponse.json({ error: BREET_MIN_AMOUNT_ERROR_MESSAGE }, { status: 403 });
+    }
 
     if (!platformSettlementAccount) {
       return NextResponse.json({ error: "Platform settlement account is not configured." }, { status: 403 });
@@ -74,7 +82,6 @@ export async function POST(request: Request) {
       settlementMode,
     });
 
-    const amountNgn = newPlan === "corporate" ? 20000 : 5000;
     const reference = `CRYPTO-UPG-${newPlan.toUpperCase()}-${crypto.randomBytes(5).toString("hex").toUpperCase()}`;
     const { data: settings } = await supabase
       .from("platform_settings")
@@ -140,6 +147,7 @@ export async function POST(request: Request) {
       reference,
       settlementMode,
       settlementRecipientType,
+      minimumAutoSettlementNgn,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to generate crypto address.";
