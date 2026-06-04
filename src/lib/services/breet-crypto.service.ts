@@ -85,6 +85,7 @@ export type BreetSettlementBankAccount = {
 };
 
 export type BreetProviderMode = "invoice" | "platform";
+export type BreetApiEnvironment = "development" | "production";
 
 function settingValue(settings: Map<string, string>, key: string, fallback = "") {
   const value = settings.get(key);
@@ -240,6 +241,17 @@ function readEnvBoolean(value: string | undefined, fallback = false) {
   if (value === "true") return true;
   if (value === "false") return false;
   return fallback;
+}
+
+export function normalizeBreetApiEnvironment(value?: string | null): BreetApiEnvironment {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "production" || normalized === "live") return "production";
+  if (normalized === "development" || normalized === "sandbox") return "development";
+  return process.env.PAYMENT_ENVIRONMENT === "live" ? "production" : "development";
+}
+
+export function getConfiguredBreetApiEnvironment(): BreetApiEnvironment {
+  return normalizeBreetApiEnvironment(process.env.BREET_ENV || process.env.PAYMENT_ENVIRONMENT);
 }
 
 export async function loadBreetRuntimeConfig(supabase: SupabaseClient): Promise<BreetRuntimeConfig> {
@@ -541,7 +553,7 @@ export function getBreetProviderHealth() {
   return {
     configured: isBreetRuntimeConfigured(),
     webhookConfigured: isBreetWebhookConfigured(),
-    env: process.env.BREET_ENV || "development",
+    env: getConfiguredBreetApiEnvironment(),
     baseUrl: process.env.BREET_BASE_URL || "https://api.breet.io/v1",
   };
 }

@@ -4,6 +4,7 @@ import type {
   CryptoTransactionResult,
   WebhookVerificationResult,
 } from "../types";
+import { normalizeBreetApiEnvironment } from "@/lib/services/breet-crypto.service";
 
 const DEFAULT_BREET_BASE = "https://api.breet.io/v1";
 
@@ -24,7 +25,7 @@ export class BreetAdapter {
     this.baseUrl = config?.baseUrl || process.env.BREET_BASE_URL || DEFAULT_BREET_BASE;
     this.appId = config?.appId || process.env.BREET_APP_ID || "";
     this.appSecret = config?.appSecret || process.env.BREET_APP_SECRET || "";
-    this.env = config?.env || process.env.BREET_ENV || "development";
+    this.env = normalizeBreetApiEnvironment(config?.env || process.env.BREET_ENV || process.env.PAYMENT_ENVIRONMENT);
     this.webhookSecret = config?.webhookSecret || process.env.BREET_WEBHOOK_SECRET || "";
   }
 
