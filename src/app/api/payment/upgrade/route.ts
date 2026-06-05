@@ -9,6 +9,7 @@ import {
   type RelationshipClaim,
 } from "@/lib/services/onboarding-flow.service";
 import { getPaymentEnvironmentForMerchantEmail, resolvePaymentRoute, type PaymentMethod } from "@/lib/services/payment-routing.service";
+import { createPendingPlanPaymentRecord } from "@/lib/services/plan-payment-recovery.service";
 
 export async function POST(request: Request) {
   try {
@@ -78,6 +79,33 @@ export async function POST(request: Request) {
       deviceMetadata: { source: "upgrade_checkout" },
     });
 
+    await createPendingPlanPaymentRecord(supabase, {
+      internalReference: reference,
+      provider: route.provider,
+      paymentMethod: method,
+      paymentPurpose: "plan_upgrade",
+      customerEmail: user.email || merchant.email || "billing@deraledger.app",
+      expectedAmount: amountKobo / 100,
+      planName: newPlan,
+      planId: newPlan,
+      userId: user.id,
+      merchantId: merchant.id,
+      metadata: {
+        type: "subscription_upgrade",
+        merchant_id: merchant.id,
+        new_plan: newPlan,
+        owner_name: ownerName || null,
+        business_type: businessType || null,
+        relationship_claim: (relationshipClaim as RelationshipClaim) || null,
+        verification_disclosure_accepted: verificationDisclosureAccepted === true,
+        verification_disclosure_version: disclosureVersionToStore,
+        amount_expected_kobo: amountKobo,
+        payment_method_requested: method,
+        resolved_provider: route.provider,
+        payment_purpose: "plan_upgrade",
+      },
+    });
+
     const result = await PaymentService.initializeTransaction({
       email: user.email || merchant.email || "billing@deraledger.app",
       amountKobo,
@@ -107,7 +135,7 @@ export async function POST(request: Request) {
       reference,
       provider: route.provider,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Upgrade initialization failed:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }

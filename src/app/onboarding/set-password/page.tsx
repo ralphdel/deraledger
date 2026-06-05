@@ -43,8 +43,10 @@ export default function OnboardingSetPasswordPage() {
             setChecking(false);
           });
       } else {
-        setError("Invalid activation link. Please request a new one.");
-        setChecking(false);
+        queueMicrotask(() => {
+          setError("Invalid activation link. Please request a new one.");
+          setChecking(false);
+        });
       }
     } else {
       supabase.auth.getSession().then(({ data: { session } }) => {
@@ -98,6 +100,10 @@ export default function OnboardingSetPasswordPage() {
         .from("merchant_team")
         .update({ must_change_password: false })
         .eq("user_id", user.id);
+
+      await fetch("/api/onboarding/mark-setup-complete", {
+        method: "POST",
+      }).catch(() => null);
 
       router.push("/dashboard");
     } catch (err: unknown) {

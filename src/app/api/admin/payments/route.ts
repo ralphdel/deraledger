@@ -67,7 +67,7 @@ export async function GET() {
 async function fetchRecentPaymentEvents() {
   const withCreatedAt = await supabase
     .from("payment_events")
-    .select("id, created_at, event_type, processor, processor_ref, amount_kobo, merchant_id, invoice_id, raw_payload")
+    .select("id, created_at, event_type, processor, processor_ref, amount_kobo, merchant_id, invoice_id, raw_payload, payment_method, payment_purpose, payment_reference, provider_reference, expected_amount, paid_amount, currency, fee, plan_id, customer_email, processing_status, failure_reason")
     .order("created_at", { ascending: false })
     .limit(50);
 
@@ -82,7 +82,7 @@ async function fetchRecentPaymentEvents() {
 
   const fallback = await supabase
     .from("payment_events")
-    .select("id, event_type, processor, processor_ref, amount_kobo, merchant_id, invoice_id, raw_payload")
+    .select("id, event_type, processor, processor_ref, amount_kobo, merchant_id, invoice_id, raw_payload, payment_method, payment_purpose, payment_reference, provider_reference, expected_amount, paid_amount, currency, fee, plan_id, customer_email, processing_status, failure_reason")
     .limit(50);
 
   if (fallback.error) {

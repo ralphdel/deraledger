@@ -11,6 +11,7 @@ import {
   validateSettlementAccountForBreet,
 } from "@/lib/services/breet-crypto.service";
 import { getPaymentEnvironment } from "@/lib/services/payment-routing.service";
+import { createPendingPlanPaymentRecord } from "@/lib/services/plan-payment-recovery.service";
 import { computeCryptoAmount, defaultNetworkForRail, rateSettingKeyForRail } from "@/lib/treasury";
 import crypto from "crypto";
 
@@ -69,6 +70,25 @@ export async function POST(request: Request) {
     });
 
     const reference = `CRYPTO-SUB-${plan.toUpperCase()}-${crypto.randomBytes(5).toString("hex").toUpperCase()}`;
+    await createPendingPlanPaymentRecord(supabase, {
+      internalReference: reference,
+      provider: "breet",
+      paymentMethod: "crypto",
+      paymentPurpose: "plan_subscription",
+      customerEmail: email,
+      expectedAmount: fiatAmount,
+      planName: plan,
+      planId: plan,
+      passwordSetupRequired: true,
+      metadata: {
+        email,
+        plan,
+        session_id: sessionId,
+        type: "subscription",
+        amount_expected_kobo: amountKobo,
+        payment_purpose: "plan_subscription",
+      },
+    });
     const settlementBankPayload = buildSettlementBankPayload(
       platformSettlementAccount,
       `Sub ${plan.toUpperCase()} ${reference.slice(-12)}`
@@ -150,6 +170,7 @@ export async function POST(request: Request) {
       cryptoCoin: result.asset || "USDT",
       fiatAmount,
       reference,
+      providerReference: result.id || reference,
       settlementMode,
       settlementRecipientType,
       minimumAutoSettlementNgn,

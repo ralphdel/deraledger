@@ -373,6 +373,7 @@ export async function POST(request: Request) {
       success: true,
       isCrypto: true,
       paymentSessionId,
+      providerReference: addressResult.id || null,
       cryptoAddress: addressResult.address,
       cryptoNetwork: network,
       cryptoCoin: rail,

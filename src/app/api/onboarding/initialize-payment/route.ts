@@ -4,6 +4,13 @@ import crypto from "crypto";
 import { getAppUrl } from "@/lib/server-utils";
 import { requiresVerificationDisclosure, VERIFICATION_DISCLOSURE_VERSION } from "@/lib/services/onboarding-flow.service";
 import { getPaymentEnvironmentForMerchantEmail, resolvePaymentRoute, type PaymentMethod } from "@/lib/services/payment-routing.service";
+import { createClient as createSupabaseClient } from "@supabase/supabase-js";
+import { createPendingPlanPaymentRecord } from "@/lib/services/plan-payment-recovery.service";
+
+const supabase = createSupabaseClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
 
 export async function POST(request: Request) {
   const {
@@ -39,6 +46,34 @@ export async function POST(request: Request) {
   try {
     const method = (paymentMethod || "card") as PaymentMethod;
     const route = await resolvePaymentRoute("plan_subscription", method, getPaymentEnvironmentForMerchantEmail(email));
+    await createPendingPlanPaymentRecord(supabase, {
+      internalReference: reference,
+      provider: route.provider,
+      paymentMethod: method,
+      paymentPurpose: "plan_subscription",
+      customerEmail: email,
+      expectedAmount: Number(amountKobo) / 100,
+      planName: plan,
+      planId: plan,
+      passwordSetupRequired: true,
+      metadata: {
+        type: "subscription",
+        plan,
+        email,
+        business_name: registeredName,
+        trading_name: tradingName,
+        owner_name: ownerName || null,
+        business_type: businessType || null,
+        relationship_claim: relationshipClaim || null,
+        verification_disclosure_accepted: verificationDisclosureAccepted === true,
+        verification_disclosure_version: disclosureVersion || VERIFICATION_DISCLOSURE_VERSION,
+        session_id: sessionId,
+        amount_expected_kobo: amountKobo,
+        payment_method_requested: method,
+        resolved_provider: route.provider,
+        payment_purpose: "plan_subscription",
+      },
+    });
     const callback = new URL(`${appUrl}/onboarding/payment-callback`);
     callback.searchParams.set("provider", route.provider);
     const result = await PaymentService.initializeTransaction({

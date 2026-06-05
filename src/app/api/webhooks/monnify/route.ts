@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { PaymentService } from "@/lib/payment";
 import { processSuccessfulFiatPayment } from "@/lib/services/fiat-payment-confirmation.service";
+import {
+  upsertWebhookAuditEvent,
+  updatePlanPaymentRecord,
+} from "@/lib/services/plan-payment-recovery.service";
 import { getPaymentEnvironment } from "@/lib/services/payment-routing.service";
 
 const supabase = createSupabaseClient(
@@ -34,13 +38,26 @@ export async function POST(request: Request) {
   const normalized = normalizeMonnifyWebhook(payload);
 
   if (normalized) {
-    await recordWebhookAttempt({
-      status: verification.valid ? "received" : "signature_failed",
-      reference: normalized.reference,
+    await upsertWebhookAuditEvent(supabase, {
+      provider: "monnify",
       eventType: payload.eventType || "monnify.webhook",
-      amountKobo: normalized.amountKobo,
-      payload,
-      metadata: normalized.metadata,
+      paymentMethod: normalized.paymentMethod,
+      paymentPurpose: normalized.paymentPurpose,
+      paymentReference: normalized.reference,
+      providerReference: normalized.providerReference,
+      expectedAmount: normalized.expectedAmount,
+      paidAmount: normalized.amountKobo / 100,
+      currency: "NGN",
+      fee: normalized.feesKobo !== null ? normalized.feesKobo / 100 : null,
+      planId: normalized.planId,
+      merchantId: normalized.merchantId,
+      invoiceId: normalized.invoiceId,
+      customerEmail: normalized.customerEmail,
+      rawPayload: payload as Record<string, unknown>,
+      processingStatus: verification.valid ? "received" : "failed",
+      failureReason: verification.valid ? null : verification.error || "Signature mismatch",
+      idempotencyKey: `monnify:${normalized.providerReference || normalized.reference}:${payload.eventType || "event"}:received`,
+      settlementDestinationSource: normalized.settlementDestinationSource,
     });
   }
 
@@ -70,19 +87,34 @@ export async function POST(request: Request) {
       metadata: normalized.metadata,
       amountKobo: normalized.amountKobo,
       reference: normalized.reference,
+      providerReference: normalized.providerReference,
       channel: normalized.channel,
       feesKobo: normalized.feesKobo,
       settlementAmountKobo: normalized.settlementAmountKobo,
       rawProviderPayload: payload as Record<string, unknown>,
     });
     await recordWebhookHealth("success");
-    await recordWebhookAttempt({
-      status: "processed",
-      reference: normalized.reference,
+    await upsertWebhookAuditEvent(supabase, {
+      provider: "monnify",
       eventType: payload.eventType || "SUCCESSFUL_TRANSACTION",
-      amountKobo: normalized.amountKobo,
-      payload,
-      metadata: normalized.metadata,
+      paymentMethod: normalized.paymentMethod,
+      paymentPurpose: normalized.paymentPurpose,
+      paymentReference: normalized.reference,
+      providerReference: normalized.providerReference,
+      expectedAmount: normalized.expectedAmount,
+      paidAmount: normalized.amountKobo / 100,
+      currency: "NGN",
+      fee: normalized.feesKobo !== null ? normalized.feesKobo / 100 : null,
+      planId: normalized.planId,
+      merchantId: normalized.merchantId,
+      invoiceId: normalized.invoiceId,
+      customerEmail: normalized.customerEmail,
+      rawPayload: payload as Record<string, unknown>,
+      processingStatus: "needs_review" in result && result.needs_review ? "manual_review" : "processed",
+      failureReason: "needs_review" in result && result.needs_review ? "Amount mismatch requires manual review." : null,
+      idempotencyKey: `monnify:${normalized.providerReference || normalized.reference}:${payload.eventType || "event"}:processed`,
+      settlementDestinationSource: normalized.settlementDestinationSource,
+      reconciliationStatus: "needs_review" in result && result.needs_review ? "needs_review" : "pending_reconciliation",
     });
 
     return NextResponse.json({
@@ -94,14 +126,40 @@ export async function POST(request: Request) {
     console.error("Monnify webhook processing failed:", error);
     await recordWebhookHealth("failed");
     if (normalized) {
-      await recordWebhookAttempt({
-        status: "processing_failed",
-        reference: normalized.reference,
+      const message = error instanceof Error ? error.message : "Webhook processing failed";
+      await upsertWebhookAuditEvent(supabase, {
+        provider: "monnify",
         eventType: payload.eventType || "SUCCESSFUL_TRANSACTION",
-        amountKobo: normalized.amountKobo,
-        payload,
-        metadata: normalized.metadata,
+        paymentMethod: normalized.paymentMethod,
+        paymentPurpose: normalized.paymentPurpose,
+        paymentReference: normalized.reference,
+        providerReference: normalized.providerReference,
+        expectedAmount: normalized.expectedAmount,
+        paidAmount: normalized.amountKobo / 100,
+        currency: "NGN",
+        fee: normalized.feesKobo !== null ? normalized.feesKobo / 100 : null,
+        planId: normalized.planId,
+        merchantId: normalized.merchantId,
+        invoiceId: normalized.invoiceId,
+        customerEmail: normalized.customerEmail,
+        rawPayload: payload as Record<string, unknown>,
+        processingStatus: "failed",
+        failureReason: message,
+        idempotencyKey: `monnify:${normalized.providerReference || normalized.reference}:${payload.eventType || "event"}:failed`,
+        settlementDestinationSource: normalized.settlementDestinationSource,
+        reconciliationStatus: "needs_review",
       });
+      if (normalized.paymentPurpose === "plan_subscription" || normalized.paymentPurpose === "plan_upgrade") {
+        await updatePlanPaymentRecord(supabase, normalized.reference, {
+          provider_reference: normalized.providerReference,
+          amount_paid: normalized.amountKobo / 100,
+          payment_status: "failed",
+          processing_status: "failed",
+          account_setup_status: "manual_review",
+          failure_reason: message,
+          raw_provider_payload: payload as Record<string, unknown>,
+        }, "monnify");
+      }
     }
     return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
   }
@@ -119,46 +177,6 @@ async function recordWebhookHealth(status: "success" | "failed") {
     )
     .eq("provider_name", "monnify")
     .eq("environment", environment);
-}
-
-async function recordWebhookAttempt(input: {
-  status: string;
-  reference: string;
-  eventType: string;
-  amountKobo: number;
-  payload: unknown;
-  metadata: Record<string, unknown>;
-}) {
-  const merchantId = typeof input.metadata.merchant_id === "string" ? input.metadata.merchant_id : null;
-  const invoiceId = typeof input.metadata.invoice_id === "string" ? input.metadata.invoice_id : null;
-  const { error } = await supabase.from("payment_events").upsert(
-    {
-      merchant_id: merchantId,
-      invoice_id: invoiceId,
-      event_type: `${input.eventType}:${input.status}`,
-      processor: "monnify",
-      processor_ref: input.reference,
-      amount_kobo: input.amountKobo,
-      raw_payload: input.payload,
-      idempotency_key: `monnify:${input.reference}:${input.status}`,
-    },
-    { onConflict: "idempotency_key" }
-  );
-  if (error) {
-    console.error("Failed to record Monnify webhook attempt:", error.message);
-    await supabase.from("audit_logs").insert({
-      event_type: "monnify_webhook_event_record_failed",
-      actor_id: null,
-      actor_role: "system",
-      target_id: invoiceId,
-      target_type: invoiceId ? "invoice" : "payment",
-      metadata: {
-        reference: input.reference,
-        status: input.status,
-        error: error.message,
-      },
-    });
-  }
 }
 
 function normalizeMonnifyWebhook(payload: MonnifyWebhookPayload) {
@@ -201,16 +219,34 @@ function normalizeMonnifyWebhook(payload: MonnifyWebhookPayload) {
     settlementAmount > 0 && settlementAmount <= amountPaid
       ? Math.round((amountPaid - settlementAmount) * 100)
       : null;
+  const paymentPurpose = normalizeMonnifyPurpose(metadata);
 
   return {
     successful,
     reference,
+    providerReference:
+      stringValue(eventData.transactionReference) ||
+      stringValue(eventData.paymentReference) ||
+      stringValue(eventData.transactionReference),
     amountKobo: Math.round(amountPaid * 100),
     channel: paymentMethod,
+    paymentMethod: paymentMethod.toLowerCase(),
+    paymentPurpose,
     feesKobo,
     settlementAmountKobo:
       settlementAmount > 0 && settlementAmount <= amountPaid
         ? Math.round(settlementAmount * 100)
+        : null,
+    expectedAmount: numericValue(metadata.amount_expected_kobo) !== null
+      ? Number(metadata.amount_expected_kobo) / 100
+      : null,
+    planId: stringValue(metadata.new_plan) || stringValue(metadata.plan),
+    merchantId: stringValue(metadata.merchant_id),
+    invoiceId: stringValue(metadata.invoice_id),
+    customerEmail: stringValue(metadata.email) || stringValue(eventData.customerEmail),
+    settlementDestinationSource:
+      paymentPurpose === "plan_subscription" || paymentPurpose === "plan_upgrade"
+        ? "provider_dashboard"
         : null,
     metadata,
   };
@@ -231,4 +267,28 @@ function normalizeMetadata(value: unknown): Record<string, unknown> {
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function numericValue(value: unknown) {
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeMonnifyPurpose(metadata: Record<string, unknown>) {
+  const explicitPurpose = stringValue(metadata.payment_purpose);
+  if (explicitPurpose) {
+    return explicitPurpose;
+  }
+  const type = stringValue(metadata.type);
+  if (type === "subscription" || type === "subscription_renewal") {
+    return "plan_subscription";
+  }
+  if (type === "subscription_upgrade") {
+    return "plan_upgrade";
+  }
+  return type || "invoice_payment";
 }

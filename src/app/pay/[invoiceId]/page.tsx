@@ -42,9 +42,12 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
   const [paymentMethod, setPaymentMethod] = useState<"card" | "bank_transfer" | "ussd" | "crypto">("card");
   const [availableMethods, setAvailableMethods] = useState<AvailableMethod[]>([]);
   const [methodAvailability, setMethodAvailability] = useState<MethodAvailability | null>(null);
+  const [cryptoMinimumAmount, setCryptoMinimumAmount] = useState(2500);
   const [refreshedInvoice, setRefreshedInvoice] = useState<InvoiceWithLineItems | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [cryptoDetails, setCryptoDetails] = useState<{
+    paymentSessionId?: string;
+    providerReference?: string | null;
     address: string;
     network: string;
     coin: string;
@@ -53,6 +56,8 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
     exchangeRate?: number;
     expiresAt?: string;
     reference: string;
+    settlementMode?: string;
+    settlementRecipientType?: string;
   } | null>(null);
 
   const [copied, setCopied] = useState(false);
@@ -152,19 +157,35 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch(`/api/checkout/payment-methods?kind=invoice&invoiceId=${invoiceId}`, {
+    const selectedAmount = Number.parseFloat(inputAmount);
+    const paymentMethodsUrl = new URL("/api/checkout/payment-methods", window.location.origin);
+    paymentMethodsUrl.searchParams.set("kind", "invoice");
+    paymentMethodsUrl.searchParams.set("invoiceId", invoiceId);
+    if (Number.isFinite(selectedAmount) && selectedAmount > 0) {
+      paymentMethodsUrl.searchParams.set("paymentAmount", selectedAmount.toString());
+    }
+
+    fetch(paymentMethodsUrl.toString(), {
       signal: controller.signal,
     })
       .then((res) => res.json())
       .then((payload) => {
         const methods = Array.isArray(payload?.availableMethods) ? payload.availableMethods as AvailableMethod[] : [];
         setAvailableMethods(methods);
+        setCryptoMinimumAmount(
+          typeof payload?.minimumAutoSettlementNgn === "number" && Number.isFinite(payload.minimumAutoSettlementNgn)
+            ? payload.minimumAutoSettlementNgn
+            : 2500
+        );
         setMethodAvailability(
           payload?.methodAvailability && typeof payload.methodAvailability === "object"
             ? payload.methodAvailability as MethodAvailability
             : null
         );
-        if (methods.length > 0 && !methods.some((method) => method.method === paymentMethod)) {
+        const selectedMethodStillVisible =
+          methods.some((method) => method.method === paymentMethod) ||
+          (paymentMethod === "crypto" && Boolean(payload?.methodAvailability?.crypto));
+        if (methods.length > 0 && !selectedMethodStillVisible) {
           setPaymentMethod(methods[0].method);
         }
       })
@@ -173,7 +194,7 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
         setMethodAvailability(null);
       });
     return () => controller.abort();
-  }, [invoiceId, paymentMethod]);
+  }, [invoiceId, paymentMethod, inputAmount]);
 
   if (loading) {
     return (
@@ -320,8 +341,9 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
 
   // ── Payment calculations ──────────────────────────────────────────────────
   // The true outstanding balance the client owes is exactly what's recorded in the DB (which already factors in applied deposits)
-  const outstandingBalance = Math.max(0, Number(invoice.outstanding_balance));
-  const grandTotal = Number(invoice.grand_total);
+  const currentInvoice = invoice;
+  const outstandingBalance = Math.max(0, Number(currentInvoice.outstanding_balance));
+  const grandTotal = Number(currentInvoice.grand_total);
   const parsedAmount = parseFloat(inputAmount) || 0;
   const minimumPayment = getMinimumPayment(grandTotal, outstandingBalance);
   const remainingLimit = isStarter ? 0 : (merchant?.monthly_collection_limit ? merchant.monthly_collection_limit - monthlyCollected : Infinity);
@@ -329,17 +351,18 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
   // Validation states
   const exceedsRemainingLimit = parsedAmount > remainingLimit;
   const isBelowMinimum = parsedAmount > 0 && parsedAmount < minimumPayment;
+  const isBelowCryptoMinimum = paymentMethod === "crypto" && parsedAmount > 0 && parsedAmount < cryptoMinimumAmount;
   const isAboveMax = parsedAmount > outstandingBalance;
   const isValidAmount = parsedAmount >= minimumPayment && parsedAmount <= outstandingBalance && !exceedsRemainingLimit;
-  const cappedAmount = Math.min(parsedAmount, outstandingBalance);
+  const isValidCryptoAmount = isValidAmount && !isBelowCryptoMinimum;
 
   const allocation = calculateProportionalPayment(
     isValidAmount ? parsedAmount : 0,
     outstandingBalance,
-    Number(invoice.tax_value),
-    Number(invoice.discount_value),
-    Number(invoice.amount_paid),
-    invoice.fee_absorption
+    Number(currentInvoice.tax_value),
+    Number(currentInvoice.discount_value),
+    Number(currentInvoice.amount_paid),
+    currentInvoice.fee_absorption
   );
 
   const handleQuickSelect = (percentage: number) => {
@@ -350,23 +373,26 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
   };
 
   const cryptoAvailability = methodAvailability?.crypto || null;
+  const cryptoVisible = Boolean(cryptoAvailability) || availableMethods.some((method) => method.method === "crypto");
   const cryptoEnabled = cryptoAvailability?.enabled ?? availableMethods.some((method) => method.method === "crypto");
+  const selectedAmountSummary = parsedAmount > 0 ? formatNaira(parsedAmount) : formatNaira(minimumPayment);
+  const cryptoMinimumMessage = `Crypto payments are available for amounts from ${formatNaira(cryptoMinimumAmount)} and above. Please use another payment method for smaller amounts.`;
 
-  const handlePayment = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!isValidAmount || !invoice) return;
+  const handlePayment = async () => {
+    if ((paymentMethod === "crypto" ? !isValidCryptoAmount : !isValidAmount) || !invoice) return;
 
     setIsProcessing(true);
     setPaymentError(null);
 
     try {
-      const res = await fetch("/api/demo-payment", {
+      const cryptoRequest = paymentMethod === "crypto";
+      const res = await fetch(cryptoRequest ? "/api/checkout/crypto-invoice" : "/api/demo-payment", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           invoiceId: invoice.id,
           paymentAmount: parsedAmount,
-          paymentMethod,
+          ...(cryptoRequest ? {} : { paymentMethod }),
           rail: invoice.crypto_asset || "USDT",
         }),
       });
@@ -375,6 +401,8 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
       
       if (result.success && result.isCrypto) {
         setCryptoDetails({
+          paymentSessionId: result.paymentSessionId,
+          providerReference: result.providerReference,
           address: result.cryptoAddress,
           network: result.cryptoNetwork,
           coin: result.cryptoCoin,
@@ -383,6 +411,8 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
           exchangeRate: result.exchangeRate,
           expiresAt: result.expiresAt,
           reference: result.reference,
+          settlementMode: result.settlementMode,
+          settlementRecipientType: result.settlementRecipientType,
         });
         setIsProcessing(false);
       } else if (result.success && result.authorizationUrl) {
@@ -398,6 +428,138 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
       setIsProcessing(false);
     }
   };
+
+  const amountControls = !cryptoDetails ? (
+    <div className="space-y-6">
+      <div className="space-y-3">
+        <div className="relative">
+          <span className="absolute left-4 top-1/2 -translate-y-1/2 text-2xl font-bold text-neutral-400">N</span>
+          <Input
+            type="number"
+            value={inputAmount}
+            onChange={(e) => setInputAmount(e.target.value)}
+            max={outstandingBalance}
+            min={0}
+            step="0.01"
+            readOnly={!currentInvoice.allow_partial_payment || !!currentInvoice.partial_payment_pct}
+            className={`pl-12 h-20 text-3xl font-bold text-purp-900 border-2 rounded-xl ${
+              isBelowMinimum || isAboveMax || isBelowCryptoMinimum
+                ? "border-red-400 focus:border-red-500 bg-red-50/50"
+                : "border-purp-200 focus:border-purp-700"
+            } ${(!currentInvoice.allow_partial_payment || !!currentInvoice.partial_payment_pct) ? "bg-neutral-50 cursor-not-allowed opacity-80" : ""}`}
+          />
+        </div>
+
+        {currentInvoice.allow_partial_payment && !currentInvoice.partial_payment_pct && (
+          <div className="flex items-center justify-between text-xs text-neutral-500 px-1">
+            <span>Min: {formatNaira(minimumPayment)}</span>
+            <span>Max: {formatNaira(outstandingBalance)}</span>
+          </div>
+        )}
+
+        <div className="flex gap-2">
+          {currentInvoice.allow_partial_payment && currentInvoice.partial_payment_pct && (
+            <Button type="button" variant="outline" className="flex-1 border-purp-200" onClick={() => handleQuickSelect(Number(currentInvoice.partial_payment_pct) / 100)}>{currentInvoice.partial_payment_pct}%</Button>
+          )}
+          {currentInvoice.allow_partial_payment && !currentInvoice.partial_payment_pct && (
+            <>
+              <Button type="button" variant="outline" className="flex-1 border-purp-200" onClick={() => handleQuickSelect(0.25)}>25%</Button>
+              <Button type="button" variant="outline" className="flex-1 border-purp-200" onClick={() => handleQuickSelect(0.5)}>50%</Button>
+            </>
+          )}
+          <Button type="button" variant="outline" className="flex-1 border-purp-200 text-purp-900 font-bold" onClick={() => handleQuickSelect(1)}>
+            Full Amount
+          </Button>
+        </div>
+      </div>
+
+      {paymentMethod === "crypto" && (
+        <div className="bg-purp-50 border border-purp-200 rounded-xl p-4 text-sm text-purp-900">
+          <p className="font-semibold">Amount to pay</p>
+          <p className="text-2xl font-bold mt-1">{selectedAmountSummary}</p>
+        </div>
+      )}
+
+      {isBelowMinimum && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
+          <AlertTriangle className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
+          <div className="text-sm">
+            <p className="font-semibold text-red-700">Amount too low</p>
+            <p className="text-red-600 mt-1">
+              The minimum payment is <strong>{formatNaira(minimumPayment)}</strong> (10% of the invoice total, capped at N1,000).
+              Please enter at least {formatNaira(minimumPayment)} to proceed.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {isBelowCryptoMinimum && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
+          <Info className="h-5 w-5 text-amber-500 flex-shrink-0 mt-0.5" />
+          <div className="text-sm">
+            <p className="font-semibold text-amber-800">Crypto minimum amount</p>
+            <p className="text-amber-700 mt-1">{cryptoMinimumMessage}</p>
+          </div>
+        </div>
+      )}
+
+      {isAboveMax && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
+          <AlertTriangle className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
+          <div className="text-sm">
+            <p className="font-semibold text-red-700">Amount exceeds balance</p>
+            <p className="text-red-600 mt-1">
+              Your payment cannot exceed the outstanding balance of <strong>{formatNaira(outstandingBalance)}</strong>.
+              Use the &quot;Full Amount&quot; button to pay the entire balance.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {exceedsRemainingLimit && !isAboveMax && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
+          <AlertTriangle className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
+          <div className="text-sm">
+            <p className="font-semibold text-red-700">Merchant Limit Exceeded</p>
+            <p className="text-red-600 mt-1">
+              This amount exceeds the merchant&apos;s remaining monthly collection limit (<strong>{formatNaira(remainingLimit)}</strong> left).
+              Please enter a smaller amount or contact the merchant directly.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {isValidAmount && (
+        <div className="bg-purp-50 border border-purp-200 rounded-xl p-5 space-y-4">
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 rounded-full bg-purp-100 flex items-center justify-center flex-shrink-0">
+              <Receipt className="w-4 h-4 text-purp-700" />
+            </div>
+            <div className="text-sm">
+              <p className="font-bold text-purp-900">Proportional Allocation</p>
+              <p className="text-neutral-500 mt-1">
+                Out of this payment, <strong className="text-purp-700">{formatNaira(allocation.taxCollected)}</strong> goes to tax and <strong className="text-red-500">{formatNaira(allocation.discountApplied)}</strong> covers your discount proportionally.
+              </p>
+            </div>
+          </div>
+
+          {currentInvoice.fee_absorption === "customer" && (
+            <div className="pt-4 border-t border-purp-200 space-y-2 text-sm">
+              <div className="flex justify-between text-neutral-500">
+                <span>Payment Amount</span><span>{formatNaira(allocation.amountPaid)}</span>
+              </div>
+              <div className="flex justify-between text-neutral-500">
+                <span>Processing Fee</span><span>{formatNaira(allocation.paystackFee)}</span>
+              </div>
+              <div className="flex justify-between font-bold text-purp-900 pt-2 border-t border-purp-200 border-dashed">
+                <span>Total to Pay</span><span>{formatNaira(allocation.totalCharge)}</span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  ) : null;
 
   if (success) {
     const displayInvoice = refreshedInvoice || invoice;
@@ -700,11 +862,11 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                 <button
                   type="button"
                   onClick={() => setPaymentMethod("crypto")}
-                  disabled={!cryptoEnabled}
+                  disabled={!cryptoVisible}
                   className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-lg text-xs font-semibold transition-all duration-200 relative ${
                     paymentMethod === "crypto"
                       ? "bg-white shadow text-purp-900 ring-1 ring-purp-200"
-                      : cryptoEnabled
+                      : cryptoVisible
                       ? "text-neutral-500 hover:text-neutral-700"
                       : "text-neutral-400"
                   }`}
@@ -752,6 +914,35 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                     {cryptoDetails.expiresAt ? ` Expires ${new Date(cryptoDetails.expiresAt).toLocaleString("en-NG")}.` : ""}
                   </p>
                 </div>
+                <div className="grid grid-cols-1 gap-3 text-left text-sm">
+                  <div className="bg-purp-50 border border-purp-200 rounded-xl p-3">
+                    <p className="text-xs uppercase tracking-wide text-purp-500 font-semibold">Expected NGN Amount</p>
+                    <p className="font-bold text-purp-900 mt-1">{formatNaira(cryptoDetails.fiatAmount)}</p>
+                  </div>
+                  <div className="bg-purp-50 border border-purp-200 rounded-xl p-3">
+                    <p className="text-xs uppercase tracking-wide text-purp-500 font-semibold">Payment Session</p>
+                    <p className="font-mono text-xs text-purp-900 break-all mt-1">{cryptoDetails.paymentSessionId || "-"}</p>
+                  </div>
+                  <div className="bg-purp-50 border border-purp-200 rounded-xl p-3">
+                    <p className="text-xs uppercase tracking-wide text-purp-500 font-semibold">Provider Reference</p>
+                    <p className="font-mono text-xs text-purp-900 break-all mt-1">{cryptoDetails.providerReference || cryptoDetails.reference}</p>
+                  </div>
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-emerald-800">
+                    <p className="font-semibold">Waiting for payment confirmation</p>
+                    <p className="text-xs mt-1">The merchant receives NGN settlement through Breet auto-settlement after payment confirmation.</p>
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full border-purp-200 text-purp-900"
+                  onClick={() => {
+                    setCryptoDetails(null);
+                    setPaymentError(null);
+                  }}
+                >
+                  Start New Crypto Quote
+                </Button>
                 <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-red-800 text-xs flex items-start gap-2">
                   <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
                   <p><strong>Important:</strong> Cryptocurrency transactions may be irreversible once confirmed on-chain. Verify the address and network before sending.</p>
@@ -759,39 +950,62 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
               </div>
             ) : paymentMethod === "crypto" ? (
               /* Crypto payment rail */
-              <div className="py-8 text-center space-y-4 animate-in fade-in duration-300">
-                <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto border-2 ${cryptoEnabled ? "bg-emerald-50 border-emerald-100" : "bg-amber-50 border-amber-100"}`}>
-                  <Sparkles className={`w-8 h-8 ${cryptoEnabled ? "text-emerald-500" : "text-amber-500"}`} />
+              <div className="pt-2 space-y-4 animate-in fade-in duration-300">
+                {amountControls}
+                <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-emerald-800 text-sm">
+                  <p className="font-semibold text-base text-purp-900">Pay with Crypto</p>
+                  <p className="mt-2">Your payment is made in crypto, while the merchant receives settlement in Naira.</p>
+                  <p className="text-xs mt-2 text-emerald-700">Checkout quote will be generated in USDT for this invoice.</p>
+                  <p className="text-xs mt-1 text-emerald-700">After you confirm the amount, we will generate a Breet wallet address for this payment.</p>
                 </div>
-                <div>
-                  <h3 className="font-bold text-purp-900 text-lg">{cryptoEnabled ? "Settle via Stablecoins" : "Coming Soon"}</h3>
-                  <p className="text-neutral-500 text-sm mt-1 max-w-xs mx-auto">
-                    {cryptoEnabled
-                      ? "Your merchant still settles in Naira while the customer pays on-chain. We will generate a wallet address and quote before you send funds."
-                      : cryptoAvailability?.reason || "Crypto payments are currently unavailable for this invoice."}
-                  </p>
+                <div className="bg-purp-50 border border-purp-200 rounded-xl p-4 text-sm text-purp-900">
+                  <p className="font-semibold">Asset and network</p>
+                  <p className="mt-1">This checkout quote is generated in <strong>USDT</strong> on <strong>TRON</strong> unless Breet returns another supported route for this invoice.</p>
                 </div>
-                {cryptoEnabled ? (
-                  <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-emerald-800 text-sm">
-                    <p className="font-medium">Checkout quote will be generated in USDT for this invoice.</p>
-                    <p className="text-xs mt-1 text-emerald-700">The merchant receives NGN settlement after confirmation and treasury processing.</p>
+                {!cryptoEnabled && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-amber-800 text-sm">
+                    <p className="font-medium">Crypto checkout is currently unavailable.</p>
+                    <p className="text-xs mt-1 text-amber-700">
+                      {isBelowCryptoMinimum ? cryptoMinimumMessage : cryptoAvailability?.reason || "Please use Card/Bank or Transfer to complete your payment."}
+                    </p>
                   </div>
-                ) : (
-                  <>
-                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-amber-800 text-sm">
-                      <p className="font-medium">Crypto checkout is currently unavailable.</p>
-                      <p className="text-xs mt-1 text-amber-700">
-                        {cryptoAvailability?.reason || "Please use Card/Bank or Transfer to complete your payment."}
-                      </p>
+                )}
+                {paymentError && (
+                  <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3 text-left">
+                    <AlertTriangle className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-semibold text-red-700">Payment Error</p>
+                      <p className="text-red-600 mt-1">{paymentError}</p>
                     </div>
-                    <Button type="button" variant="outline" className="border-purp-200" onClick={() => setPaymentMethod("card")}>
-                      Use Card / Bank Transfer Instead
-                    </Button>
-                  </>
+                  </div>
+                )}
+                <Button
+                  type="button"
+                  onClick={() => void handlePayment()}
+                  disabled={isProcessing || !cryptoEnabled || !isValidCryptoAmount}
+                  className="w-full h-14 bg-emerald-600 hover:bg-emerald-700 text-white text-base font-bold disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isProcessing
+                    ? "Generating crypto payment address..."
+                    : isBelowCryptoMinimum
+                    ? `Minimum ${formatNaira(cryptoMinimumAmount)} for Crypto`
+                    : !isValidAmount
+                    ? `Enter ${formatNaira(minimumPayment)} - ${formatNaira(outstandingBalance)}`
+                    : !cryptoEnabled
+                    ? "Crypto Unavailable"
+                    : "Generate Crypto Payment Address"}
+                </Button>
+                {!cryptoEnabled && !isBelowCryptoMinimum && (
+                  <Button type="button" variant="outline" className="border-purp-200" onClick={() => setPaymentMethod("card")}>
+                    Use Card / Bank Transfer Instead
+                  </Button>
                 )}
               </div>
             ) : (
-            <form onSubmit={handlePayment} className="space-y-6">
+            <form onSubmit={(event) => { event.preventDefault(); void handlePayment(); }} className="space-y-6 pt-2">
+              {amountControls}
+
+              {false && (<>
               <div className="space-y-3">
                 <div className="relative">
                   <span className="absolute left-4 top-1/2 -translate-y-1/2 text-2xl font-bold text-neutral-400">₦</span>
@@ -802,17 +1016,17 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                     max={outstandingBalance}
                     min={0}
                     step="0.01"
-                    readOnly={!invoice.allow_partial_payment || !!invoice.partial_payment_pct}
+                    readOnly={!currentInvoice.allow_partial_payment || !!currentInvoice.partial_payment_pct}
                     className={`pl-12 h-20 text-3xl font-bold text-purp-900 border-2 rounded-xl ${
                       isBelowMinimum || isAboveMax
                         ? "border-red-400 focus:border-red-500 bg-red-50/50"
                         : "border-purp-200 focus:border-purp-700"
-                    } ${( !invoice.allow_partial_payment || !!invoice.partial_payment_pct ) ? "bg-neutral-50 cursor-not-allowed opacity-80" : ""}`}
+                    } ${(!currentInvoice.allow_partial_payment || !!currentInvoice.partial_payment_pct) ? "bg-neutral-50 cursor-not-allowed opacity-80" : ""}`}
                   />
                 </div>
 
                 {/* Minimum payment info */}
-                {invoice.allow_partial_payment && !invoice.partial_payment_pct && (
+                {currentInvoice.allow_partial_payment && !currentInvoice.partial_payment_pct && (
                   <div className="flex items-center justify-between text-xs text-neutral-500 px-1">
                     <span>Min: {formatNaira(minimumPayment)}</span>
                     <span>Max: {formatNaira(outstandingBalance)}</span>
@@ -820,19 +1034,19 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                 )}
 
                 <div className="flex gap-2">
-                  {invoice.allow_partial_payment && invoice.partial_payment_pct && (
-                    <Button type="button" variant="outline" className="flex-1 border-purp-200" onClick={() => handleQuickSelect(Number(invoice.partial_payment_pct) / 100)}>{invoice.partial_payment_pct}%</Button>
+                  {currentInvoice.allow_partial_payment && currentInvoice.partial_payment_pct && (
+                    <Button type="button" variant="outline" className="flex-1 border-purp-200" onClick={() => handleQuickSelect(Number(currentInvoice.partial_payment_pct) / 100)}>{currentInvoice.partial_payment_pct}%</Button>
                   )}
-                  {invoice.allow_partial_payment && !invoice.partial_payment_pct && (
+                  {currentInvoice.allow_partial_payment && !currentInvoice.partial_payment_pct && (
                     <>
                       <Button type="button" variant="outline" className="flex-1 border-purp-200" onClick={() => handleQuickSelect(0.25)}>25%</Button>
                       <Button type="button" variant="outline" className="flex-1 border-purp-200" onClick={() => handleQuickSelect(0.5)}>50%</Button>
                     </>
                   )}
-                  {(!invoice.allow_partial_payment || invoice.partial_payment_pct) && (
+                  {(!currentInvoice.allow_partial_payment || currentInvoice.partial_payment_pct) && (
                     <Button type="button" variant="outline" className="flex-1 border-purp-200 text-purp-900 font-bold" onClick={() => handleQuickSelect(1)}>Full Amount</Button>
                   )}
-                  {invoice.allow_partial_payment && !invoice.partial_payment_pct && (
+                  {currentInvoice.allow_partial_payment && !currentInvoice.partial_payment_pct && (
                     <Button type="button" variant="outline" className="flex-1 border-purp-200 text-purp-900 font-bold" onClick={() => handleQuickSelect(1)}>Full</Button>
                   )}
                 </div>
@@ -893,7 +1107,7 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                     </div>
                   </div>
 
-                  {invoice.fee_absorption === "customer" && (
+                  {currentInvoice.fee_absorption === "customer" && (
                     <div className="pt-4 border-t border-purp-200 space-y-2 text-sm">
                       <div className="flex justify-between text-neutral-500">
                         <span>Payment Amount</span><span>{formatNaira(allocation.amountPaid)}</span>
@@ -908,6 +1122,7 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                   )}
                 </div>
               )}
+              </>)}
 
               {paymentError && (
                 <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
@@ -928,7 +1143,7 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                   ? "Processing..."
                   : !isValidAmount
                   ? `Enter ${formatNaira(minimumPayment)} – ${formatNaira(outstandingBalance)}`
-                  : `Pay ${invoice.fee_absorption === "customer" ? formatNaira(allocation.totalCharge) : formatNaira(allocation.amountPaid)}`}
+                  : `Pay ${currentInvoice.fee_absorption === "customer" ? formatNaira(allocation.totalCharge) : formatNaira(allocation.amountPaid)}`}
               </Button>
             </form>
             )}

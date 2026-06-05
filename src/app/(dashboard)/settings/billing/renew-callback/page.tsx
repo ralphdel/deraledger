@@ -7,7 +7,7 @@ import { CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
 
 function RenewCallbackContent() {
   const searchParams = useSearchParams();
-  const [status, setStatus] = useState<"verifying" | "success" | "error">("verifying");
+  const [status, setStatus] = useState<"verifying" | "success" | "manual_review" | "error">("verifying");
   const [message, setMessage] = useState("Verifying your payment...");
 
   useEffect(() => {
@@ -19,8 +19,10 @@ function RenewCallbackContent() {
     const provider = searchParams.get("provider") || undefined;
 
     if (!reference) {
-      setStatus("error");
-      setMessage("No payment reference found. Redirecting to billing...");
+      queueMicrotask(() => {
+        setStatus("error");
+        setMessage("No payment reference found. Redirecting to billing...");
+      });
       setTimeout(() => { window.location.href = "/settings/billing"; }, 2500);
       return;
     }
@@ -47,6 +49,9 @@ function RenewCallbackContent() {
           // DashboardLayout mounted with its stale 'expired' subscription state.
           // A hard reload forces the layout to re-fetch and get the new 'active' status.
           setTimeout(() => { window.location.href = "/settings/billing"; }, 2800);
+        } else if (data.status === "manual_review") {
+          setStatus("manual_review");
+          setMessage(data.message || "Payment was received but needs manual review before activation.");
         } else {
           setStatus("error");
           setMessage(data.error || "Payment verification failed. Please contact support.");
@@ -90,6 +95,17 @@ function RenewCallbackContent() {
               <AlertCircle className="h-8 w-8 text-red-600" />
             </div>
             <h1 className="text-xl font-bold text-neutral-900 mb-2">Verification Issue</h1>
+            <p className="text-neutral-600 text-sm leading-relaxed">{message}</p>
+            <p className="text-xs text-neutral-400 mt-4">Redirecting to billing page...</p>
+          </>
+        )}
+
+        {status === "manual_review" && (
+          <>
+            <div className="h-16 w-16 rounded-full bg-amber-100 flex items-center justify-center mx-auto mb-5">
+              <AlertCircle className="h-8 w-8 text-amber-600" />
+            </div>
+            <h1 className="text-xl font-bold text-neutral-900 mb-2">Payment Under Review</h1>
             <p className="text-neutral-600 text-sm leading-relaxed">{message}</p>
             <p className="text-xs text-neutral-400 mt-4">Redirecting to billing page...</p>
           </>

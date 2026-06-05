@@ -81,6 +81,18 @@ type PaymentEventRow = {
   merchant_id: string | null;
   invoice_id: string | null;
   raw_payload: Record<string, unknown> | null;
+  payment_method?: string | null;
+  payment_purpose?: string | null;
+  payment_reference?: string | null;
+  provider_reference?: string | null;
+  expected_amount?: number | null;
+  paid_amount?: number | null;
+  currency?: string | null;
+  fee?: number | null;
+  plan_id?: string | null;
+  customer_email?: string | null;
+  processing_status?: string | null;
+  failure_reason?: string | null;
 };
 
 type PaymentTransactionRow = {
@@ -126,7 +138,11 @@ export default function AdminPaymentsPage() {
   }
 
   useEffect(() => {
-    void load();
+    const timer = window.setTimeout(() => {
+      void load();
+    }, 0);
+
+    return () => window.clearTimeout(timer);
   }, []);
 
   const environment = data?.environment || "sandbox";
@@ -446,8 +462,24 @@ export default function AdminPaymentsPage() {
                                   <EventDetail label="Purpose" value={details.purpose} />
                                   <EventDetail label="Method" value={details.method} />
                                   <EventDetail label="Currency" value={details.currency} />
+                                  <EventDetail label="Expected amount" value={details.expectedAmount ? formatNaira(details.expectedAmount) : null} />
+                                  <EventDetail label="Paid amount" value={details.paidAmount ? formatNaira(details.paidAmount) : null} />
+                                  <EventDetail label="Fee" value={details.fee ? formatNaira(details.fee) : null} />
+                                  <EventDetail label="Wallet address" value={details.walletAddress} />
+                                  <EventDetail label="Tx hash" value={details.txHash} />
+                                  <EventDetail label="Crypto asset" value={details.cryptoAsset} />
+                                  <EventDetail label="Crypto amount" value={details.cryptoAmount} />
+                                  <EventDetail label="USD amount" value={details.amountUsd} />
+                                  <EventDetail label="Rate" value={details.conversionRate} />
+                                  <EventDetail label="Estimated NGN" value={details.estimatedNgn ? formatNaira(details.estimatedNgn) : null} />
+                                  <EventDetail label="Amount settled" value={details.amountSettledNgn !== null && details.amountSettledNgn !== undefined ? formatNaira(details.amountSettledNgn) : null} />
+                                  <EventDetail label="Provider fee" value={details.providerFeeUsd ? `$${details.providerFeeUsd}` : null} />
                                   <EventDetail label="Merchant" value={event.merchant_id || details.merchantId} />
                                   <EventDetail label="Invoice" value={event.invoice_id || details.invoiceId} />
+                                  <EventDetail label="Plan" value={details.planId} />
+                                  <EventDetail label="Customer email" value={details.customerEmail} />
+                                  <EventDetail label="Processing result" value={details.processingStatus} />
+                                  <EventDetail label="Failure reason" value={details.failureReason} />
                                 </dl>
                               </div>
                               <div className="rounded-lg border border-neutral-200 bg-white p-4">
@@ -622,38 +654,106 @@ function EventDetail({ label, value }: { label: string; value: unknown }) {
 
 function getProviderEventDetails(event: PaymentEventRow) {
   const payload = asRecord(event.raw_payload);
+  if (event.processor === "breet") {
+    return getBreetProviderEventDetails(event, payload);
+  }
+
   const eventData = asRecord(payload.eventData) || asRecord(payload.data) || payload;
   const product = asRecord(eventData.product);
   const metadata = asRecord(eventData.metaData) || asRecord(eventData.metadata) || payload;
   const eventStatus = String(eventData.paymentStatus || eventData.status || payload.eventType || event.event_type || "");
   const eventType = event.event_type.toLowerCase();
   const status =
-    eventType.includes("processing_failed") || eventType.includes("signature_failed") || eventType.includes("failed")
+    event.processing_status ||
+    (eventType.includes("processing_failed") || eventType.includes("signature_failed") || eventType.includes("failed")
       ? lastSegment(event.event_type, ":") || "failed"
       : eventType.includes("received")
         ? "received"
         : eventType.includes("processed") || eventType.includes("success") || eventStatus.toLowerCase().includes("paid")
           ? "successful"
-          : eventStatus || "unknown";
+          : eventStatus || "unknown");
 
   return {
     status,
-    paymentReference: stringValue(eventData.paymentReference) || stringValue(product.reference) || event.processor_ref,
+    paymentReference: event.payment_reference || stringValue(eventData.paymentReference) || stringValue(product.reference) || event.processor_ref,
     providerReference:
+      event.provider_reference ||
       stringValue(eventData.transactionReference) ||
       stringValue(eventData.providerReference) ||
       stringValue(eventData.processorReference),
     purpose:
+      event.payment_purpose ||
       stringValue(metadata.payment_purpose) ||
       stringValue(metadata.type) ||
       stringValue(eventData.paymentDescription),
     method:
+      event.payment_method ||
       stringValue(eventData.paymentMethod) ||
       stringValue(metadata.payment_method_requested) ||
       stringValue(metadata.payment_method),
-    currency: stringValue(eventData.currency) || stringValue(eventData.currencyCode),
+    currency: event.currency || stringValue(eventData.currency) || stringValue(eventData.currencyCode),
     invoiceId: stringValue(metadata.invoice_id),
     merchantId: stringValue(metadata.merchant_id),
+    planId: event.plan_id || stringValue(metadata.new_plan) || stringValue(metadata.plan),
+    customerEmail: event.customer_email || stringValue(metadata.email) || stringValue(eventData.customerEmail),
+    processingStatus: event.processing_status,
+    failureReason: event.failure_reason,
+    expectedAmount: event.expected_amount ?? null,
+    paidAmount: event.paid_amount ?? (event.amount_kobo ? Number(event.amount_kobo) / 100 : null),
+    fee: event.fee ?? null,
+    walletAddress: null,
+    txHash: null,
+    cryptoAsset: null,
+    cryptoAmount: null,
+    amountUsd: null,
+    conversionRate: null,
+    estimatedNgn: null,
+    amountSettledNgn: null,
+    providerFeeUsd: null,
+  };
+}
+
+function getBreetProviderEventDetails(event: PaymentEventRow, payload: Record<string, unknown>) {
+  const eventName = stringValue(payload.event) || event.event_type;
+  const rawStatus = stringValue(payload.status);
+  const amountUsd = numericValue(payload.amountInUSD);
+  const conversionRate = numericValue(payload.rate);
+  const estimatedNgn = amountUsd && conversionRate ? amountUsd * conversionRate : null;
+  const amountSettledNgn = numericValue(payload.amountSettled);
+  const status = (() => {
+    const normalized = `${eventName} ${rawStatus || ""}`.toLowerCase();
+    if (normalized.includes("address.created")) return "address created";
+    if (normalized.includes("completed")) return "completed";
+    if (normalized.includes("pending")) return "pending";
+    if (normalized.includes("flagged")) return "manual review";
+    return rawStatus || "received";
+  })();
+
+  return {
+    status,
+    paymentReference: event.processor_ref,
+    providerReference: stringValue(payload.id) || event.processor_ref,
+    purpose: event.invoice_id ? "invoice_payment" : null,
+    method: "crypto",
+    currency: "NGN",
+    invoiceId: event.invoice_id,
+    merchantId: event.merchant_id,
+    planId: event.plan_id || null,
+    customerEmail: event.customer_email || null,
+    processingStatus: event.processing_status || status,
+    failureReason: event.failure_reason || null,
+    expectedAmount: event.expected_amount ?? null,
+    paidAmount: event.paid_amount ?? null,
+    fee: event.fee ?? null,
+    walletAddress: stringValue(payload.address) || stringValue(payload.destinationAddress),
+    txHash: stringValue(payload.txHash) || stringValue(payload.tx_hash),
+    cryptoAsset: stringValue(payload.asset),
+    cryptoAmount: numericValue(payload.cryptoAmount),
+    amountUsd,
+    conversionRate,
+    estimatedNgn,
+    amountSettledNgn,
+    providerFeeUsd: numericValue(payload.feeAmountInUsd),
   };
 }
 
@@ -667,6 +767,11 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function stringValue(value: unknown) {
   return typeof value === "string" && value.trim() ? value : null;
+}
+
+function numericValue(value: unknown) {
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function lastSegment(value: string, separator: string) {

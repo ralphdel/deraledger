@@ -11,6 +11,7 @@ import {
   validateSettlementAccountForBreet,
 } from "@/lib/services/breet-crypto.service";
 import { getPaymentEnvironment } from "@/lib/services/payment-routing.service";
+import { createPendingPlanPaymentRecord } from "@/lib/services/plan-payment-recovery.service";
 import { computeCryptoAmount, defaultNetworkForRail, rateSettingKeyForRail } from "@/lib/treasury";
 import crypto from "crypto";
 
@@ -84,6 +85,25 @@ export async function POST(request: Request) {
     });
 
     const reference = `CRYPTO-UPG-${newPlan.toUpperCase()}-${crypto.randomBytes(5).toString("hex").toUpperCase()}`;
+    await createPendingPlanPaymentRecord(supabase, {
+      internalReference: reference,
+      provider: "breet",
+      paymentMethod: "crypto",
+      paymentPurpose: "plan_upgrade",
+      customerEmail: user.email || merchant.email || "billing@deraledger.app",
+      expectedAmount: amountNgn,
+      planName: newPlan,
+      planId: newPlan,
+      userId: user.id,
+      merchantId: merchant.id,
+      metadata: {
+        merchant_id: merchant.id,
+        new_plan: newPlan,
+        type: "subscription_upgrade",
+        amount_expected_kobo: amountNgn * 100,
+        payment_purpose: "plan_upgrade",
+      },
+    });
     const settlementBankPayload = buildSettlementBankPayload(
       platformSettlementAccount,
       `Upgrade ${newPlan.toUpperCase()} ${reference.slice(-12)}`
@@ -164,6 +184,7 @@ export async function POST(request: Request) {
       cryptoCoin: result.asset || "USDT",
       fiatAmount: amountNgn,
       reference,
+      providerReference: result.id || reference,
       settlementMode,
       settlementRecipientType,
       minimumAutoSettlementNgn,

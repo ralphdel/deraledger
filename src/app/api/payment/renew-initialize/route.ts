@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { PaymentService } from "@/lib/payment";
 import { getAppUrl } from "@/lib/server-utils";
 import { getPaymentEnvironmentForMerchantEmail, resolvePaymentRoute, type PaymentMethod } from "@/lib/services/payment-routing.service";
+import { createPendingPlanPaymentRecord } from "@/lib/services/plan-payment-recovery.service";
 
 /**
  * POST /api/payment/renew-initialize
@@ -60,6 +61,31 @@ export async function POST(request: Request) {
     callback.searchParams.set("provider", route.provider);
     const resolvedCallback = callback.toString();
 
+    await createPendingPlanPaymentRecord(supabase, {
+      internalReference: reference,
+      provider: route.provider,
+      paymentMethod: method,
+      paymentPurpose: "plan_subscription",
+      customerEmail: resolvedEmail,
+      expectedAmount: amountKobo / 100,
+      planName: plan,
+      planId: plan,
+      userId: user.id,
+      merchantId: merchant.id,
+      metadata: {
+        type: "subscription_renewal",
+        merchant_id: merchant.id,
+        plan,
+        email: resolvedEmail,
+        business_name: merchant.business_name,
+        owner_name: merchant.owner_name || null,
+        amount_expected_kobo: amountKobo,
+        payment_method_requested: method,
+        resolved_provider: route.provider,
+        payment_purpose: "plan_subscription",
+      },
+    });
+
     // Initialize with Paystack — returns accessCode for inline popup
     const result = await PaymentService.initializeTransaction({
       email: resolvedEmail,
@@ -88,7 +114,7 @@ export async function POST(request: Request) {
       authorizationUrl: result.authorizationUrl,
       provider: route.provider,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Renewal initialization (inline) failed:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }

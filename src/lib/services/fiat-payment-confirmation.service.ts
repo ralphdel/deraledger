@@ -11,6 +11,12 @@ import {
   upsertSettlementLedgerForTransaction,
 } from "@/lib/services/settlement-ledger.service";
 import { calculateProviderReportedSettlement } from "@/lib/services/provider-settlement-calculation.service";
+import {
+  buildSetupRecoveryToken,
+  classifyAmountMismatch,
+  findPaymentRecordByReference,
+  updatePlanPaymentRecord,
+} from "@/lib/services/plan-payment-recovery.service";
 
 type FiatProvider = "paystack" | "monnify" | "breet";
 
@@ -19,6 +25,7 @@ export type SuccessfulFiatPayment = {
   metadata: Record<string, unknown>;
   amountKobo: number;
   reference: string;
+  providerReference?: string | null;
   channel: string;
   feesKobo?: number | null;
   settlementAmountKobo?: number | null;
@@ -59,7 +66,19 @@ async function confirmSubscriptionRenewal(
     return { received: true, skipped: true };
   }
 
-  assertExpectedPlanAmount(metadata, amountKobo, reference);
+  const mismatch = classifyAmountMismatch(Number(metadata.amount_expected_kobo || 0), amountKobo);
+  if (mismatch) {
+    await updatePlanPaymentRecord(supabase, reference, {
+      provider_reference: payment.providerReference || reference,
+      amount_paid: amountKobo / 100,
+      payment_status: "pending",
+      processing_status: mismatch.processingStatus,
+      account_setup_status: "manual_review",
+      failure_reason: mismatch.message,
+      raw_provider_payload: payment.rawProviderPayload || metadata,
+    }, provider);
+    return { received: true, needs_review: true, status: mismatch.processingStatus };
+  }
 
   const { data: existingPayment } = await supabase
     .from("subscription_payments")
@@ -68,6 +87,16 @@ async function confirmSubscriptionRenewal(
     .single();
 
   if (existingPayment) {
+    await updatePlanPaymentRecord(supabase, reference, {
+      provider_reference: payment.providerReference || reference,
+      amount_paid: amountKobo / 100,
+      payment_status: "successful",
+      processing_status: "processed",
+      account_setup_status: "active",
+      failure_reason: null,
+      raw_provider_payload: payment.rawProviderPayload || metadata,
+      paid_at: new Date().toISOString(),
+    }, provider);
     return { received: true, already_processed: true };
   }
 
@@ -147,6 +176,18 @@ async function confirmSubscriptionRenewal(
     },
   });
 
+  await updatePlanPaymentRecord(supabase, reference, {
+    merchant_id: merchantId,
+    provider_reference: payment.providerReference || reference,
+    amount_paid: amountPaidNgn,
+    payment_status: "successful",
+    processing_status: "processed",
+    account_setup_status: "active",
+    failure_reason: null,
+    raw_provider_payload: payment.rawProviderPayload || metadata,
+    paid_at: new Date().toISOString(),
+  }, provider);
+
   try {
     const { data: merchant } = await supabase
       .from("merchants")
@@ -186,7 +227,19 @@ async function confirmSubscriptionUpgrade(
     return { received: true, skipped: true };
   }
 
-  assertExpectedPlanAmount(metadata, amountKobo, reference);
+  const mismatch = classifyAmountMismatch(Number(metadata.amount_expected_kobo || 0), amountKobo);
+  if (mismatch) {
+    await updatePlanPaymentRecord(supabase, reference, {
+      provider_reference: payment.providerReference || reference,
+      amount_paid: amountKobo / 100,
+      payment_status: "pending",
+      processing_status: mismatch.processingStatus,
+      account_setup_status: "manual_review",
+      failure_reason: mismatch.message,
+      raw_provider_payload: payment.rawProviderPayload || metadata,
+    }, provider);
+    return { received: true, needs_review: true, status: mismatch.processingStatus };
+  }
 
   const { data: existingPayment } = await supabase
     .from("subscription_payments")
@@ -194,6 +247,17 @@ async function confirmSubscriptionUpgrade(
     .eq("paystack_ref", reference)
     .single();
   if (existingPayment) {
+    await updatePlanPaymentRecord(supabase, reference, {
+      merchant_id: merchantId,
+      provider_reference: payment.providerReference || reference,
+      amount_paid: amountKobo / 100,
+      payment_status: "successful",
+      processing_status: "processed",
+      account_setup_status: "paid_pending_setup",
+      failure_reason: null,
+      raw_provider_payload: payment.rawProviderPayload || metadata,
+      paid_at: new Date().toISOString(),
+    }, provider);
     return { received: true, already_processed: true };
   }
 
@@ -320,6 +384,18 @@ async function confirmSubscriptionUpgrade(
     },
   });
 
+  await updatePlanPaymentRecord(supabase, reference, {
+    merchant_id: merchantId,
+    provider_reference: payment.providerReference || reference,
+    amount_paid: amountPaidNgn,
+    payment_status: "successful",
+    processing_status: "processed",
+    account_setup_status: "paid_pending_setup",
+    failure_reason: null,
+    raw_provider_payload: payment.rawProviderPayload || metadata,
+    paid_at: new Date().toISOString(),
+  }, provider);
+
   return { received: true, processed: true };
 }
 
@@ -347,7 +423,20 @@ async function confirmInitialSubscription(
     return { received: true, skipped: true };
   }
 
-  assertExpectedPlanAmount(metadata, amountKobo, reference);
+  const mismatch = classifyAmountMismatch(Number(metadata.amount_expected_kobo || 0), amountKobo);
+  if (mismatch) {
+    await updatePlanPaymentRecord(supabase, reference, {
+      provider_reference: payment.providerReference || reference,
+      amount_paid: amountKobo / 100,
+      payment_status: "pending",
+      processing_status: mismatch.processingStatus,
+      account_setup_status: "manual_review",
+      password_setup_required: true,
+      failure_reason: mismatch.message,
+      raw_provider_payload: payment.rawProviderPayload || metadata,
+    }, provider);
+    return { received: true, needs_review: true, status: mismatch.processingStatus };
+  }
 
   const { data: session } = await supabase
     .from("onboarding_sessions")
@@ -358,6 +447,18 @@ async function confirmInitialSubscription(
     .single();
 
   if (!session) {
+    const existingRecord = await findPaymentRecordByReference(supabase, reference, provider);
+    if (existingRecord) {
+      await updatePlanPaymentRecord(supabase, reference, {
+        provider_reference: payment.providerReference || reference,
+        amount_paid: amountKobo / 100,
+        payment_status: "successful",
+        processing_status: "processed",
+        account_setup_status: existingRecord.account_setup_status || "active_pending_password",
+        raw_provider_payload: payment.rawProviderPayload || metadata,
+        paid_at: new Date().toISOString(),
+      }, provider);
+    }
     return { received: true, already_processed: true };
   }
 
@@ -516,18 +617,23 @@ async function confirmInitialSubscription(
     })
     .eq("id", sessionId);
 
+  const recoveryToken = buildSetupRecoveryToken();
+  const existingPaymentRecord = await findPaymentRecordByReference(supabase, reference, provider);
   const appUrl = getAppUrl();
   let setPasswordLink = `${appUrl}/onboarding/resend`;
-  const { data: magicLinkData, error: magicError } = await supabase.auth.admin.generateLink({
-    type: "magiclink",
-    email,
-  });
+  let welcomeEmailSentAt = existingPaymentRecord?.setup_recovery_email_sent_at || null;
+  if (!welcomeEmailSentAt) {
+    const { data: magicLinkData, error: magicError } = await supabase.auth.admin.generateLink({
+      type: "magiclink",
+      email,
+    });
 
-  if (!magicError && magicLinkData?.properties?.email_otp) {
-    const otp = magicLinkData.properties.email_otp;
-    setPasswordLink = `${appUrl}/auth/verify?token=${otp}&email=${encodeURIComponent(
-      email
-    )}&type=magiclink&next=${encodeURIComponent("/onboarding/set-password")}`;
+    if (!magicError && magicLinkData?.properties?.email_otp) {
+      const otp = magicLinkData.properties.email_otp;
+      setPasswordLink = `${appUrl}/auth/verify?token=${otp}&email=${encodeURIComponent(
+        email
+      )}&type=magiclink&next=${encodeURIComponent("/onboarding/set-password")}`;
+    }
   }
 
   const expiryDate = calculateSubscriptionExpiry(amountPaidNgn, activePlan as PlanType);
@@ -551,17 +657,20 @@ async function confirmInitialSubscription(
     status: "paid",
   });
 
-  try {
-    const { sendOnboardingWelcomeEmail } = await import("@/lib/brevo");
-    await sendOnboardingWelcomeEmail(
-      email,
-      businessName,
-      activePlan as "individual" | "corporate",
-      setPasswordLink,
-      expiryDate.toISOString()
-    );
-  } catch (error) {
-    console.error("Failed to send welcome email:", error);
+  if (!welcomeEmailSentAt) {
+    try {
+      const { sendOnboardingWelcomeEmail } = await import("@/lib/brevo");
+      await sendOnboardingWelcomeEmail(
+        email,
+        businessName,
+        activePlan as "individual" | "corporate",
+        setPasswordLink,
+        expiryDate.toISOString()
+      );
+      welcomeEmailSentAt = new Date().toISOString();
+    } catch (error) {
+      console.error("Failed to send welcome email:", error);
+    }
   }
 
   await supabase.from("audit_logs").insert({
@@ -577,6 +686,28 @@ async function confirmInitialSubscription(
       amount_ngn: amountPaidNgn,
     },
   });
+
+  await updatePlanPaymentRecord(supabase, reference, {
+    user_id: userId,
+    merchant_id: merchantId,
+    provider_reference: payment.providerReference || reference,
+    amount_paid: amountPaidNgn,
+    payment_status: "successful",
+    processing_status: "processed",
+    account_setup_status: "active_pending_password",
+    password_setup_required: true,
+    failure_reason: null,
+    raw_provider_payload: payment.rawProviderPayload || metadata,
+    paid_at: new Date().toISOString(),
+    setup_recovery_token_hash: recoveryToken.tokenHash,
+    setup_recovery_token_expires_at: recoveryToken.expiresAt,
+    setup_recovery_email_sent_at: welcomeEmailSentAt,
+    setup_recovery_email_count: welcomeEmailSentAt
+      ? existingPaymentRecord?.setup_recovery_email_sent_at
+        ? undefined
+        : 1
+      : undefined,
+  }, provider);
 
   return { received: true, processed: true };
 }
@@ -794,23 +925,6 @@ function normalizePaymentMethod(channel: string) {
     return "bank_transfer";
   }
   return "ussd";
-}
-
-function assertExpectedPlanAmount(
-  metadata: Record<string, unknown>,
-  amountKobo: number,
-  reference: string
-) {
-  const expected = Number(metadata.amount_expected_kobo);
-  if (!Number.isFinite(expected) || expected <= 0) {
-    return;
-  }
-
-  if (Math.round(expected) !== Math.round(amountKobo)) {
-    throw new Error(
-      `Payment amount mismatch for ${reference}: expected ${Math.round(expected)}, got ${Math.round(amountKobo)}`
-    );
-  }
 }
 
 async function sendInvoiceReceipt(

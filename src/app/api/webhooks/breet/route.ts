@@ -26,6 +26,30 @@ function numberValue(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function positiveNumberValue(value: unknown) {
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function estimateNgnFromBreetUsd(payload: WebhookPayload) {
+  const amountUsd = positiveNumberValue(payload.amountInUSD);
+  const rate = positiveNumberValue(payload.rate);
+  return amountUsd && rate ? Number((amountUsd * rate).toFixed(2)) : undefined;
+}
+
+function confirmedBreetNgnAmount(payload: WebhookPayload, fallback: number) {
+  return (
+    positiveNumberValue(payload.amountSettled) ||
+    positiveNumberValue(payload.amount_ngn) ||
+    positiveNumberValue(payload.amountInNGN) ||
+    positiveNumberValue(payload.ngnAmount) ||
+    positiveNumberValue(payload.convertedNgnAmount) ||
+    positiveNumberValue(eventDataValue(payload, ["converted_ngn_amount"])) ||
+    estimateNgnFromBreetUsd(payload) ||
+    fallback
+  );
+}
+
 function extractSessionContext(payload: WebhookPayload) {
   const metadata = asRecord(payload.metadata);
   const label = stringValue(payload.label) || stringValue(metadata.label) || "";
@@ -90,7 +114,7 @@ async function recordWebhookLog(input: {
   responseCode?: number | null;
   rawPayload: WebhookPayload;
 }) {
-  await supabase.from("treasury_webhook_logs").insert({
+  const { error } = await supabase.from("treasury_webhook_logs").insert({
     provider: "breet",
     event_type: input.eventType,
     status: input.status,
@@ -102,6 +126,16 @@ async function recordWebhookLog(input: {
     error_message: input.errorMessage || null,
     raw_payload: input.rawPayload,
   });
+
+  if (error) {
+    console.warn("Breet webhook auxiliary log failed:", {
+      eventType: input.eventType,
+      processorReference: input.processorReference,
+      paymentSessionId: input.paymentSessionId,
+      reason: error.message,
+      responseCode: input.responseCode ?? 200,
+    });
+  }
 }
 
 async function updateProviderWebhookHealth(status: "success" | "failed") {
@@ -379,6 +413,27 @@ export async function POST(request: Request) {
   });
 
   if (!invoiceSession && !planSession) {
+    const { error: eventError } = await supabase.from("payment_events").insert({
+      merchant_id: context.merchantId || null,
+      invoice_id: context.invoiceId || null,
+      transaction_id: null,
+      event_type: eventType,
+      processor: "breet",
+      processor_ref: providerReference || txHash || null,
+      amount_kobo: 0,
+      raw_payload: payload,
+      idempotency_key: idempotencyKey || null,
+    });
+
+    if (eventError) {
+      console.warn("Breet unmatched webhook payment event failed:", {
+        eventType,
+        providerReference,
+        walletAddress: context.walletAddress,
+        reason: eventError.message,
+      });
+    }
+
     await recordWebhookLog({
       eventType,
       status: "failed",
@@ -437,13 +492,7 @@ async function handleInvoiceWebhook(input: {
     numberValue(payload.cryptoAmount) ||
     numberValue(eventDataValue(payload, ["crypto_amount"])) ||
     0;
-  const receivedNgN =
-    numberValue(payload.amount_ngn) ||
-    numberValue(payload.amountInNGN) ||
-    numberValue(payload.ngnAmount) ||
-    numberValue(payload.convertedNgnAmount) ||
-    numberValue(eventDataValue(payload, ["converted_ngn_amount"])) ||
-    Number(session.amount_ngn || 0);
+  const receivedNgN = confirmedBreetNgnAmount(payload, Number(session.amount_ngn || 0));
   const expectedNgN = Number(session.amount_ngn || 0);
   const confirmationCount =
     numberValue(payload.confirmations) ||
@@ -537,11 +586,11 @@ async function handleInvoiceWebhook(input: {
       merchantId: stringValue(session.merchant_id) || context.merchantId || null,
       invoiceId: stringValue(session.invoice_id) || context.invoiceId || null,
       paymentSessionId: String(session.id),
-      errorMessage: rpcResult.error?.message || "Treasury processing failed",
+      errorMessage: rpcResult.error?.message || "Breet invoice confirmation failed",
       rawPayload: payload,
     });
     await updateProviderWebhookHealth("failed");
-    return NextResponse.json({ error: "Treasury processing failed" }, { status: 500 });
+    return NextResponse.json({ error: "Breet invoice confirmation failed" }, { status: 500 });
   }
 
   await supabase
@@ -621,12 +670,7 @@ async function handlePlanWebhook(input: {
 }) {
   const { payload, eventType, providerReference, txHash, session, idempotencyKey } = input;
   const expectedNgN = Number(session.expected_ngn_amount || 0);
-  const convertedNgN =
-    numberValue(payload.amount_ngn) ||
-    numberValue(payload.amountInNGN) ||
-    numberValue(payload.ngnAmount) ||
-    numberValue(eventDataValue(payload, ["converted_ngn_amount"])) ||
-    expectedNgN;
+  const convertedNgN = confirmedBreetNgnAmount(payload, expectedNgN);
   const amountKobo = Math.round(convertedNgN * 100);
   const amountCrypto =
     numberValue(payload.amount_crypto) ||
