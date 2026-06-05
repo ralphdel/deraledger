@@ -4,6 +4,7 @@ import {
   canUseBreetCryptoCheckout,
   isBelowBreetMinimumAmount,
   loadBreetRuntimeConfig,
+  resolveBreetCheckoutEnvironment,
 } from "@/lib/services/breet-crypto.service";
 import {
   getPaymentEnvironment,
@@ -75,12 +76,29 @@ export async function GET(request: Request) {
       }
     }
 
+    const runtimeConfig = await loadBreetRuntimeConfig(supabase);
+    const cryptoEnvironment = resolveBreetCheckoutEnvironment(runtimeConfig, environment);
     const routedMethods = await listAvailablePaymentMethods(purpose, environment);
+    const cryptoRoutedMethods =
+      cryptoEnvironment !== environment
+        ? await listAvailablePaymentMethods(purpose, cryptoEnvironment)
+        : routedMethods;
+    const mergedMethods = [
+      ...routedMethods,
+      ...cryptoRoutedMethods.filter((method) =>
+        method.method === "crypto" && !routedMethods.some((existing) => existing.method === "crypto")
+      ),
+    ];
     const settlementReadyMethods =
       purpose === "invoice_payment" || purpose === "payment_link" || purpose === "crypto_payment"
-        ? await filterMethodsBySettlementReadiness(supabase, merchantId, routedMethods, environment, purpose)
-        : routedMethods;
-    const runtimeConfig = await loadBreetRuntimeConfig(supabase);
+        ? await filterMethodsBySettlementReadiness(
+            supabase,
+            merchantId,
+            mergedMethods.filter((method) => method.method !== "crypto"),
+            environment,
+            purpose
+          )
+        : mergedMethods.filter((method) => method.method !== "crypto");
     const requestedInvoiceAmount =
       parsePositiveAmount(searchParams.get("paymentAmount")) ??
       parsePositiveAmount(searchParams.get("amountNgn")) ??
@@ -96,7 +114,8 @@ export async function GET(request: Request) {
     const cryptoBelowMinimum =
       amountToCheck !== null &&
       isBelowBreetMinimumAmount(amountToCheck, runtimeConfig.minimumAutoSettlementNgn);
-    const breetEligibility = settlementReadyMethods.some((method) => method.method === "crypto")
+    const cryptoCandidate = mergedMethods.find((method) => method.method === "crypto" && method.provider === "breet") || null;
+    const breetEligibility = cryptoCandidate
       ? await canUseBreetCryptoCheckout({
           supabase,
           purpose,
@@ -104,19 +123,50 @@ export async function GET(request: Request) {
           environment,
         })
       : null;
-    const availableMethods = settlementReadyMethods.filter((method) => {
-      if (method.method !== "crypto") return true;
-      if (cryptoBelowMinimum) return false;
-      if (breetEligibility && !breetEligibility.allowed) return false;
-      return true;
+
+    const cryptoDisabledReason =
+      !cryptoCandidate
+        ? "Crypto checkout route is disabled."
+        : cryptoBelowMinimum
+          ? `Crypto payments are available for amounts from ₦${runtimeConfig.minimumAutoSettlementNgn.toLocaleString()} and above. Please use another payment method for smaller amounts.`
+          : breetEligibility && !breetEligibility.allowed
+            ? breetEligibility.reason || "Crypto checkout is unavailable."
+            : null;
+
+    const availableMethods = mergedMethods.filter((method) => {
+      if (method.method !== "crypto") {
+        return settlementReadyMethods.some((readyMethod) => readyMethod.method === method.method);
+      }
+      return Boolean(cryptoCandidate && !cryptoDisabledReason);
     });
+
+    const methodAvailability = {
+      card: {
+        enabled: availableMethods.some((method) => method.method === "card"),
+        reason: null as string | null,
+      },
+      bank_transfer: {
+        enabled: availableMethods.some((method) => method.method === "bank_transfer"),
+        reason: null as string | null,
+      },
+      ussd: {
+        enabled: availableMethods.some((method) => method.method === "ussd"),
+        reason: null as string | null,
+      },
+      crypto: {
+        enabled: availableMethods.some((method) => method.method === "crypto"),
+        reason: cryptoDisabledReason,
+      },
+    };
 
     return NextResponse.json({
       kind,
       purpose,
       environment,
+      effectiveCryptoEnvironment: breetEligibility?.effectiveEnvironment || cryptoEnvironment,
       minimumAutoSettlementNgn: runtimeConfig.minimumAutoSettlementNgn,
       availableMethods,
+      methodAvailability,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to load payment methods.";

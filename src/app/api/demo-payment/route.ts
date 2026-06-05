@@ -65,11 +65,7 @@ export async function POST(request: Request) {
     }
 
     const selectedMethod = (paymentMethod || "card") as PaymentMethod;
-    const route = await resolvePaymentRoute(
-      "invoice_payment",
-      selectedMethod,
-      getPaymentEnvironmentForMerchantEmail(merchant.email)
-    );
+    const paymentEnvironment = getPaymentEnvironmentForMerchantEmail(merchant.email);
 
     // Calculate k-factor and total charge
     const kFactor = grandTotal > 0 ? cappedPayment / grandTotal : 0;
@@ -84,18 +80,6 @@ export async function POST(request: Request) {
 
     const reference = `purp_${invoiceId.slice(0, 8)}_${Date.now()}`;
     const appUrl = getAppUrl();
-
-    const metadata = {
-      type: "invoice_payment",
-      invoice_id: invoice.id,
-      invoice_number: invoice.invoice_number,
-      merchant_id: invoice.merchant_id,
-      payment_amount: cappedPayment,
-      k_factor: kFactor,
-      payment_method_requested: selectedMethod,
-      resolved_provider: route.provider,
-      payment_purpose: "invoice_payment",
-    };
 
     if (selectedMethod === "crypto") {
       const cryptoResponse = await fetch(`${appUrl}/api/checkout/crypto-invoice`, {
@@ -118,6 +102,24 @@ export async function POST(request: Request) {
 
       return NextResponse.json(cryptoResult);
     }
+
+    const route = await resolvePaymentRoute(
+      "invoice_payment",
+      selectedMethod,
+      paymentEnvironment
+    );
+
+    const metadata = {
+      type: "invoice_payment",
+      invoice_id: invoice.id,
+      invoice_number: invoice.invoice_number,
+      merchant_id: invoice.merchant_id,
+      payment_amount: cappedPayment,
+      k_factor: kFactor,
+      payment_method_requested: selectedMethod,
+      resolved_provider: route.provider,
+      payment_purpose: "invoice_payment",
+    };
 
     // Default: Fiat Checkout
     const callback = new URL(`${appUrl}/pay/${invoiceId}`);

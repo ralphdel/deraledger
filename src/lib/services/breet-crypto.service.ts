@@ -27,6 +27,7 @@ export type CryptoPaymentLifecycleStatus =
 export const BREET_PLATFORM_SETTING_KEYS = [
   "breet_settlement_mode",
   "breet_api_environment",
+  "breet_development_checkout_enabled",
   "breet_auto_settlement_enabled",
   "breet_merchant_auto_settlement_enabled",
   "breet_invoice_crypto_enabled",
@@ -61,6 +62,7 @@ export const BREET_MIN_AMOUNT_ERROR_MESSAGE =
 export type BreetRuntimeConfig = {
   settlementMode: BreetSettlementModeV2;
   apiEnvironment: BreetApiEnvironment;
+  developmentCheckoutEnabled: boolean;
   merchantAutoSettlementEnabled: boolean;
   platformAutoSettlementEnabled: boolean;
   invoiceCryptoEnabled: boolean;
@@ -125,6 +127,13 @@ function parseBooleanSetting(settings: Map<string, string>, key: string, fallbac
   const raw = settings.get(key);
   if (raw === "true") return true;
   if (raw === "false") return false;
+  return fallback;
+}
+
+function parseEnvBoolean(value: string | undefined, fallback: boolean) {
+  if (typeof value !== "string") return fallback;
+  if (value === "true") return true;
+  if (value === "false") return false;
   return fallback;
 }
 
@@ -411,6 +420,7 @@ export async function loadBreetRuntimeConfig(supabase: SupabaseClient): Promise<
   const envMerchantAutoSettlement = readEnvBoolean(process.env.BREET_MERCHANT_AUTO_SETTLEMENT_ENABLED, true);
   const envPlatformAutoSettlement = readEnvBoolean(process.env.BREET_AUTO_SETTLEMENT_ENABLED, true);
   const envForcePlatformSettlement = readEnvBoolean(process.env.BREET_SANDBOX_FORCE_PLATFORM_SETTLEMENT, false);
+  const envDevelopmentCheckoutEnabled = parseEnvBoolean(process.env.BREET_DEVELOPMENT_CHECKOUT_ENABLED, false);
   const envMinimumAutoSettlement = getBreetMinimumAutoSettlementNgn();
   const envFallbackMode =
     envMerchantAutoSettlement ? "breet_auto_settlement" :
@@ -432,6 +442,7 @@ export async function loadBreetRuntimeConfig(supabase: SupabaseClient): Promise<
   return {
     settlementMode: normalizeBreetSettlementMode(settingValue(map, "breet_settlement_mode", envFallbackMode)),
     apiEnvironment,
+    developmentCheckoutEnabled: parseBooleanSetting(map, "breet_development_checkout_enabled", envDevelopmentCheckoutEnabled),
     merchantAutoSettlementEnabled: parseBooleanSetting(map, "breet_merchant_auto_settlement_enabled", envMerchantAutoSettlement),
     platformAutoSettlementEnabled:
       envForcePlatformSettlement ||
@@ -513,6 +524,22 @@ export function getBreetConfigWarnings(config: Pick<BreetRuntimeConfig, "apiEnvi
   return warnings;
 }
 
+export function isBreetDevelopmentCheckoutActive(
+  config: Pick<BreetRuntimeConfig, "apiEnvironment" | "developmentCheckoutEnabled" | "liveEnabled">
+) {
+  return config.apiEnvironment === "development" && config.developmentCheckoutEnabled && !config.liveEnabled;
+}
+
+export function resolveBreetCheckoutEnvironment(
+  config: Pick<BreetRuntimeConfig, "apiEnvironment" | "developmentCheckoutEnabled" | "liveEnabled">,
+  requestedEnvironment: "sandbox" | "live"
+) {
+  if (requestedEnvironment === "live" && isBreetDevelopmentCheckoutActive(config)) {
+    return "sandbox" as const;
+  }
+  return requestedEnvironment;
+}
+
 export async function getSupportedAssets(supabase?: SupabaseClient) {
   if (!supabase) {
     return ["USDT", "USDC", "BTC", "ETH"];
@@ -579,16 +606,17 @@ export async function canUseBreetCryptoCheckout(input: {
   requireMerchantSettlementMapping?: boolean;
 }) {
   const config = await loadBreetRuntimeConfig(input.supabase);
+  const effectiveEnvironment = resolveBreetCheckoutEnvironment(config, input.environment);
   if (!isBreetRuntimeConfigured()) {
-    return { allowed: false, reason: "Breet credentials are incomplete.", settlementMode: config.settlementMode, config } as const;
+    return { allowed: false, reason: "Breet credentials are incomplete.", settlementMode: config.settlementMode, config, effectiveEnvironment } as const;
   }
 
   if (!isBreetWebhookConfigured()) {
-    return { allowed: false, reason: "Breet webhook is not configured.", settlementMode: config.settlementMode, config } as const;
+    return { allowed: false, reason: "Breet webhook secret is missing.", settlementMode: config.settlementMode, config, effectiveEnvironment } as const;
   }
 
   if (!config.webhookUrl) {
-    return { allowed: false, reason: "Breet webhook URL is not configured.", settlementMode: config.settlementMode, config } as const;
+    return { allowed: false, reason: "Breet webhook URL is not configured.", settlementMode: config.settlementMode, config, effectiveEnvironment } as const;
   }
 
   if (config.apiEnvironment === "production" && !config.liveEnabled) {
@@ -597,45 +625,59 @@ export async function canUseBreetCryptoCheckout(input: {
       reason: "Breet live checkout is disabled.",
       settlementMode: config.settlementMode,
       config,
+      effectiveEnvironment,
     } as const;
   }
 
-  if (input.environment === "live" && !config.liveEnabled) {
+  if (input.environment === "live" && effectiveEnvironment !== "sandbox" && !config.liveEnabled) {
     return {
       allowed: false,
       reason: "Breet live checkout is disabled.",
       settlementMode: config.settlementMode,
       config,
+      effectiveEnvironment,
+    } as const;
+  }
+
+  if (input.environment === "live" && config.apiEnvironment === "development" && !config.liveEnabled && !config.developmentCheckoutEnabled) {
+    return {
+      allowed: false,
+      reason: "Breet development checkout is disabled.",
+      settlementMode: config.settlementMode,
+      config,
+      effectiveEnvironment,
     } as const;
   }
 
   if (config.settlementMode === "disabled") {
-    return { allowed: false, reason: "Breet settlement mode is disabled.", settlementMode: config.settlementMode, config } as const;
+    return { allowed: false, reason: "Breet settlement mode is disabled.", settlementMode: config.settlementMode, config, effectiveEnvironment } as const;
   }
 
   const effectiveMode = resolveBreetSettlementModeForPurpose(input.purpose, config.settlementMode);
 
   if (effectiveMode === "treasury_manual" && !config.treasurySettlementAccountReference) {
     return {
-      allowed: false,
-      reason: "Treasury/manual settlement is not configured.",
-      settlementMode: effectiveMode,
-      config,
-    } as const;
+        allowed: false,
+        reason: "Treasury/manual settlement is not configured.",
+        settlementMode: effectiveMode,
+        config,
+        effectiveEnvironment,
+      } as const;
   }
 
   if (effectiveMode === "treasury_manual" && !config.platformSettlementBankAccount) {
     return {
-      allowed: false,
-      reason: "Treasury/manual settlement bank account is not configured.",
-      settlementMode: effectiveMode,
-      config,
-    } as const;
+        allowed: false,
+        reason: "Treasury/manual settlement bank account is not configured.",
+        settlementMode: effectiveMode,
+        config,
+        effectiveEnvironment,
+      } as const;
   }
 
   if (input.purpose === "invoice_payment" || input.purpose === "payment_link" || input.purpose === "crypto_payment") {
     if (!config.invoiceCryptoEnabled) {
-      return { allowed: false, reason: "Crypto payments are disabled for invoice checkout.", settlementMode: config.settlementMode, config } as const;
+      return { allowed: false, reason: "Crypto payments are disabled for invoice checkout.", settlementMode: config.settlementMode, config, effectiveEnvironment } as const;
     }
 
     if (config.settlementMode !== "treasury_manual" && !config.merchantAutoSettlementEnabled) {
@@ -644,6 +686,7 @@ export async function canUseBreetCryptoCheckout(input: {
         reason: "Merchant crypto auto-settlement is disabled.",
         settlementMode: effectiveMode,
         config,
+        effectiveEnvironment,
       } as const;
     }
 
@@ -653,29 +696,30 @@ export async function canUseBreetCryptoCheckout(input: {
         reason: "Crypto settlement setup is incomplete for this merchant.",
         settlementMode: effectiveMode,
         config,
+        effectiveEnvironment,
       } as const;
     }
 
     if (!input.merchantId) {
-      return { allowed: false, reason: "Crypto settlement setup is incomplete for this merchant.", settlementMode: config.settlementMode, config } as const;
+      return { allowed: false, reason: "Crypto settlement setup is incomplete for this merchant.", settlementMode: config.settlementMode, config, effectiveEnvironment } as const;
     }
 
     const ready = await isProviderSettlementReady(input.supabase, {
       merchantId: input.merchantId,
       provider: "breet",
-      environment: input.environment,
+      environment: effectiveEnvironment,
       requireCryptoMapping: true,
     });
 
     if (!ready) {
-      return { allowed: false, reason: "Crypto settlement setup is incomplete for this merchant.", settlementMode: config.settlementMode, config } as const;
+      return { allowed: false, reason: "Crypto settlement setup is incomplete for this merchant.", settlementMode: config.settlementMode, config, effectiveEnvironment } as const;
     }
 
   }
 
   if (input.purpose === "plan_subscription" || input.purpose === "plan_upgrade") {
     if (!config.subscriptionCryptoEnabled) {
-      return { allowed: false, reason: "Crypto payments are disabled for subscription checkout.", settlementMode: config.settlementMode, config } as const;
+      return { allowed: false, reason: "Crypto payments are disabled for subscription checkout.", settlementMode: config.settlementMode, config, effectiveEnvironment } as const;
     }
 
     if (config.settlementMode !== "treasury_manual" && !config.platformAutoSettlementEnabled) {
@@ -684,6 +728,7 @@ export async function canUseBreetCryptoCheckout(input: {
         reason: "Platform crypto auto-settlement is disabled.",
         settlementMode: effectiveMode,
         config,
+        effectiveEnvironment,
       } as const;
     }
 
@@ -693,6 +738,7 @@ export async function canUseBreetCryptoCheckout(input: {
         reason: "Merchant settlement mode cannot be used for platform crypto payments.",
         settlementMode: effectiveMode,
         config,
+        effectiveEnvironment,
       } as const;
     }
 
@@ -711,12 +757,13 @@ export async function canUseBreetCryptoCheckout(input: {
           reason: "Platform settlement account is not configured.",
           settlementMode: effectiveMode,
           config,
+          effectiveEnvironment,
         } as const;
       }
     }
   }
 
-  return { allowed: true, settlementMode: effectiveMode, config } as const;
+  return { allowed: true, settlementMode: effectiveMode, config, effectiveEnvironment } as const;
 }
 
 export function resolveBreetSettlementModeForPurpose(

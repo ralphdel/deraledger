@@ -22,6 +22,11 @@ type AvailableMethod = {
   fallbackProvider: "paystack" | "monnify" | "breet" | null;
 };
 
+type MethodAvailability = Record<
+  "card" | "bank_transfer" | "ussd" | "crypto",
+  { enabled: boolean; reason: string | null }
+>;
+
 export default function PublicPaymentPortal({ params }: { params: Promise<{ invoiceId: string }> }) {
   const { invoiceId } = use(params);
   const [invoice, setInvoice] = useState<InvoiceWithLineItems | null>(null);
@@ -36,6 +41,7 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
   const [paymentError, setPaymentError] = useState<string | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<"card" | "bank_transfer" | "ussd" | "crypto">("card");
   const [availableMethods, setAvailableMethods] = useState<AvailableMethod[]>([]);
+  const [methodAvailability, setMethodAvailability] = useState<MethodAvailability | null>(null);
   const [refreshedInvoice, setRefreshedInvoice] = useState<InvoiceWithLineItems | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [cryptoDetails, setCryptoDetails] = useState<{
@@ -153,12 +159,18 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
       .then((payload) => {
         const methods = Array.isArray(payload?.availableMethods) ? payload.availableMethods as AvailableMethod[] : [];
         setAvailableMethods(methods);
+        setMethodAvailability(
+          payload?.methodAvailability && typeof payload.methodAvailability === "object"
+            ? payload.methodAvailability as MethodAvailability
+            : null
+        );
         if (methods.length > 0 && !methods.some((method) => method.method === paymentMethod)) {
           setPaymentMethod(methods[0].method);
         }
       })
       .catch(() => {
         setAvailableMethods([]);
+        setMethodAvailability(null);
       });
     return () => controller.abort();
   }, [invoiceId, paymentMethod]);
@@ -204,7 +216,8 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
   const isExpired = invoice.status === "expired";
 
   // Check if merchant subscription is locked
-  const isMerchantSubscriptionExpired = (merchant as any)?.subscription_status === "expired";
+  const isMerchantSubscriptionExpired =
+    (merchant as (Merchant & { subscription_status?: string | null }) | null)?.subscription_status === "expired";
 
   // We no longer strictly block just because the date passed, 
   // so that reopened invoices stay active until explicitly expired again.
@@ -336,7 +349,8 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
     setInputAmount(finalAmount.toString());
   };
 
-  const cryptoEnabled = availableMethods.some((method) => method.method === "crypto");
+  const cryptoAvailability = methodAvailability?.crypto || null;
+  const cryptoEnabled = cryptoAvailability?.enabled ?? availableMethods.some((method) => method.method === "crypto");
 
   const handlePayment = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -698,7 +712,7 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                   <Sparkles className="h-5 w-5" />
                   <span>Crypto</span>
                   <span className={`absolute -top-1 -right-1 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full leading-none ${cryptoEnabled ? "bg-emerald-500" : "bg-amber-400"}`}>
-                    {cryptoEnabled ? "LIVE" : "SOON"}
+                    {cryptoEnabled ? "READY" : "OFF"}
                   </span>
                 </button>
               </div>
@@ -754,7 +768,7 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                   <p className="text-neutral-500 text-sm mt-1 max-w-xs mx-auto">
                     {cryptoEnabled
                       ? "Your merchant still settles in Naira while the customer pays on-chain. We will generate a wallet address and quote before you send funds."
-                      : "Crypto payments will be available soon. This payment option is part of our MVP rollout."}
+                      : cryptoAvailability?.reason || "Crypto payments are currently unavailable for this invoice."}
                   </p>
                 </div>
                 {cryptoEnabled ? (
@@ -765,8 +779,10 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                 ) : (
                   <>
                     <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-amber-800 text-sm">
-                      <p className="font-medium">This payment method is currently unavailable during MVP rollout.</p>
-                      <p className="text-xs mt-1 text-amber-700">Please use Card/Bank or Transfer to complete your payment.</p>
+                      <p className="font-medium">Crypto checkout is currently unavailable.</p>
+                      <p className="text-xs mt-1 text-amber-700">
+                        {cryptoAvailability?.reason || "Please use Card/Bank or Transfer to complete your payment."}
+                      </p>
                     </div>
                     <Button type="button" variant="outline" className="border-purp-200" onClick={() => setPaymentMethod("card")}>
                       Use Card / Bank Transfer Instead
@@ -855,7 +871,7 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                   <div className="text-sm">
                     <p className="font-semibold text-red-700">Merchant Limit Exceeded</p>
                     <p className="text-red-600 mt-1">
-                      This amount exceeds the merchant's remaining monthly collection limit (<strong>{formatNaira(remainingLimit)}</strong> left). 
+                      This amount exceeds the merchant&apos;s remaining monthly collection limit (<strong>{formatNaira(remainingLimit)}</strong> left). 
                       Please enter a smaller amount or contact the merchant directly.
                     </p>
                   </div>
