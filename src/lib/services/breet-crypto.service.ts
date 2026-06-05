@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { BreetBankListItem, BreetBankValidationResult } from "@/lib/payment/types";
 import {
   isProviderSettlementReady,
   getSettlementEnvironment,
@@ -25,11 +26,13 @@ export type CryptoPaymentLifecycleStatus =
 
 export const BREET_PLATFORM_SETTING_KEYS = [
   "breet_settlement_mode",
+  "breet_api_environment",
   "breet_auto_settlement_enabled",
   "breet_merchant_auto_settlement_enabled",
   "breet_invoice_crypto_enabled",
   "breet_subscription_crypto_enabled",
   "breet_min_auto_settlement_ngn",
+  "breet_platform_bank_validated",
   "breet_webhook_url",
   "breet_supported_assets",
   "breet_supported_networks",
@@ -57,14 +60,18 @@ export const BREET_MIN_AMOUNT_ERROR_MESSAGE =
 
 export type BreetRuntimeConfig = {
   settlementMode: BreetSettlementModeV2;
+  apiEnvironment: BreetApiEnvironment;
   merchantAutoSettlementEnabled: boolean;
   platformAutoSettlementEnabled: boolean;
   invoiceCryptoEnabled: boolean;
   subscriptionCryptoEnabled: boolean;
   minimumAutoSettlementNgn: number;
+  platformSettlementBankValidated: boolean;
   webhookUrl: string | null;
   supportedAssets: string[];
   supportedNetworks: string[];
+  defaultReceiveCurrency: string;
+  forcePlatformSettlementInSandbox: boolean;
   treasurySettlementAccountReference: string | null;
   treasurySettlementAccountLabel: string | null;
   platformSettlementBankAccount: BreetSettlementBankAccount | null;
@@ -92,6 +99,17 @@ export type BreetSettlementBankAccount = {
 
 export type BreetProviderMode = "invoice" | "platform";
 export type BreetApiEnvironment = "development" | "production";
+export type BreetBankSetupCandidate = Pick<
+  BreetSettlementBankAccount,
+  "bank_name" | "bank_code" | "bank_id" | "account_number" | "account_name" | "raw_verification_payload"
+>;
+
+export type BreetMerchantMappingState = {
+  hasMappedBankId: boolean;
+  mappingConfirmed: boolean;
+  validationPassed: boolean;
+  mappedBankId: string | null;
+};
 
 function settingValue(settings: Map<string, string>, key: string, fallback = "") {
   const value = settings.get(key);
@@ -199,16 +217,126 @@ export function buildBreetWebhookIdempotencyKey(providerReference: string, event
   return reference ? `breet:${reference}:${event}` : null;
 }
 
-export function buildSettlementBankPayload(bankAccount: BreetSettlementBankAccount) {
-  const currency = String(bankAccount.currency || "NGN").toUpperCase();
+export function buildSettlementBankPayload(bankAccount: BreetSettlementBankAccount, narration: string) {
+  const bankId = resolveBreetBankId(bankAccount);
+  const accountNumber = String(bankAccount.account_number || "").trim();
+  if (!bankId || !accountNumber) {
+    return null;
+  }
+
   return {
-    bank_name: bankAccount.bank_name || null,
-    bank_code: bankAccount.bank_code || bankAccount.bank_id || null,
-    bank_id: bankAccount.bank_id || bankAccount.bank_code || null,
-    account_number: bankAccount.account_number || null,
-    account_name: bankAccount.account_name || null,
-    currency,
-    settlement_currency: currency,
+    bankId,
+    accountNumber,
+    narration,
+    bankName: bankAccount.bank_name || null,
+    accountName: bankAccount.account_name || null,
+    accountNumberMasked: maskAccountNumber(accountNumber),
+  };
+}
+
+function normalizeBankName(value?: string | null) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+export function matchBreetBank(bankAccount: BreetBankSetupCandidate, banks: BreetBankListItem[]) {
+  const directBankId = resolveBreetBankId(bankAccount);
+  if (directBankId) {
+    const directMatch = banks.find((bank) => bank.id === directBankId);
+    if (directMatch) return directMatch;
+  }
+
+  const bankCode = String(bankAccount.bank_code || "").trim();
+  if (bankCode) {
+    const byCode = banks.find((bank) =>
+      [bank.monnifyCode, bank.anchorCode, bank.redbillerCode, bank.palmpayCode]
+        .map((value) => String(value || "").trim())
+        .includes(bankCode)
+    );
+    if (byCode) return byCode;
+  }
+
+  const normalizedName = normalizeBankName(bankAccount.bank_name);
+  if (!normalizedName) return null;
+  return banks.find((bank) => normalizeBankName(bank.name) === normalizedName) || null;
+}
+
+export function maskAccountNumber(accountNumber?: string | null) {
+  const digits = String(accountNumber || "").replace(/\s+/g, "");
+  if (!digits) return null;
+  const last4 = digits.slice(-4);
+  return `****${last4}`;
+}
+
+export function resolveBreetBankId(bankAccount: BreetSettlementBankAccount) {
+  const candidates = [
+    bankAccount.bank_id,
+    stringFromUnknown(bankAccount.raw_verification_payload?.bank_id),
+    stringFromUnknown(bankAccount.raw_verification_payload?.bankId),
+    stringFromUnknown(bankAccount.raw_verification_payload?.breet_bank_id),
+    stringFromUnknown(bankAccount.raw_verification_payload?.provider_bank_id),
+  ];
+
+  for (const candidate of candidates) {
+    const value = String(candidate || "").trim();
+    if (value) return value;
+  }
+
+  return null;
+}
+
+function stringFromUnknown(value: unknown) {
+  return typeof value === "string" ? value : null;
+}
+
+export async function fetchBreetBanks(currency = "ngn", env?: BreetApiEnvironment) {
+  const { PaymentService } = await import("@/lib/payment");
+  return PaymentService.fetchBreetBanks(currency, env);
+}
+
+export async function validateBreetBankAccount(input: { bankId: string; accountNumber: string }, env?: BreetApiEnvironment) {
+  const { PaymentService } = await import("@/lib/payment");
+  return PaymentService.validateBreetBankAccount(input, env);
+}
+
+export async function addBreetIntegrationBank(input: {
+  bankId: string;
+  accountNumber: string;
+  narration: string;
+}, env?: BreetApiEnvironment) {
+  const { PaymentService } = await import("@/lib/payment");
+  return PaymentService.addBreetIntegrationBank(input, env);
+}
+
+export async function fetchSavedBreetIntegrationBanks(env?: BreetApiEnvironment) {
+  const { PaymentService } = await import("@/lib/payment");
+  return PaymentService.fetchSavedBreetIntegrationBanks(env);
+}
+
+export async function resolveAndValidateBreetBankAccount(
+  bankAccount: BreetBankSetupCandidate,
+  options?: { banks?: BreetBankListItem[]; env?: BreetApiEnvironment }
+): Promise<{
+  bankId: string | null;
+  bank?: BreetBankListItem | null;
+  validation?: BreetBankValidationResult | null;
+}> {
+  const banks = options?.banks || await fetchBreetBanks("ngn", options?.env);
+  const matchedBank = matchBreetBank(bankAccount, banks);
+  if (!matchedBank || !bankAccount.account_number) {
+    return { bankId: null, bank: matchedBank, validation: null };
+  }
+
+  const validation = await validateBreetBankAccount({
+    bankId: matchedBank.id,
+    accountNumber: String(bankAccount.account_number),
+  }, options?.env);
+
+  return {
+    bankId: matchedBank.id,
+    bank: matchedBank,
+    validation,
   };
 }
 
@@ -220,7 +348,7 @@ export function validateSettlementAccountForBreet(
   const status = String(bankAccount.status || "").toLowerCase();
   const currency = String(bankAccount.currency || "NGN").toUpperCase();
 
-  if (!bankAccount.bank_name || (!bankAccount.bank_code && !bankAccount.bank_id) || !bankAccount.account_number || !bankAccount.account_name) {
+  if (!bankAccount.bank_name || !resolveBreetBankId(bankAccount) || !bankAccount.account_number || !bankAccount.account_name) {
     return { valid: false, reason: "Settlement account is incomplete." } as const;
   }
 
@@ -260,6 +388,10 @@ export function getConfiguredBreetApiEnvironment(): BreetApiEnvironment {
   return normalizeBreetApiEnvironment(process.env.BREET_ENV || process.env.PAYMENT_ENVIRONMENT);
 }
 
+export function resolveBreetApiEnvironmentSetting(value?: string | null) {
+  return normalizeBreetApiEnvironment(value || process.env.BREET_ENV || process.env.PAYMENT_ENVIRONMENT);
+}
+
 export function getBreetMinimumAutoSettlementNgn() {
   const parsed = Number(process.env.BREET_MIN_AUTO_SETTLEMENT_NGN);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_BREET_MIN_AUTO_SETTLEMENT_NGN;
@@ -284,6 +416,7 @@ export async function loadBreetRuntimeConfig(supabase: SupabaseClient): Promise<
     envMerchantAutoSettlement ? "breet_auto_settlement" :
     envPlatformAutoSettlement ? "platform_auto_settlement" :
     "disabled";
+  const apiEnvironment = resolveBreetApiEnvironmentSetting(settingValue(map, "breet_api_environment", ""));
   const platformBankAccount = {
     bank_name: settingValue(map, "breet_platform_bank_name", process.env.BREET_PLATFORM_BANK_NAME || "") || null,
     bank_code: settingValue(map, "breet_platform_bank_code", process.env.BREET_PLATFORM_BANK_CODE || "") || null,
@@ -298,6 +431,7 @@ export async function loadBreetRuntimeConfig(supabase: SupabaseClient): Promise<
 
   return {
     settlementMode: normalizeBreetSettlementMode(settingValue(map, "breet_settlement_mode", envFallbackMode)),
+    apiEnvironment,
     merchantAutoSettlementEnabled: parseBooleanSetting(map, "breet_merchant_auto_settlement_enabled", envMerchantAutoSettlement),
     platformAutoSettlementEnabled:
       envForcePlatformSettlement ||
@@ -310,7 +444,8 @@ export async function loadBreetRuntimeConfig(supabase: SupabaseClient): Promise<
       "breet_min_auto_settlement_ngn",
       envMinimumAutoSettlement
     ),
-    webhookUrl: settingValue(map, "breet_webhook_url", "") || null,
+    platformSettlementBankValidated: parseBooleanSetting(map, "breet_platform_bank_validated", false),
+    webhookUrl: settingValue(map, "breet_webhook_url", process.env.BREET_WEBHOOK_URL || "") || null,
     supportedAssets: settingValue(map, "breet_supported_assets", "USDT,USDC,BTC,ETH")
       .split(",")
       .map((value) => value.trim().toUpperCase())
@@ -319,6 +454,13 @@ export async function loadBreetRuntimeConfig(supabase: SupabaseClient): Promise<
       .split(",")
       .map((value) => value.trim().toUpperCase())
       .filter(Boolean),
+    defaultReceiveCurrency: settingValue(
+      map,
+      "breet_default_receive_currency",
+      process.env.BREET_DEFAULT_RECEIVE_CURRENCY || "NGN"
+    ).toUpperCase(),
+    forcePlatformSettlementInSandbox:
+      envForcePlatformSettlement || parseBooleanSetting(map, "breet_sandbox_force_platform_settlement", false),
     treasurySettlementAccountReference:
       settingValue(map, "breet_treasury_settlement_account_reference", "") || null,
     treasurySettlementAccountLabel:
@@ -353,6 +495,22 @@ export function isBreetWebhookConfigured() {
 
 export function getBreetSettlementMode(config: Pick<BreetRuntimeConfig, "settlementMode">) {
   return config.settlementMode;
+}
+
+export function getBreetWebhookUrl(config: Pick<BreetRuntimeConfig, "webhookUrl">) {
+  return config.webhookUrl || process.env.BREET_WEBHOOK_URL || null;
+}
+
+export function getBreetConfigWarnings(config: Pick<BreetRuntimeConfig, "apiEnvironment" | "liveEnabled" | "webhookUrl">) {
+  const warnings: string[] = [];
+  if (config.apiEnvironment === "production" && !config.liveEnabled) {
+    warnings.push("Production environment selected, but Breet Live is disabled. Checkout remains gated.");
+  }
+  const webhookUrl = getBreetWebhookUrl(config);
+  if (webhookUrl && webhookUrl.toLowerCase().includes("localhost")) {
+    warnings.push("Breet cannot send webhooks to localhost. Use a public tunnel or deployed URL.");
+  }
+  return warnings;
 }
 
 export async function getSupportedAssets(supabase?: SupabaseClient) {
@@ -395,13 +553,15 @@ export function buildBreetSettlementAccountSnapshot(
   bankAccount: BreetSettlementBankAccount,
   overrides?: { recipientType?: "merchant" | "platform"; settlementMode?: BreetSettlementModeV2 }
 ) {
+  const accountNumberMasked = maskAccountNumber(bankAccount.account_number);
   return {
     recipient_type: overrides?.recipientType || "merchant",
     settlement_mode: overrides?.settlementMode || "breet_auto_settlement",
     bank_name: bankAccount.bank_name || null,
     bank_code: bankAccount.bank_code || bankAccount.bank_id || null,
-    bank_id: bankAccount.bank_id || bankAccount.bank_code || null,
-    account_number: bankAccount.account_number || null,
+    bank_id: resolveBreetBankId(bankAccount),
+    account_number: accountNumberMasked,
+    account_number_masked: accountNumberMasked,
     account_name: bankAccount.account_name || null,
     currency: String(bankAccount.currency || "NGN").toUpperCase(),
   };
@@ -425,6 +585,19 @@ export async function canUseBreetCryptoCheckout(input: {
 
   if (!isBreetWebhookConfigured()) {
     return { allowed: false, reason: "Breet webhook is not configured.", settlementMode: config.settlementMode, config } as const;
+  }
+
+  if (!config.webhookUrl) {
+    return { allowed: false, reason: "Breet webhook URL is not configured.", settlementMode: config.settlementMode, config } as const;
+  }
+
+  if (config.apiEnvironment === "production" && !config.liveEnabled) {
+    return {
+      allowed: false,
+      reason: "Breet live checkout is disabled.",
+      settlementMode: config.settlementMode,
+      config,
+    } as const;
   }
 
   if (input.environment === "live" && !config.liveEnabled) {
@@ -525,6 +698,8 @@ export async function canUseBreetCryptoCheckout(input: {
 
     if (effectiveMode === "platform_auto_settlement") {
       const platformConfigured =
+        config.platformSettlementBankValidated &&
+        Boolean(resolveBreetBankId(config.platformSettlementBankAccount || {})) &&
         Boolean(config.platformSettlementBankAccount?.bank_name) &&
         Boolean(config.platformSettlementBankAccount?.account_number) &&
         Boolean(config.platformSettlementBankAccount?.account_name) &&
@@ -576,6 +751,37 @@ export function getBreetProviderHealth() {
     webhookConfigured: isBreetWebhookConfigured(),
     env: getConfiguredBreetApiEnvironment(),
     baseUrl: process.env.BREET_BASE_URL || "https://api.breet.io/v1",
+  };
+}
+
+export function getMerchantBreetMappingState(
+  bankAccount: Pick<BreetSettlementBankAccount, "raw_verification_payload"> & { bank_id?: string | null },
+  mapping?: {
+    provider_account_reference?: string | null;
+    raw_provider_response?: Record<string, unknown> | null;
+    status?: string | null;
+  } | null
+): BreetMerchantMappingState {
+  const raw = {
+    ...(bankAccount.raw_verification_payload || {}),
+    ...(mapping?.raw_provider_response || {}),
+  } as Record<string, unknown>;
+  const mappedBankId =
+    resolveBreetBankId({
+      bank_id: bankAccount.bank_id || mapping?.provider_account_reference || null,
+      raw_verification_payload: raw,
+    }) || null;
+  const mappingConfirmed = raw.mapping_confirmed_by_admin === true || raw.breet_mapping_confirmed === true;
+  const validationPassed =
+    raw.breet_validation_passed === true ||
+    raw.breet_bank_validation_passed === true ||
+    Boolean(raw.breet_bank_validation_payload);
+
+  return {
+    hasMappedBankId: Boolean(mappedBankId),
+    mappingConfirmed,
+    validationPassed,
+    mappedBankId,
   };
 }
 

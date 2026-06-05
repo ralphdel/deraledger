@@ -32,6 +32,12 @@ function extractSessionContext(payload: WebhookPayload) {
 
   return {
     label,
+    walletAddress:
+      stringValue(payload.address) ||
+      stringValue(payload.destinationAddress) ||
+      stringValue(metadata.wallet_address) ||
+      stringValue(metadata.walletAddress) ||
+      null,
     merchantId:
       stringValue(payload.merchant_id) ||
       stringValue(payload.merchantId) ||
@@ -116,6 +122,7 @@ async function findInvoiceSession(context: {
   paymentSessionId?: string;
   internalReference?: string;
   providerReference?: string;
+  walletAddress?: string | null;
 }) {
   const candidates = [context.paymentSessionId, context.internalReference, context.providerReference]
     .filter((value): value is string => Boolean(value));
@@ -143,6 +150,17 @@ async function findInvoiceSession(context: {
     if (byProviderReference.data) return byProviderReference.data;
   }
 
+  if (context.walletAddress) {
+    const byWallet = await supabase
+      .from("payment_sessions")
+      .select("*")
+      .eq("wallet_address", context.walletAddress)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (byWallet.data) return byWallet.data;
+  }
+
   return null;
 }
 
@@ -150,6 +168,7 @@ async function findPlanSession(context: {
   paymentSessionId?: string;
   internalReference?: string;
   providerReference?: string;
+  walletAddress?: string | null;
 }) {
   const candidates = [context.paymentSessionId, context.internalReference, context.providerReference]
     .filter((value): value is string => Boolean(value));
@@ -177,7 +196,120 @@ async function findPlanSession(context: {
     if (bySessionRef.data) return bySessionRef.data;
   }
 
+  if (context.walletAddress) {
+    const byWallet = await supabase
+      .from("crypto_payment_sessions")
+      .select("*")
+      .eq("metadata->>wallet_address", context.walletAddress)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (byWallet.data) return byWallet.data;
+  }
+
   return null;
+}
+
+function isBreetTerminalSuccessEvent(eventType: string, rawStatus?: string | null, payload?: WebhookPayload) {
+  const event = String(eventType || "").toLowerCase();
+  const status = String(rawStatus || "").toLowerCase();
+  const payloadStatus = String(payload?.status || "").toLowerCase();
+
+  return (
+    event.includes("completed") ||
+    event.includes("success") ||
+    event.includes("settlement.completed") ||
+    status === "completed" ||
+    status === "successful" ||
+    status === "paid" ||
+    payloadStatus === "completed" ||
+    payloadStatus === "successful" ||
+    payloadStatus === "paid"
+  );
+}
+
+function isBreetFlaggedEvent(eventType: string, rawStatus?: string | null, payload?: WebhookPayload) {
+  const event = String(eventType || "").toLowerCase();
+  const status = String(rawStatus || "").toLowerCase();
+  const payloadStatus = String(payload?.status || "").toLowerCase();
+
+  return event.includes("flagged") || status.includes("flagged") || payloadStatus.includes("flagged");
+}
+
+async function recordNonTerminalEvent(input: {
+  payload: WebhookPayload;
+  eventType: string;
+  providerReference: string | null;
+  txHash: string | null;
+  session: Record<string, unknown>;
+  idempotencyKey: string | null;
+  merchantId: string | null;
+  invoiceId: string | null;
+  paymentSessionId: string;
+  sessionTable: "payment_sessions" | "crypto_payment_sessions";
+}) {
+  const lifecycleStatus = normalizeCryptoLifecycleStatus(
+    mapBreetEventToCryptoStatus(input.eventType, stringValue(input.payload.status), input.payload)
+  );
+  const now = new Date().toISOString();
+  const isFlagged = isBreetFlaggedEvent(input.eventType, stringValue(input.payload.status), input.payload);
+  const updateBase = {
+    provider_reference: input.providerReference || input.session.provider_reference || null,
+    crypto_status: isFlagged ? "manual_review" : lifecycleStatus,
+    webhook_status: "processed",
+    raw_webhook_payload: input.payload,
+    manual_review_reason: isFlagged ? "Breet flagged the transaction for review." : String(input.session.manual_review_reason || "") || null,
+    updated_at: now,
+  };
+
+  const updatePayload =
+    input.sessionTable === "crypto_payment_sessions"
+      ? {
+          ...updateBase,
+          settlement_status: isFlagged ? "manual_review" : String(input.session.settlement_status || "pending"),
+          processed_at: isFlagged ? now : input.session.processed_at || null,
+        }
+      : {
+          ...updateBase,
+          status: isFlagged ? "UNDER_REVIEW" : String(input.session.status || "PENDING"),
+          tx_hash: input.txHash || input.session.tx_hash || null,
+        };
+
+  await supabase
+    .from(input.sessionTable)
+    .update(updatePayload)
+    .eq("id", input.paymentSessionId);
+
+  await supabase.from("payment_events").insert({
+    merchant_id: input.merchantId,
+    invoice_id: input.invoiceId,
+    transaction_id: null,
+    event_type: input.eventType,
+    processor: "breet",
+    processor_ref: input.providerReference || input.txHash || null,
+    amount_kobo: 0,
+    raw_payload: input.payload,
+    idempotency_key: input.idempotencyKey || null,
+  });
+
+  await recordWebhookLog({
+    eventType: input.eventType,
+    status: isFlagged ? "under_review" : "processed",
+    processorReference: input.providerReference,
+    merchantId: input.merchantId,
+    invoiceId: input.invoiceId,
+    paymentSessionId: input.paymentSessionId,
+    errorMessage: isFlagged ? "breet_flagged" : null,
+    rawPayload: input.payload,
+  });
+  await updateProviderWebhookHealth("success");
+
+  return NextResponse.json({
+    received: true,
+    mapped: true,
+    terminal: false,
+    status: isFlagged ? "manual_review" : lifecycleStatus,
+  });
 }
 
 export async function POST(request: Request) {
@@ -237,11 +369,13 @@ export async function POST(request: Request) {
     paymentSessionId: context.paymentSessionId,
     internalReference: context.internalReference,
     providerReference: providerReference || undefined,
+    walletAddress: context.walletAddress,
   });
   const planSession = invoiceSession ? null : await findPlanSession({
     paymentSessionId: context.paymentSessionId,
     internalReference: context.internalReference,
     providerReference: providerReference || undefined,
+    walletAddress: context.walletAddress,
   });
 
   if (!invoiceSession && !planSession) {
@@ -331,6 +465,21 @@ async function handleInvoiceWebhook(input: {
     mapBreetEventToCryptoStatus(eventType, stringValue(payload.status), payload)
   );
 
+  if (!isBreetTerminalSuccessEvent(eventType, stringValue(payload.status), payload)) {
+    return recordNonTerminalEvent({
+      payload,
+      eventType,
+      providerReference,
+      txHash,
+      session,
+      idempotencyKey,
+      merchantId: stringValue(session.merchant_id) || context.merchantId || null,
+      invoiceId: stringValue(session.invoice_id) || context.invoiceId || null,
+      paymentSessionId: String(session.id),
+      sessionTable: "payment_sessions",
+    });
+  }
+
   if (!withinTolerance(expectedNgN, receivedNgN, toleranceBps)) {
     await supabase
       .from("payment_sessions")
@@ -338,7 +487,6 @@ async function handleInvoiceWebhook(input: {
         status: "UNDER_REVIEW",
         crypto_status:
           receivedNgN < expectedNgN ? "crypto_underpaid" : "crypto_overpaid",
-        settlement_status: "manual_review",
         manual_review_reason: "Amount outside configured tolerance.",
         crypto_amount_received: amountCrypto || null,
         converted_ngn_amount: receivedNgN,
@@ -408,8 +556,8 @@ async function handleInvoiceWebhook(input: {
       expected_settlement_ngn: receivedNgN - platformFee,
       actual_settlement_ngn: receivedNgN - platformFee,
       settlement_mode: settlementMode,
+      status: "PAID",
       crypto_status: lifecycleStatus,
-      settlement_status: rpcResult.data.payment_status || "pending",
       webhook_status: "processed",
       raw_webhook_payload: payload,
       paid_at: new Date().toISOString(),
@@ -489,6 +637,21 @@ async function handlePlanWebhook(input: {
   const lifecycleStatus = normalizeCryptoLifecycleStatus(
     mapBreetEventToCryptoStatus(eventType, stringValue(payload.status), payload)
   );
+
+  if (!isBreetTerminalSuccessEvent(eventType, stringValue(payload.status), payload)) {
+    return recordNonTerminalEvent({
+      payload,
+      eventType,
+      providerReference,
+      txHash,
+      session,
+      idempotencyKey,
+      merchantId: stringValue(session.merchant_id) || null,
+      invoiceId: null,
+      paymentSessionId: String(session.id),
+      sessionTable: "crypto_payment_sessions",
+    });
+  }
 
   if (lifecycleStatus === "crypto_expired" || lifecycleStatus === "failed") {
     await supabase

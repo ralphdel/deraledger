@@ -1,6 +1,10 @@
 import type {
+  BreetBankListItem,
+  BreetBankValidationResult,
+  BreetIntegrationBankResult,
   CryptoDepositAddressParams,
   CryptoDepositAddressResult,
+  CryptoSettlementBankPayload,
   CryptoTransactionResult,
   WebhookVerificationResult,
 } from "../types";
@@ -46,7 +50,7 @@ export class BreetAdapter {
     };
   }
 
-  private async request<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+  private async request<T>(method: "GET" | "POST" | "PUT", path: string, body?: unknown): Promise<T> {
     const res = await fetch(`${this.baseUrl}${path}`, {
       method,
       headers: this.headers(),
@@ -61,26 +65,197 @@ export class BreetAdapter {
     return json as T;
   }
 
+  private extractWalletId(raw: Record<string, unknown>) {
+    const data = this.asRecord(raw.data);
+    return String(
+      raw.walletId ||
+      raw.wallet_id ||
+      raw.vaultId ||
+      data.walletId ||
+      data.wallet_id ||
+      data.vaultId ||
+      raw.id ||
+      data.id ||
+      ""
+    );
+  }
+
+  private extractWalletAddress(raw: Record<string, unknown>) {
+    const data = this.asRecord(raw.data);
+    return String(
+      raw.address ||
+      raw.destinationAddress ||
+      raw.walletAddress ||
+      data.address ||
+      data.destinationAddress ||
+      data.walletAddress ||
+      ""
+    );
+  }
+
+  private asRecord(value: unknown) {
+    return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  }
+
+  private normalizeBankList(raw: unknown): BreetBankListItem[] {
+    const bankRows = Array.isArray(raw)
+      ? raw
+      : Array.isArray(this.asRecord(raw).data)
+        ? (this.asRecord(raw).data as unknown[])
+        : Array.isArray(this.asRecord(raw).banks)
+          ? (this.asRecord(raw).banks as unknown[])
+          : [];
+
+    return bankRows.map((row) => {
+      const record = this.asRecord(row);
+      return {
+        id: String(record.id || ""),
+        name: String(record.name || record.bankName || ""),
+        currency: typeof record.currency === "string" ? record.currency : undefined,
+        type: typeof record.type === "string" ? record.type : undefined,
+        slug: typeof record.slug === "string" ? record.slug : undefined,
+        redbillerCode: typeof record.redbillerCode === "string" ? record.redbillerCode : null,
+        anchorCode: typeof record.anchorCode === "string" ? record.anchorCode : null,
+        monnifyCode: typeof record.monnifyCode === "string" ? record.monnifyCode : null,
+        palmpayCode: typeof record.palmpayCode === "string" ? record.palmpayCode : null,
+        avatar: typeof record.avatar === "string" ? record.avatar : null,
+      };
+    }).filter((bank) => bank.id && bank.name);
+  }
+
+  private normalizeIntegrationBank(raw: Record<string, unknown>): BreetIntegrationBankResult {
+    const data = this.asRecord(raw.data);
+    return {
+      id: String(raw.id || data.id || raw.walletId || data.walletId || ""),
+      bankId: String(raw.bankId || data.bankId || raw.id || data.id || ""),
+      bankName: typeof (raw.bankName || data.bankName) === "string" ? String(raw.bankName || data.bankName) : null,
+      accountNumber: String(raw.accountNumber || data.accountNumber || ""),
+      accountName: typeof (raw.accountName || data.accountName) === "string" ? String(raw.accountName || data.accountName) : null,
+      narration: typeof (raw.narration || data.narration) === "string" ? String(raw.narration || data.narration) : null,
+      autoSettlement: typeof (raw.autoSettlement || data.autoSettlement) === "boolean"
+        ? Boolean(raw.autoSettlement || data.autoSettlement)
+        : undefined,
+      raw,
+    };
+  }
+
+  private normalizeSellAssets(raw: unknown) {
+    const rows = Array.isArray(raw)
+      ? raw
+      : Array.isArray(this.asRecord(raw).data)
+        ? (this.asRecord(raw).data as unknown[])
+        : [];
+
+    return rows.map((row) => {
+      const record = this.asRecord(row);
+      return {
+        id: String(record.id || record._id || ""),
+        symbol: String(record.symbol || ""),
+        identifier: typeof record.identifier === "string" ? record.identifier : "",
+        name: String(record.name || ""),
+        type: typeof record.type === "string" ? record.type : "",
+        isActive: record.isActive !== false,
+      };
+    }).filter((asset) => asset.id && asset.symbol);
+  }
+
+  private matchesPreferredNetwork(asset: { identifier: string; name: string; type: string }, network?: string | null) {
+    const normalized = String(network || "").trim().toUpperCase();
+    const haystack = `${asset.identifier} ${asset.name} ${asset.type}`.toUpperCase();
+
+    if (normalized === "TRON") return haystack.includes("TRON") || haystack.includes("TRC20") || haystack.includes("TRX");
+    if (normalized === "ETHEREUM") return haystack.includes("ETH") || haystack.includes("ERC20") || haystack.includes("SEPOLIA");
+    if (normalized === "BITCOIN") return haystack.includes("BTC") || haystack.includes("BITCOIN");
+
+    return false;
+  }
+
+  private async resolveSellAssetId(assetId: string, network?: string | null) {
+    const rawAssetId = String(assetId || "").trim();
+    if (!rawAssetId) {
+      throw new Error("Breet asset id is required.");
+    }
+
+    // Already looks like a provider id or an environment-specific identifier.
+    if (/^[0-9a-f]{24}$/i.test(rawAssetId) || rawAssetId.includes("_")) {
+      return rawAssetId;
+    }
+
+    const assetsRaw = await this.request<Record<string, unknown> | unknown[]>("GET", "/trades/sell/assets");
+    const assets = this.normalizeSellAssets(assetsRaw).filter((asset) => asset.isActive);
+    const matches = assets.filter((asset) => asset.symbol.toUpperCase() === rawAssetId.toUpperCase());
+    if (matches.length === 0) {
+      return rawAssetId;
+    }
+
+    const preferred = matches.find((asset) => this.matchesPreferredNetwork(asset, network));
+    return (preferred || matches[0]).id;
+  }
+
+  private shouldEnableAutoSettlement(params: CryptoDepositAddressParams) {
+    return params.settlementMode === "breet_auto_settlement" || params.settlementMode === "platform_auto_settlement";
+  }
+
+  private sanitizeLabel(label: string) {
+    const normalized = String(label || "")
+      .trim()
+      .replace(/[^A-Za-z0-9-]/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "");
+    return normalized.slice(0, 100) || "breet-payment";
+  }
+
+  private sanitizeNarration(narration?: string | null) {
+    return String(narration || "").trim().slice(0, 32);
+  }
+
+  private toGenerateAddressBody(params: CryptoDepositAddressParams, settlementBank: CryptoSettlementBankPayload | null) {
+    return {
+      label: this.sanitizeLabel(params.label),
+      ...(settlementBank ? {
+        bankId: settlementBank.bankId,
+        accountNumber: settlementBank.accountNumber,
+        narration: this.sanitizeNarration(settlementBank.narration),
+      } : {}),
+    };
+  }
+
   async generateAddress(params: CryptoDepositAddressParams): Promise<CryptoDepositAddressResult> {
+    const settlementBank = params.settlementBank || null;
+    const resolvedAssetId = await this.resolveSellAssetId(params.assetId, params.network);
     const raw = await this.request<Record<string, unknown>>(
       "POST",
-      `/trades/sell/assets/${encodeURIComponent(params.assetId)}/generate-address`,
-      {
-        label: params.label,
-        payment_type: params.paymentType || "invoice",
-        settlement_mode: params.settlementMode || "breet_auto_settlement",
-        settlement_recipient_type: params.settlementRecipientType || "merchant",
-        settlement_bank: params.settlementBank || null,
-      }
+      `/trades/sell/assets/${encodeURIComponent(resolvedAssetId)}/generate-address`,
+      this.toGenerateAddressBody(params, settlementBank)
     );
+    const walletId = this.extractWalletId(raw);
+    const address = this.extractWalletAddress(raw);
+    let autoSettlementEnabled = false;
+    let autoSettlementResponse: Record<string, unknown> | null = null;
+
+    if (settlementBank && walletId && this.shouldEnableAutoSettlement(params)) {
+      autoSettlementResponse = await this.request<Record<string, unknown>>(
+        "PUT",
+        `/trades/wallets/${encodeURIComponent(walletId)}/auto-settlement`,
+        { autoSettlement: true }
+      );
+      autoSettlementEnabled = true;
+    }
+    const providerRaw = autoSettlementResponse
+      ? { ...raw, autoSettlementResponse }
+      : raw;
 
     return {
-      id: String(raw.id || ""),
+      id: walletId || String(raw.id || ""),
       vaultId: raw.vaultId ? String(raw.vaultId) : undefined,
-      address: String(raw.address || raw.destinationAddress || ""),
-      asset: raw.asset ? String(raw.asset) : undefined,
+      walletId: walletId || undefined,
+      address,
+      asset: raw.asset ? String(raw.asset) : params.assetId,
       label: raw.label ? String(raw.label) : params.label,
-      raw,
+      settlementBankId: settlementBank?.bankId,
+      settlementAccountMasked: settlementBank?.accountNumberMasked || null,
+      autoSettlementEnabled,
+      raw: providerRaw,
     };
   }
 
@@ -116,6 +291,65 @@ export class BreetAdapter {
       txHash: raw.txHash ? String(raw.txHash) : undefined,
       raw,
     };
+  }
+
+  async fetchBanks(currency = "ngn"): Promise<BreetBankListItem[]> {
+    const raw = await this.request<Record<string, unknown> | unknown[]>(
+      "GET",
+      `/payments/banks?currency=${encodeURIComponent(currency)}`
+    );
+    return this.normalizeBankList(raw);
+  }
+
+  async validateBankAccount(input: { bankId: string; accountNumber: string }): Promise<BreetBankValidationResult> {
+    const raw = await this.request<Record<string, unknown>>(
+      "POST",
+      "/payments/banks/validate",
+      {
+        id: input.bankId,
+        accountNumber: input.accountNumber,
+      }
+    );
+    const data = this.asRecord(raw.data);
+
+    return {
+      bankId: String(raw.id || data.id || input.bankId),
+      accountNumber: String(raw.accountNumber || data.accountNumber || input.accountNumber),
+      accountName: typeof (raw.accountName || data.accountName) === "string" ? String(raw.accountName || data.accountName) : null,
+      bankName: typeof (raw.bankName || data.bankName) === "string" ? String(raw.bankName || data.bankName) : null,
+      raw,
+    };
+  }
+
+  async addIntegrationBank(input: {
+    bankId: string;
+    accountNumber: string;
+    narration: string;
+  }): Promise<BreetIntegrationBankResult> {
+    const raw = await this.request<Record<string, unknown>>(
+      "POST",
+      "/payments/banks/add",
+      {
+        id: input.bankId,
+        accountNumber: input.accountNumber,
+        narration: input.narration,
+      }
+    );
+    return this.normalizeIntegrationBank(raw);
+  }
+
+  async fetchSavedIntegrationBanks(): Promise<BreetIntegrationBankResult[]> {
+    const raw = await this.request<Record<string, unknown> | unknown[]>(
+      "GET",
+      "/payments/integration-banks"
+    );
+    const rows = Array.isArray(raw)
+      ? raw
+      : Array.isArray(this.asRecord(raw).data)
+        ? (this.asRecord(raw).data as unknown[])
+        : [];
+
+    return rows.map((row) => this.normalizeIntegrationBank(this.asRecord(row))).filter((bank) => bank.bankId || bank.id);
   }
 
   normalizePaymentResponse(raw: Record<string, unknown>, fallbackLabel?: string) {

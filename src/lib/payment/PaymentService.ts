@@ -16,6 +16,9 @@ import type {
   WebhookVerificationResult,
   CryptoDepositAddressParams,
   CryptoDepositAddressResult,
+  BreetBankListItem,
+  BreetBankValidationResult,
+  BreetIntegrationBankResult,
   CryptoTransactionResult,
 } from "./types";
 
@@ -79,6 +82,14 @@ function getBreetProcessor(): BreetAdapter {
   return _breet;
 }
 
+function createBreetProcessor(env?: "development" | "production"): BreetAdapter {
+  if (!env) {
+    return getBreetProcessor();
+  }
+
+  return new BreetAdapter({ env });
+}
+
 // ── Public PaymentService API ──────────────────────────────────────────────────
 // Consumers call these. They never know which adapter is running underneath.
 
@@ -112,19 +123,19 @@ export const PaymentService = {
   },
 
   generateCryptoDepositAddress(p: CryptoDepositAddressParams): Promise<CryptoDepositAddressResult> {
-    return getBreetProcessor().generateAddress(p);
+    return createBreetProcessor(p.providerEnvironment).generateAddress(p);
   },
 
   generateInvoicePaymentAddress(p: CryptoDepositAddressParams): Promise<CryptoDepositAddressResult> {
-    return getBreetProcessor().generateInvoicePaymentAddress(p);
+    return createBreetProcessor(p.providerEnvironment).generateInvoicePaymentAddress(p);
   },
 
   generatePlatformPaymentAddress(p: CryptoDepositAddressParams): Promise<CryptoDepositAddressResult> {
-    return getBreetProcessor().generatePlatformPaymentAddress(p);
+    return createBreetProcessor(p.providerEnvironment).generatePlatformPaymentAddress(p);
   },
 
   initializeCryptoPayment(p: CryptoDepositAddressParams): Promise<CryptoDepositAddressResult> {
-    return getBreetProcessor().initializePayment(p);
+    return createBreetProcessor(p.providerEnvironment).initializePayment(p);
   },
 
   fetchCryptoTransaction(transactionId: string): Promise<CryptoTransactionResult> {
@@ -149,5 +160,28 @@ export const PaymentService = {
 
   getBreetProviderHealth() {
     return getBreetProcessor().getProviderHealth();
+  },
+
+  fetchBreetBanks(currency?: string, env?: "development" | "production"): Promise<BreetBankListItem[]> {
+    return createBreetProcessor(env).fetchBanks(currency);
+  },
+
+  validateBreetBankAccount(
+    input: { bankId: string; accountNumber: string },
+    env?: "development" | "production"
+  ): Promise<BreetBankValidationResult> {
+    return createBreetProcessor(env).validateBankAccount(input);
+  },
+
+  addBreetIntegrationBank(input: {
+    bankId: string;
+    accountNumber: string;
+    narration: string;
+  }, env?: "development" | "production"): Promise<BreetIntegrationBankResult> {
+    return createBreetProcessor(env).addIntegrationBank(input);
+  },
+
+  fetchSavedBreetIntegrationBanks(env?: "development" | "production"): Promise<BreetIntegrationBankResult[]> {
+    return createBreetProcessor(env).fetchSavedIntegrationBanks();
   },
 } as const;

@@ -8,6 +8,7 @@ import type {
 import { calculateProviderReportedSettlement } from "@/lib/services/provider-settlement-calculation.service";
 import {
   canUseBreetCryptoCheckout,
+  getMerchantBreetMappingState,
   normalizeBreetSettlementMode,
   normalizeMerchantFacingPaymentMethod,
 } from "@/lib/services/breet-crypto.service";
@@ -258,7 +259,7 @@ export async function isProviderSettlementReady(
 
   const { data: mapping, error: mappingError } = await supabase
     .from("merchant_provider_settlement_accounts")
-    .select("id, status")
+    .select("id, status, provider_account_reference, raw_provider_response")
     .eq("settlement_account_id", account.id)
     .eq("provider_name", input.provider)
     .eq("environment", input.environment)
@@ -270,7 +271,25 @@ export async function isProviderSettlementReady(
     return false;
   }
 
-  if (mapping) return true;
+  if (mapping) {
+    if (input.provider !== "breet" || !input.requireCryptoMapping) {
+      return true;
+    }
+
+    const mappingState = getMerchantBreetMappingState(
+      {
+        raw_verification_payload: null,
+        bank_id: typeof mapping.provider_account_reference === "string" ? mapping.provider_account_reference : null,
+      },
+      {
+        provider_account_reference: typeof mapping.provider_account_reference === "string" ? mapping.provider_account_reference : null,
+        raw_provider_response: mapping.raw_provider_response as Record<string, unknown> | null,
+        status: mapping.status,
+      }
+    );
+
+    return mappingState.hasMappedBankId && (mappingState.mappingConfirmed || mappingState.validationPassed);
+  }
 
   return await hasLegacySettlementReadiness(supabase, input.merchantId, input.provider);
 }

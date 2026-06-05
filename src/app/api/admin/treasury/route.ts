@@ -1,10 +1,20 @@
 import { NextResponse } from "next/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { requireAdminPortalSession } from "@/lib/admin-portal-auth";
+import type { BreetBankListItem } from "@/lib/payment/types";
 import {
+  addBreetIntegrationBank,
+  getBreetConfigWarnings,
+  fetchBreetBanks,
+  fetchSavedBreetIntegrationBanks,
   getBreetProviderHealth,
+  getMerchantBreetMappingState,
   loadBreetRuntimeConfig,
+  matchBreetBank,
+  resolveBreetBankId,
+  validateBreetBankAccount,
 } from "@/lib/services/breet-crypto.service";
+import { getPaymentEnvironmentForMerchantEmail } from "@/lib/services/payment-routing.service";
 
 const supabase = createSupabaseClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -21,6 +31,36 @@ type BreetSettlementRecordRow = {
   amount_settled?: number | string | null;
   settlement_difference?: number | string | null;
   [key: string]: unknown;
+};
+
+type MerchantReadinessStatus = {
+  merchantId: string;
+  merchantName: string | null;
+  hasVerifiedSettlementAccount: boolean;
+  hasMappedBreetBankId: boolean;
+  validationConfirmed: boolean;
+  mappingConfirmedByAdmin: boolean;
+  validationPassed: boolean;
+  amountThresholdEnforced: boolean;
+  merchantSettlementAccount: {
+    id: string;
+    bankName: string | null;
+    bankCode: string | null;
+    maskedAccountNumber: string | null;
+    accountName: string | null;
+    verificationStatus: string | null;
+    status: string | null;
+  } | null;
+  currentBreetBank: {
+    bankId: string;
+    bankName: string | null;
+  } | null;
+  matchedBreetBank: {
+    bankId: string;
+    bankName: string;
+  } | null;
+  mappingEnvironment: "sandbox" | "live" | null;
+  validationNote: string | null;
 };
 
 const CONFIG_KEYS = [
@@ -41,11 +81,13 @@ const CONFIG_KEYS = [
   "crypto_usdt_confirmations",
   "crypto_usdc_confirmations",
   "breet_settlement_mode",
+  "breet_api_environment",
   "breet_auto_settlement_enabled",
   "breet_merchant_auto_settlement_enabled",
   "breet_invoice_crypto_enabled",
   "breet_subscription_crypto_enabled",
   "breet_min_auto_settlement_ngn",
+  "breet_platform_bank_validated",
   "breet_webhook_url",
   "breet_supported_assets",
   "breet_supported_networks",
@@ -61,14 +103,18 @@ const CONFIG_KEYS = [
   "breet_live_enabled",
 ];
 
-export async function GET() {
+export async function GET(request: Request) {
   const guard = await requireAdminPortalSession();
   if (!guard.ok) {
     return NextResponse.json({ error: guard.error }, { status: guard.status });
   }
+  const selectedMerchantId = new URL(request.url).searchParams.get("merchantId");
 
   const runtimeConfig = await loadBreetRuntimeConfig(supabase);
-  const providerHealth = getBreetProviderHealth();
+  const providerHealth = {
+    ...getBreetProviderHealth(),
+    env: runtimeConfig.apiEnvironment,
+  };
   const manualTreasuryEnabled = runtimeConfig.settlementMode === "treasury_manual";
   const manualQueueFunctionAvailable = manualTreasuryEnabled
     ? await hasManualQueueFunction()
@@ -84,6 +130,8 @@ export async function GET() {
     cryptoSessionsRes,
     settlementRes,
     merchantRes,
+    breetBanks,
+    savedIntegrationBanks,
   ] = await Promise.all([
     supabase.from("merchant_wallets").select("*").order("updated_at", { ascending: false }).limit(100),
     supabase.from("treasury_transactions").select("*").order("created_at", { ascending: false }).limit(100),
@@ -94,10 +142,15 @@ export async function GET() {
     supabase.from("crypto_payment_sessions").select("*").eq("provider_name", "breet").order("created_at", { ascending: false }).limit(100),
     supabase.from("settlement_records").select("*").eq("provider_name", "breet").order("created_at", { ascending: false }).limit(100),
     supabase.from("merchants").select("id, business_name").limit(500),
+    providerHealth.configured ? fetchBreetBanks("ngn", runtimeConfig.apiEnvironment).catch(() => []) : Promise.resolve([]),
+    providerHealth.configured ? fetchSavedBreetIntegrationBanks(runtimeConfig.apiEnvironment).catch(() => []) : Promise.resolve([]),
   ]);
 
   const merchants = merchantRes.data || [];
   const merchantMap = Object.fromEntries(merchants.map((merchant) => [merchant.id, merchant.business_name]));
+  const merchantReadiness = selectedMerchantId
+    ? await loadMerchantReadiness(selectedMerchantId, merchantMap[selectedMerchantId] || null, breetBanks)
+    : null;
   const wallets = walletRes.data || [];
   const treasuryTransactions = (treasuryRes.data || []).map((tx) => ({
     ...tx,
@@ -129,6 +182,21 @@ export async function GET() {
     merchant_name: log.merchant_id ? merchantMap[log.merchant_id] || log.merchant_id : null,
   }));
   const settings = Object.fromEntries((settingsRes.data || []).map((row) => [row.key, row.value]));
+  const editableSettings = {
+    ...settings,
+    breet_api_environment: settings.breet_api_environment || runtimeConfig.apiEnvironment,
+    breet_webhook_url: settings.breet_webhook_url || runtimeConfig.webhookUrl || "",
+    breet_invoice_crypto_enabled: settings.breet_invoice_crypto_enabled || String(runtimeConfig.invoiceCryptoEnabled),
+    breet_subscription_crypto_enabled: settings.breet_subscription_crypto_enabled || String(runtimeConfig.subscriptionCryptoEnabled),
+    breet_merchant_auto_settlement_enabled: settings.breet_merchant_auto_settlement_enabled || String(runtimeConfig.merchantAutoSettlementEnabled),
+    breet_auto_settlement_enabled: settings.breet_auto_settlement_enabled || String(runtimeConfig.platformAutoSettlementEnabled),
+    breet_default_receive_currency: settings.breet_default_receive_currency || runtimeConfig.defaultReceiveCurrency || "NGN",
+    breet_min_auto_settlement_ngn: settings.breet_min_auto_settlement_ngn || String(runtimeConfig.minimumAutoSettlementNgn),
+    breet_supported_assets: settings.breet_supported_assets || runtimeConfig.supportedAssets.join(","),
+    breet_supported_networks: settings.breet_supported_networks || runtimeConfig.supportedNetworks.join(","),
+    breet_sandbox_force_platform_settlement: settings.breet_sandbox_force_platform_settlement || String(runtimeConfig.forcePlatformSettlementInSandbox),
+    breet_live_enabled: settings.breet_live_enabled || String(runtimeConfig.liveEnabled),
+  };
   const breetSettlementRecords = ((settlementRes.data as BreetSettlementRecordRow[] | null) || []).map((record) => ({
     ...record,
     merchant_name: merchantMap[String(record.merchant_id || "")] || record.merchant_id,
@@ -172,23 +240,34 @@ export async function GET() {
     paymentSessions: [...paymentSessions, ...cryptoPaymentSessions],
     settlementRecords: breetSettlementRecords,
     webhookLogs: recentWebhookLogs,
-    settings,
+    settings: editableSettings,
+    breetBanks,
+    savedIntegrationBanks,
     configStatus: {
       settlementMode: runtimeConfig.settlementMode,
+      apiEnvironment: runtimeConfig.apiEnvironment,
+      appIdConfigured: Boolean(process.env.BREET_APP_ID),
+      appSecretConfigured: Boolean(process.env.BREET_APP_SECRET),
       liveEnabled: runtimeConfig.liveEnabled,
+      webhookUrl: runtimeConfig.webhookUrl,
       webhookConfigured: providerHealth.webhookConfigured,
       invoiceCryptoEnabled: runtimeConfig.invoiceCryptoEnabled,
       subscriptionCryptoEnabled: runtimeConfig.subscriptionCryptoEnabled,
       minimumAutoSettlementNgn: runtimeConfig.minimumAutoSettlementNgn,
+      platformSettlementBankValidated: runtimeConfig.platformSettlementBankValidated,
       merchantAutoSettlementEnabled: runtimeConfig.merchantAutoSettlementEnabled,
       platformAutoSettlementEnabled: runtimeConfig.platformAutoSettlementEnabled,
       platformSettlementBankAccount: runtimeConfig.platformSettlementBankAccount,
+      defaultReceiveCurrency: runtimeConfig.defaultReceiveCurrency,
+      forcePlatformSettlementInSandbox: runtimeConfig.forcePlatformSettlementInSandbox,
       supportedAssets: runtimeConfig.supportedAssets,
       supportedNetworks: runtimeConfig.supportedNetworks,
+      configWarnings: getBreetConfigWarnings(runtimeConfig),
       manualTreasuryEnabled,
       manualQueueFunctionAvailable,
       manualPayoutProviders: manualTreasuryEnabled ? [...MANUAL_PAYOUT_PROVIDERS] : [],
     },
+    merchantReadiness,
     providerHealth,
   });
 }
@@ -198,9 +277,18 @@ export async function POST(request: Request) {
   if (!guard.ok) {
     return NextResponse.json({ error: guard.error }, { status: guard.status });
   }
+  const providerHealth = getBreetProviderHealth();
 
   const body = (await request.json().catch(() => null)) as
-    | { action?: string; merchantId?: string | null; payoutProvider?: string; settings?: Record<string, string> }
+    | {
+        action?: string;
+        merchantId?: string | null;
+        payoutProvider?: string;
+        settings?: Record<string, string>;
+        bankId?: string;
+        accountNumber?: string;
+        narration?: string;
+      }
     | null;
 
   if (!body?.action) {
@@ -245,13 +333,313 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "No treasury settings provided" }, { status: 400 });
     }
 
-    const payload = entries.map(([key, value]) => ({ key, value }));
+    const payload = entries.map(([key, value]) => ({ key, value: normalizeSettingValue(key, value) }));
+    const webhookUrlEntry = payload.find((entry) => entry.key === "breet_webhook_url");
+    if (webhookUrlEntry?.value) {
+      const webhookError = validateWebhookUrl(webhookUrlEntry.value);
+      if (webhookError) {
+        return NextResponse.json({ error: webhookError }, { status: 400 });
+      }
+    }
+    const envEntry = payload.find((entry) => entry.key === "breet_api_environment");
+    if (envEntry && !["development", "production"].includes(envEntry.value)) {
+      return NextResponse.json({ error: "Breet API environment must be development or production." }, { status: 400 });
+    }
+    const platformBankFields = new Set([
+      "breet_platform_bank_id",
+      "breet_platform_bank_name",
+      "breet_platform_account_number",
+      "breet_platform_account_name",
+    ]);
+    const touchedPlatformBankField = entries.some(([key]) => platformBankFields.has(key));
+    const explicitlySetValidated = entries.some(([key]) => key === "breet_platform_bank_validated");
+    if (touchedPlatformBankField && !explicitlySetValidated) {
+      payload.push({ key: "breet_platform_bank_validated", value: "false" });
+    }
     const { error } = await supabase.from("platform_settings").upsert(payload, { onConflict: "key" });
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
     return NextResponse.json({ success: true });
+  }
+
+  if (body.action === "validate_platform_breet_bank") {
+    const runtimeConfig = await loadBreetRuntimeConfig(supabase);
+    if (!providerHealth.configured) {
+      return NextResponse.json({ error: "Breet credentials are incomplete." }, { status: 409 });
+    }
+
+    const bankId = String(body.bankId || "").trim();
+    const accountNumber = String(body.accountNumber || "").trim();
+    if (!bankId || !accountNumber) {
+      return NextResponse.json({ error: "Bank and account number are required." }, { status: 400 });
+    }
+
+    try {
+      const [banks, validation] = await Promise.all([
+        fetchBreetBanks("ngn", runtimeConfig.apiEnvironment),
+        validateBreetBankAccount({ bankId, accountNumber }, runtimeConfig.apiEnvironment),
+      ]);
+    const matchedBank = banks.find((bank) => bank.id === bankId);
+    const payload = [
+      { key: "breet_platform_bank_id", value: bankId },
+      { key: "breet_platform_bank_name", value: validation.bankName || matchedBank?.name || "" },
+      { key: "breet_platform_account_number", value: validation.accountNumber || accountNumber },
+      { key: "breet_platform_account_name", value: validation.accountName || "" },
+      { key: "breet_platform_bank_validated", value: "true" },
+    ];
+
+    const { error } = await supabase.from("platform_settings").upsert(payload, { onConflict: "key" });
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    await supabase.from("audit_logs").insert({
+      event_type: "breet_platform_bank_validated",
+      actor_id: null,
+      actor_role: "admin",
+      target_id: bankId,
+      target_type: "platform_setting",
+      metadata: {
+        bank_id: bankId,
+        bank_name: validation.bankName || matchedBank?.name || null,
+        account_number_masked: maskAccountNumber(accountNumber),
+        validation_payload: validation.raw,
+      },
+    });
+
+    return NextResponse.json({
+      success: true,
+      validation,
+      bank: matchedBank || null,
+    });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to validate Breet bank account.";
+      return NextResponse.json({ error: message }, { status: 502 });
+    }
+  }
+
+  if (body.action === "add_platform_breet_integration_bank") {
+    const runtimeConfig = await loadBreetRuntimeConfig(supabase);
+    if (!providerHealth.configured) {
+      return NextResponse.json({ error: "Breet credentials are incomplete." }, { status: 409 });
+    }
+
+    const bankId = String(body.bankId || "").trim();
+    const accountNumber = String(body.accountNumber || "").trim();
+    const narration = String(body.narration || "DeraLedger platform settlement").trim();
+    if (!bankId || !accountNumber) {
+      return NextResponse.json({ error: "Bank and account number are required." }, { status: 400 });
+    }
+
+    try {
+      const result = await addBreetIntegrationBank({
+        bankId,
+        accountNumber,
+        narration,
+      }, runtimeConfig.apiEnvironment);
+
+      await supabase.from("platform_settings").upsert([
+        { key: "breet_platform_bank_id", value: bankId },
+        { key: "breet_platform_bank_name", value: result.bankName || "" },
+        { key: "breet_platform_account_number", value: result.accountNumber || accountNumber },
+        { key: "breet_platform_account_name", value: result.accountName || "" },
+        { key: "breet_platform_bank_validated", value: "true" },
+      ], { onConflict: "key" });
+
+      await supabase.from("audit_logs").insert({
+        event_type: "breet_platform_integration_bank_added",
+        actor_id: null,
+        actor_role: "admin",
+        target_id: result.id || bankId,
+        target_type: "platform_setting",
+        metadata: {
+          bank_id: bankId,
+          bank_name: result.bankName || null,
+          account_number_masked: maskAccountNumber(accountNumber),
+          narration,
+          integration_payload: result.raw,
+        },
+      });
+
+      return NextResponse.json({
+        success: true,
+        integrationBank: result,
+        savedIntegrationBanks: await fetchSavedBreetIntegrationBanks(runtimeConfig.apiEnvironment).catch(() => []),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to add Breet integration bank.";
+      return NextResponse.json({ error: message }, { status: 502 });
+    }
+  }
+
+  if (body.action === "confirm_merchant_breet_mapping") {
+    const merchantId = String(body.merchantId || "").trim();
+    const bankId = String(body.bankId || "").trim();
+    if (!merchantId || !bankId) {
+      return NextResponse.json({ error: "Merchant and Breet bank are required." }, { status: 400 });
+    }
+
+    const runtimeConfig = await loadBreetRuntimeConfig(supabase);
+    const merchantContext = await loadMerchantAccountContext(merchantId);
+    if (!merchantContext) {
+      return NextResponse.json({ error: "Merchant settlement account not found." }, { status: 404 });
+    }
+
+    const banks = providerHealth.configured
+      ? await fetchBreetBanks("ngn", runtimeConfig.apiEnvironment).catch(() => [])
+      : [];
+    const matchedBank = banks.find((bank) => bank.id === bankId) || null;
+    const nextRawPayload = {
+      ...(merchantContext.account.raw_verification_payload || {}),
+      breet_bank_id: bankId,
+      breet_bank_name: matchedBank?.name || merchantContext.account.bank_name,
+      breet_mapping_confirmed: true,
+      mapping_confirmed_by_admin: true,
+      breet_mapping_confirmed_at: new Date().toISOString(),
+    };
+
+    await supabase
+      .from("merchant_settlement_accounts")
+      .update({
+        raw_verification_payload: nextRawPayload,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", merchantContext.account.id);
+
+    await supabase
+      .from("merchant_provider_settlement_accounts")
+      .upsert({
+        merchant_id: merchantId,
+        settlement_account_id: merchantContext.account.id,
+        provider_name: "breet",
+        provider_account_reference: bankId,
+        status: "connected",
+        environment: merchantContext.environment,
+        raw_provider_response: {
+          ...(merchantContext.mapping?.raw_provider_response || {}),
+          breet_bank_id: bankId,
+          breet_bank_name: matchedBank?.name || merchantContext.account.bank_name,
+          breet_mapping_confirmed: true,
+          mapping_confirmed_by_admin: true,
+          breet_mapping_confirmed_at: new Date().toISOString(),
+        },
+        last_sync_at: new Date().toISOString(),
+      }, { onConflict: "settlement_account_id,provider_name,environment" });
+
+    await supabase.from("audit_logs").insert({
+      event_type: "breet_merchant_bank_mapping_confirmed",
+      actor_id: null,
+      actor_role: "admin",
+      target_id: merchantId,
+      target_type: "merchant_settlement_account",
+      metadata: {
+        merchant_id: merchantId,
+        settlement_account_id: merchantContext.account.id,
+        bank_id: bankId,
+        bank_name: matchedBank?.name || merchantContext.account.bank_name,
+        account_number_masked: maskAccountNumber(merchantContext.account.account_number),
+      },
+    });
+
+    return NextResponse.json({ success: true });
+  }
+
+  if (body.action === "validate_merchant_breet_bank") {
+    const merchantId = String(body.merchantId || "").trim();
+    const bankId = String(body.bankId || "").trim();
+    if (!merchantId || !bankId) {
+      return NextResponse.json({ error: "Merchant and Breet bank are required." }, { status: 400 });
+    }
+
+    const runtimeConfig = await loadBreetRuntimeConfig(supabase);
+    const merchantContext = await loadMerchantAccountContext(merchantId);
+    if (!merchantContext) {
+      return NextResponse.json({ error: "Merchant settlement account not found." }, { status: 404 });
+    }
+
+    try {
+      const [banks, validation] = await Promise.all([
+        fetchBreetBanks("ngn", runtimeConfig.apiEnvironment),
+        validateBreetBankAccount({
+          bankId,
+          accountNumber: merchantContext.account.account_number,
+        }, runtimeConfig.apiEnvironment),
+      ]);
+      const matchedBank = banks.find((bank) => bank.id === bankId) || null;
+      const nextRawPayload = {
+        ...(merchantContext.account.raw_verification_payload || {}),
+        breet_bank_id: bankId,
+        breet_bank_name: validation.bankName || matchedBank?.name || merchantContext.account.bank_name,
+        breet_bank_validation_payload: validation.raw,
+        breet_bank_validation_passed: true,
+        breet_validation_passed: true,
+        breet_bank_validation_at: new Date().toISOString(),
+        breet_mapping_confirmed: true,
+        mapping_confirmed_by_admin: true,
+      };
+
+      await supabase
+        .from("merchant_settlement_accounts")
+        .update({
+          raw_verification_payload: nextRawPayload,
+          account_name: validation.accountName || merchantContext.account.account_name,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", merchantContext.account.id);
+
+      await supabase
+        .from("merchant_provider_settlement_accounts")
+        .upsert({
+          merchant_id: merchantId,
+          settlement_account_id: merchantContext.account.id,
+          provider_name: "breet",
+          provider_account_reference: bankId,
+          status: "active",
+          environment: merchantContext.environment,
+          raw_provider_response: {
+            ...(merchantContext.mapping?.raw_provider_response || {}),
+            breet_bank_id: bankId,
+            breet_bank_name: validation.bankName || matchedBank?.name || merchantContext.account.bank_name,
+            breet_bank_validation_payload: validation.raw,
+            breet_bank_validation_passed: true,
+            breet_validation_passed: true,
+            breet_bank_validation_at: new Date().toISOString(),
+            breet_mapping_confirmed: true,
+            mapping_confirmed_by_admin: true,
+          },
+          last_sync_at: new Date().toISOString(),
+        }, { onConflict: "settlement_account_id,provider_name,environment" });
+
+      await supabase.from("audit_logs").insert({
+        event_type: "breet_merchant_bank_validated",
+        actor_id: null,
+        actor_role: "admin",
+        target_id: merchantId,
+        target_type: "merchant_settlement_account",
+        metadata: {
+          merchant_id: merchantId,
+          settlement_account_id: merchantContext.account.id,
+          bank_id: bankId,
+          bank_name: validation.bankName || matchedBank?.name || null,
+          account_number_masked: maskAccountNumber(merchantContext.account.account_number),
+          validation_payload: validation.raw,
+        },
+      });
+
+      return NextResponse.json({
+        success: true,
+        validation,
+        note:
+          validation.accountName && validation.accountName !== merchantContext.account.account_name
+            ? "Sandbox account name may differ from real account name."
+            : null,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to validate merchant Breet bank account.";
+      return NextResponse.json({ error: message }, { status: 502 });
+    }
   }
 
   return NextResponse.json({ error: "Unsupported action" }, { status: 400 });
@@ -276,4 +664,181 @@ async function hasManualQueueFunction() {
   }
 
   return Boolean(data && data.length > 0);
+}
+
+function maskAccountNumber(accountNumber?: string | null) {
+  const value = String(accountNumber || "").trim();
+  if (!value) return null;
+  return `****${value.slice(-4)}`;
+}
+
+async function loadMerchantReadiness(
+  merchantId: string,
+  merchantName: string | null,
+  banks: BreetBankListItem[]
+): Promise<MerchantReadinessStatus | null> {
+  const merchantContext = await loadMerchantAccountContext(merchantId);
+
+  if (!merchantContext) {
+    return {
+      merchantId,
+      merchantName,
+      hasVerifiedSettlementAccount: false,
+      hasMappedBreetBankId: false,
+      validationConfirmed: false,
+      mappingConfirmedByAdmin: false,
+      validationPassed: false,
+      amountThresholdEnforced: true,
+      merchantSettlementAccount: null,
+      currentBreetBank: null,
+      matchedBreetBank: null,
+      mappingEnvironment: null,
+      validationNote: null,
+    };
+  }
+
+  const { account, mapping, environment } = merchantContext;
+  const mergedAccount = {
+    bank_name: account.bank_name,
+    bank_code: account.bank_code,
+    bank_id:
+      resolveBreetBankId({
+        bank_name: account.bank_name,
+        bank_code: account.bank_code,
+        bank_id: typeof mapping?.provider_account_reference === "string" ? mapping.provider_account_reference : null,
+        account_number: account.account_number,
+        account_name: account.account_name,
+        raw_verification_payload: {
+          ...(account.raw_verification_payload || {}),
+          ...(mapping?.raw_provider_response || {}),
+        },
+      }) || null,
+    account_number: account.account_number,
+    account_name: account.account_name,
+    raw_verification_payload: {
+      ...(account.raw_verification_payload || {}),
+      ...(mapping?.raw_provider_response || {}),
+    },
+  };
+  const mappingState = getMerchantBreetMappingState(mergedAccount, mapping || null);
+  const matchedBank = matchBreetBank(mergedAccount, banks) || null;
+
+  const hasVerifiedSettlementAccount =
+    account.verification_status === "verified" &&
+    account.status === "active" &&
+    Boolean(account.account_number);
+  const hasMappedBreetBankId = mappingState.hasMappedBankId;
+  const validationConfirmed = hasMappedBreetBankId && (mappingState.validationPassed || mappingState.mappingConfirmed);
+
+  return {
+    merchantId,
+    merchantName,
+    hasVerifiedSettlementAccount,
+    hasMappedBreetBankId,
+    validationConfirmed,
+    mappingConfirmedByAdmin: mappingState.mappingConfirmed,
+    validationPassed: mappingState.validationPassed,
+    amountThresholdEnforced: true,
+    merchantSettlementAccount: {
+      id: account.id,
+      bankName: account.bank_name,
+      bankCode: account.bank_code,
+      maskedAccountNumber: maskAccountNumber(account.account_number),
+      accountName: account.account_name,
+      verificationStatus: account.verification_status,
+      status: account.status,
+    },
+    currentBreetBank: mappingState.mappedBankId
+      ? {
+          bankId: mappingState.mappedBankId,
+          bankName: String(
+            mergedAccount.raw_verification_payload?.breet_bank_name ||
+            mergedAccount.raw_verification_payload?.bank_name ||
+            matchedBank?.name ||
+            ""
+          ) || null,
+        }
+      : null,
+    matchedBreetBank: matchedBank ? { bankId: matchedBank.id, bankName: matchedBank.name } : null,
+    mappingEnvironment: environment,
+    validationNote:
+      mappingState.validationPassed &&
+      mergedAccount.account_name &&
+      typeof mergedAccount.raw_verification_payload?.breet_bank_validation_payload === "object"
+        ? "Sandbox account name may differ from real account name."
+        : null,
+  };
+}
+
+async function loadMerchantAccountContext(merchantId: string) {
+  const { data: merchant } = await supabase
+    .from("merchants")
+    .select("id, email")
+    .eq("id", merchantId)
+    .maybeSingle();
+
+  if (!merchant) return null;
+
+  const environment = getPaymentEnvironmentForMerchantEmail(merchant.email);
+  const { data: account } = await supabase
+    .from("merchant_settlement_accounts")
+    .select("id, bank_name, bank_code, account_number, account_name, verification_status, status, raw_verification_payload")
+    .eq("merchant_id", merchantId)
+    .eq("is_default", true)
+    .maybeSingle();
+
+  if (!account) return null;
+
+  const { data: mapping } = await supabase
+    .from("merchant_provider_settlement_accounts")
+    .select("provider_account_reference, raw_provider_response, status")
+    .eq("merchant_id", merchantId)
+    .eq("settlement_account_id", account.id)
+    .eq("provider_name", "breet")
+    .eq("environment", environment)
+    .maybeSingle();
+
+  return {
+    merchant,
+    environment,
+    account,
+    mapping,
+  };
+}
+
+function normalizeSettingValue(key: string, value: string) {
+  const trimmed = String(value || "").trim();
+  if (key === "breet_api_environment") {
+    return trimmed.toLowerCase() === "production" ? "production" : "development";
+  }
+  if ([
+    "breet_live_enabled",
+    "breet_invoice_crypto_enabled",
+    "breet_subscription_crypto_enabled",
+    "breet_merchant_auto_settlement_enabled",
+    "breet_auto_settlement_enabled",
+    "breet_sandbox_force_platform_settlement",
+  ].includes(key)) {
+    return trimmed === "true" ? "true" : "false";
+  }
+  if (key === "breet_supported_assets" || key === "breet_supported_networks") {
+    return trimmed
+      .split(",")
+      .map((item) => item.trim().toUpperCase())
+      .filter(Boolean)
+      .join(",");
+  }
+  return trimmed;
+}
+
+function validateWebhookUrl(value: string) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return null;
+  if (!normalized.startsWith("https://")) {
+    return "Breet webhook URL must start with https://";
+  }
+  if (!normalized.endsWith("/api/webhooks/breet")) {
+    return "Breet webhook URL must end with /api/webhooks/breet";
+  }
+  return null;
 }

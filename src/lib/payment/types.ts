@@ -54,21 +54,68 @@ export interface WebhookVerificationResult {
   error?: string;
 }
 
+export interface CryptoSettlementBankPayload {
+  bankId: string;
+  accountNumber: string;
+  narration: string;
+  bankName?: string | null;
+  accountName?: string | null;
+  accountNumberMasked?: string | null;
+}
+
+export interface BreetBankListItem {
+  id: string;
+  name: string;
+  currency?: string;
+  type?: string;
+  slug?: string;
+  redbillerCode?: string | null;
+  anchorCode?: string | null;
+  monnifyCode?: string | null;
+  palmpayCode?: string | null;
+  avatar?: string | null;
+}
+
+export interface BreetBankValidationResult {
+  bankId: string;
+  accountNumber: string;
+  accountName?: string | null;
+  bankName?: string | null;
+  raw: Record<string, unknown>;
+}
+
+export interface BreetIntegrationBankResult {
+  id: string;
+  bankId: string;
+  bankName?: string | null;
+  accountNumber: string;
+  accountName?: string | null;
+  narration?: string | null;
+  autoSettlement?: boolean;
+  raw: Record<string, unknown>;
+}
+
 export interface CryptoDepositAddressParams {
   assetId: string;
   label: string;
-  settlementBank?: Record<string, unknown> | null;
+  settlementBank?: CryptoSettlementBankPayload | null;
   paymentType?: "invoice" | "subscription" | "upgrade";
   settlementMode?: string;
   settlementRecipientType?: "merchant" | "platform";
+  providerEnvironment?: "development" | "production";
+  network?: string | null;
 }
 
 export interface CryptoDepositAddressResult {
   id: string;
   vaultId?: string;
+  walletId?: string;
   address: string;
   asset?: string;
   label?: string;
+  settlementBankId?: string;
+  settlementAccountMasked?: string | null;
+  autoSettlementEnabled?: boolean;
   raw?: Record<string, unknown>;
 }
 

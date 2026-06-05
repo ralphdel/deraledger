@@ -7,6 +7,7 @@ import {
   buildSettlementBankPayload,
   canUseBreetCryptoCheckout,
   isBelowBreetMinimumAmount,
+  maskAccountNumber,
   validateSettlementAccountForBreet,
 } from "@/lib/services/breet-crypto.service";
 import { getPaymentEnvironment } from "@/lib/services/payment-routing.service";
@@ -68,6 +69,13 @@ export async function POST(request: Request) {
     });
 
     const reference = `CRYPTO-SUB-${plan.toUpperCase()}-${crypto.randomBytes(5).toString("hex").toUpperCase()}`;
+    const settlementBankPayload = buildSettlementBankPayload(
+      platformSettlementAccount,
+      `Sub ${plan.toUpperCase()} ${reference.slice(-12)}`
+    );
+    if (!settlementBankPayload) {
+      return NextResponse.json({ error: "Platform settlement account is not configured." }, { status: 403 });
+    }
     const { data: settings } = await supabase
       .from("platform_settings")
       .select("key, value")
@@ -80,13 +88,15 @@ export async function POST(request: Request) {
     const result = await PaymentService.generatePlatformPaymentAddress({
       assetId: "USDT",
       label: reference,
-      settlementBank: buildSettlementBankPayload(platformSettlementAccount),
+      settlementBank: settlementBankPayload,
       settlementMode,
       settlementRecipientType,
       paymentType: "subscription",
+      providerEnvironment: eligibility.config.apiEnvironment,
+      network: defaultNetworkForRail("USDT"),
     });
 
-    await supabase.from("crypto_payment_sessions").insert({
+    const { error: sessionError } = await supabase.from("crypto_payment_sessions").insert({
       merchant_id: null,
       user_id: null,
       business_id: null,
@@ -107,8 +117,7 @@ export async function POST(request: Request) {
       webhook_status: "pending",
       payment_status: "pending",
       payment_session_reference: sessionId,
-      provider_wallet_id: result.vaultId || result.id || null,
-      settlement_account_reference: process.env.BREET_PLATFORM_BANK_CODE || null,
+      provider_wallet_id: result.walletId || result.vaultId || result.id || null,
       settlement_account_snapshot: settlementAccountSnapshot,
       expires_at: new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString(),
       metadata: {
@@ -116,6 +125,11 @@ export async function POST(request: Request) {
         plan,
         session_id: sessionId,
         type: "subscription",
+        wallet_id: result.walletId || result.vaultId || result.id || null,
+        wallet_address: result.address,
+        settlement_bank_id_used: result.settlementBankId || settlementBankPayload.bankId,
+        settlement_account_masked: result.settlementAccountMasked || maskAccountNumber(platformSettlementAccount.account_number),
+        auto_settlement_enabled: result.autoSettlementEnabled === true,
         settlement_mode: settlementMode,
         settlement_recipient_type: settlementRecipientType,
         settlement_account_snapshot: settlementAccountSnapshot,
@@ -123,6 +137,11 @@ export async function POST(request: Request) {
       },
       raw_payload: result.raw || {},
     });
+
+    if (sessionError) {
+      console.error("Failed to create subscription crypto payment session:", sessionError.message);
+      return NextResponse.json({ error: "Could not create crypto payment session" }, { status: 500 });
+    }
 
     return NextResponse.json({
       success: true,

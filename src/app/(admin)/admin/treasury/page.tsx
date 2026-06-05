@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   ArrowRightLeft,
   CheckCircle2,
   Clock3,
   Coins,
+  Copy,
   Loader2,
   RefreshCcw,
   ShieldAlert,
@@ -15,6 +16,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
@@ -116,25 +118,51 @@ type SettlementBatchRow = {
 
 type ConfigStatus = {
   settlementMode: "breet_auto_settlement" | "platform_auto_settlement" | "treasury_manual" | "disabled";
+  apiEnvironment: "development" | "production";
+  appIdConfigured: boolean;
+  appSecretConfigured: boolean;
   liveEnabled: boolean;
+  webhookUrl: string | null;
   webhookConfigured: boolean;
   invoiceCryptoEnabled: boolean;
   subscriptionCryptoEnabled: boolean;
   minimumAutoSettlementNgn: number;
+  platformSettlementBankValidated: boolean;
   merchantAutoSettlementEnabled: boolean;
   platformAutoSettlementEnabled: boolean;
   platformSettlementBankAccount: {
     bank_name?: string | null;
     bank_code?: string | null;
+    bank_id?: string | null;
     account_number?: string | null;
     account_name?: string | null;
     currency?: string | null;
   } | null;
+  defaultReceiveCurrency: string;
+  forcePlatformSettlementInSandbox: boolean;
   supportedAssets: string[];
   supportedNetworks: string[];
+  configWarnings: string[];
   manualTreasuryEnabled: boolean;
   manualQueueFunctionAvailable: boolean;
   manualPayoutProviders: string[];
+};
+
+type BreetBankRow = {
+  id: string;
+  name: string;
+  currency?: string;
+  monnifyCode?: string | null;
+};
+
+type BreetIntegrationBankRow = {
+  id: string;
+  bankId: string;
+  bankName?: string | null;
+  accountNumber: string;
+  accountName?: string | null;
+  narration?: string | null;
+  autoSettlement?: boolean;
 };
 
 type TreasuryPayload = {
@@ -147,6 +175,37 @@ type TreasuryPayload = {
   webhookLogs: WebhookRow[];
   settings: Record<string, string>;
   configStatus: ConfigStatus;
+  breetBanks: BreetBankRow[];
+  savedIntegrationBanks: BreetIntegrationBankRow[];
+  merchantReadiness: {
+    merchantId: string;
+    merchantName: string | null;
+    hasVerifiedSettlementAccount: boolean;
+    hasMappedBreetBankId: boolean;
+    validationConfirmed: boolean;
+    mappingConfirmedByAdmin: boolean;
+    validationPassed: boolean;
+    amountThresholdEnforced: boolean;
+    merchantSettlementAccount: {
+      id: string;
+      bankName: string | null;
+      bankCode: string | null;
+      maskedAccountNumber: string | null;
+      accountName: string | null;
+      verificationStatus: string | null;
+      status: string | null;
+    } | null;
+    currentBreetBank: {
+      bankId: string;
+      bankName: string | null;
+    } | null;
+    matchedBreetBank: {
+      bankId: string;
+      bankName: string;
+    } | null;
+    mappingEnvironment: "sandbox" | "live" | null;
+    validationNote: string | null;
+  } | null;
   providerHealth: {
     configured: boolean;
     webhookConfigured: boolean;
@@ -173,11 +232,13 @@ const SETTING_LABELS: Record<string, string> = {
   crypto_usdt_confirmations: "USDT Confirmations",
   crypto_usdc_confirmations: "USDC Confirmations",
   breet_settlement_mode: "Breet Settlement Mode",
+  breet_api_environment: "Breet API Environment",
   breet_auto_settlement_enabled: "Platform Auto-Settlement Enabled",
   breet_merchant_auto_settlement_enabled: "Merchant Auto-Settlement Enabled",
   breet_invoice_crypto_enabled: "Invoice Crypto Enabled",
   breet_subscription_crypto_enabled: "Subscription Crypto Enabled",
   breet_min_auto_settlement_ngn: "Minimum Auto-Settlement Amount (NGN)",
+  breet_platform_bank_validated: "Platform Bank Validated",
   breet_webhook_url: "Breet Webhook URL",
   breet_supported_assets: "Supported Assets",
   breet_supported_networks: "Supported Networks",
@@ -201,11 +262,19 @@ export default function AdminTreasuryPage() {
   const [payoutProvider, setPayoutProvider] = useState("paystack");
   const [settingsDraft, setSettingsDraft] = useState<Record<string, string>>({});
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [platformBankId, setPlatformBankId] = useState("");
+  const [platformAccountNumber, setPlatformAccountNumber] = useState("");
+  const [platformNarration, setPlatformNarration] = useState("DeraLedger platform settlement");
+  const [platformAccountNamePreview, setPlatformAccountNamePreview] = useState<string | null>(null);
+  const [merchantBreetBankId, setMerchantBreetBankId] = useState("");
+  const [merchantValidationNote, setMerchantValidationNote] = useState<string | null>(null);
+  const [showAdvancedFallback, setShowAdvancedFallback] = useState(false);
 
-  async function loadTreasury() {
+  const loadTreasury = useCallback(async () => {
     setLoading(true);
     setFeedback(null);
-    const res = await fetch("/api/admin/treasury");
+    const merchantParam = merchantFilter !== "all" ? `?merchantId=${encodeURIComponent(merchantFilter)}` : "";
+    const res = await fetch(`/api/admin/treasury${merchantParam}`);
     const payload = (await res.json()) as TreasuryPayload | { error?: string };
     if (!res.ok || !("summary" in payload)) {
       setFeedback((payload as { error?: string }).error || "Failed to load treasury console.");
@@ -216,15 +285,24 @@ export default function AdminTreasuryPage() {
     setData(payload);
     setSettingsDraft(payload.settings);
     setPayoutProvider(payload.configStatus.manualPayoutProviders[0] || "paystack");
+    setPlatformBankId(payload.configStatus.platformSettlementBankAccount?.bank_id || "");
+    setPlatformAccountNumber(payload.configStatus.platformSettlementBankAccount?.account_number || "");
+    setPlatformAccountNamePreview(payload.configStatus.platformSettlementBankAccount?.account_name || null);
+    setMerchantBreetBankId(
+      payload.merchantReadiness?.currentBreetBank?.bankId ||
+      payload.merchantReadiness?.matchedBreetBank?.bankId ||
+      ""
+    );
+    setMerchantValidationNote(payload.merchantReadiness?.validationNote || null);
     setLoading(false);
-  }
+  }, [merchantFilter]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
       void loadTreasury();
     }, 0);
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [loadTreasury]);
 
   const mode = data?.configStatus.settlementMode || "disabled";
   const manualTreasuryEnabled = data?.configStatus.manualTreasuryEnabled || false;
@@ -328,6 +406,111 @@ export default function AdminTreasuryPage() {
     setBusy(null);
   }
 
+  async function copyWebhookUrl() {
+    const webhookUrl = settingsDraft.breet_webhook_url || data?.configStatus.webhookUrl || "";
+    if (!webhookUrl) return;
+    await navigator.clipboard.writeText(webhookUrl);
+    setFeedback("Breet webhook URL copied.");
+  }
+
+  async function validatePlatformBank() {
+    setBusy("validate-platform-bank");
+    setFeedback(null);
+    const res = await fetch("/api/admin/treasury", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "validate_platform_breet_bank",
+        bankId: platformBankId,
+        accountNumber: platformAccountNumber,
+      }),
+    });
+    const payload = await res.json() as {
+      error?: string;
+      validation?: { accountName?: string | null };
+    };
+    if (!res.ok) {
+      setFeedback(payload.error || "Failed to validate platform bank account.");
+    } else {
+      setPlatformAccountNamePreview(payload.validation?.accountName || null);
+      setFeedback("Platform Breet bank validated and saved.");
+      await loadTreasury();
+    }
+    setBusy(null);
+  }
+
+  async function addPlatformIntegrationBank() {
+    setBusy("add-platform-bank");
+    setFeedback(null);
+    const res = await fetch("/api/admin/treasury", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "add_platform_breet_integration_bank",
+        bankId: platformBankId,
+        accountNumber: platformAccountNumber,
+        narration: platformNarration,
+      }),
+    });
+    const payload = await res.json() as { error?: string };
+    if (!res.ok) {
+      setFeedback(payload.error || "Failed to add platform bank to Breet integration.");
+    } else {
+      setFeedback("Platform bank added to Breet integration.");
+      await loadTreasury();
+    }
+    setBusy(null);
+  }
+
+  async function saveMerchantBreetMapping() {
+    if (!data?.merchantReadiness || !merchantBreetBankId) return;
+    setBusy("save-merchant-bank");
+    setFeedback(null);
+    setMerchantValidationNote(null);
+    const res = await fetch("/api/admin/treasury", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "confirm_merchant_breet_mapping",
+        merchantId: data.merchantReadiness.merchantId,
+        bankId: merchantBreetBankId,
+      }),
+    });
+    const payload = await res.json() as { error?: string };
+    if (!res.ok) {
+      setFeedback(payload.error || "Failed to save merchant Breet bank mapping.");
+    } else {
+      setFeedback("Merchant Breet bank mapping saved.");
+      await loadTreasury();
+    }
+    setBusy(null);
+  }
+
+  async function validateMerchantBreetBank() {
+    if (!data?.merchantReadiness || !merchantBreetBankId) return;
+    setBusy("validate-merchant-bank");
+    setFeedback(null);
+    setMerchantValidationNote(null);
+    const res = await fetch("/api/admin/treasury", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "validate_merchant_breet_bank",
+        merchantId: data.merchantReadiness.merchantId,
+        bankId: merchantBreetBankId,
+      }),
+    });
+    const payload = await res.json() as { error?: string; note?: string | null };
+    if (!res.ok) {
+      setFeedback(payload.error || "Failed to validate merchant account with Breet.");
+    } else {
+      setMerchantValidationNote(payload.note || null);
+      setFeedback("Merchant settlement account validated with Breet.");
+      await loadTreasury();
+    }
+    setBusy(null);
+  }
+
   if (loading && !data) {
     return (
       <div className="flex items-center justify-center py-16 text-neutral-500">
@@ -344,6 +527,47 @@ export default function AdminTreasuryPage() {
     mode === "platform_auto_settlement"
       ? "Pending Platform Settlements"
       : "Pending Auto-Settlements";
+  const checkoutSupportedAssets = data.configStatus.supportedAssets.filter((asset) => ["USDT", "USDC"].includes(asset));
+  const showAdvancedTab = manualTreasuryEnabled || showAdvancedFallback;
+  const selectedPlatformBank = data.breetBanks.find((bank) => bank.id === platformBankId) || null;
+  const selectedMerchantBank = data.breetBanks.find((bank) => bank.id === merchantBreetBankId) || null;
+  const webhookUrlDraft = settingsDraft.breet_webhook_url || "";
+  const webhookUrlError = webhookUrlDraft &&
+    (!webhookUrlDraft.startsWith("https://") || !webhookUrlDraft.endsWith("/api/webhooks/breet"))
+      ? "Webhook URL must start with https:// and end with /api/webhooks/breet."
+      : null;
+  const webhookUrlWarning = webhookUrlDraft.toLowerCase().includes("localhost")
+    ? "Breet cannot send webhooks to localhost. Use a public tunnel or deployed URL."
+    : null;
+  const advancedSettingsKeys = [
+    "crypto_usdt_ngn_rate",
+    "crypto_usdc_ngn_rate",
+    "crypto_btc_ngn_rate",
+    "crypto_eth_ngn_rate",
+    "crypto_session_ttl_minutes",
+    "crypto_rate_lock_minutes",
+    "crypto_rate_slippage_bps",
+    "crypto_underpayment_tolerance_bps",
+    "crypto_manual_review_threshold_bps",
+    "crypto_platform_fee_bps",
+    "crypto_overpayment_action",
+    "crypto_btc_confirmations",
+    "crypto_eth_confirmations",
+    "crypto_usdt_confirmations",
+    "crypto_usdc_confirmations",
+    "breet_treasury_settlement_account_reference",
+    "breet_treasury_settlement_account_label",
+  ];
+  const legacySettingsEntries = advancedSettingsKeys
+    .filter((key) => Object.prototype.hasOwnProperty.call(SETTING_LABELS, key))
+    .map((key) => [key, SETTING_LABELS[key]] as const);
+  const manualFallbackCards = manualTreasuryEnabled
+    ? [
+        { label: "Queue Depth", value: String(data.summary.queueDepth), icon: ArrowRightLeft, tone: "bg-purple-100 text-purple-700 border-purple-200" },
+        { label: "Pending Manual Payouts", value: String(filteredBatches.filter((batch) => ["queued", "processing"].includes(batch.status)).length), icon: Clock3, tone: "bg-purple-100 text-purple-700 border-purple-200" },
+        { label: "Locked Payouts", value: String(filteredBatches.filter((batch) => batch.status === "held").length), icon: ShieldAlert, tone: "bg-purple-100 text-purple-700 border-purple-200" },
+      ]
+    : [];
 
   const summaryCards = [
     { label: "Crypto Inflow", value: formatNaira(data.summary.totalCryptoInflow), icon: Coins, tone: "bg-blue-100 text-blue-700 border-blue-200" },
@@ -353,9 +577,7 @@ export default function AdminTreasuryPage() {
     { label: "Webhook Failures", value: String(data.summary.webhookFailures), icon: ShieldAlert, tone: "bg-red-100 text-red-700 border-red-200" },
     { label: "Under Review", value: String(data.summary.underReviewCount), icon: ShieldAlert, tone: "bg-amber-100 text-amber-700 border-amber-200" },
     { label: "Reconciliation Delta", value: formatNaira(data.summary.reconciliationDelta), icon: Coins, tone: "bg-slate-100 text-slate-700 border-slate-200" },
-    ...(manualTreasuryEnabled
-      ? [{ label: "Queue Depth", value: String(data.summary.queueDepth), icon: ArrowRightLeft, tone: "bg-purple-100 text-purple-700 border-purple-200" }]
-      : []),
+    ...manualFallbackCards,
   ];
 
   return (
@@ -369,7 +591,7 @@ export default function AdminTreasuryPage() {
             </Badge>
           </div>
           <p className="text-neutral-500 text-sm mt-1">
-            Monitor Breet crypto collections, auto-settlement status, webhook events, and reconciliation.
+            Monitor Breet crypto collections, per-address auto-settlement, webhook events, and reconciliation.
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -394,6 +616,12 @@ export default function AdminTreasuryPage() {
         <div className="rounded-xl border border-neutral-200 bg-white px-4 py-3 text-sm text-neutral-700">{feedback}</div>
       ) : null}
 
+      <Card className="border shadow-none">
+        <CardContent className="p-5 text-sm text-neutral-700">
+          DeraLedger uses Breet per-address auto-settlement. Merchant invoice crypto payments settle directly to each merchant&apos;s linked bank account. Subscription and upgrade crypto payments settle to DeraLedger&apos;s platform account.
+        </CardContent>
+      </Card>
+
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         {summaryCards.map((card) => (
           <Card key={card.label} className="border shadow-none">
@@ -410,37 +638,6 @@ export default function AdminTreasuryPage() {
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <Card className="border shadow-none">
-          <CardHeader>
-            <CardTitle className="text-base">Breet Mode Status</CardTitle>
-          </CardHeader>
-          <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-            <Info label="Breet Settlement Mode" value={labelMode(mode)} />
-            <Info label="Breet Live Enabled" value={boolLabel(data.configStatus.liveEnabled)} />
-            <Info label="Webhook Configured" value={boolLabel(data.configStatus.webhookConfigured)} />
-            <Info label="Invoice Crypto Enabled" value={boolLabel(data.configStatus.invoiceCryptoEnabled)} />
-            <Info label="Subscription Crypto Enabled" value={boolLabel(data.configStatus.subscriptionCryptoEnabled)} />
-            <Info label="Minimum Auto-Settlement Amount" value={formatNaira(data.configStatus.minimumAutoSettlementNgn || 0)} />
-            <Info label="Merchant Auto-Settlement" value={boolLabel(data.configStatus.merchantAutoSettlementEnabled)} />
-            <Info label="Platform Auto-Settlement" value={boolLabel(data.configStatus.platformAutoSettlementEnabled)} />
-            <Info label="Provider Runtime" value={`${data.providerHealth.configured ? "Configured" : "Missing"} (${data.providerHealth.env})`} />
-          </CardContent>
-        </Card>
-
-        <Card className="border shadow-none">
-          <CardHeader>
-            <CardTitle className="text-base">Settlement Configuration</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm">
-            <Info label="Supported Assets" value={data.configStatus.supportedAssets.join(", ") || "Not set"} />
-            <Info label="Supported Networks" value={data.configStatus.supportedNetworks.join(", ") || "Not set"} />
-            <Info label="Platform Settlement Bank" value={formatBankSnapshot(data.configStatus.platformSettlementBankAccount)} />
-            <Info label="Webhook Secret Path" value={data.configStatus.webhookConfigured ? "Shared-secret request verification active" : "Missing"} />
-          </CardContent>
-        </Card>
-      </div>
-
       {mode === "disabled" ? (
         <Card className="border shadow-none">
           <CardContent className="p-5 text-sm text-neutral-600">
@@ -449,14 +646,400 @@ export default function AdminTreasuryPage() {
         </Card>
       ) : null}
 
-      <Tabs defaultValue="sessions" className="space-y-4">
+      <Tabs defaultValue="overview" className="space-y-4">
         <TabsList className="bg-white border">
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="platform-bank">Platform Bank Setup</TabsTrigger>
           <TabsTrigger value="sessions">Sessions</TabsTrigger>
           <TabsTrigger value="settlements">Settlements</TabsTrigger>
           <TabsTrigger value="webhooks">Webhooks</TabsTrigger>
-          <TabsTrigger value="fallback">Fallback</TabsTrigger>
-          <TabsTrigger value="config">Config</TabsTrigger>
+          <TabsTrigger value="manual-review">Manual Review</TabsTrigger>
+          {showAdvancedTab ? <TabsTrigger value="advanced">Advanced Fallback</TabsTrigger> : null}
         </TabsList>
+
+        <TabsContent value="overview" className="space-y-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <Card className="border shadow-none">
+              <CardHeader>
+                <CardTitle className="text-base">Breet Configuration</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                  <Info label="Breet Settlement Mode" value={labelMode(mode)} />
+                  <Info label="Webhook Secret Configured" value={yesNoLabel(data.configStatus.webhookConfigured)} />
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-neutral-700">Breet API Environment</label>
+                    <Select
+                      value={settingsDraft.breet_api_environment || data.configStatus.apiEnvironment}
+                      onValueChange={(value) => setSettingsDraft((current) => ({ ...current, breet_api_environment: value ?? "development" }))}
+                    >
+                      <SelectTrigger className="bg-white border-2">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="development">Development / Sandbox</SelectItem>
+                        <SelectItem value="production">Production / Live</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2 md:col-span-2">
+                    <label className="text-sm font-medium text-neutral-700">Breet Webhook URL</label>
+                    <div className="flex gap-2">
+                      <Input
+                        value={webhookUrlDraft}
+                        onChange={(event) => setSettingsDraft((current) => ({ ...current, breet_webhook_url: event.target.value }))}
+                        className="bg-white border-2"
+                        placeholder="https://www.deraledger.com/api/webhooks/breet"
+                      />
+                      <Button variant="outline" onClick={() => void copyWebhookUrl()} disabled={!webhookUrlDraft}>
+                        <Copy className="h-4 w-4" />
+                      </Button>
+                    </div>
+                    {webhookUrlError ? <p className="text-xs text-red-600">{webhookUrlError}</p> : null}
+                    {webhookUrlWarning ? <p className="text-xs text-amber-700">{webhookUrlWarning}</p> : null}
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-neutral-700">Default Receive Currency</label>
+                    <Input
+                      value={settingsDraft.breet_default_receive_currency || data.configStatus.defaultReceiveCurrency}
+                      onChange={(event) => setSettingsDraft((current) => ({ ...current, breet_default_receive_currency: event.target.value.toUpperCase() }))}
+                      className="bg-white border-2"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-neutral-700">Minimum Auto-Settlement Amount</label>
+                    <Input
+                      value={settingsDraft.breet_min_auto_settlement_ngn || String(data.configStatus.minimumAutoSettlementNgn)}
+                      onChange={(event) => setSettingsDraft((current) => ({ ...current, breet_min_auto_settlement_ngn: event.target.value }))}
+                      className="bg-white border-2"
+                      inputMode="numeric"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-neutral-700">Supported Assets</label>
+                    <Input
+                      value={settingsDraft.breet_supported_assets || checkoutSupportedAssets.join(",")}
+                      onChange={(event) => setSettingsDraft((current) => ({ ...current, breet_supported_assets: event.target.value }))}
+                      className="bg-white border-2"
+                    />
+                    <p className="text-xs text-neutral-500">Keep first-test checkout assets to USDT and USDC.</p>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-neutral-700">Supported Networks</label>
+                    <Input
+                      value={settingsDraft.breet_supported_networks || data.configStatus.supportedNetworks.join(",")}
+                      onChange={(event) => setSettingsDraft((current) => ({ ...current, breet_supported_networks: event.target.value }))}
+                      className="bg-white border-2"
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+                  <ToggleRow
+                    label="Invoice Crypto Enabled"
+                    checked={readBoolSetting(settingsDraft.breet_invoice_crypto_enabled, data.configStatus.invoiceCryptoEnabled)}
+                    onCheckedChange={(checked) => setSettingsDraft((current) => ({ ...current, breet_invoice_crypto_enabled: String(checked) }))}
+                  />
+                  <ToggleRow
+                    label="Subscription Crypto Enabled"
+                    checked={readBoolSetting(settingsDraft.breet_subscription_crypto_enabled, data.configStatus.subscriptionCryptoEnabled)}
+                    onCheckedChange={(checked) => setSettingsDraft((current) => ({ ...current, breet_subscription_crypto_enabled: String(checked) }))}
+                  />
+                  <ToggleRow
+                    label="Merchant Auto-Settlement Enabled"
+                    checked={readBoolSetting(settingsDraft.breet_merchant_auto_settlement_enabled, data.configStatus.merchantAutoSettlementEnabled)}
+                    onCheckedChange={(checked) => setSettingsDraft((current) => ({ ...current, breet_merchant_auto_settlement_enabled: String(checked) }))}
+                  />
+                  <ToggleRow
+                    label="Platform Auto-Settlement Enabled"
+                    checked={readBoolSetting(settingsDraft.breet_auto_settlement_enabled, data.configStatus.platformAutoSettlementEnabled)}
+                    onCheckedChange={(checked) => setSettingsDraft((current) => ({ ...current, breet_auto_settlement_enabled: String(checked) }))}
+                  />
+                  <ToggleRow
+                    label="Force Platform Settlement in Sandbox"
+                    checked={readBoolSetting(settingsDraft.breet_sandbox_force_platform_settlement, data.configStatus.forcePlatformSettlementInSandbox)}
+                    onCheckedChange={(checked) => setSettingsDraft((current) => ({ ...current, breet_sandbox_force_platform_settlement: String(checked) }))}
+                  />
+                  <ToggleRow
+                    label="Breet Live Enabled"
+                    checked={readBoolSetting(settingsDraft.breet_live_enabled, data.configStatus.liveEnabled)}
+                    onCheckedChange={(checked) => setSettingsDraft((current) => ({ ...current, breet_live_enabled: String(checked) }))}
+                    note={checkedWarning(readBoolSetting(settingsDraft.breet_live_enabled, data.configStatus.liveEnabled))}
+                  />
+                </div>
+                {data.configStatus.configWarnings.length > 0 ? (
+                  <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                    {data.configStatus.configWarnings.map((warning) => (
+                      <p key={warning}>{warning}</p>
+                    ))}
+                  </div>
+                ) : null}
+                <div className="flex justify-end">
+                  <Button
+                    onClick={() => void saveSettings()}
+                    disabled={busy === "settings" || Boolean(webhookUrlError)}
+                    className="bg-purp-900 hover:bg-purp-800"
+                  >
+                    {busy === "settings" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save Breet Configuration"}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border shadow-none">
+              <CardHeader>
+                <CardTitle className="text-base">Sandbox Readiness</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <ChecklistItem label="App ID configured" ok={data.configStatus.appIdConfigured} />
+                <ChecklistItem label="App Secret configured" ok={data.configStatus.appSecretConfigured} />
+                <ChecklistItem label="Webhook Secret configured" ok={data.configStatus.webhookConfigured} />
+                <ChecklistItem label="Webhook URL configured" ok={Boolean(data.configStatus.webhookUrl)} />
+                <ChecklistItem label="Environment = development" ok={data.configStatus.apiEnvironment === "development"} />
+                <ChecklistItem label="Platform Breet bank validated" ok={data.configStatus.platformSettlementBankValidated} />
+                <ChecklistItem label="Minimum auto-settlement amount configured" ok={Boolean(data.configStatus.minimumAutoSettlementNgn)} />
+                <ChecklistItem label="Invoice crypto enabled" ok={data.configStatus.invoiceCryptoEnabled} />
+                <ChecklistItem label="Subscription crypto enabled" ok={data.configStatus.subscriptionCryptoEnabled} />
+                <ChecklistItem label="Live disabled" ok={!data.configStatus.liveEnabled} />
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <Card className="border shadow-none">
+              <CardHeader>
+                <CardTitle className="text-base">Per-Address Auto-Settlement</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm text-neutral-700">
+                <Info label="Platform Settlement Bank" value={formatBankSnapshot(data.configStatus.platformSettlementBankAccount)} />
+                <Info label="Platform Bank Validated" value={boolLabel(data.configStatus.platformSettlementBankValidated)} />
+                <Info label="Per-Address Mode" value={mode === "breet_auto_settlement" ? "Auto-settlement active" : labelMode(mode)} />
+                <div className="rounded-lg border border-neutral-200 p-3 text-sm text-neutral-600">
+                  {mode === "breet_auto_settlement"
+                    ? "Merchant invoice payments settle to merchant bank accounts. Subscription and upgrade payments settle to the platform account."
+                    : mode === "platform_auto_settlement"
+                      ? "Platform settlement monitoring is active. Merchant payout queue controls remain hidden."
+                      : mode === "treasury_manual"
+                        ? "DeraLedger is temporarily responsible for treasury settlement in this mode."
+                        : "Breet crypto is disabled until the configuration checklist is complete."}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border shadow-none">
+              <CardHeader>
+                <CardTitle className="text-base">Merchant Invoice Readiness</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {data.merchantReadiness ? (
+                  <>
+                    <p className="text-sm text-neutral-600">
+                      Reviewing readiness for <span className="font-medium text-neutral-900">{data.merchantReadiness.merchantName || data.merchantReadiness.merchantId}</span>.
+                    </p>
+                    <ChecklistItem label="Merchant has verified settlement account" ok={data.merchantReadiness.hasVerifiedSettlementAccount} />
+                    <ChecklistItem label="Merchant settlement account mapped to Breet bankId" ok={data.merchantReadiness.hasMappedBreetBankId} />
+                    <ChecklistItem label="Merchant account validation passed or mapping confirmed" ok={data.merchantReadiness.validationConfirmed} />
+                    <ChecklistItem label="Amount above minimum auto-settlement threshold" ok={data.merchantReadiness.amountThresholdEnforced} note="Enforced at checkout." />
+                    <div className="rounded-xl border border-neutral-200 p-4 space-y-4">
+                      <div>
+                        <p className="text-sm font-semibold text-neutral-900">Merchant Breet Bank Mapping</p>
+                        <p className="text-xs text-neutral-500 mt-1">Map the merchant&apos;s verified settlement account to a Breet bankId, then validate it before invoice crypto checkout.</p>
+                      </div>
+                      {data.merchantReadiness.merchantSettlementAccount ? (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3 text-sm">
+                          <Info label="Bank Name" value={data.merchantReadiness.merchantSettlementAccount.bankName || "-"} />
+                          <Info label="Local Bank Code" value={data.merchantReadiness.merchantSettlementAccount.bankCode || "-"} />
+                          <Info label="Account Number" value={data.merchantReadiness.merchantSettlementAccount.maskedAccountNumber || "-"} />
+                          <Info label="Account Name" value={data.merchantReadiness.merchantSettlementAccount.accountName || "-"} />
+                          <Info label="Verification Status" value={labelValue(data.merchantReadiness.merchantSettlementAccount.verificationStatus)} />
+                        </div>
+                      ) : null}
+                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                        <Info label="Matched Breet Bank" value={data.merchantReadiness.matchedBreetBank?.bankName || "No auto-match yet"} />
+                        <Info label="Matched Breet bankId" value={data.merchantReadiness.matchedBreetBank?.bankId || "-"} />
+                        <Info label="Current Breet Mapping" value={data.merchantReadiness.currentBreetBank ? `${data.merchantReadiness.currentBreetBank.bankName || "Mapped bank"} (${data.merchantReadiness.currentBreetBank.bankId})` : "Not saved"} />
+                        <Info label="Mapping Environment" value={data.merchantReadiness.mappingEnvironment || "-"} />
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto_auto] gap-4 items-end">
+                        <div className="space-y-2">
+                          <label className="text-sm font-medium text-neutral-700">Select Breet bank</label>
+                          <Select value={merchantBreetBankId || null} onValueChange={(value) => setMerchantBreetBankId(value ?? "")}>
+                            <SelectTrigger className="bg-white border-2">
+                              <SelectValue placeholder="Select Breet bank" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {data.breetBanks.map((bank) => (
+                                <SelectItem key={bank.id} value={bank.id}>
+                                  {bank.name} ({bank.id})
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <Button
+                          variant="outline"
+                          onClick={() => void saveMerchantBreetMapping()}
+                          disabled={busy === "save-merchant-bank" || !merchantBreetBankId}
+                        >
+                          {busy === "save-merchant-bank" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Confirm / Save Mapping"}
+                        </Button>
+                        <Button
+                          onClick={() => void validateMerchantBreetBank()}
+                          disabled={busy === "validate-merchant-bank" || !merchantBreetBankId}
+                          className="bg-purp-900 hover:bg-purp-800"
+                        >
+                          {busy === "validate-merchant-bank" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Validate Merchant Account With Breet"}
+                        </Button>
+                      </div>
+                      <div className="rounded-lg border border-neutral-200 bg-neutral-50 p-3 text-xs text-neutral-600">
+                        {selectedMerchantBank ? `Selected Breet bank: ${selectedMerchantBank.name} (${selectedMerchantBank.id})` : "Select the correct Breet bank if auto-match is missing."}
+                        {merchantValidationNote || data.merchantReadiness.validationNote ? (
+                          <p className="mt-2 text-amber-700">{merchantValidationNote || data.merchantReadiness.validationNote}</p>
+                        ) : null}
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="rounded-lg border border-neutral-200 p-3 text-sm text-neutral-600">
+                    Select a merchant from the filter to inspect invoice settlement readiness.
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="platform-bank">
+          <Card className="border shadow-none">
+            <CardHeader>
+              <CardTitle className="text-base">Platform Breet Bank Setup</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-neutral-700">Fetch Breet Banks</label>
+                  <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-600">
+                    {data.breetBanks.length} banks loaded
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-neutral-700">Select Breet Bank</label>
+                  <Select value={platformBankId || null} onValueChange={(value) => {
+                    setPlatformBankId(value ?? "");
+                    setPlatformAccountNamePreview(null);
+                  }}>
+                    <SelectTrigger className="bg-white border-2">
+                      <SelectValue placeholder="Select Breet bank" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {data.breetBanks.map((bank) => (
+                        <SelectItem key={bank.id} value={bank.id}>
+                          {bank.name} ({bank.id})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-neutral-700">Selected bankId</label>
+                  <Input value={platformBankId} readOnly className="bg-neutral-50 border-2" />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-neutral-700">Bank name</label>
+                  <Input value={selectedPlatformBank?.name || ""} readOnly className="bg-neutral-50 border-2" />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-neutral-700">Account number</label>
+                  <Input
+                    value={platformAccountNamePreview ? maskAccountDigits(platformAccountNumber) : platformAccountNumber}
+                    onChange={(event) => {
+                      setPlatformAccountNumber(event.target.value);
+                      setPlatformAccountNamePreview(null);
+                    }}
+                    className="bg-white border-2"
+                    inputMode="numeric"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <Info label="Resolved Account Name" value={platformAccountNamePreview || "Not validated"} />
+                <Info label="Bank Validation Status" value={boolLabel(data.configStatus.platformSettlementBankValidated)} />
+                <Info label="Platform Test Account" value="OPay - Paycom · bankId 25 · ******9714" />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
+                <Info label="Platform bankId" value={data.configStatus.platformSettlementBankAccount?.bank_id || "-"} />
+                <Info label="Platform bank name" value={data.configStatus.platformSettlementBankAccount?.bank_name || "-"} />
+                <Info label="Platform account number" value={maskAccountDigits(data.configStatus.platformSettlementBankAccount?.account_number)} />
+                <Info label="Platform account name" value={data.configStatus.platformSettlementBankAccount?.account_name || "-"} />
+                <Info
+                  label="Saved Integration Bank"
+                  value={data.savedIntegrationBanks.some((bank) =>
+                    bank.bankId === data.configStatus.platformSettlementBankAccount?.bank_id &&
+                    bank.accountNumber.slice(-4) === (data.configStatus.platformSettlementBankAccount?.account_number || "").slice(-4)
+                  ) ? "Saved in Breet" : "Not yet saved"}
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-neutral-700">Add/save integration bank if needed</label>
+                  <Input value={platformNarration} onChange={(event) => setPlatformNarration(event.target.value)} className="bg-white border-2" />
+                </div>
+                <div className="flex items-end gap-2 flex-wrap">
+                  <Button
+                    onClick={() => void validatePlatformBank()}
+                    disabled={busy === "validate-platform-bank" || !platformBankId || !platformAccountNumber}
+                    className="bg-purp-900 hover:bg-purp-800"
+                  >
+                    {busy === "validate-platform-bank" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Validate Platform Bank"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => void addPlatformIntegrationBank()}
+                    disabled={busy === "add-platform-bank" || !platformBankId || !platformAccountNumber}
+                  >
+                    {busy === "add-platform-bank" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Add / Save Integration Bank"}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <h3 className="text-sm font-semibold text-neutral-900">Saved Breet Integration Banks</h3>
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-neutral-50">
+                        <TableHead>Bank</TableHead>
+                        <TableHead>Bank ID</TableHead>
+                        <TableHead>Account</TableHead>
+                        <TableHead>Account Name</TableHead>
+                        <TableHead>Narration</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {data.savedIntegrationBanks.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={5} className="text-center py-8 text-neutral-500">No saved Breet integration banks yet.</TableCell>
+                        </TableRow>
+                      ) : data.savedIntegrationBanks.map((bank) => (
+                        <TableRow key={`${bank.bankId}-${bank.accountNumber}`}>
+                          <TableCell>{bank.bankName || "-"}</TableCell>
+                          <TableCell>{bank.bankId}</TableCell>
+                          <TableCell>{maskAccountDigits(bank.accountNumber)}</TableCell>
+                          <TableCell>{bank.accountName || "-"}</TableCell>
+                          <TableCell>{bank.narration || "-"}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
 
         <TabsContent value="sessions" className="space-y-4">
           <Card className="border shadow-none">
@@ -504,37 +1087,6 @@ export default function AdminTreasuryPage() {
             </CardContent>
           </Card>
 
-          <Card className="border shadow-none">
-            <CardHeader>
-              <CardTitle className="text-base">Manual Review Queue</CardTitle>
-            </CardHeader>
-            <CardContent className="p-0 overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-neutral-50">
-                    <TableHead>Merchant</TableHead>
-                    <TableHead>Purpose</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Recipient</TableHead>
-                    <TableHead>Reference</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {reviewSessions.length === 0 ? (
-                    <TableRow><TableCell colSpan={5} className="text-center py-10 text-neutral-500">No sessions currently under manual review.</TableCell></TableRow>
-                  ) : reviewSessions.map((session) => (
-                    <TableRow key={session.id}>
-                      <TableCell className="font-medium">{session.merchant_name || "-"}</TableCell>
-                      <TableCell className="text-xs">{labelValue(session.payment_purpose)}</TableCell>
-                      <TableCell><StatusBadge status={String(session.crypto_status || session.status || session.payment_status || "pending")} /></TableCell>
-                      <TableCell className="text-xs">{labelValue(session.settlement_recipient_type)}</TableCell>
-                      <TableCell className="text-xs">{session.provider_reference || session.reference || session.internal_reference || "-"}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
         </TabsContent>
 
         <TabsContent value="settlements" className="space-y-4">
@@ -647,18 +1199,77 @@ export default function AdminTreasuryPage() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="fallback" className="space-y-4">
+        <TabsContent value="manual-review" className="space-y-4">
+          <Card className="border shadow-none">
+            <CardHeader>
+              <CardTitle className="text-base">Manual Review Queue</CardTitle>
+            </CardHeader>
+            <CardContent className="p-0 overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-neutral-50">
+                    <TableHead>Merchant</TableHead>
+                    <TableHead>Purpose</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Recipient</TableHead>
+                    <TableHead>Reference</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {reviewSessions.length === 0 ? (
+                    <TableRow><TableCell colSpan={5} className="text-center py-10 text-neutral-500">No sessions currently under manual review.</TableCell></TableRow>
+                  ) : reviewSessions.map((session) => (
+                    <TableRow key={session.id}>
+                      <TableCell className="font-medium">{session.merchant_name || "-"}</TableCell>
+                      <TableCell className="text-xs">{labelValue(session.payment_purpose)}</TableCell>
+                      <TableCell><StatusBadge status={String(session.crypto_status || session.status || session.payment_status || "pending")} /></TableCell>
+                      <TableCell className="text-xs">{labelValue(session.settlement_recipient_type)}</TableCell>
+                      <TableCell className="text-xs">{session.provider_reference || session.reference || session.internal_reference || "-"}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="advanced" className="space-y-4">
           {!manualTreasuryEnabled ? (
             <Card className="border shadow-none">
-              <CardContent className="p-5 text-sm text-neutral-600">
-                Manual treasury settlement is disabled. Breet payments are expected to auto-settle through Breet.
+              <CardHeader>
+                <CardTitle className="text-base">Advanced / Legacy Treasury Manual Fallback</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4 text-sm text-neutral-600">
+                  Manual treasury settlement is disabled. Breet payments are expected to auto-settle through Breet.
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {legacySettingsEntries.map(([key, label]) => (
+                    <div key={key} className="space-y-2">
+                      <label className="text-sm font-medium text-neutral-700">{label}</label>
+                      <Input
+                        value={settingsDraft[key] || ""}
+                        onChange={(event) => setSettingsDraft((current) => ({ ...current, [key]: event.target.value }))}
+                        className="bg-white border-2"
+                      />
+                    </div>
+                  ))}
+                </div>
+                <div className="flex items-center justify-between rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+                  <div className="text-sm text-neutral-600">
+                    Legacy settlement thresholds and treasury-manual settings are hidden from the main Breet monitoring view.
+                  </div>
+                  <Button onClick={() => void saveSettings()} disabled={busy === "settings"} className="bg-purp-900 hover:bg-purp-800">
+                    {busy === "settings" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save Legacy Settings"}
+                  </Button>
+                </div>
               </CardContent>
             </Card>
           ) : (
             <>
               <Card className="border-amber-200 bg-amber-50 shadow-none">
                 <CardHeader>
-                  <CardTitle className="text-base text-amber-900">Manual Treasury Fallback</CardTitle>
+                  <CardTitle className="text-base text-amber-900">Advanced / Legacy Treasury Manual Fallback</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4 text-sm text-amber-900">
                   <p>DeraLedger is temporarily responsible for treasury settlement in this mode.</p>
@@ -730,40 +1341,46 @@ export default function AdminTreasuryPage() {
                   </Table>
                 </CardContent>
               </Card>
+
+              <Card className="border shadow-none">
+                <CardHeader>
+                  <CardTitle className="text-base">Legacy Treasury Settings</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {legacySettingsEntries.map(([key, label]) => (
+                      <div key={key} className="space-y-2">
+                        <label className="text-sm font-medium text-neutral-700">{label}</label>
+                        <Input
+                          value={settingsDraft[key] || ""}
+                          onChange={(event) => setSettingsDraft((current) => ({ ...current, [key]: event.target.value }))}
+                          className="bg-white border-2"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex items-center justify-between rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+                    <div className="text-sm text-neutral-600">
+                      Legacy settlement and treasury-manual controls only apply while treasury manual mode is active.
+                    </div>
+                    <Button onClick={() => void saveSettings()} disabled={busy === "settings"} className="bg-purp-900 hover:bg-purp-800">
+                      {busy === "settings" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save Legacy Settings"}
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
             </>
           )}
         </TabsContent>
-
-        <TabsContent value="config">
-          <Card className="border shadow-none">
-            <CardHeader>
-              <CardTitle className="text-base">Treasury Configuration</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                {Object.entries(SETTING_LABELS).map(([key, label]) => (
-                  <div key={key} className="space-y-2">
-                    <label className="text-sm font-medium text-neutral-700">{label}</label>
-                    <Input
-                      value={settingsDraft[key] || ""}
-                      onChange={(event) => setSettingsDraft((current) => ({ ...current, [key]: event.target.value }))}
-                      className="bg-white border-2"
-                    />
-                  </div>
-                ))}
-              </div>
-              <div className="flex items-center justify-between rounded-xl border border-neutral-200 bg-neutral-50 p-4">
-                <div className="text-sm text-neutral-600">
-                  Configure Breet rates, assets, settlement mode, webhook endpoint, and platform settlement account details here.
-                </div>
-                <Button onClick={() => void saveSettings()} disabled={busy === "settings"} className="bg-purp-900 hover:bg-purp-800">
-                  {busy === "settings" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save Settings"}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
       </Tabs>
+
+      {!showAdvancedTab ? (
+        <div className="flex justify-end">
+          <Button variant="outline" onClick={() => setShowAdvancedFallback(true)}>
+            Show advanced legacy fallback
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -799,6 +1416,10 @@ function boolLabel(value: boolean) {
   return value ? "Enabled" : "Disabled";
 }
 
+function yesNoLabel(value: boolean) {
+  return value ? "Yes" : "No";
+}
+
 function labelMode(value: string) {
   return value.replaceAll("_", " ");
 }
@@ -818,4 +1439,59 @@ function formatBankSnapshot(
 ) {
   if (!bank?.bank_name || !bank.account_number || !bank.account_name) return "Not configured";
   return `${bank.bank_name} ****${bank.account_number.slice(-4)} · ${bank.account_name} (${bank.currency || "NGN"})`;
+}
+
+function maskAccountDigits(accountNumber?: string | null) {
+  const value = String(accountNumber || "").trim();
+  if (!value) return "-";
+  return `****${value.slice(-4)}`;
+}
+
+function ChecklistItem({ label, ok, note }: { label: string; ok: boolean; note?: string }) {
+  return (
+    <div className="rounded-lg border border-neutral-200 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm text-neutral-700">{label}</p>
+        <Badge
+          variant="outline"
+          className={`border-2 ${ok ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-amber-200 bg-amber-50 text-amber-700"}`}
+        >
+          {ok ? "Ready" : "Needs attention"}
+        </Badge>
+      </div>
+      {note ? <p className="mt-2 text-xs text-neutral-500">{note}</p> : null}
+    </div>
+  );
+}
+
+function ToggleRow({
+  label,
+  checked,
+  onCheckedChange,
+  note,
+}: {
+  label: string;
+  checked: boolean;
+  onCheckedChange: (checked: boolean) => void;
+  note?: string | null;
+}) {
+  return (
+    <div className="rounded-lg border border-neutral-200 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm text-neutral-700">{label}</p>
+        <Switch checked={checked} onCheckedChange={onCheckedChange} />
+      </div>
+      {note ? <p className="mt-2 text-xs text-neutral-500">{note}</p> : null}
+    </div>
+  );
+}
+
+function readBoolSetting(value: string | undefined, fallback: boolean) {
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return fallback;
+}
+
+function checkedWarning(enabled: boolean) {
+  return enabled ? "Use this only after explicit live-readiness approval." : null;
 }
