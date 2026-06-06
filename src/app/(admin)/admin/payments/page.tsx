@@ -93,6 +93,7 @@ type PaymentEventRow = {
   customer_email?: string | null;
   processing_status?: string | null;
   failure_reason?: string | null;
+  reconciliation_status?: string | null;
 };
 
 type PaymentTransactionRow = {
@@ -479,6 +480,7 @@ export default function AdminPaymentsPage() {
                                   <EventDetail label="Plan" value={details.planId} />
                                   <EventDetail label="Customer email" value={details.customerEmail} />
                                   <EventDetail label="Processing result" value={details.processingStatus} />
+                                  <EventDetail label="Reconciliation" value={details.reconciliationStatus} />
                                   <EventDetail label="Failure reason" value={details.failureReason} />
                                 </dl>
                               </div>
@@ -697,6 +699,7 @@ function getProviderEventDetails(event: PaymentEventRow) {
     planId: event.plan_id || stringValue(metadata.new_plan) || stringValue(metadata.plan),
     customerEmail: event.customer_email || stringValue(metadata.email) || stringValue(eventData.customerEmail),
     processingStatus: event.processing_status,
+    reconciliationStatus: event.reconciliation_status,
     failureReason: event.failure_reason,
     expectedAmount: event.expected_amount ?? null,
     paidAmount: event.paid_amount ?? (event.amount_kobo ? Number(event.amount_kobo) / 100 : null),
@@ -741,6 +744,7 @@ function getBreetProviderEventDetails(event: PaymentEventRow, payload: Record<st
     planId: event.plan_id || null,
     customerEmail: event.customer_email || null,
     processingStatus: event.processing_status || status,
+    reconciliationStatus: event.reconciliation_status,
     failureReason: event.failure_reason || null,
     expectedAmount: event.expected_amount ?? null,
     paidAmount: event.paid_amount ?? null,

@@ -213,8 +213,8 @@ export default function TeamPage() {
     getMerchant().then((m) => {
       if (m) {
         setMerchant(m);
-        setBusinessName(m.business_name);
-        if (m.workspace_code) setWorkspaceCode(m.workspace_code);
+        setBusinessName(m.business_name || "");
+        setWorkspaceCode(m.workspace_code || "");
         Promise.all([
           fetchRoles(m.id),
           loadTeam(m.id, m.email, m.created_at || "2025-01-01")

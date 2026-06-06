@@ -251,9 +251,9 @@ export default function SettingsPage() {
         setBusinessCity(m.business_city || "");
         setBusinessState(m.business_state || "");
         setBusinessCountry(m.business_country || "NG");
-        setEmail(m.email);
+        setEmail(m.email || "");
         setPhone(m.phone || "");
-        setFeeDefault(m.fee_absorption_default);
+        setFeeDefault(m.fee_absorption_default === "customer" ? "customer" : "business");
         setBvnNumber(/^\d{11}$/.test(m.bvn || "") ? (m.bvn || "") : "");
         setCacNumber(m.cac_number || "");
         setLogoUrl(m.logo_url || null);

@@ -3,6 +3,7 @@ import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { PaymentService } from "@/lib/payment";
 import { processSuccessfulFiatPayment } from "@/lib/services/fiat-payment-confirmation.service";
 import {
+  classifyAmountMismatch,
   upsertWebhookAuditEvent,
   updatePlanPaymentRecord,
 } from "@/lib/services/plan-payment-recovery.service";
@@ -38,6 +39,9 @@ export async function POST(request: Request) {
   const normalized = normalizeMonnifyWebhook(payload);
 
   if (normalized) {
+    const processingStatus = verification.valid
+      ? getMonnifyAuditProcessingStatus(normalized)
+      : "failed";
     await upsertWebhookAuditEvent(supabase, {
       provider: "monnify",
       eventType: payload.eventType || "monnify.webhook",
@@ -54,14 +58,18 @@ export async function POST(request: Request) {
       invoiceId: normalized.invoiceId,
       customerEmail: normalized.customerEmail,
       rawPayload: payload as Record<string, unknown>,
-      processingStatus: verification.valid ? "received" : "failed",
+      processingStatus,
       failureReason: verification.valid ? null : verification.error || "Signature mismatch",
       idempotencyKey: `monnify:${normalized.providerReference || normalized.reference}:${payload.eventType || "event"}:received`,
       settlementDestinationSource: normalized.settlementDestinationSource,
+      reconciliationStatus: processingStatus === "manual_review" ? "needs_review" : null,
     });
   }
 
   if (!normalized || !normalized.successful) {
+    if (normalized && (normalized.paymentPurpose === "plan_subscription" || normalized.paymentPurpose === "plan_upgrade")) {
+      await updatePlanRecordForNonSuccessMonnifyEvent(normalized, payload as Record<string, unknown>);
+    }
     return NextResponse.json({
       received: true,
       provider: "monnify",
@@ -190,7 +198,9 @@ function normalizeMonnifyWebhook(payload: MonnifyWebhookPayload) {
     paymentStatus === "SUCCESS";
 
   if (!successful || currency !== "NGN") {
-    return null;
+    if (currency !== "NGN") {
+      return null;
+    }
   }
 
   const product = asRecord(eventData.product);
@@ -207,7 +217,7 @@ function normalizeMonnifyWebhook(payload: MonnifyWebhookPayload) {
   }
 
   const amountPaid = Number(eventData.amountPaid ?? eventData.amount ?? eventData.totalPayable ?? 0);
-  if (!Number.isFinite(amountPaid) || amountPaid <= 0) {
+  if (!Number.isFinite(amountPaid) || amountPaid < 0) {
     return null;
   }
 
@@ -223,6 +233,8 @@ function normalizeMonnifyWebhook(payload: MonnifyWebhookPayload) {
 
   return {
     successful,
+    eventType,
+    paymentStatus,
     reference,
     providerReference:
       stringValue(eventData.transactionReference) ||
@@ -250,6 +262,49 @@ function normalizeMonnifyWebhook(payload: MonnifyWebhookPayload) {
         : null,
     metadata,
   };
+}
+
+async function updatePlanRecordForNonSuccessMonnifyEvent(
+  normalized: NonNullable<ReturnType<typeof normalizeMonnifyWebhook>>,
+  rawPayload: Record<string, unknown>
+) {
+  const expectedKobo = normalized.expectedAmount ? Math.round(normalized.expectedAmount * 100) : 0;
+  const mismatch = classifyAmountMismatch(expectedKobo, normalized.amountKobo);
+  const status = getMonnifyAuditProcessingStatus(normalized);
+
+  if (status !== "manual_review" && !mismatch) {
+    return;
+  }
+
+  await updatePlanPaymentRecord(supabase, normalized.reference, {
+    provider_reference: normalized.providerReference,
+    amount_paid: normalized.amountKobo / 100,
+    payment_status: "pending",
+    processing_status: mismatch?.processingStatus || "manual_review",
+    account_setup_status: "manual_review",
+    failure_reason: mismatch?.message || `Monnify payment event requires review: ${normalized.paymentStatus || normalized.eventType || "non-success"}.`,
+    raw_provider_payload: rawPayload,
+  }, "monnify");
+}
+
+function getMonnifyAuditProcessingStatus(normalized: NonNullable<ReturnType<typeof normalizeMonnifyWebhook>>) {
+  const status = `${normalized.eventType || ""} ${normalized.paymentStatus || ""}`.toLowerCase();
+  const expectedKobo = normalized.expectedAmount ? Math.round(normalized.expectedAmount * 100) : 0;
+  const mismatch = classifyAmountMismatch(expectedKobo, normalized.amountKobo);
+
+  if (mismatch) {
+    return "manual_review";
+  }
+  if (status.includes("under") || status.includes("partial") || status.includes("refund") || status.includes("reversed")) {
+    return "manual_review";
+  }
+  if (normalized.successful) {
+    return "received";
+  }
+  if (status.includes("fail") || status.includes("cancel") || status.includes("expire")) {
+    return "failed";
+  }
+  return "received";
 }
 
 function normalizeMetadata(value: unknown): Record<string, unknown> {

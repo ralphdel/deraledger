@@ -17,6 +17,17 @@ type PlatformSettings = {
   superadminSandboxEmail: string;
 };
 
+function normalizePlatformSettings(payload: Partial<PlatformSettings> | null | undefined): PlatformSettings {
+  return {
+    currentVersion: Math.max(1, Number(payload?.currentVersion || 1)),
+    forceLogoutOnUpdate: Boolean(payload?.forceLogoutOnUpdate),
+    title: payload?.title || "",
+    summary: payload?.summary || "",
+    requiredAction: payload?.requiredAction || "",
+    superadminSandboxEmail: payload?.superadminSandboxEmail || "",
+  };
+}
+
 export default function AdminSystemPage() {
   const [settings, setSettings] = useState<PlatformSettings | null>(null);
   const [draft, setDraft] = useState<PlatformSettings | null>(null);
@@ -28,8 +39,9 @@ export default function AdminSystemPage() {
     fetch("/api/admin/platform-settings")
       .then((res) => res.json())
       .then((payload) => {
-        setSettings(payload);
-        setDraft(payload);
+        const normalized = normalizePlatformSettings(payload);
+        setSettings(normalized);
+        setDraft(normalized);
       })
       .catch(() => setFeedback("Could not load platform settings."))
       .finally(() => setLoading(false));

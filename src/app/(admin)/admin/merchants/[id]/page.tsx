@@ -433,7 +433,10 @@ export default function MerchantDetailPage() {
             <DialogTitle>Change Plan for {merchant.business_name}</DialogTitle>
             <DialogDescription>Current plan: <span className="font-semibold capitalize">{tier}</span></DialogDescription>
           </DialogHeader>
-          <Select value={newPlan} onValueChange={(v) => setNewPlan(v as any)}>
+          <Select
+            value={newPlan}
+            onValueChange={(v) => setNewPlan((v ?? "individual") as "starter" | "individual" | "corporate")}
+          >
             <SelectTrigger className="border-2"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="starter">Starter (Free)</SelectItem>
