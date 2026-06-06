@@ -94,13 +94,14 @@ export class MonnifyAdapter implements IPaymentProcessor {
   }
 
   async initializeTransaction(p: TransactionParams): Promise<TransactionResult> {
+    const redirectUrl = normalizeMonnifyRedirectUrl(p.callbackUrl);
     const body: Record<string, unknown> = {
       amount: p.amountKobo / 100,
       customerName: String(p.metadata.business_name || p.metadata.trading_name || p.email),
       customerEmail: p.email,
       paymentReference: p.reference,
       paymentDescription: String(p.metadata.type || "DeraLedger payment"),
-      redirectUrl: p.callbackUrl,
+      redirectUrl,
       currencyCode: "NGN",
       contractCode: this.contractCode,
       paymentMethods: [p.paymentMethod === "bank_transfer" ? "ACCOUNT_TRANSFER" : p.paymentMethod === "ussd" ? "USSD" : "CARD"],
@@ -217,5 +218,16 @@ export class MonnifyAdapter implements IPaymentProcessor {
     } catch {
       return {};
     }
+  }
+}
+
+function normalizeMonnifyRedirectUrl(callbackUrl: string) {
+  try {
+    const url = new URL(callbackUrl);
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return callbackUrl.split("?")[0] || callbackUrl;
   }
 }

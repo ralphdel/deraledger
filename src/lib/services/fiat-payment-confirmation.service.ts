@@ -438,15 +438,32 @@ async function confirmInitialSubscription(
     return { received: true, needs_review: true, status: mismatch.processingStatus };
   }
 
-  const { data: session } = await supabase
+  const { data: session, error: sessionLoadError } = await supabase
     .from("onboarding_sessions")
-    .update({ status: "processing" })
+    .select("id, status, merchant_id")
     .eq("id", sessionId)
-    .eq("status", "awaiting_payment")
-    .select("id")
-    .single();
+    .maybeSingle();
+
+  if (sessionLoadError) {
+    throw new Error(`Failed to load onboarding session: ${sessionLoadError.message}`);
+  }
 
   if (!session) {
+    await updatePlanPaymentRecord(supabase, reference, {
+      provider_reference: payment.providerReference || reference,
+      amount_paid: amountKobo / 100,
+      payment_status: "successful",
+      processing_status: "paid_pending_setup",
+      account_setup_status: "paid_pending_setup",
+      password_setup_required: true,
+      failure_reason: "Payment verified, but onboarding session could not be found.",
+      raw_provider_payload: payment.rawProviderPayload || metadata,
+      paid_at: new Date().toISOString(),
+    }, provider);
+    return { received: true, needs_review: true, status: "paid_pending_setup" };
+  }
+
+  if (session.status === "payment_confirmed" && session.merchant_id) {
     const existingRecord = await findPaymentRecordByReference(supabase, reference, provider);
     if (existingRecord) {
       await updatePlanPaymentRecord(supabase, reference, {
@@ -460,6 +477,17 @@ async function confirmInitialSubscription(
       }, provider);
     }
     return { received: true, already_processed: true };
+  }
+
+  if (session.status !== "processing") {
+    const { error: sessionLockError } = await supabase
+      .from("onboarding_sessions")
+      .update({ status: "processing" })
+      .eq("id", sessionId);
+
+    if (sessionLockError) {
+      throw new Error(`Failed to lock onboarding session: ${sessionLockError.message}`);
+    }
   }
 
   const activePlan = plan || "corporate";
