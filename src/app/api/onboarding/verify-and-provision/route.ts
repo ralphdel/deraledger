@@ -4,6 +4,7 @@ import { PaymentService } from "@/lib/payment";
 import { processSuccessfulFiatPayment } from "@/lib/services/fiat-payment-confirmation.service";
 import {
   findPaymentRecordByReference,
+  updatePlanPaymentRecord,
   upsertWebhookAuditEvent,
 } from "@/lib/services/plan-payment-recovery.service";
 
@@ -114,11 +115,12 @@ async function verifyProviderTransaction(reference: string, provider?: string) {
         };
       }
 
+      const metadata = asRecord(raw.metadata) || asRecord(raw.metaData) || {};
       return {
         provider: providerName,
         raw,
         success: false as const,
-        processingStatus: getVerificationProcessingStatus(raw, status),
+        processingStatus: getVerificationProcessingStatus(raw, status, metadata),
       };
     } catch {
       continue;
@@ -189,11 +191,34 @@ async function recordUnsuccessfulVerificationAttempt(
         : null,
     reconciliationStatus: verification.processingStatus === "manual_review" ? "needs_review" : null,
   });
+
+  if (
+    verification.processingStatus === "manual_review" &&
+    (paymentPurpose === "plan_subscription" || paymentPurpose === "plan_upgrade")
+  ) {
+    await updatePlanPaymentRecord(supabase, reference, {
+      provider_reference: providerReference,
+      amount_paid: paidAmount,
+      payment_status: "pending",
+      processing_status: "manual_review",
+      account_setup_status: "manual_review",
+      failure_reason: getVerificationFailureReason(payload),
+      raw_provider_payload: payload,
+    }, verification.provider);
+  }
 }
 
-function getVerificationProcessingStatus(payload: Record<string, unknown>, status: string | null) {
+function getVerificationProcessingStatus(
+  payload: Record<string, unknown>,
+  status: string | null,
+  metadata: Record<string, unknown>
+) {
   const normalized = `${status || ""} ${payload.paymentStatus || ""} ${payload.status || ""}`.toLowerCase();
+  const paymentPurpose = stringValue(metadata.payment_purpose) || normalizePaymentPurpose(stringValue(metadata.type));
   if (normalized.includes("under") || normalized.includes("partial") || normalized.includes("refund") || normalized.includes("reversed")) {
+    return "manual_review" as const;
+  }
+  if ((paymentPurpose === "plan_subscription" || paymentPurpose === "plan_upgrade") && normalized.includes("pending")) {
     return "manual_review" as const;
   }
   if (normalized.includes("fail") || normalized.includes("cancel") || normalized.includes("expire")) {
