@@ -42,28 +42,32 @@ export async function POST(request: Request) {
     const processingStatus = verification.valid
       ? getMonnifyAuditProcessingStatus(normalized)
       : "failed";
-    await upsertWebhookAuditEvent(supabase, {
-      provider: "monnify",
-      eventType: payload.eventType || "monnify.webhook",
-      paymentMethod: normalized.paymentMethod,
-      paymentPurpose: normalized.paymentPurpose,
-      paymentReference: normalized.reference,
-      providerReference: normalized.providerReference,
-      expectedAmount: normalized.expectedAmount,
-      paidAmount: normalized.amountKobo / 100,
-      currency: "NGN",
-      fee: normalized.feesKobo !== null ? normalized.feesKobo / 100 : null,
-      planId: normalized.planId,
-      merchantId: normalized.merchantId,
-      invoiceId: normalized.invoiceId,
-      customerEmail: normalized.customerEmail,
-      rawPayload: payload as Record<string, unknown>,
-      processingStatus,
-      failureReason: verification.valid ? null : verification.error || "Signature mismatch",
-      idempotencyKey: `monnify:${normalized.providerReference || normalized.reference}:${payload.eventType || "event"}:received`,
-      settlementDestinationSource: normalized.settlementDestinationSource,
-      reconciliationStatus: processingStatus === "manual_review" ? "needs_review" : null,
-    });
+    try {
+      await upsertWebhookAuditEvent(supabase, {
+        provider: "monnify",
+        eventType: payload.eventType || "monnify.webhook",
+        paymentMethod: normalized.paymentMethod,
+        paymentPurpose: normalized.paymentPurpose,
+        paymentReference: normalized.reference,
+        providerReference: normalized.providerReference,
+        expectedAmount: normalized.expectedAmount,
+        paidAmount: normalized.amountKobo / 100,
+        currency: "NGN",
+        fee: normalized.feesKobo !== null ? normalized.feesKobo / 100 : null,
+        planId: normalized.planId,
+        merchantId: normalized.merchantId,
+        invoiceId: normalized.invoiceId,
+        customerEmail: normalized.customerEmail,
+        rawPayload: payload as Record<string, unknown>,
+        processingStatus,
+        failureReason: verification.valid ? null : verification.error || "Signature mismatch",
+        idempotencyKey: `monnify:${normalized.providerReference || normalized.reference}:${payload.eventType || "event"}:received`,
+        settlementDestinationSource: normalized.settlementDestinationSource,
+        reconciliationStatus: processingStatus === "manual_review" ? "needs_review" : null,
+      });
+    } catch (error) {
+      console.error("Failed to record Monnify webhook audit event:", error);
+    }
   }
 
   if (!normalized || !normalized.successful) {

@@ -25,7 +25,11 @@ export async function POST(request: Request) {
   }
 
   if (!verification.success) {
-    await recordUnsuccessfulVerificationAttempt(reference, verification);
+    try {
+      await recordUnsuccessfulVerificationAttempt(reference, verification);
+    } catch (error) {
+      console.error("Failed to record unsuccessful payment verification audit event:", error);
+    }
     return NextResponse.json({
       success: false,
       status: verification.processingStatus,
