@@ -578,11 +578,9 @@ async function handleInvoiceWebhook(input: {
     0;
   const settings = await readSettings([
     `crypto_${rail.toLowerCase()}_confirmations`,
-    "crypto_underpayment_tolerance_bps",
     "crypto_platform_fee_bps",
     "crypto_overpayment_action",
   ]);
-  const toleranceBps = Number(settings.get("crypto_underpayment_tolerance_bps") || "100");
   const expectedConfirmations = Number(settings.get(`crypto_${rail.toLowerCase()}_confirmations`) || "12");
   const platformFeeBps = Number(settings.get("crypto_platform_fee_bps") || "0");
   const platformFee = Number(((receivedNgN * platformFeeBps) / 10_000).toFixed(2));
@@ -605,40 +603,6 @@ async function handleInvoiceWebhook(input: {
       paymentSessionId: String(session.id),
       sessionTable: "payment_sessions",
     });
-  }
-
-  if (!withinTolerance(expectedNgN, receivedNgN, toleranceBps)) {
-    await supabase
-      .from("payment_sessions")
-      .update({
-        status: "UNDER_REVIEW",
-        crypto_status:
-          receivedNgN < expectedNgN ? "crypto_underpaid" : "crypto_overpaid",
-        manual_review_reason: "Amount outside configured tolerance.",
-        crypto_amount_received: amountCrypto || null,
-        converted_ngn_amount: receivedNgN,
-        metadata: {
-          ...asRecord(session.metadata),
-          ...pendingObservation,
-        },
-        webhook_status: "processed",
-        raw_webhook_payload: payload,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", session.id);
-
-    await recordWebhookLog({
-      eventType,
-      status: "under_review",
-      processorReference: providerReference,
-      merchantId: stringValue(session.merchant_id) || context.merchantId || null,
-      invoiceId: stringValue(session.invoice_id) || context.invoiceId || null,
-      paymentSessionId: String(session.id),
-      errorMessage: "amount_outside_tolerance",
-      rawPayload: payload,
-    });
-    await updateProviderWebhookHealth("success");
-    return NextResponse.json({ received: true, mapped: true, underReview: true });
   }
 
   const rpcResult = await supabase.rpc("process_breet_invoice_confirmation", {
@@ -675,7 +639,7 @@ async function handleInvoiceWebhook(input: {
     return NextResponse.json({ error: "Breet invoice confirmation failed" }, { status: 500 });
   }
 
-  await supabase
+  const { error: paymentSessionUpdateError } = await supabase
     .from("payment_sessions")
     .update({
       provider_reference: providerReference || session.provider_reference || null,
@@ -686,8 +650,10 @@ async function handleInvoiceWebhook(input: {
       settlement_fee: 0,
       expected_settlement_ngn: receivedNgN - platformFee,
       actual_settlement_ngn: receivedNgN - platformFee,
+      amount_settled: receivedNgN,
+      settlement_currency: "NGN",
       settlement_mode: settlementMode,
-      status: "PAID",
+      status: "CONFIRMED",
       crypto_status: lifecycleStatus,
       confirmation_count: pendingObservation.latest_confirmation_count,
       metadata: {
@@ -701,6 +667,21 @@ async function handleInvoiceWebhook(input: {
     })
     .eq("id", session.id);
 
+  if (paymentSessionUpdateError) {
+    await recordWebhookLog({
+      eventType,
+      status: "failed",
+      processorReference: providerReference,
+      merchantId: stringValue(session.merchant_id) || context.merchantId || null,
+      invoiceId: stringValue(session.invoice_id) || context.invoiceId || null,
+      paymentSessionId: String(session.id),
+      errorMessage: paymentSessionUpdateError.message,
+      rawPayload: payload,
+    });
+    await updateProviderWebhookHealth("failed");
+    return NextResponse.json({ error: "Breet invoice session finalization failed" }, { status: 500 });
+  }
+
   await supabase.from("payment_events").insert({
     merchant_id: session.merchant_id,
     invoice_id: session.invoice_id,
@@ -708,7 +689,7 @@ async function handleInvoiceWebhook(input: {
     event_type: eventType,
     processor: "breet",
     processor_ref: providerReference || txHash || null,
-    amount_kobo: Math.round(expectedNgN * 100),
+    amount_kobo: Math.round(receivedNgN * 100),
     raw_payload: payload,
     idempotency_key: idempotencyKey || null,
     payment_method: "crypto",

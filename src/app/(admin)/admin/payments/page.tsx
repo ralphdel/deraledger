@@ -730,6 +730,14 @@ export default function AdminPaymentsPage() {
                                   <EventDetail label="Rate" value={details.conversionRate} />
                                   <EventDetail label="Estimated NGN" value={details.estimatedNgn ? formatNaira(details.estimatedNgn) : null} />
                                   <EventDetail label="Amount settled" value={details.amountSettledNgn !== null && details.amountSettledNgn !== undefined ? formatNaira(details.amountSettledNgn) : null} />
+                                  <EventDetail
+                                    label="Invoice credit"
+                                    value={
+                                      event.invoice_id && details.paidAmount !== null && details.paidAmount !== undefined
+                                        ? formatNaira(details.paidAmount)
+                                        : null
+                                    }
+                                  />
                                   <EventDetail label="Provider fee" value={details.providerFeeUsd ? `$${details.providerFeeUsd}` : null} />
                                   <EventDetail label="Merchant" value={event.merchant_id || details.merchantId} />
                                   <EventDetail label="Invoice" value={event.invoice_id || details.invoiceId} />

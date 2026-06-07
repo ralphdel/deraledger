@@ -206,6 +206,9 @@ export function mapBreetEventToCryptoStatus(
   if (event.includes("confirm") || status.includes("confirm") || payloadStatus.includes("confirm")) {
     return "crypto_payment_confirming";
   }
+  if (event.includes("completed") || status === "completed" || payloadStatus === "completed") {
+    return "crypto_payment_confirmed";
+  }
   if (event.includes("detect") || event.includes("received") || status.includes("detect")) {
     return "crypto_payment_detected";
   }
