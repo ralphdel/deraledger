@@ -33,6 +33,19 @@ type SessionRow = {
   created_at: string;
 };
 
+type AccountingMetadata = {
+  latest_invoice_credit_amount?: unknown;
+  invoice_credit_amount?: unknown;
+  latest_customer_payable_amount?: unknown;
+  customer_payable_amount?: unknown;
+  latest_gross_provider_value_ngn?: unknown;
+  gross_provider_value_ngn?: unknown;
+  latest_provider_fee_amount?: unknown;
+  provider_fee_amount?: unknown;
+  latest_fee_payer?: unknown;
+  fee_payer?: unknown;
+};
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
@@ -172,6 +185,29 @@ export async function GET(request: Request) {
     numberValue(metadata.latest_amount_settled) ??
     numberValue(payload.amountSettled) ??
     numberValue(session.converted_ngn_amount);
+  const accounting = asRecord(payload.deraledger_accounting) as AccountingMetadata;
+  const invoiceCreditAmount =
+    numberValue(accounting.latest_invoice_credit_amount) ??
+    numberValue(accounting.invoice_credit_amount) ??
+    numberValue(metadata.latest_invoice_credit_amount) ??
+    numberValue(session.amount_ngn);
+  const customerPayableAmount =
+    numberValue(accounting.customer_payable_amount) ??
+    numberValue(metadata.customer_payable_amount) ??
+    numberValue(metadata.latest_customer_payable_amount) ??
+    numberValue(session.amount_ngn);
+  const grossProviderValueNgn =
+    numberValue(accounting.gross_provider_value_ngn) ??
+    numberValue(metadata.latest_gross_provider_value_ngn) ??
+    estimatedNgn;
+  const providerFeeAmount =
+    numberValue(accounting.provider_fee_amount) ??
+    numberValue(metadata.latest_provider_fee_amount);
+  const feePayer =
+    stringValue(accounting.fee_payer) ??
+    stringValue(metadata.latest_fee_payer) ??
+    stringValue(metadata.fee_payer) ??
+    stringValue(metadata.invoice_fee_absorption);
   const txHash =
     session.tx_hash ||
     stringValue(metadata.latest_tx_hash) ||
@@ -195,7 +231,12 @@ export async function GET(request: Request) {
     amountInUSD,
     rate,
     estimatedNgn,
+    invoiceCreditAmount,
+    customerPayableAmount,
+    grossProviderValueNgn,
     amountSettled,
+    providerFeeAmount,
+    feePayer,
     invoiceCredited: statusInfo.status === "completed",
     message: statusInfo.message,
     walletAddress: session.wallet_address,

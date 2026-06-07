@@ -23,6 +23,7 @@ import {
   normalizeCryptoRail,
   rateSettingKeyForRail,
 } from "@/lib/treasury";
+import { calculateProportionalPayment } from "@/lib/calculations";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -172,6 +173,21 @@ export async function POST(request: Request) {
     }
 
     const intendedPaymentAmount = roundCurrency(paymentAmount);
+    const feePayer = invoice.fee_absorption === "customer" ? "customer" : "business";
+    const allocation = calculateProportionalPayment(
+      intendedPaymentAmount,
+      Number(invoice.outstanding_balance || 0),
+      Number(invoice.tax_value || 0),
+      Number(invoice.discount_value || 0),
+      Number(invoice.amount_paid || 0),
+      feePayer
+    );
+    const customerPayableAmount = roundCurrency(
+      feePayer === "customer" ? allocation.totalCharge : intendedPaymentAmount
+    );
+    const expectedFeeAmount = roundCurrency(
+      feePayer === "customer" ? allocation.paystackFee : 0
+    );
     const minimumAutoSettlementNgn = eligibility.config.minimumAutoSettlementNgn;
 
     if (isBelowBreetMinimumAmount(outstanding, minimumAutoSettlementNgn)) {
@@ -252,7 +268,7 @@ export async function POST(request: Request) {
       defaultConfirmationsForRail(rail)
     );
     const ttlMinutes = parseNumericSetting(settingsMap.get("crypto_session_ttl_minutes"), 30);
-    const cryptoAmount = computeCryptoAmount(intendedPaymentAmount, exchangeRate);
+    const cryptoAmount = computeCryptoAmount(customerPayableAmount, exchangeRate);
     const expiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString();
     const paymentSessionId = crypto.randomUUID();
     const reference = `INV-CRYPTO-${invoice.id.slice(0, 8).toUpperCase()}-${Date.now()}`;
@@ -307,7 +323,7 @@ export async function POST(request: Request) {
       crypto_status: "crypto_payment_initialized",
       provider_fee: 0,
       settlement_fee: 0,
-      expected_settlement_ngn: intendedPaymentAmount,
+      expected_settlement_ngn: customerPayableAmount,
       actual_settlement_ngn: null,
       webhook_status: "pending",
       settlement_account_reference: addressResult.settlementBankId || resolveBreetBankId(settlementBank) || null,
@@ -316,6 +332,11 @@ export async function POST(request: Request) {
         invoice_number: invoice.invoice_number,
         client_email: invoice.clients?.email || null,
         purpose: "invoice_payment",
+        selected_invoice_amount: intendedPaymentAmount,
+        customer_payable_amount: customerPayableAmount,
+        fee_payer: feePayer,
+        fee_amount: expectedFeeAmount,
+        invoice_fee_absorption: feePayer,
         settlement_mode: settlementMode,
         settlement_recipient_type: settlementRecipientType,
         settlement_destination: settlementRecipientType === "merchant"

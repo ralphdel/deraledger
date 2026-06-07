@@ -1095,10 +1095,23 @@ function getProviderEventDetails(event: PaymentEventRow) {
 function getBreetProviderEventDetails(event: PaymentEventRow, payload: Record<string, unknown>) {
   const eventName = stringValue(payload.event) || event.event_type;
   const rawStatus = stringValue(payload.status);
+  const accounting = asRecord(payload.deraledger_accounting);
   const amountUsd = numericValue(payload.amountInUSD);
   const conversionRate = numericValue(payload.rate);
-  const estimatedNgn = amountUsd && conversionRate ? amountUsd * conversionRate : null;
-  const amountSettledNgn = numericValue(payload.amountSettled);
+  const estimatedNgn =
+    numericValue(accounting.gross_provider_value_ngn) ||
+    (amountUsd && conversionRate ? amountUsd * conversionRate : null);
+  const amountSettledNgn =
+    numericValue(accounting.amount_settled_ngn) ||
+    numericValue(payload.amountSettled);
+  const invoiceCreditAmount =
+    numericValue(accounting.invoice_credit_amount) ||
+    event.paid_amount ||
+    null;
+  const providerFeeAmount =
+    numericValue(accounting.provider_fee_amount) ||
+    event.fee ||
+    null;
   const status = (() => {
     const normalized = `${eventName} ${rawStatus || ""}`.toLowerCase();
     if (normalized.includes("address.created")) return "address created";
@@ -1123,9 +1136,12 @@ function getBreetProviderEventDetails(event: PaymentEventRow, payload: Record<st
     reconciliationStatus: event.reconciliation_status,
     failureReason: event.failure_reason || null,
     expectedAmount: event.expected_amount ?? null,
-    paidAmount: event.paid_amount ?? null,
-    fee: event.fee ?? null,
-    walletAddress: stringValue(payload.address) || stringValue(payload.destinationAddress),
+    paidAmount: invoiceCreditAmount,
+    fee: providerFeeAmount,
+    walletAddress:
+      stringValue(accounting.destination_address) ||
+      stringValue(payload.address) ||
+      stringValue(payload.destinationAddress),
     txHash: stringValue(payload.txHash) || stringValue(payload.tx_hash),
     cryptoAsset: stringValue(payload.asset),
     cryptoAmount: numericValue(payload.cryptoAmount),

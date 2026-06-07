@@ -40,7 +40,12 @@ type CryptoCheckoutStatus = {
   amountInUSD?: number | null;
   rate?: number | null;
   estimatedNgn?: number | null;
+  invoiceCreditAmount?: number | null;
+  customerPayableAmount?: number | null;
+  grossProviderValueNgn?: number | null;
   amountSettled?: number | null;
+  providerFeeAmount?: number | null;
+  feePayer?: string | null;
   invoiceCredited: boolean;
   message: string;
   walletAddress?: string | null;
@@ -1119,7 +1124,7 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                     </p>
                   </div>
                 </div>
-                {(cryptoCheckoutStatus?.txHash || cryptoCheckoutStatus?.confirmations || cryptoCheckoutStatus?.estimatedNgn || cryptoCheckoutStatus?.amountSettled) ? (
+                {(cryptoCheckoutStatus?.txHash || cryptoCheckoutStatus?.confirmations || cryptoCheckoutStatus?.estimatedNgn || cryptoCheckoutStatus?.invoiceCreditAmount || cryptoCheckoutStatus?.amountSettled) ? (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-left text-sm">
                     {cryptoCheckoutStatus?.txHash ? (
                       <div className="bg-white border border-neutral-200 rounded-xl p-3">
@@ -1144,11 +1149,27 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                         <p className="font-semibold text-neutral-900 mt-1">{formatNaira(cryptoCheckoutStatus.estimatedNgn)}</p>
                       </div>
                     ) : null}
+                    {typeof cryptoCheckoutStatus?.invoiceCreditAmount === "number" ? (
+                      <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-emerald-800">
+                        <p className="text-xs uppercase tracking-wide font-semibold">Invoice Payment Amount</p>
+                        <p className="font-semibold mt-1">{formatNaira(cryptoCheckoutStatus.invoiceCreditAmount)}</p>
+                        <p className="text-[11px] mt-1">This is the amount credited to your invoice after confirmation.</p>
+                      </div>
+                    ) : null}
                     {typeof cryptoCheckoutStatus?.amountSettled === "number" ? (
                       <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-amber-800">
-                        <p className="text-xs uppercase tracking-wide font-semibold">Provider Reported NGN</p>
+                        <p className="text-xs uppercase tracking-wide font-semibold">Merchant Net Settlement</p>
                         <p className="font-semibold mt-1">{formatNaira(cryptoCheckoutStatus.amountSettled)}</p>
-                        <p className="text-[11px] mt-1">Reported by provider; not final until confirmation.</p>
+                        <p className="text-[11px] mt-1">Tracked separately from your invoice credit for reconciliation.</p>
+                      </div>
+                    ) : null}
+                    {typeof cryptoCheckoutStatus?.providerFeeAmount === "number" && cryptoCheckoutStatus.providerFeeAmount > 0 ? (
+                      <div className="bg-white border border-neutral-200 rounded-xl p-3">
+                        <p className="text-xs uppercase tracking-wide text-neutral-500 font-semibold">Provider Fee</p>
+                        <p className="font-semibold text-neutral-900 mt-1">{formatNaira(cryptoCheckoutStatus.providerFeeAmount)}</p>
+                        <p className="text-[11px] mt-1 capitalize">
+                          {cryptoCheckoutStatus.feePayer === "customer" ? "Customer" : "Merchant"} bears this fee.
+                        </p>
                       </div>
                     ) : null}
                   </div>

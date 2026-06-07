@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { PaymentService } from "@/lib/payment";
 import { processSuccessfulFiatPayment } from "@/lib/services/fiat-payment-confirmation.service";
-import { upsertSettlementLedgerForTransaction } from "@/lib/services/settlement-ledger.service";
 import {
   buildBreetWebhookIdempotencyKey,
   mapBreetEventToCryptoStatus,
@@ -128,6 +127,61 @@ function getNonTerminalProcessingStatus(eventType: string, lifecycleStatus: stri
   }
 
   return "waiting_for_payment";
+}
+
+function roundCurrency(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function normalizeFeePayer(value: unknown): "business" | "customer" {
+  return value === "customer" ? "customer" : "business";
+}
+
+function getInvoiceSessionAccounting(
+  session: Record<string, unknown>,
+  invoice: Record<string, unknown> | null,
+  payload: WebhookPayload,
+  fallbackAmountSettled: number
+) {
+  const metadata = asRecord(session.metadata);
+  const selectedInvoiceAmount = roundCurrency(
+    positiveNumberValue(metadata.selected_invoice_amount) ||
+      positiveNumberValue(session.amount_ngn) ||
+      0
+  );
+  const feePayer = normalizeFeePayer(
+    stringValue(metadata.fee_payer) ||
+      stringValue(metadata.invoice_fee_absorption) ||
+      stringValue(invoice?.fee_absorption)
+  );
+  const configuredFeeAmount = roundCurrency(
+    positiveNumberValue(metadata.fee_amount) || 0
+  );
+  const customerPayableAmount = roundCurrency(
+    positiveNumberValue(metadata.customer_payable_amount) ||
+      (feePayer === "customer" ? selectedInvoiceAmount + configuredFeeAmount : selectedInvoiceAmount)
+  );
+  const grossProviderValueNgn = roundCurrency(
+    estimateNgnFromBreetUsd(payload) || customerPayableAmount || selectedInvoiceAmount
+  );
+  const amountSettledNgn = roundCurrency(
+    positiveNumberValue(payload.amountSettled) || fallbackAmountSettled || 0
+  );
+  const providerFeeAmount = roundCurrency(
+    Math.max(
+      0,
+      (feePayer === "customer" ? customerPayableAmount : selectedInvoiceAmount) - amountSettledNgn
+    )
+  );
+
+  return {
+    feePayer,
+    selectedInvoiceAmount,
+    customerPayableAmount,
+    grossProviderValueNgn,
+    amountSettledNgn,
+    providerFeeAmount,
+  };
 }
 
 async function readSettings(keys: string[]) {
@@ -558,6 +612,27 @@ async function handleInvoiceWebhook(input: {
   idempotencyKey: string | null;
 }) {
   const { payload, eventType, providerReference, txHash, context, session, idempotencyKey } = input;
+  const { data: invoice, error: invoiceError } = await supabase
+    .from("invoices")
+    .select("id, merchant_id, invoice_number, outstanding_balance, amount_paid, fee_absorption, status, payment_status, grand_total, tax_value, discount_value")
+    .eq("id", String(session.invoice_id || context.invoiceId || ""))
+    .maybeSingle();
+
+  if (invoiceError || !invoice) {
+    await recordWebhookLog({
+      eventType,
+      status: "failed",
+      processorReference: providerReference,
+      merchantId: stringValue(session.merchant_id) || context.merchantId || null,
+      invoiceId: stringValue(session.invoice_id) || context.invoiceId || null,
+      paymentSessionId: String(session.id),
+      errorMessage: invoiceError?.message || "Invoice not found for Breet session",
+      rawPayload: payload,
+    });
+    await updateProviderWebhookHealth("failed");
+    return NextResponse.json({ error: "Breet invoice mapping failed" }, { status: 500 });
+  }
+
   const rail = normalizeCryptoRail(
     stringValue(payload.currency) ||
       stringValue(payload.asset) ||
@@ -570,7 +645,6 @@ async function handleInvoiceWebhook(input: {
     numberValue(eventDataValue(payload, ["crypto_amount"])) ||
     0;
   const receivedNgN = confirmedBreetNgnAmount(payload, Number(session.amount_ngn || 0));
-  const expectedNgN = Number(session.amount_ngn || 0);
   const confirmationCount =
     numberValue(payload.confirmations) ||
     numberValue(payload.confirmation_count) ||
@@ -582,13 +656,20 @@ async function handleInvoiceWebhook(input: {
     "crypto_overpayment_action",
   ]);
   const expectedConfirmations = Number(settings.get(`crypto_${rail.toLowerCase()}_confirmations`) || "12");
-  const platformFeeBps = Number(settings.get("crypto_platform_fee_bps") || "0");
-  const platformFee = Number(((receivedNgN * platformFeeBps) / 10_000).toFixed(2));
+  const toleranceBps = Number(settings.get("crypto_underpayment_tolerance_bps") || "100");
   const settlementMode = normalizeBreetSettlementMode(String(session.settlement_mode || "treasury_manual"));
   const lifecycleStatus = normalizeCryptoLifecycleStatus(
     mapBreetEventToCryptoStatus(eventType, stringValue(payload.status), payload)
   );
   const pendingObservation = buildPendingObservation(payload, eventType);
+  const accounting = getInvoiceSessionAccounting(session, invoice, payload, receivedNgN);
+  const expectedCryptoAmount = Number(session.amount_crypto || 0);
+  const hasExpectedCryptoAmount = expectedCryptoAmount > 0 && amountCrypto > 0;
+  const coverageAmount = hasExpectedCryptoAmount ? amountCrypto : accounting.grossProviderValueNgn;
+  const expectedCoverageAmount = hasExpectedCryptoAmount ? expectedCryptoAmount : accounting.customerPayableAmount;
+  const paymentCoverageConfirmed =
+    expectedCoverageAmount <= 0 ||
+    withinTolerance(expectedCoverageAmount, coverageAmount, toleranceBps);
 
   if (!isBreetTerminalSuccessEvent(eventType, stringValue(payload.status), payload)) {
     return recordNonTerminalEvent({
@@ -605,6 +686,120 @@ async function handleInvoiceWebhook(input: {
     });
   }
 
+  if (!paymentCoverageConfirmed) {
+    const underpaidAmount = roundCurrency(Math.max(0, expectedCoverageAmount - coverageAmount));
+    const underpaymentReason =
+      coverageAmount < expectedCoverageAmount
+        ? `Breet completed event confirmed less than the expected customer payment amount by ${underpaidAmount.toFixed(2)}.`
+        : "Breet completed event requires manual review before invoice credit.";
+    const accountingPayload = {
+      ...payload,
+      deraledger_accounting: {
+        fee_payer: accounting.feePayer,
+        selected_invoice_amount: accounting.selectedInvoiceAmount,
+        customer_payable_amount: accounting.customerPayableAmount,
+        gross_provider_value_ngn: accounting.grossProviderValueNgn,
+        amount_settled_ngn: accounting.amountSettledNgn,
+        provider_fee_amount: accounting.providerFeeAmount,
+        invoice_credit_amount: 0,
+        coverage_amount: coverageAmount,
+        expected_coverage_amount: expectedCoverageAmount,
+      },
+    };
+
+    await supabase
+      .from("payment_sessions")
+      .update({
+        provider_reference: providerReference || session.provider_reference || null,
+        tx_hash: txHash || session.tx_hash || null,
+        crypto_amount_received: amountCrypto || null,
+        converted_ngn_amount: accounting.grossProviderValueNgn,
+        provider_fee: accounting.providerFeeAmount,
+        settlement_fee: 0,
+        expected_settlement_ngn: accounting.customerPayableAmount,
+        actual_settlement_ngn: accounting.amountSettledNgn,
+        amount_settled: accounting.amountSettledNgn,
+        settlement_currency: "NGN",
+        settlement_mode: settlementMode,
+        status: "UNDER_REVIEW",
+        crypto_status: "manual_review",
+        confirmation_count: pendingObservation.latest_confirmation_count,
+        manual_review_reason: underpaymentReason,
+        metadata: {
+          ...asRecord(session.metadata),
+          ...pendingObservation,
+          latest_invoice_credit_amount: 0,
+          latest_customer_payable_amount: accounting.customerPayableAmount,
+          latest_gross_provider_value_ngn: accounting.grossProviderValueNgn,
+          latest_amount_settled: accounting.amountSettledNgn,
+          latest_provider_fee_amount: accounting.providerFeeAmount,
+          latest_fee_payer: accounting.feePayer,
+        },
+        webhook_status: "processed",
+        raw_webhook_payload: accountingPayload,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", session.id);
+
+    await supabase.from("payment_events").insert({
+      merchant_id: session.merchant_id,
+      invoice_id: session.invoice_id,
+      transaction_id: null,
+      event_type: eventType,
+      processor: "breet",
+      processor_ref: providerReference || txHash || null,
+      amount_kobo: Math.round(accounting.selectedInvoiceAmount * 100),
+      raw_payload: accountingPayload,
+      idempotency_key: idempotencyKey || null,
+      payment_method: "crypto",
+      payment_purpose: "invoice_payment",
+      payment_reference: String(session.reference || session.id),
+      provider_reference: providerReference || txHash || null,
+      expected_amount: accounting.selectedInvoiceAmount,
+      paid_amount: 0,
+      currency: "NGN",
+      fee: accounting.providerFeeAmount,
+      customer_email: stringValue(asRecord(session.metadata).client_email) || null,
+      processing_status: "manual_review",
+      failure_reason: "amount_mismatch",
+      reconciliation_status: "underpaid",
+    });
+
+    await recordWebhookLog({
+      eventType,
+      status: "under_review",
+      processorReference: providerReference,
+      merchantId: stringValue(session.merchant_id) || context.merchantId || null,
+      invoiceId: stringValue(session.invoice_id) || context.invoiceId || null,
+      paymentSessionId: String(session.id),
+      errorMessage: underpaymentReason,
+      rawPayload: accountingPayload,
+    });
+    await updateProviderWebhookHealth("success");
+
+    return NextResponse.json({
+      received: true,
+      mapped: true,
+      underReview: true,
+      reason: "amount_mismatch",
+    });
+  }
+
+  const accountingPayload = {
+    ...payload,
+    deraledger_accounting: {
+      fee_payer: accounting.feePayer,
+      selected_invoice_amount: accounting.selectedInvoiceAmount,
+      customer_payable_amount: accounting.customerPayableAmount,
+      gross_provider_value_ngn: accounting.grossProviderValueNgn,
+      amount_settled_ngn: accounting.amountSettledNgn,
+      provider_fee_amount: accounting.providerFeeAmount,
+      invoice_credit_amount: accounting.selectedInvoiceAmount,
+      destination_address: stringValue(payload.destinationAddress) || stringValue(payload.address) || stringValue(session.wallet_address),
+      tx_hash: txHash || null,
+    },
+  };
+
   const rpcResult = await supabase.rpc("process_breet_invoice_confirmation", {
     p_payment_session_id: session.id,
     p_event_type: eventType,
@@ -615,13 +810,13 @@ async function handleInvoiceWebhook(input: {
     p_exchange_rate: Number(session.exchange_rate || 0),
     p_payment_rail: rail,
     p_source_currency: rail,
-    p_gross_ngn: receivedNgN,
-    p_platform_fee: platformFee,
+    p_gross_ngn: accounting.selectedInvoiceAmount,
+    p_platform_fee: accounting.providerFeeAmount,
     p_network_fee: 0,
-    p_merchant_net_ngn: Number((receivedNgN - platformFee).toFixed(2)),
+    p_merchant_net_ngn: accounting.amountSettledNgn,
     p_confirmation_count: confirmationCount,
     p_expected_confirmations: expectedConfirmations,
-    p_raw_payload: payload,
+    p_raw_payload: accountingPayload,
   });
 
   if (rpcResult.error || !rpcResult.data?.ok) {
@@ -645,12 +840,12 @@ async function handleInvoiceWebhook(input: {
       provider_reference: providerReference || session.provider_reference || null,
       tx_hash: txHash || session.tx_hash || null,
       crypto_amount_received: amountCrypto || null,
-      converted_ngn_amount: receivedNgN,
-      provider_fee: platformFee,
+      converted_ngn_amount: accounting.grossProviderValueNgn,
+      provider_fee: accounting.providerFeeAmount,
       settlement_fee: 0,
-      expected_settlement_ngn: receivedNgN - platformFee,
-      actual_settlement_ngn: receivedNgN - platformFee,
-      amount_settled: receivedNgN,
+      expected_settlement_ngn: accounting.amountSettledNgn,
+      actual_settlement_ngn: accounting.amountSettledNgn,
+      amount_settled: accounting.amountSettledNgn,
       settlement_currency: "NGN",
       settlement_mode: settlementMode,
       status: "CONFIRMED",
@@ -659,9 +854,15 @@ async function handleInvoiceWebhook(input: {
       metadata: {
         ...asRecord(session.metadata),
         ...pendingObservation,
+        latest_invoice_credit_amount: accounting.selectedInvoiceAmount,
+        latest_customer_payable_amount: accounting.customerPayableAmount,
+        latest_gross_provider_value_ngn: accounting.grossProviderValueNgn,
+        latest_amount_settled: accounting.amountSettledNgn,
+        latest_provider_fee_amount: accounting.providerFeeAmount,
+        latest_fee_payer: accounting.feePayer,
       },
       webhook_status: "processed",
-      raw_webhook_payload: payload,
+      raw_webhook_payload: accountingPayload,
       paid_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })
@@ -689,16 +890,17 @@ async function handleInvoiceWebhook(input: {
     event_type: eventType,
     processor: "breet",
     processor_ref: providerReference || txHash || null,
-    amount_kobo: Math.round(receivedNgN * 100),
-    raw_payload: payload,
+    amount_kobo: Math.round(accounting.selectedInvoiceAmount * 100),
+    raw_payload: accountingPayload,
     idempotency_key: idempotencyKey || null,
     payment_method: "crypto",
     payment_purpose: "invoice_payment",
     payment_reference: String(session.reference || session.id),
     provider_reference: providerReference || txHash || null,
-    expected_amount: expectedNgN,
-    paid_amount: receivedNgN,
+    expected_amount: accounting.selectedInvoiceAmount,
+    paid_amount: accounting.selectedInvoiceAmount,
     currency: "NGN",
+    fee: accounting.providerFeeAmount,
     customer_email: stringValue(asRecord(session.metadata).client_email) || null,
     processing_status: "completed",
     reconciliation_status: "invoice_credited",
@@ -711,11 +913,93 @@ async function handleInvoiceWebhook(input: {
     .maybeSingle();
 
   if (transactionRow?.id) {
-    await upsertSettlementLedgerForTransaction(supabase, transactionRow.id, {
-      provider: "breet",
-      settlementMode,
-      rawProviderPayload: payload,
-    });
+    await supabase
+      .from("transactions")
+      .update({
+        amount_paid: accounting.selectedInvoiceAmount,
+        paystack_fee: accounting.providerFeeAmount,
+        fee_absorbed_by: accounting.feePayer,
+        merchant_net_amount: accounting.amountSettledNgn,
+        settlement_status: "settlement_pending",
+        processor_reference: providerReference || txHash || session.reference,
+        source_currency: rail,
+        source_amount: amountCrypto || Number(session.amount_crypto || 0) || null,
+        fx_rate: Number(session.exchange_rate || 0) || null,
+      })
+      .eq("id", transactionRow.id);
+  }
+
+  await supabase
+    .from("treasury_transactions")
+    .update({
+      gross_ngn: accounting.customerPayableAmount,
+      platform_fee: accounting.providerFeeAmount,
+      network_fee: 0,
+      merchant_net_ngn: accounting.amountSettledNgn,
+      blockchain_tx_hash: txHash || null,
+      breet_reference: providerReference || session.reference || null,
+      raw_payload: accountingPayload,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("payment_session_id", String(session.id));
+
+  const paymentRecordResult = await supabase
+    .from("payment_records")
+    .upsert(
+      {
+        merchant_id: session.merchant_id,
+        invoice_id: session.invoice_id,
+        legacy_transaction_id: transactionRow?.id || null,
+        payment_purpose: "invoice_payment",
+        payment_method: "crypto",
+        provider_name: "breet",
+        internal_reference: String(session.reference || session.id),
+        provider_reference: providerReference || txHash || null,
+        expected_amount: accounting.selectedInvoiceAmount,
+        amount_paid: accounting.selectedInvoiceAmount,
+        currency: "NGN",
+        payment_status: "successful",
+        customer_email: stringValue(asRecord(session.metadata).client_email) || null,
+        raw_provider_payload: accountingPayload,
+        paid_at: new Date().toISOString(),
+      },
+      { onConflict: "internal_reference" }
+    )
+    .select("id")
+    .single();
+
+  if (!paymentRecordResult.error && paymentRecordResult.data?.id) {
+    await supabase.from("settlement_records").upsert(
+      {
+        payment_record_id: paymentRecordResult.data.id,
+        legacy_transaction_id: transactionRow?.id || null,
+        merchant_id: session.merchant_id,
+        settlement_account_id: null,
+        provider_settlement_account_id: null,
+        provider_name: "breet",
+        payment_method: "crypto",
+        settlement_recipient_type: "merchant",
+        settlement_currency: "NGN",
+        gross_amount: accounting.customerPayableAmount,
+        provider_fee: accounting.providerFeeAmount,
+        platform_fee: 0,
+        customer_fee: accounting.feePayer === "customer" ? accounting.providerFeeAmount : 0,
+        merchant_fee: accounting.feePayer === "business" ? accounting.providerFeeAmount : 0,
+        expected_settlement: accounting.amountSettledNgn,
+        actual_settlement: accounting.amountSettledNgn,
+        settlement_difference: 0,
+        fee_payer: accounting.feePayer === "customer" ? "customer_pays_fee" : "merchant_pays_fee",
+        settlement_status: "completed",
+        settlement_mode: settlementMode,
+        settlement_owner: "provider",
+        payout_action_required: false,
+        provider_settlement_reference: providerReference || txHash || String(session.reference || session.id),
+        provider_fee_source: "breet_payload",
+        expected_settlement_source: "breet_trade_completed",
+        raw_settlement_payload: accountingPayload,
+      },
+      { onConflict: "payment_record_id" }
+    );
   }
 
   await recordWebhookLog({
@@ -725,7 +1009,7 @@ async function handleInvoiceWebhook(input: {
     merchantId: stringValue(session.merchant_id) || context.merchantId || null,
     invoiceId: stringValue(session.invoice_id) || context.invoiceId || null,
     paymentSessionId: String(session.id),
-    rawPayload: payload,
+    rawPayload: accountingPayload,
   });
   await updateProviderWebhookHealth("success");
 
