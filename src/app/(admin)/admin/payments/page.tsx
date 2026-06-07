@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, Loader2, RefreshCcw, Save, ShieldCheck } from "lucide-react";
+import { ChevronDown, ChevronRight, Loader2, Mail, RefreshCcw, Save, ShieldCheck } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -63,12 +63,27 @@ type PaymentAdminPayload = {
   routes: PaymentRouteRow[];
   methods: PaymentMethodRow[];
   events: PaymentEventRow[];
+  paymentRecords: PaymentRecordRow[];
   transactions: PaymentTransactionRow[];
+  pagination?: {
+    events: PaginationMeta;
+    paymentRecords: PaginationMeta;
+    transactions: PaginationMeta;
+  };
   diagnostics?: {
     eventsError: string | null;
     eventsWarning?: string | null;
+    paymentRecordsError?: string | null;
+    paymentRecordsWarning?: string | null;
     transactionsError: string | null;
   };
+};
+
+type PaginationMeta = {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
 };
 
 type PaymentEventRow = {
@@ -108,8 +123,39 @@ type PaymentTransactionRow = {
   processor_reference?: string | null;
 };
 
+type PaymentRecordRow = {
+  id: string;
+  created_at: string | null;
+  updated_at?: string | null;
+  provider_name: "paystack" | "monnify" | "breet" | null;
+  payment_method: string | null;
+  payment_purpose: string | null;
+  internal_reference: string | null;
+  provider_reference: string | null;
+  expected_amount: number | null;
+  amount_paid: number | null;
+  currency: string | null;
+  payment_status: string | null;
+  processing_status: string | null;
+  account_setup_status: string | null;
+  password_setup_required: boolean | null;
+  customer_email: string | null;
+  merchant_id: string | null;
+  user_id: string | null;
+  business_id: string | null;
+  plan_id: string | null;
+  plan_name: string | null;
+  setup_recovery_email_sent_at: string | null;
+  setup_recovery_email_count: number | null;
+  setup_completed_at: string | null;
+  reconciliation_status: string | null;
+  failure_reason: string | null;
+  raw_provider_payload: Record<string, unknown> | null;
+};
+
 const PROVIDERS = ["paystack", "monnify", "breet"] as const;
 const PURPOSES = ["plan_subscription", "plan_upgrade", "invoice_payment", "payment_link"] as const;
+const DEFAULT_PAGINATION: PaginationMeta = { page: 1, pageSize: 10, total: 0, totalPages: 1 };
 
 export default function AdminPaymentsPage() {
   const [data, setData] = useState<PaymentAdminPayload | null>(null);
@@ -120,11 +166,21 @@ export default function AdminPaymentsPage() {
   const [routes, setRoutes] = useState<PaymentRouteRow[]>([]);
   const [methods, setMethods] = useState<PaymentMethodRow[]>([]);
   const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
+  const [expandedRecordId, setExpandedRecordId] = useState<string | null>(null);
+  const [resendingRecordId, setResendingRecordId] = useState<string | null>(null);
+  const [transactionsPage, setTransactionsPage] = useState(1);
+  const [recordsPage, setRecordsPage] = useState(1);
+  const [eventsPage, setEventsPage] = useState(1);
 
   async function load() {
     setLoading(true);
     setFeedback(null);
-    const response = await fetch("/api/admin/payments");
+    const params = new URLSearchParams({
+      transactionsPage: String(transactionsPage),
+      recordsPage: String(recordsPage),
+      eventsPage: String(eventsPage),
+    });
+    const response = await fetch(`/api/admin/payments?${params.toString()}`);
     const payload = (await response.json()) as PaymentAdminPayload | { error?: string };
     if (!response.ok || !("providers" in payload)) {
       setFeedback((payload as { error?: string }).error || "Failed to load payment settings.");
@@ -144,7 +200,7 @@ export default function AdminPaymentsPage() {
     }, 0);
 
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [transactionsPage, recordsPage, eventsPage]);
 
   const environment = data?.environment || "sandbox";
 
@@ -161,7 +217,11 @@ export default function AdminPaymentsPage() {
     [methods, environment]
   );
   const recentEvents = data?.events || [];
+  const recentPaymentRecords = data?.paymentRecords || [];
   const recentTransactions = data?.transactions || [];
+  const transactionsPagination = data?.pagination?.transactions || DEFAULT_PAGINATION;
+  const recordsPagination = data?.pagination?.paymentRecords || DEFAULT_PAGINATION;
+  const eventsPagination = data?.pagination?.events || DEFAULT_PAGINATION;
 
   function updateProvider(
     providerName: PaymentProviderRow["provider_name"],
@@ -223,6 +283,25 @@ export default function AdminPaymentsPage() {
     setFeedback("Payment routing settings saved.");
     await load();
     setSaving(false);
+  }
+
+  async function resendSetupLink(record: PaymentRecordRow) {
+    setResendingRecordId(record.id);
+    setFeedback(null);
+    const response = await fetch("/api/admin/payments/resend-setup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paymentRecordId: record.id }),
+    });
+    const payload = (await response.json().catch(() => ({}))) as { error?: string };
+    if (!response.ok) {
+      setFeedback(payload.error || "Failed to resend setup link.");
+      setResendingRecordId(null);
+      return;
+    }
+    setFeedback(`Setup link resent to ${record.customer_email || "merchant"}.`);
+    await load();
+    setResendingRecordId(null);
   }
 
   if (loading && !data) {
@@ -343,7 +422,12 @@ export default function AdminPaymentsPage() {
       <div className="space-y-6">
         <Card className="border shadow-none">
           <CardHeader>
-            <CardTitle className="text-base">Recent Payment Transactions</CardTitle>
+            <div className="flex items-center justify-between gap-4">
+              <CardTitle className="text-base">Recent Payment Transactions</CardTitle>
+              <Badge variant="outline" className="border-2 bg-neutral-50">
+                {transactionsPagination.total} total
+              </Badge>
+            </div>
           </CardHeader>
           <CardContent className="overflow-x-auto p-0">
             {data?.diagnostics?.transactionsError ? (
@@ -375,6 +459,145 @@ export default function AdminPaymentsPage() {
                 ))}
               </TableBody>
             </Table>
+            <PaginationControls
+              label="transactions"
+              pagination={transactionsPagination}
+              onPageChange={setTransactionsPage}
+            />
+          </CardContent>
+        </Card>
+
+        <Card className="border shadow-none">
+          <CardHeader>
+            <div className="flex items-center justify-between gap-4">
+              <CardTitle className="text-base">Subscription Recovery Records</CardTitle>
+              <Badge variant="outline" className="border-2 bg-neutral-50">
+                {recordsPagination.total} records
+              </Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="overflow-x-auto p-0">
+            {data?.diagnostics?.paymentRecordsError ? (
+              <div className="border-b border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700">
+                Recovery record query warning: {data.diagnostics.paymentRecordsError}
+              </div>
+            ) : null}
+            {!data?.diagnostics?.paymentRecordsError && data?.diagnostics?.paymentRecordsWarning ? (
+              <div className="border-b border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700">
+                Recovery record schema warning: {data.diagnostics.paymentRecordsWarning}
+              </div>
+            ) : null}
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-neutral-50">
+                  <TableHead className="w-10"></TableHead>
+                  <TableHead>Created</TableHead>
+                  <TableHead>Provider</TableHead>
+                  <TableHead>Method</TableHead>
+                  <TableHead>Purpose</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Setup</TableHead>
+                  <TableHead>Expected</TableHead>
+                  <TableHead>Paid</TableHead>
+                  <TableHead>Reference</TableHead>
+                  <TableHead>Customer</TableHead>
+                  <TableHead>Recovery Email</TableHead>
+                  <TableHead>Action</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {recentPaymentRecords.length === 0 ? (
+                  <TableRow><TableCell colSpan={13} className="py-8 text-center text-sm text-neutral-500">No subscription recovery records yet.</TableCell></TableRow>
+                ) : recentPaymentRecords.map((record) => {
+                  const isExpanded = expandedRecordId === record.id;
+                  const canResend = canResendSetupLink(record);
+                  return (
+                    <Fragment key={record.id}>
+                      <TableRow className="align-top">
+                        <TableCell>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 w-8 p-0"
+                            onClick={() => setExpandedRecordId(isExpanded ? null : record.id)}
+                          >
+                            {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                          </Button>
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap text-xs text-neutral-500">{formatDate(record.created_at)}</TableCell>
+                        <TableCell><Badge variant="outline" className="border-2 capitalize">{record.provider_name || "-"}</Badge></TableCell>
+                        <TableCell className="capitalize">{record.payment_method || "-"}</TableCell>
+                        <TableCell className="min-w-[150px] text-xs">{record.payment_purpose || "-"}</TableCell>
+                        <TableCell><EventStatusBadge status={record.processing_status || record.payment_status || "unknown"} /></TableCell>
+                        <TableCell><EventStatusBadge status={record.account_setup_status || "unknown"} /></TableCell>
+                        <TableCell className="whitespace-nowrap font-medium">{formatNaira(Number(record.expected_amount || 0))}</TableCell>
+                        <TableCell className="whitespace-nowrap font-medium">{formatNaira(Number(record.amount_paid || 0))}</TableCell>
+                        <TableCell className="min-w-[230px]">
+                          <p className="break-all font-mono text-xs text-neutral-900">{record.internal_reference || "-"}</p>
+                          {record.provider_reference ? (
+                            <p className="mt-1 break-all font-mono text-[11px] text-neutral-500">{record.provider_reference}</p>
+                          ) : null}
+                        </TableCell>
+                        <TableCell className="min-w-[210px] break-all text-xs">{record.customer_email || "-"}</TableCell>
+                        <TableCell className="min-w-[160px] text-xs text-neutral-600">
+                          <p>{record.setup_recovery_email_count || 0} sent</p>
+                          <p>{formatDate(record.setup_recovery_email_sent_at)}</p>
+                        </TableCell>
+                        <TableCell>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="gap-2 border-2"
+                            disabled={!canResend || resendingRecordId === record.id}
+                            onClick={() => void resendSetupLink(record)}
+                          >
+                            {resendingRecordId === record.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Mail className="h-3.5 w-3.5" />}
+                            Resend
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                      {isExpanded ? (
+                        <TableRow>
+                          <TableCell colSpan={13} className="bg-neutral-50 p-0">
+                            <div className="grid gap-4 p-4 lg:grid-cols-[320px_1fr]">
+                              <div className="rounded-lg border border-neutral-200 bg-white p-4">
+                                <p className="text-xs font-semibold uppercase text-neutral-500">Recovery Summary</p>
+                                <dl className="mt-3 space-y-2 text-sm">
+                                  <EventDetail label="Payment status" value={record.payment_status} />
+                                  <EventDetail label="Processing" value={record.processing_status} />
+                                  <EventDetail label="Account setup" value={record.account_setup_status} />
+                                  <EventDetail label="Reconciliation" value={record.reconciliation_status} />
+                                  <EventDetail label="Password required" value={record.password_setup_required ? "yes" : "no"} />
+                                  <EventDetail label="Setup completed" value={formatDate(record.setup_completed_at)} />
+                                  <EventDetail label="Merchant" value={record.merchant_id} />
+                                  <EventDetail label="User" value={record.user_id} />
+                                  <EventDetail label="Business" value={record.business_id} />
+                                  <EventDetail label="Plan" value={record.plan_name || record.plan_id} />
+                                  <EventDetail label="Failure reason" value={record.failure_reason} />
+                                </dl>
+                              </div>
+                              <div className="rounded-lg border border-neutral-200 bg-white p-4">
+                                <p className="text-xs font-semibold uppercase text-neutral-500">Raw Provider Payload</p>
+                                <pre className="mt-3 max-h-[360px] overflow-auto rounded-md bg-neutral-950 p-4 text-xs leading-relaxed text-neutral-100">
+                                  {JSON.stringify(record.raw_provider_payload || {}, null, 2)}
+                                </pre>
+                              </div>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ) : null}
+                    </Fragment>
+                  );
+                })}
+              </TableBody>
+            </Table>
+            <PaginationControls
+              label="recovery records"
+              pagination={recordsPagination}
+              onPageChange={setRecordsPage}
+            />
           </CardContent>
         </Card>
 
@@ -382,7 +605,9 @@ export default function AdminPaymentsPage() {
           <CardHeader>
             <div className="flex items-center justify-between gap-4">
               <CardTitle className="text-base">Recent Provider Events</CardTitle>
-              <Badge variant="outline" className="border-2 bg-neutral-50">{recentEvents.length} events</Badge>
+              <Badge variant="outline" className="border-2 bg-neutral-50">
+                {eventsPagination.total} events
+              </Badge>
             </div>
           </CardHeader>
           <CardContent className="overflow-x-auto p-0">
@@ -499,6 +724,11 @@ export default function AdminPaymentsPage() {
                 })}
               </TableBody>
             </Table>
+            <PaginationControls
+              label="provider events"
+              pagination={eventsPagination}
+              onPageChange={setEventsPage}
+            />
           </CardContent>
         </Card>
       </div>
@@ -630,11 +860,66 @@ function formatDate(value: string | null) {
   });
 }
 
+function PaginationControls({
+  label,
+  pagination,
+  onPageChange,
+}: {
+  label: string;
+  pagination: PaginationMeta;
+  onPageChange: (page: number) => void;
+}) {
+  const currentPage = Math.min(Math.max(pagination.page || 1, 1), Math.max(pagination.totalPages || 1, 1));
+  const totalPages = Math.max(pagination.totalPages || 1, 1);
+  const total = pagination.total || 0;
+  const start = total === 0 ? 0 : (currentPage - 1) * pagination.pageSize + 1;
+  const end = total === 0 ? 0 : Math.min(currentPage * pagination.pageSize, total);
+
+  return (
+    <div className="flex flex-col gap-3 border-t border-neutral-200 px-4 py-3 text-xs text-neutral-500 sm:flex-row sm:items-center sm:justify-between">
+      <span>
+        Showing {start}-{end} of {total} {label}
+      </span>
+      <div className="flex items-center gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-8 border-2"
+          disabled={currentPage <= 1}
+          onClick={() => onPageChange(currentPage - 1)}
+        >
+          Previous
+        </Button>
+        <span className="min-w-[88px] text-center font-medium text-neutral-700">
+          Page {currentPage} of {totalPages}
+        </span>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-8 border-2"
+          disabled={currentPage >= totalPages}
+          onClick={() => onPageChange(currentPage + 1)}
+        >
+          Next
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function EventStatusBadge({ status }: { status: string }) {
   const normalized = status.toLowerCase();
   const className = normalized.includes("fail")
     ? "border-red-200 bg-red-50 text-red-700"
-    : normalized.includes("pending") || normalized.includes("received") || normalized.includes("signature")
+    : normalized.includes("pending") ||
+        normalized.includes("received") ||
+        normalized.includes("signature") ||
+        normalized.includes("review") ||
+        normalized.includes("mismatch") ||
+        normalized.includes("under") ||
+        normalized.includes("over")
       ? "border-amber-200 bg-amber-50 text-amber-700"
       : "border-emerald-200 bg-emerald-50 text-emerald-700";
 
@@ -642,6 +927,18 @@ function EventStatusBadge({ status }: { status: string }) {
     <Badge variant="outline" className={`border-2 capitalize ${className}`}>
       {status.replaceAll("_", " ")}
     </Badge>
+  );
+}
+
+function canResendSetupLink(record: PaymentRecordRow) {
+  return (
+    record.payment_status === "successful" &&
+    record.processing_status === "processed" &&
+    record.password_setup_required === true &&
+    Boolean(record.customer_email) &&
+    (record.account_setup_status === "active_pending_password" ||
+      record.account_setup_status === "paid_pending_setup" ||
+      record.account_setup_status === "active")
   );
 }
 

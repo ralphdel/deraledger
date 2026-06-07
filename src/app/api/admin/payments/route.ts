@@ -10,23 +10,32 @@ const supabase = createSupabaseClient(
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+type PaginationParams = {
+  page: number;
+  pageSize: number;
+};
+
+const DEFAULT_PAGE_SIZE = 10;
+const MAX_PAGE_SIZE = 50;
+
+export async function GET(request: Request) {
   const guard = await requireAdminPortalSession();
   if (!guard.ok) {
     return NextResponse.json({ error: guard.error }, { status: guard.status });
   }
 
+  const url = new URL(request.url);
+  const recordsPagination = getPaginationParams(url, "records");
+  const eventsPagination = getPaginationParams(url, "events");
+  const transactionsPagination = getPaginationParams(url, "transactions");
   const environment = getPaymentEnvironment();
-  const [providersRes, routesRes, methodsRes, eventsRes, transactionsRes] = await Promise.all([
+  const [providersRes, routesRes, methodsRes, eventsRes, recordsRes, transactionsRes] = await Promise.all([
     supabase.from("payment_providers").select("*").order("environment").order("provider_name"),
     supabase.from("payment_provider_routes").select("*").order("environment").order("payment_purpose"),
     supabase.from("payment_method_configs").select("*").order("environment").order("payment_purpose"),
-    fetchRecentPaymentEvents(),
-    supabase
-      .from("transactions")
-      .select("id, created_at, invoice_id, merchant_id, amount_paid, payment_method, status, paystack_reference")
-      .order("created_at", { ascending: false })
-      .limit(50),
+    fetchRecentPaymentEvents(eventsPagination),
+    fetchRecentPaymentRecords(recordsPagination),
+    fetchRecentPaymentTransactions(transactionsPagination),
   ]);
 
   if (providersRes.error || routesRes.error || methodsRes.error) {
@@ -51,11 +60,19 @@ export async function GET() {
     routes,
     methods,
     events: eventsRes.data || [],
-    transactions: transactionsRes.error ? [] : transactionsRes.data || [],
+    paymentRecords: recordsRes.data || [],
+    transactions: transactionsRes.data || [],
+    pagination: {
+      events: eventsRes.pagination,
+      paymentRecords: recordsRes.pagination,
+      transactions: transactionsRes.pagination,
+    },
     diagnostics: {
       eventsError: eventsRes.error || null,
       eventsWarning: eventsRes.warning || null,
-      transactionsError: transactionsRes.error?.message || null,
+      paymentRecordsError: recordsRes.error || null,
+      paymentRecordsWarning: recordsRes.warning || null,
+      transactionsError: transactionsRes.error || null,
     },
   }, {
     headers: {
@@ -64,36 +81,117 @@ export async function GET() {
   });
 }
 
-async function fetchRecentPaymentEvents() {
+function getPaginationParams(url: URL, prefix: string): PaginationParams {
+  const page = Number(url.searchParams.get(`${prefix}Page`) || 1);
+  const pageSize = Number(url.searchParams.get(`${prefix}PageSize`) || DEFAULT_PAGE_SIZE);
+
+  return {
+    page: Number.isFinite(page) && page > 0 ? Math.floor(page) : 1,
+    pageSize:
+      Number.isFinite(pageSize) && pageSize > 0
+        ? Math.min(Math.floor(pageSize), MAX_PAGE_SIZE)
+        : DEFAULT_PAGE_SIZE,
+  };
+}
+
+function rangeFor({ page, pageSize }: PaginationParams) {
+  const from = (page - 1) * pageSize;
+  return { from, to: from + pageSize - 1 };
+}
+
+function paginationMeta(params: PaginationParams, count: number | null) {
+  const total = count || 0;
+  return {
+    page: params.page,
+    pageSize: params.pageSize,
+    total,
+    totalPages: Math.max(1, Math.ceil(total / params.pageSize)),
+  };
+}
+
+async function fetchRecentPaymentRecords(params: PaginationParams) {
+  const { from, to } = rangeFor(params);
   const withCreatedAt = await supabase
-    .from("payment_events")
-    .select("id, created_at, event_type, processor, processor_ref, amount_kobo, merchant_id, invoice_id, raw_payload, payment_method, payment_purpose, payment_reference, provider_reference, expected_amount, paid_amount, currency, fee, plan_id, customer_email, processing_status, failure_reason, reconciliation_status")
+    .from("payment_records")
+    .select("id, created_at, updated_at, provider_name, payment_method, payment_purpose, internal_reference, provider_reference, expected_amount, amount_paid, currency, payment_status, processing_status, account_setup_status, password_setup_required, customer_email, merchant_id, user_id, business_id, plan_id, plan_name, setup_recovery_email_sent_at, setup_recovery_email_count, setup_completed_at, reconciliation_status, failure_reason, raw_provider_payload", { count: "exact" })
+    .in("payment_purpose", ["plan_subscription", "plan_upgrade"])
     .order("created_at", { ascending: false })
-    .limit(50);
+    .range(from, to);
 
   if (!withCreatedAt.error) {
-    return { data: withCreatedAt.data || [], error: null, warning: null };
+    return { data: withCreatedAt.data || [], error: null, warning: null, pagination: paginationMeta(params, withCreatedAt.count) };
   }
 
   const message = withCreatedAt.error.message;
   if (!message.includes("created_at")) {
-    return { data: [], error: message, warning: null };
+    return { data: [], error: message, warning: null, pagination: paginationMeta(params, 0) };
+  }
+
+  const fallback = await supabase
+    .from("payment_records")
+    .select("id, provider_name, payment_method, payment_purpose, internal_reference, provider_reference, expected_amount, amount_paid, currency, payment_status, processing_status, account_setup_status, password_setup_required, customer_email, merchant_id, user_id, business_id, plan_id, plan_name, setup_recovery_email_sent_at, setup_recovery_email_count, setup_completed_at, reconciliation_status, failure_reason, raw_provider_payload", { count: "exact" })
+    .in("payment_purpose", ["plan_subscription", "plan_upgrade"])
+    .range(from, to);
+
+  if (fallback.error) {
+    return { data: [], error: fallback.error.message, warning: message, pagination: paginationMeta(params, 0) };
+  }
+
+  return {
+    data: (fallback.data || []).map((record) => ({ ...record, created_at: null, updated_at: null })),
+    error: null,
+    warning: "payment_records.created_at is missing. Recent subscription recovery records cannot be sorted by time.",
+    pagination: paginationMeta(params, fallback.count),
+  };
+}
+
+async function fetchRecentPaymentEvents(params: PaginationParams) {
+  const { from, to } = rangeFor(params);
+  const withCreatedAt = await supabase
+    .from("payment_events")
+    .select("id, created_at, event_type, processor, processor_ref, amount_kobo, merchant_id, invoice_id, raw_payload, payment_method, payment_purpose, payment_reference, provider_reference, expected_amount, paid_amount, currency, fee, plan_id, customer_email, processing_status, failure_reason, reconciliation_status", { count: "exact" })
+    .order("created_at", { ascending: false })
+    .range(from, to);
+
+  if (!withCreatedAt.error) {
+    return { data: withCreatedAt.data || [], error: null, warning: null, pagination: paginationMeta(params, withCreatedAt.count) };
+  }
+
+  const message = withCreatedAt.error.message;
+  if (!message.includes("created_at")) {
+    return { data: [], error: message, warning: null, pagination: paginationMeta(params, 0) };
   }
 
   const fallback = await supabase
     .from("payment_events")
-    .select("id, event_type, processor, processor_ref, amount_kobo, merchant_id, invoice_id, raw_payload, payment_method, payment_purpose, payment_reference, provider_reference, expected_amount, paid_amount, currency, fee, plan_id, customer_email, processing_status, failure_reason, reconciliation_status")
-    .limit(50);
+    .select("id, event_type, processor, processor_ref, amount_kobo, merchant_id, invoice_id, raw_payload, payment_method, payment_purpose, payment_reference, provider_reference, expected_amount, paid_amount, currency, fee, plan_id, customer_email, processing_status, failure_reason, reconciliation_status", { count: "exact" })
+    .range(from, to);
 
   if (fallback.error) {
-    return { data: [], error: fallback.error.message, warning: message };
+    return { data: [], error: fallback.error.message, warning: message, pagination: paginationMeta(params, 0) };
   }
 
   return {
     data: (fallback.data || []).map((event) => ({ ...event, created_at: null })),
     error: null,
     warning: "payment_events.created_at is missing. Run the payment events timestamp migration to sort provider events by time.",
+    pagination: paginationMeta(params, fallback.count),
   };
+}
+
+async function fetchRecentPaymentTransactions(params: PaginationParams) {
+  const { from, to } = rangeFor(params);
+  const result = await supabase
+    .from("transactions")
+    .select("id, created_at, invoice_id, merchant_id, amount_paid, payment_method, status, paystack_reference", { count: "exact" })
+    .order("created_at", { ascending: false })
+    .range(from, to);
+
+  if (result.error) {
+    return { data: [], error: result.error.message, pagination: paginationMeta(params, 0) };
+  }
+
+  return { data: result.data || [], error: null, pagination: paginationMeta(params, result.count) };
 }
 
 export async function POST(request: Request) {
