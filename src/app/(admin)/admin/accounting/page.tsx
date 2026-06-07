@@ -31,6 +31,7 @@ import { downloadCSV } from "@/lib/csv";
 type SettlementRow = {
   id: string;
   merchant_id?: string | null;
+  invoice_id?: string | null;
   created_at: string;
   provider_name: string;
   payment_method: string | null;
@@ -49,6 +50,7 @@ type SettlementRow = {
   provider_fee_source?: string | null;
   expected_settlement_source?: string | null;
   provider_settlement_reference?: string | null;
+  raw_settlement_payload?: Record<string, unknown> | null;
   settlement_recipient_type?: string | null;
   settlement_account_snapshot?: Record<string, unknown> | null;
   settlement_bank_name?: string | null;
@@ -243,11 +245,11 @@ export default function AdminAccountingPage() {
       Merchant: row.merchants?.business_name || row.merchants?.email || "",
       Provider: row.provider_name,
       Method: row.payment_method || "",
-      "Gross Amount": row.gross_amount ?? "",
+      "Invoice Credit": row.gross_amount ?? "",
       "Provider Fee": row.provider_fee ?? "",
-      "Expected Settlement": row.expected_settlement ?? "",
-      "Actual Settlement": row.actual_settlement ?? "",
-      Difference: row.settlement_difference ?? "",
+      "Expected Net Settlement": row.expected_settlement ?? "",
+      "Actual Net Settlement": row.actual_settlement ?? "",
+      "Settlement Delta": row.settlement_difference ?? "",
       Status: row.settlement_status,
       Owner: row.settlement_owner || "",
       Mode: row.settlement_mode || "",
@@ -305,17 +307,22 @@ export default function AdminAccountingPage() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-        <SummaryCard icon={TrendingUp} label="Gross Collected" value={formatNaira(summary?.grossAmount || 0)} />
+        <SummaryCard icon={TrendingUp} label="Invoice Credit" value={formatNaira(summary?.grossAmount || 0)} />
         <SummaryCard icon={Minus} label="Provider Fees" value={formatNaira(summary?.providerFees || 0)} />
-        <SummaryCard icon={Banknote} label="Expected Settlement" value={formatNaira(summary?.expectedSettlement || 0)} />
-        <SummaryCard icon={CheckCircle2} label="Actual Settled" value={formatNaira(summary?.actualSettlement || 0)} />
+        <SummaryCard icon={Banknote} label="Expected Net Settlement" value={formatNaira(summary?.expectedSettlement || 0)} />
+        <SummaryCard icon={CheckCircle2} label="Actual Net Settlement" value={formatNaira(summary?.actualSettlement || 0)} />
         <SummaryCard icon={AlertTriangle} label="Manual Review" value={String(summary?.manualReviewCount || 0)} />
       </div>
 
       <Card className="border shadow-none">
         <CardHeader className="pb-3">
           <div className="flex flex-col lg:flex-row gap-3 lg:items-center lg:justify-between">
-            <CardTitle className="text-base font-bold text-neutral-900">Settlement Operations</CardTitle>
+            <div className="space-y-1">
+              <CardTitle className="text-base font-bold text-neutral-900">Settlement Operations</CardTitle>
+              <p className="text-sm text-neutral-500">
+                Invoice Credit is the amount applied to the customer invoice. Expected and Actual Settlement show the merchant&apos;s net settlement after provider fees.
+              </p>
+            </div>
             <div className="flex flex-col sm:flex-row gap-2">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-400" />
@@ -356,9 +363,9 @@ export default function AdminAccountingPage() {
                   <TableHead>Settlement Account</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Owner</TableHead>
-                  <TableHead className="text-right">Gross</TableHead>
-                  <TableHead className="text-right">Expected</TableHead>
-                  <TableHead className="text-right">Actual</TableHead>
+                  <TableHead className="text-right">Invoice Credit</TableHead>
+                  <TableHead className="text-right">Expected Net Settlement</TableHead>
+                  <TableHead className="text-right">Actual Net Settlement</TableHead>
                   <TableHead />
                 </TableRow>
               </TableHeader>
@@ -384,7 +391,7 @@ export default function AdminAccountingPage() {
                     </TableCell>
                     <TableCell>
                       <Badge variant="outline" className="capitalize border-2">{row.provider_name}</Badge>
-                      <p className="text-xs text-neutral-500 mt-1">{row.payment_method || "method unknown"}</p>
+                      <p className="text-xs text-neutral-500 mt-1">{label(row.payment_method || "method unknown")}</p>
                     </TableCell>
                     <TableCell className="text-sm">
                       <p>{settlementAccountSummary(row)}</p>
@@ -429,16 +436,22 @@ export default function AdminAccountingPage() {
               <p className="text-sm text-neutral-500">{selected.merchants?.business_name} · {selected.provider_name}</p>
             </div>
             <div className="p-5 space-y-4">
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <Info label="Settlement provider" value={label(selected.provider_name || "-")} />
+              <div className="rounded-lg border border-neutral-200 bg-neutral-50 p-4 text-sm text-neutral-600">
+                {feePayerExplanation(selected)}
+              </div>
+              <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
+                <Info label="Provider" value={label(selected.provider_name || "-")} />
+                <Info label="Payment method" value={label(selected.payment_method || "-")} />
                 <Info label="Settlement mode" value={label(selected.settlement_mode || "-")} />
                 <Info label="Recipient type" value={label(selected.settlement_recipient_type || "-")} />
+                <Info label="Invoice credit amount" value={formatMoneyDisplay(invoiceCreditAmount(selected))} />
+                <Info label="Customer payable amount" value={formatMoneyDisplay(customerPayableAmount(selected))} />
+                <Info label="Expected net settlement" value={selected.expected_settlement === null || selected.expected_settlement === undefined ? "Manual review" : formatNaira(Number(selected.expected_settlement))} />
+                <Info label="Actual net settlement" value={selected.actual_settlement === null || selected.actual_settlement === undefined ? "-" : formatNaira(Number(selected.actual_settlement || 0))} />
+                <Info label="Provider fee" value={formatMoneyDisplay(providerFeeAmount(selected))} />
+                <Info label="Fee payer" value={label(settlementFeePayer(selected) || "-")} />
+                <Info label="Settlement delta" value={formatMoneyDisplay(settlementDeltaAmount(selected))} />
                 <Info label="Settlement owner" value={label(selected.settlement_owner || "-")} />
-                <Info label="Gross" value={formatNaira(Number(selected.gross_amount || 0))} />
-                <Info label="Expected" value={selected.expected_settlement === null || selected.expected_settlement === undefined ? "Manual review" : formatNaira(Number(selected.expected_settlement))} />
-                <Info label="Actual settlement" value={selected.actual_settlement === null || selected.actual_settlement === undefined ? "-" : formatNaira(Number(selected.actual_settlement || 0))} />
-                <Info label="Provider fee" value={formatNaira(Number(selected.provider_fee || 0))} />
-                <Info label="Fee payer" value={label(selected.fee_payer || "-")} />
                 <Info label="Fee source" value={label(selected.provider_fee_source || "provider_missing")} />
                 <Info label="Settlement account" value={settlementAccountSummary(selected)} />
                 <Info label="Account name" value={selected.settlement_account_name || selected.merchant_settlement_accounts?.account_name || "No account"} />
@@ -447,6 +460,14 @@ export default function AdminAccountingPage() {
                 <Info label="Tx hash" value={selected.tx_hash || "-"} />
                 <Info label="Wallet address" value={selected.wallet_address || "-"} />
               </div>
+              {selected.raw_settlement_payload ? (
+                <details className="rounded-lg border border-neutral-200 p-4">
+                  <summary className="cursor-pointer text-sm font-medium text-neutral-900">View raw payload</summary>
+                  <pre className="mt-3 overflow-x-auto rounded-md bg-neutral-950 p-3 text-xs text-neutral-100">
+                    {JSON.stringify(selected.raw_settlement_payload, null, 2)}
+                  </pre>
+                </details>
+              ) : null}
               <Input value={actualSettlement} onChange={(event) => setActualSettlement(event.target.value)} placeholder="Actual settlement amount" className="border-2" />
               <Input value={providerReference} onChange={(event) => setProviderReference(event.target.value)} placeholder="Provider settlement reference" className="border-2" />
               <Textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Reconciliation notes" className="border-2 min-h-[100px]" />
@@ -471,7 +492,7 @@ export default function AdminAccountingPage() {
             </div>
             <div className="p-5 space-y-4">
               <div className="grid grid-cols-2 gap-3 text-sm">
-                <Info label="Selected expected total" value={formatNaira(selectedExpectedTotal)} />
+                <Info label="Selected expected net total" value={formatNaira(selectedExpectedTotal)} />
                 <Info label="Settlement account" value={selectedRows[0] ? settlementAccountSummary(selectedRows[0]) : "No account"} />
               </div>
               <Input value={actualSettlement} onChange={(event) => setActualSettlement(event.target.value)} placeholder="Actual batch amount credited" className="border-2" />
@@ -516,7 +537,7 @@ function Info({ label: text, value }: { label: string; value: string }) {
   return (
     <div className="border rounded-md p-3">
       <p className="text-xs text-neutral-500">{text}</p>
-      <p className="font-semibold text-neutral-900">{value}</p>
+      <p className="font-semibold break-words text-neutral-900">{value}</p>
     </div>
   );
 }
@@ -561,4 +582,64 @@ function maskAccountNumber(accountNumber?: string | null) {
   if (accountNumber.startsWith("****")) return accountNumber;
   const last4 = accountNumber.slice(-4) || "----";
   return `****${last4}`;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function numericValue(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function settlementAccounting(row: SettlementRow) {
+  const payload = asRecord(row.raw_settlement_payload);
+  const accounting = asRecord(payload.deraledger_accounting);
+  return {
+    invoiceCreditAmount: numericValue(accounting.invoice_credit_amount) ?? row.gross_amount ?? null,
+    customerPayableAmount: numericValue(accounting.customer_payable_amount) ?? row.gross_amount ?? null,
+    providerFeeAmount: numericValue(accounting.provider_fee_amount) ?? row.provider_fee ?? null,
+    feePayer: typeof accounting.fee_payer === "string" ? accounting.fee_payer : row.fee_payer,
+    settlementDelta: row.settlement_difference ?? null,
+  };
+}
+
+function invoiceCreditAmount(row: SettlementRow) {
+  return settlementAccounting(row).invoiceCreditAmount;
+}
+
+function customerPayableAmount(row: SettlementRow) {
+  return settlementAccounting(row).customerPayableAmount;
+}
+
+function providerFeeAmount(row: SettlementRow) {
+  return settlementAccounting(row).providerFeeAmount;
+}
+
+function settlementFeePayer(row: SettlementRow) {
+  return settlementAccounting(row).feePayer;
+}
+
+function settlementDeltaAmount(row: SettlementRow) {
+  return settlementAccounting(row).settlementDelta;
+}
+
+function formatMoneyDisplay(value: number | null) {
+  return value === null || value === undefined ? "-" : formatNaira(value);
+}
+
+function feePayerExplanation(row: SettlementRow) {
+  const feePayer = settlementFeePayer(row);
+  if (feePayer === "merchant_pays_fee" || feePayer === "business") {
+    return "Merchant bears provider fee. Invoice is credited with the full selected payment amount, while merchant settlement is net of provider fee.";
+  }
+  if (feePayer === "customer_pays_fee" || feePayer === "customer") {
+    return "Customer bears provider fee. Customer payable includes invoice amount plus fee.";
+  }
+  return "Review invoice credit, fee payer, and settlement details together so the credited amount is not confused with the merchant's net settlement.";
 }

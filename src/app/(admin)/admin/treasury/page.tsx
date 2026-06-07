@@ -1288,19 +1288,24 @@ export default function AdminTreasuryPage() {
         <TabsContent value="settlements" className="space-y-4">
           <Card className="border shadow-none">
             <CardHeader>
-              <CardTitle className="text-base">Settlement Records</CardTitle>
+              <div className="space-y-1">
+                <CardTitle className="text-base">Settlement Records</CardTitle>
+                <p className="text-sm text-neutral-500">
+                  This view reconciles settlement only. Invoice amount may be higher than settlement amount when the merchant bears provider fees.
+                </p>
+              </div>
             </CardHeader>
             <CardContent className="p-0 overflow-x-auto">
-              <Table className="min-w-[940px]">
+              <Table className="min-w-[1120px]">
                 <TableHeader>
                   <TableRow className="bg-neutral-50">
                     <TableHead>Merchant</TableHead>
                     <TableHead>Mode</TableHead>
                     <TableHead>Recipient</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead>Expected</TableHead>
-                    <TableHead>Actual</TableHead>
-                    <TableHead>Delta</TableHead>
+                    <TableHead>Expected Net Settlement</TableHead>
+                    <TableHead>Actual Net Settlement</TableHead>
+                    <TableHead>Settlement Delta</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
