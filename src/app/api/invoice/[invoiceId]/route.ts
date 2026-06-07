@@ -9,6 +9,70 @@ function getServiceClient() {
   );
 }
 
+type InvoiceApiRecord = {
+  id: string;
+  merchant_id: string;
+  reference_id?: string | null;
+  payment_provider?: string | null;
+  payment_method?: string | null;
+  crypto_asset?: string | null;
+  [key: string]: unknown;
+};
+
+type AllocationRow = {
+  id: string;
+  source_invoice_id: string;
+  allocated_amount: number | string | null;
+  invoices?: {
+    invoice_number?: string | null;
+    grand_total?: number | string | null;
+  } | null;
+};
+
+async function applyLatestSuccessfulPaymentDisplay(adminClient: ReturnType<typeof getServiceClient>, invoice: InvoiceApiRecord | null) {
+  if (!invoice) return null;
+  const { data: paymentRecord } = await adminClient
+    .from("payment_records")
+    .select("provider_name,payment_method,paid_at,created_at,raw_provider_payload")
+    .eq("invoice_id", invoice.id)
+    .eq("payment_status", "successful")
+    .order("paid_at", { ascending: false, nullsFirst: false })
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (paymentRecord) {
+    invoice.payment_provider = paymentRecord.provider_name || invoice.payment_provider;
+    invoice.payment_method = paymentRecord.payment_method || invoice.payment_method;
+    if (paymentRecord.payment_method === "crypto") {
+      invoice.crypto_asset =
+        paymentRecord.raw_provider_payload?.asset ||
+        paymentRecord.raw_provider_payload?.raw_provider_payload?.asset ||
+        invoice.crypto_asset;
+    }
+    return invoice;
+  }
+
+  const { data: transaction } = await adminClient
+    .from("transactions")
+    .select("payment_method,payment_rail")
+    .eq("invoice_id", invoice.id)
+    .eq("status", "success")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (transaction) {
+    const latestMethod = transaction.payment_method || transaction.payment_rail || invoice.payment_method;
+    invoice.payment_method = latestMethod;
+    if (latestMethod === "crypto" || ["usdt", "usdc", "btc", "eth"].includes(String(latestMethod).toLowerCase())) {
+      invoice.payment_provider = "breet";
+    }
+  }
+
+  return invoice;
+}
+
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ invoiceId: string }> }
@@ -18,7 +82,7 @@ export async function GET(
   const adminClient = getServiceClient();
 
   // 1. Look up invoice — try by UUID `id` first, then fall back to `invoice_hash` or `short_link`
-  let invoice: any = null;
+  let invoice: InvoiceApiRecord | null = null;
 
   const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(invoiceId);
 
@@ -46,6 +110,8 @@ export async function GET(
     }
     invoice = data;
   }
+
+  invoice = await applyLatestSuccessfulPaymentDisplay(adminClient, invoice);
 
   if (!invoice) {
     console.error("Invoice not found for ID:", invoiceId);
@@ -86,7 +152,7 @@ export async function GET(
     .gte("created_at", firstDayOfMonth);
 
   const monthlyCollected = (txData || []).reduce(
-    (sum: number, tx: any) => sum + Number(tx.amount_paid),
+    (sum: number, tx) => sum + Number(tx.amount_paid),
     0
   );
 
@@ -123,7 +189,7 @@ export async function GET(
         .eq("invoice_type", "collection");
 
       const totalCollected = (siblings || []).reduce(
-        (sum: number, s: any) => sum + Number(s.amount_paid ?? 0), 0
+        (sum: number, sibling) => sum + Number(sibling.amount_paid ?? 0), 0
       );
       const projectTotalValue = Number(ref.project_total_value ?? 0);
       const hasProjectTotal = projectTotalValue > 0;
@@ -151,16 +217,16 @@ export async function GET(
     .select("id, source_invoice_id, allocated_amount, invoices!source_invoice_id(invoice_number, grand_total)")
     .eq("target_invoice_id", invoice.id);
 
-  const depositAllocations = (allocations || []).map((a: any) => ({
-    id: a.id,
-    source_invoice_id: a.source_invoice_id,
-    allocated_amount: Number(a.allocated_amount),
-    source_invoice_number: a.invoices?.invoice_number ?? null,
-    source_invoice_total: a.invoices?.grand_total ? Number(a.invoices.grand_total) : null,
+  const depositAllocations = ((allocations || []) as AllocationRow[]).map((allocation) => ({
+    id: allocation.id,
+    source_invoice_id: allocation.source_invoice_id,
+    allocated_amount: Number(allocation.allocated_amount),
+    source_invoice_number: allocation.invoices?.invoice_number ?? null,
+    source_invoice_total: allocation.invoices?.grand_total ? Number(allocation.invoices.grand_total) : null,
   }));
 
   const totalDepositAllocated = depositAllocations.reduce(
-    (sum: number, a: any) => sum + a.allocated_amount, 0
+    (sum: number, allocation) => sum + allocation.allocated_amount, 0
   );
 
   return NextResponse.json({ invoice, merchant: effectiveMerchant, monthlyCollected, referenceContext, depositAllocations, totalDepositAllocated });

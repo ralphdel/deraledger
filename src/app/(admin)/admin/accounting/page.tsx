@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   Banknote,
@@ -12,6 +12,7 @@ import {
   RefreshCw,
   Search,
   TrendingUp,
+  type LucideIcon,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -48,6 +49,14 @@ type SettlementRow = {
   provider_fee_source?: string | null;
   expected_settlement_source?: string | null;
   provider_settlement_reference?: string | null;
+  settlement_recipient_type?: string | null;
+  settlement_account_snapshot?: Record<string, unknown> | null;
+  settlement_bank_name?: string | null;
+  settlement_account_name?: string | null;
+  settlement_account_number_masked?: string | null;
+  provider_bank_id?: string | null;
+  wallet_address?: string | null;
+  tx_hash?: string | null;
   settled_at?: string | null;
   reconciliation_notes?: string | null;
   payment_records?: {
@@ -114,7 +123,7 @@ export default function AdminAccountingPage() {
   const [batchModalOpen, setBatchModalOpen] = useState(false);
   const [batchSettledAt, setBatchSettledAt] = useState(() => new Date().toISOString().slice(0, 16));
 
-  const fetchRows = async () => {
+  const fetchRows = useCallback(async () => {
     setLoading(true);
     const params = new URLSearchParams({ limit: "250" });
     if (provider !== "all") params.set("provider", provider);
@@ -125,14 +134,17 @@ export default function AdminAccountingPage() {
     setRows(payload.rows || []);
     setSummary(payload.summary || null);
     setLoading(false);
-  };
+  }, [provider, status]);
 
   useEffect(() => {
-    fetchRows().catch((error) => {
-      console.error(error);
-      setLoading(false);
-    });
-  }, [provider, status]);
+    const timer = window.setTimeout(() => {
+      void fetchRows().catch((error: unknown) => {
+        console.error(error);
+        setLoading(false);
+      });
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [fetchRows]);
 
   const filteredRows = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -146,6 +158,11 @@ export default function AdminAccountingPage() {
         row.provider_settlement_reference,
         row.merchant_settlement_accounts?.account_name,
         row.merchant_settlement_accounts?.bank_name,
+        row.settlement_bank_name,
+        row.settlement_account_name,
+        row.provider_bank_id,
+        row.wallet_address,
+        row.tx_hash,
       ];
       return values.some((value) => String(value || "").toLowerCase().includes(needle));
     });
@@ -234,7 +251,7 @@ export default function AdminAccountingPage() {
       Status: row.settlement_status,
       Owner: row.settlement_owner || "",
       Mode: row.settlement_mode || "",
-      "Settlement Account": maskAccount(row.merchant_settlement_accounts),
+      "Settlement Account": settlementAccountSummary(row),
       "Provider Batch": row.provider_settlement_batches?.provider_batch_reference || "",
       "Batch Settled At": row.provider_settlement_batches?.settled_at || row.provider_settlement_batches?.provider_reported_settled_at || "",
       Reference: row.provider_settlement_reference || row.payment_records?.provider_reference || "",
@@ -369,7 +386,10 @@ export default function AdminAccountingPage() {
                       <Badge variant="outline" className="capitalize border-2">{row.provider_name}</Badge>
                       <p className="text-xs text-neutral-500 mt-1">{row.payment_method || "method unknown"}</p>
                     </TableCell>
-                    <TableCell className="text-sm">{maskAccount(row.merchant_settlement_accounts)}</TableCell>
+                    <TableCell className="text-sm">
+                      <p>{settlementAccountSummary(row)}</p>
+                      {row.provider_bank_id ? <p className="text-xs text-neutral-500 mt-1">Bank ID {row.provider_bank_id}</p> : null}
+                    </TableCell>
                     <TableCell>
                       <StatusBadge status={row.settlement_status} />
                       {row.provider_settlement_batches?.settled_at && (
@@ -410,10 +430,22 @@ export default function AdminAccountingPage() {
             </div>
             <div className="p-5 space-y-4">
               <div className="grid grid-cols-2 gap-3 text-sm">
+                <Info label="Settlement provider" value={label(selected.provider_name || "-")} />
+                <Info label="Settlement mode" value={label(selected.settlement_mode || "-")} />
+                <Info label="Recipient type" value={label(selected.settlement_recipient_type || "-")} />
+                <Info label="Settlement owner" value={label(selected.settlement_owner || "-")} />
                 <Info label="Gross" value={formatNaira(Number(selected.gross_amount || 0))} />
                 <Info label="Expected" value={selected.expected_settlement === null || selected.expected_settlement === undefined ? "Manual review" : formatNaira(Number(selected.expected_settlement))} />
+                <Info label="Actual settlement" value={selected.actual_settlement === null || selected.actual_settlement === undefined ? "-" : formatNaira(Number(selected.actual_settlement || 0))} />
+                <Info label="Provider fee" value={formatNaira(Number(selected.provider_fee || 0))} />
+                <Info label="Fee payer" value={label(selected.fee_payer || "-")} />
                 <Info label="Fee source" value={label(selected.provider_fee_source || "provider_missing")} />
-                <Info label="Settlement account" value={maskAccount(selected.merchant_settlement_accounts)} />
+                <Info label="Settlement account" value={settlementAccountSummary(selected)} />
+                <Info label="Account name" value={selected.settlement_account_name || selected.merchant_settlement_accounts?.account_name || "No account"} />
+                <Info label="Breet bankId" value={selected.provider_bank_id || "-"} />
+                <Info label="Provider reference" value={selected.provider_settlement_reference || selected.payment_records?.provider_reference || "-"} />
+                <Info label="Tx hash" value={selected.tx_hash || "-"} />
+                <Info label="Wallet address" value={selected.wallet_address || "-"} />
               </div>
               <Input value={actualSettlement} onChange={(event) => setActualSettlement(event.target.value)} placeholder="Actual settlement amount" className="border-2" />
               <Input value={providerReference} onChange={(event) => setProviderReference(event.target.value)} placeholder="Provider settlement reference" className="border-2" />
@@ -440,7 +472,7 @@ export default function AdminAccountingPage() {
             <div className="p-5 space-y-4">
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <Info label="Selected expected total" value={formatNaira(selectedExpectedTotal)} />
-                <Info label="Settlement account" value={selectedRows[0] ? maskAccount(selectedRows[0].merchant_settlement_accounts) : "No account"} />
+                <Info label="Settlement account" value={selectedRows[0] ? settlementAccountSummary(selectedRows[0]) : "No account"} />
               </div>
               <Input value={actualSettlement} onChange={(event) => setActualSettlement(event.target.value)} placeholder="Actual batch amount credited" className="border-2" />
               <Input value={providerReference} onChange={(event) => setProviderReference(event.target.value)} placeholder="Provider batch/reference" className="border-2" />
@@ -459,7 +491,7 @@ export default function AdminAccountingPage() {
   );
 }
 
-function SummaryCard({ icon: Icon, label: text, value }: { icon: any; label: string; value: string }) {
+function SummaryCard({ icon: Icon, label: text, value }: { icon: LucideIcon; label: string; value: string }) {
   return (
     <Card className="border shadow-none">
       <CardContent className="p-5">
@@ -511,4 +543,22 @@ function label(value: string) {
 
 function getMerchantKey(row: SettlementRow) {
   return row.merchant_id || row.merchants?.email || row.merchants?.business_name || "unknown";
+}
+
+function settlementAccountSummary(
+  row: Pick<SettlementRow, "merchant_settlement_accounts" | "settlement_bank_name" | "settlement_account_number_masked" | "settlement_account_name">
+) {
+  const legacySummary = maskAccount(row.merchant_settlement_accounts);
+  const bankName = row.settlement_bank_name || row.merchant_settlement_accounts?.bank_name || "No account";
+  const maskedNumber = row.settlement_account_number_masked || maskAccountNumber(row.merchant_settlement_accounts?.account_number);
+  const accountName = row.settlement_account_name || row.merchant_settlement_accounts?.account_name || "No account";
+  if (!maskedNumber) return legacySummary;
+  return `${bankName} ${maskedNumber} · ${accountName}`;
+}
+
+function maskAccountNumber(accountNumber?: string | null) {
+  if (!accountNumber) return null;
+  if (accountNumber.startsWith("****")) return accountNumber;
+  const last4 = accountNumber.slice(-4) || "----";
+  return `****${last4}`;
 }

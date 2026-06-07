@@ -184,6 +184,28 @@ function getInvoiceSessionAccounting(
   };
 }
 
+function extractSettlementSnapshot(session: Record<string, unknown>) {
+  const directSnapshot = asRecord(session.settlement_account_snapshot);
+  const metadataSnapshot = asRecord(asRecord(session.metadata).settlement_account_snapshot);
+  const snapshot = Object.keys(directSnapshot).length > 0 ? directSnapshot : metadataSnapshot;
+  const bankId =
+    stringValue(snapshot.bank_id) ||
+    stringValue(asRecord(session.metadata).settlement_bank_id_used) ||
+    null;
+
+  return {
+    snapshot: Object.keys(snapshot).length > 0 ? snapshot : null,
+    bankId,
+    bankName: stringValue(snapshot.bank_name) || null,
+    accountName: stringValue(snapshot.account_name) || null,
+    accountNumberMasked:
+      stringValue(snapshot.account_number_masked) ||
+      stringValue(snapshot.account_number) ||
+      stringValue(asRecord(session.metadata).settlement_account_masked) ||
+      null,
+  };
+}
+
 async function readSettings(keys: string[]) {
   const { data } = await supabase
     .from("platform_settings")
@@ -930,6 +952,16 @@ async function handleInvoiceWebhook(input: {
   }
 
   await supabase
+    .from("invoices")
+    .update({
+      payment_provider: "breet",
+      payment_method: "crypto",
+      crypto_asset: rail,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", String(session.invoice_id));
+
+  await supabase
     .from("treasury_transactions")
     .update({
       gross_ngn: accounting.customerPayableAmount,
@@ -969,6 +1001,7 @@ async function handleInvoiceWebhook(input: {
     .single();
 
   if (!paymentRecordResult.error && paymentRecordResult.data?.id) {
+    const settlementSnapshot = extractSettlementSnapshot(session);
     await supabase.from("settlement_records").upsert(
       {
         payment_record_id: paymentRecordResult.data.id,
@@ -996,6 +1029,13 @@ async function handleInvoiceWebhook(input: {
         provider_settlement_reference: providerReference || txHash || String(session.reference || session.id),
         provider_fee_source: "breet_payload",
         expected_settlement_source: "breet_trade_completed",
+        settlement_account_snapshot: settlementSnapshot.snapshot,
+        settlement_bank_name: settlementSnapshot.bankName,
+        settlement_account_name: settlementSnapshot.accountName,
+        settlement_account_number_masked: settlementSnapshot.accountNumberMasked,
+        provider_bank_id: settlementSnapshot.bankId,
+        wallet_address: stringValue(session.wallet_address) || stringValue(payload.destinationAddress) || null,
+        tx_hash: txHash || null,
         raw_settlement_payload: accountingPayload,
       },
       { onConflict: "payment_record_id" }

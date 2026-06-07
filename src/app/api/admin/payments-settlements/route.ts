@@ -9,6 +9,25 @@ const supabase = createSupabaseClient(
 
 export const dynamic = "force-dynamic";
 
+type SettlementAccountDisplay = {
+  bank_name?: string | null;
+  account_number?: string | null;
+  account_name?: string | null;
+  currency?: string | null;
+};
+
+type PaymentSessionFallback = {
+  invoice_id?: string | null;
+  reference?: string | null;
+  provider_reference?: string | null;
+  settlement_mode?: string | null;
+  settlement_recipient_type?: string | null;
+  settlement_account_snapshot?: Record<string, unknown> | null;
+  wallet_address?: string | null;
+  tx_hash?: string | null;
+  raw_webhook_payload?: Record<string, unknown> | null;
+};
+
 export async function GET(request: Request) {
   const guard = await requireAdminPortalSession();
   if (!guard.ok) {
@@ -72,7 +91,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  const rows = data || [];
+  const rows = await enrichSettlementRows(data || []);
   return NextResponse.json({
     rows,
     summary: {
@@ -84,6 +103,235 @@ export async function GET(request: Request) {
       manualReviewCount: rows.filter((row) => row.settlement_status === "manual_review").length,
     },
   });
+}
+
+async function enrichSettlementRows(rows: Record<string, unknown>[]) {
+  const breetRows = rows.filter((row) => row.provider_name === "breet" && row.payment_method === "crypto");
+  if (!breetRows.length) {
+    return rows;
+  }
+
+  const invoiceIds = Array.from(new Set(
+    breetRows
+      .map((row) => row.payment_records && typeof row.payment_records === "object" ? (row.payment_records as Record<string, unknown>).invoice_id : row.invoice_id)
+      .filter((value): value is string => typeof value === "string" && value.length > 0)
+  ));
+
+  const internalRefs = Array.from(new Set(
+    breetRows
+      .map((row) => row.payment_records && typeof row.payment_records === "object" ? (row.payment_records as Record<string, unknown>).internal_reference : null)
+      .filter((value): value is string => typeof value === "string" && value.length > 0)
+  ));
+
+  const providerRefs = Array.from(new Set(
+    breetRows
+      .flatMap((row) => {
+        const paymentRecord = row.payment_records && typeof row.payment_records === "object"
+          ? row.payment_records as Record<string, unknown>
+          : null;
+        return [
+          typeof row.provider_settlement_reference === "string" ? row.provider_settlement_reference : null,
+          typeof paymentRecord?.provider_reference === "string" ? paymentRecord.provider_reference : null,
+        ];
+      })
+      .filter((value): value is string => typeof value === "string" && value.length > 0)
+  ));
+
+  const merchantIds = Array.from(new Set(
+    breetRows
+      .map((row) => typeof row.merchant_id === "string" ? row.merchant_id : null)
+      .filter((value): value is string => Boolean(value))
+  ));
+
+  const sessions: PaymentSessionFallback[] = [];
+  if (invoiceIds.length) {
+    const { data } = await supabase
+      .from("payment_sessions")
+      .select("invoice_id, reference, provider_reference, settlement_mode, settlement_recipient_type, settlement_account_snapshot, wallet_address, tx_hash, raw_webhook_payload")
+      .eq("provider_name", "breet")
+      .eq("payment_method", "crypto")
+      .in("invoice_id", invoiceIds)
+      .order("created_at", { ascending: false });
+    sessions.push(...(data || []));
+  }
+  if (internalRefs.length) {
+    const { data } = await supabase
+      .from("payment_sessions")
+      .select("invoice_id, reference, provider_reference, settlement_mode, settlement_recipient_type, settlement_account_snapshot, wallet_address, tx_hash, raw_webhook_payload")
+      .eq("provider_name", "breet")
+      .eq("payment_method", "crypto")
+      .in("reference", internalRefs);
+    sessions.push(...(data || []));
+  }
+  if (providerRefs.length) {
+    const { data } = await supabase
+      .from("payment_sessions")
+      .select("invoice_id, reference, provider_reference, settlement_mode, settlement_recipient_type, settlement_account_snapshot, wallet_address, tx_hash, raw_webhook_payload")
+      .eq("provider_name", "breet")
+      .eq("payment_method", "crypto")
+      .in("provider_reference", providerRefs);
+    sessions.push(...(data || []));
+  }
+
+  const { data: defaultAccountsData } = merchantIds.length
+    ? await supabase
+        .from("merchant_settlement_accounts")
+        .select("merchant_id, bank_name, account_number, account_name, currency")
+        .in("merchant_id", merchantIds)
+        .eq("is_default", true)
+        .eq("status", "active")
+        .eq("verification_status", "verified")
+    : { data: [] as Record<string, unknown>[] };
+  const defaultAccounts = defaultAccountsData || [];
+
+  const defaultAccountMap = new Map(
+    defaultAccounts
+      .filter((row) => typeof row.merchant_id === "string")
+      .map((row) => [String(row.merchant_id), row as Record<string, unknown>])
+  );
+
+  const sessionByProviderRef = new Map<string, PaymentSessionFallback>();
+  const sessionByReference = new Map<string, PaymentSessionFallback>();
+  const sessionByInvoiceId = new Map<string, PaymentSessionFallback>();
+
+  for (const session of sessions) {
+    if (typeof session.provider_reference === "string" && !sessionByProviderRef.has(session.provider_reference)) {
+      sessionByProviderRef.set(session.provider_reference, session);
+    }
+    if (typeof session.reference === "string" && !sessionByReference.has(session.reference)) {
+      sessionByReference.set(session.reference, session);
+    }
+    if (typeof session.invoice_id === "string" && !sessionByInvoiceId.has(session.invoice_id)) {
+      sessionByInvoiceId.set(session.invoice_id, session);
+    }
+  }
+
+  return rows.map((row) => {
+    if (row.provider_name !== "breet" || row.payment_method !== "crypto") {
+      return row;
+    }
+
+    const paymentRecord = row.payment_records && typeof row.payment_records === "object"
+      ? row.payment_records as Record<string, unknown>
+      : null;
+    const providerRef = typeof row.provider_settlement_reference === "string"
+      ? row.provider_settlement_reference
+      : typeof paymentRecord?.provider_reference === "string"
+        ? paymentRecord.provider_reference
+        : null;
+    const internalRef = typeof paymentRecord?.internal_reference === "string" ? paymentRecord.internal_reference : null;
+    const invoiceId = typeof paymentRecord?.invoice_id === "string"
+      ? paymentRecord.invoice_id
+      : typeof row.invoice_id === "string"
+        ? row.invoice_id
+        : null;
+
+    const session =
+      (providerRef ? sessionByProviderRef.get(providerRef) : null) ||
+      (internalRef ? sessionByReference.get(internalRef) : null) ||
+      (invoiceId ? sessionByInvoiceId.get(invoiceId) : null) ||
+      null;
+
+    const snapshot = resolveSettlementSnapshot(row, session);
+    const fallbackAccount = typeof row.merchant_id === "string" ? defaultAccountMap.get(row.merchant_id) : null;
+    const accountDisplay = buildSettlementAccountDisplay(
+      snapshot,
+      row.merchant_settlement_accounts as SettlementAccountDisplay | null | undefined,
+      fallbackAccount
+    );
+    const rawPayload = asRecord(row.raw_settlement_payload);
+    const accounting = asRecord(rawPayload.deraledger_accounting);
+
+    return {
+      ...row,
+      settlement_mode: row.settlement_mode || session?.settlement_mode || snapshot?.settlement_mode || null,
+      settlement_recipient_type:
+        row.settlement_recipient_type ||
+        session?.settlement_recipient_type ||
+        stringValue(snapshot?.recipient_type) ||
+        null,
+      settlement_account_snapshot: snapshot,
+      settlement_bank_name: stringValue(row.settlement_bank_name) || stringValue(snapshot?.bank_name) || stringValue(fallbackAccount?.bank_name) || null,
+      settlement_account_name: stringValue(row.settlement_account_name) || stringValue(snapshot?.account_name) || stringValue(fallbackAccount?.account_name) || null,
+      settlement_account_number_masked:
+        stringValue(row.settlement_account_number_masked) ||
+        stringValue(snapshot?.account_number_masked) ||
+        stringValue(snapshot?.account_number) ||
+        maskAccountNumber(stringValue(fallbackAccount?.account_number)) ||
+        null,
+      provider_bank_id:
+        stringValue(row.provider_bank_id) ||
+        stringValue(snapshot?.bank_id) ||
+        stringValue(accounting.provider_bank_id) ||
+        null,
+      wallet_address:
+        stringValue(row.wallet_address) ||
+        session?.wallet_address ||
+        stringValue(rawPayload.destinationAddress) ||
+        stringValue(accounting.destination_address) ||
+        null,
+      tx_hash:
+        stringValue(row.tx_hash) ||
+        session?.tx_hash ||
+        stringValue(rawPayload.txHash) ||
+        stringValue(rawPayload.tx_hash) ||
+        stringValue(accounting.tx_hash) ||
+        null,
+      merchant_settlement_accounts: accountDisplay,
+    };
+  });
+}
+
+function resolveSettlementSnapshot(row: Record<string, unknown>, session: PaymentSessionFallback | null) {
+  const direct = asRecord(row.settlement_account_snapshot);
+  if (Object.keys(direct).length > 0) return direct;
+  const sessionSnapshot = asRecord(session?.settlement_account_snapshot);
+  if (Object.keys(sessionSnapshot).length > 0) return sessionSnapshot;
+  return null;
+}
+
+function buildSettlementAccountDisplay(
+  snapshot: Record<string, unknown> | null,
+  linkedAccount: SettlementAccountDisplay | null | undefined,
+  fallbackAccount: Record<string, unknown> | null | undefined
+) {
+  if (snapshot) {
+    return {
+      bank_name: stringValue(snapshot.bank_name),
+      account_number: stringValue(snapshot.account_number_masked) || stringValue(snapshot.account_number),
+      account_name: stringValue(snapshot.account_name),
+      currency: stringValue(snapshot.currency),
+    };
+  }
+
+  if (linkedAccount) {
+    return linkedAccount;
+  }
+
+  if (fallbackAccount) {
+    return {
+      bank_name: stringValue(fallbackAccount.bank_name),
+      account_number: maskAccountNumber(stringValue(fallbackAccount.account_number)),
+      account_name: stringValue(fallbackAccount.account_name),
+      currency: stringValue(fallbackAccount.currency),
+    };
+  }
+
+  return null;
+}
+
+function maskAccountNumber(accountNumber: string | null) {
+  if (!accountNumber) return null;
+  const last4 = accountNumber.slice(-4);
+  return `****${last4}`;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" && value.trim() ? value : null;
 }
 
 export async function PATCH(request: Request) {
