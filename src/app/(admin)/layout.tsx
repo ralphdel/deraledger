@@ -146,7 +146,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       )}
 
       {/* Main Content */}
-      <div className="flex-1 lg:ml-64 flex flex-col min-h-screen">
+      <div className="flex min-h-screen min-w-0 flex-1 flex-col lg:ml-64">
         {/* Top Bar */}
         <header className="sticky top-0 z-20 bg-white border-b border-neutral-200 h-16 flex items-center px-4 sm:px-6 lg:px-8">
           <button onClick={() => setSidebarOpen(true)} className="lg:hidden mr-4 text-neutral-900">
@@ -189,7 +189,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         </header>
 
         {/* Page Content */}
-        <main className="flex-1 p-4 sm:p-6 lg:p-8">{children}</main>
+        <main className="min-w-0 flex-1 overflow-x-hidden p-4 sm:p-6 lg:p-8">{children}</main>
       </div>
       <PlatformUpdateModal />
     </div>

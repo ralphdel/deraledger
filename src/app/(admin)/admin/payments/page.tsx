@@ -489,8 +489,8 @@ export default function AdminPaymentsPage() {
         </Card>
         </TabsContent>
 
-        <TabsContent value="recovery" className="mt-0 min-w-0 max-w-full overflow-hidden">
-        <Card className="min-w-0 max-w-full overflow-hidden border shadow-none">
+        <TabsContent value="recovery" className="mt-0 w-full min-w-0 max-w-full overflow-hidden">
+        <Card className="w-full min-w-0 max-w-full overflow-hidden border shadow-none">
           <CardHeader>
             <div className="flex items-center justify-between gap-4">
               <CardTitle className="text-base">Subscription Recovery Records</CardTitle>
@@ -499,7 +499,7 @@ export default function AdminPaymentsPage() {
               </Badge>
             </div>
           </CardHeader>
-          <CardContent className="min-w-0 max-w-full p-0">
+          <CardContent className="w-full min-w-0 max-w-full overflow-hidden p-0">
             {data?.diagnostics?.paymentRecordsError ? (
               <div className="border-b border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700">
                 Recovery record query warning: {data.diagnostics.paymentRecordsError}
@@ -510,8 +510,8 @@ export default function AdminPaymentsPage() {
                 Recovery record schema warning: {data.diagnostics.paymentRecordsWarning}
               </div>
             ) : null}
-            <div className="w-full max-w-full overflow-x-auto overscroll-x-contain">
-            <Table className="w-[1480px] min-w-[1480px]">
+            <div className="block w-full max-w-full overflow-x-auto overscroll-x-contain">
+            <table className="w-[1480px] min-w-[1480px] caption-bottom text-sm">
               <TableHeader>
                 <TableRow className="bg-neutral-50">
                   <TableHead className="w-10"></TableHead>
@@ -552,19 +552,19 @@ export default function AdminPaymentsPage() {
                         <TableCell className="whitespace-nowrap text-xs text-neutral-500">{formatDate(record.created_at)}</TableCell>
                         <TableCell><Badge variant="outline" className="border-2 capitalize">{record.provider_name || "-"}</Badge></TableCell>
                         <TableCell className="capitalize">{record.payment_method || "-"}</TableCell>
-                        <TableCell className="min-w-[150px] text-xs">{record.payment_purpose || "-"}</TableCell>
+                        <TableCell className="w-[150px] whitespace-normal text-xs">{record.payment_purpose || "-"}</TableCell>
                         <TableCell><EventStatusBadge status={record.processing_status || record.payment_status || "unknown"} /></TableCell>
                         <TableCell><EventStatusBadge status={record.account_setup_status || "unknown"} /></TableCell>
                         <TableCell className="whitespace-nowrap font-medium">{formatNaira(Number(record.expected_amount || 0))}</TableCell>
                         <TableCell className="whitespace-nowrap font-medium">{formatNaira(Number(record.amount_paid || 0))}</TableCell>
-                        <TableCell className="min-w-[230px]">
+                        <TableCell className="w-[230px] whitespace-normal">
                           <p className="break-all font-mono text-xs text-neutral-900">{record.internal_reference || "-"}</p>
                           {record.provider_reference ? (
                             <p className="mt-1 break-all font-mono text-[11px] text-neutral-500">{record.provider_reference}</p>
                           ) : null}
                         </TableCell>
-                        <TableCell className="min-w-[210px] break-all text-xs">{record.customer_email || "-"}</TableCell>
-                        <TableCell className="min-w-[160px] text-xs text-neutral-600">
+                        <TableCell className="w-[210px] whitespace-normal break-all text-xs">{record.customer_email || "-"}</TableCell>
+                        <TableCell className="w-[160px] whitespace-normal text-xs text-neutral-600">
                           <p>{record.setup_recovery_email_count || 0} sent</p>
                           <p>{formatDate(record.setup_recovery_email_sent_at)}</p>
                         </TableCell>
@@ -585,8 +585,8 @@ export default function AdminPaymentsPage() {
                       {isExpanded ? (
                         <TableRow>
                           <TableCell colSpan={13} className="bg-neutral-50 p-0">
-                            <div className="grid gap-4 p-4 lg:grid-cols-[320px_1fr]">
-                              <div className="rounded-lg border border-neutral-200 bg-white p-4">
+                            <div className="grid w-full min-w-0 max-w-full gap-4 p-4 lg:grid-cols-[320px_minmax(0,1fr)]">
+                              <div className="min-w-0 max-w-full rounded-lg border border-neutral-200 bg-white p-4">
                                 <p className="text-xs font-semibold uppercase text-neutral-500">Recovery Summary</p>
                                 <dl className="mt-3 space-y-2 text-sm">
                                   <EventDetail label="Payment status" value={record.payment_status} />
@@ -602,9 +602,9 @@ export default function AdminPaymentsPage() {
                                   <EventDetail label="Failure reason" value={record.failure_reason} />
                                 </dl>
                               </div>
-                              <div className="rounded-lg border border-neutral-200 bg-white p-4">
+                              <div className="min-w-0 max-w-full rounded-lg border border-neutral-200 bg-white p-4">
                                 <p className="text-xs font-semibold uppercase text-neutral-500">Raw Provider Payload</p>
-                                <pre className="mt-3 max-h-[360px] overflow-auto rounded-md bg-neutral-950 p-4 text-xs leading-relaxed text-neutral-100">
+                                <pre className="mt-3 max-h-[360px] max-w-full overflow-auto whitespace-pre-wrap break-words rounded-md bg-neutral-950 p-4 text-xs leading-relaxed text-neutral-100">
                                   {JSON.stringify(record.raw_provider_payload || {}, null, 2)}
                                 </pre>
                               </div>
@@ -616,7 +616,7 @@ export default function AdminPaymentsPage() {
                   );
                 })}
               </TableBody>
-            </Table>
+            </table>
             </div>
             <PaginationControls
               label="recovery records"
