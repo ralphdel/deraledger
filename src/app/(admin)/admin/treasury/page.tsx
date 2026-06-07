@@ -653,6 +653,109 @@ export default function AdminTreasuryPage() {
     { label: "Reconciliation Delta", value: formatNaira(data.summary.reconciliationDelta), icon: Coins, tone: "bg-slate-100 text-slate-700 border-slate-200" },
     ...manualFallbackCards,
   ];
+  const mockTradeCard = (
+    <Card className="border shadow-none">
+      <CardHeader>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <CardTitle className="text-base">Breet Sandbox Mock Trade</CardTitle>
+          <Badge variant="outline" className="w-fit border-2 bg-neutral-50">
+            {data.configStatus.apiEnvironment}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          This admin-only tool calls Breet&apos;s development mock-trade endpoint using server-side credentials.
+          It is disabled automatically when Breet live mode or production environment is active.
+        </div>
+        {mockTradeDisabled ? (
+          <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+            Mock trades are unavailable because Breet is not fully configured for development mode or live mode is enabled.
+          </div>
+        ) : null}
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <div className="space-y-2 md:col-span-2">
+            <label className="text-sm font-medium text-neutral-700">Wallet Address</label>
+            <Input
+              value={mockTradeDraft.walletAddress}
+              onChange={(event) => setMockTradeDraft((current) => ({ ...current, walletAddress: event.target.value }))}
+              className="border-2 bg-white font-mono text-xs"
+              placeholder="Breet generated wallet address"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-neutral-700">Asset</label>
+            <Input
+              value={mockTradeDraft.asset}
+              onChange={(event) => setMockTradeDraft((current) => ({ ...current, asset: event.target.value }))}
+              className="border-2 bg-white"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-neutral-700">Amount In USD</label>
+            <Input
+              value={mockTradeDraft.amountInUSD}
+              onChange={(event) => setMockTradeDraft((current) => ({ ...current, amountInUSD: event.target.value }))}
+              className="border-2 bg-white"
+              inputMode="decimal"
+              placeholder="3.12"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-neutral-700">Crypto Received</label>
+            <Input
+              value={mockTradeDraft.cryptoReceived}
+              onChange={(event) => setMockTradeDraft((current) => ({ ...current, cryptoReceived: event.target.value }))}
+              className="border-2 bg-white"
+              inputMode="decimal"
+              placeholder="3.12"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-neutral-700">Reference</label>
+            <Input
+              value={mockTradeDraft.reference}
+              onChange={(event) => setMockTradeDraft((current) => ({ ...current, reference: event.target.value }))}
+              className="border-2 bg-white font-mono text-xs"
+              placeholder="plan-test-5000-001"
+            />
+          </div>
+          <div className="space-y-2 xl:col-span-2">
+            <label className="text-sm font-medium text-neutral-700">Transaction Hash</label>
+            <Input
+              value={mockTradeDraft.txHash}
+              onChange={(event) => setMockTradeDraft((current) => ({ ...current, txHash: event.target.value }))}
+              className="border-2 bg-white font-mono text-xs"
+              placeholder="0xplan5000test001"
+            />
+          </div>
+        </div>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-xs text-neutral-500">
+            Reference and txHash must be unique. Secrets are never accepted from this form or shown in responses.
+          </p>
+          <Button
+            onClick={() => void triggerMockTrade()}
+            disabled={busy === "breet-mock-trade" || mockTradeDisabled || mockTradeInvalid}
+            className="bg-purp-900 hover:bg-purp-800"
+          >
+            {busy === "breet-mock-trade" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Trigger Mock Trade"}
+          </Button>
+        </div>
+        {mockTradeResult ? (
+          <div className={`rounded-xl border p-4 text-sm ${
+            mockTradeResult.error ? "border-red-200 bg-red-50 text-red-700" : "border-emerald-200 bg-emerald-50 text-emerald-800"
+          }`}>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <Info label="Breet response status" value={mockTradeResult.status ? String(mockTradeResult.status) : "-"} />
+              <Info label="Provider message" value={mockTradeResult.providerMessage || mockTradeResult.error || "-"} />
+              <Info label="Webhook expected" value={mockTradeResult.webhookExpected ? "Yes" : "No"} />
+            </div>
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
 
   return (
     <div className="space-y-6">
@@ -732,6 +835,7 @@ export default function AdminTreasuryPage() {
         <div className="overflow-x-auto pb-1">
         <TabsList className="inline-flex min-w-max bg-white border">
           <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="mock-trade">Mock Trade</TabsTrigger>
           <TabsTrigger value="platform-bank">Platform Bank Setup</TabsTrigger>
           <TabsTrigger value="sessions">Sessions</TabsTrigger>
           <TabsTrigger value="settlements">Settlements</TabsTrigger>
@@ -890,107 +994,7 @@ export default function AdminTreasuryPage() {
             </Card>
           </div>
 
-          <Card className="border shadow-none">
-            <CardHeader>
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <CardTitle className="text-base">Breet Sandbox Mock Trade</CardTitle>
-                <Badge variant="outline" className="w-fit border-2 bg-neutral-50">
-                  {data.configStatus.apiEnvironment}
-                </Badge>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-                This admin-only tool calls Breet&apos;s development mock-trade endpoint using server-side credentials.
-                It is disabled automatically when Breet live mode or production environment is active.
-              </div>
-              {mockTradeDisabled ? (
-                <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-                  Mock trades are unavailable because Breet is not fully configured for development mode or live mode is enabled.
-                </div>
-              ) : null}
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                <div className="space-y-2 md:col-span-2">
-                  <label className="text-sm font-medium text-neutral-700">Wallet Address</label>
-                  <Input
-                    value={mockTradeDraft.walletAddress}
-                    onChange={(event) => setMockTradeDraft((current) => ({ ...current, walletAddress: event.target.value }))}
-                    className="bg-white border-2 font-mono text-xs"
-                    placeholder="Breet generated wallet address"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-neutral-700">Asset</label>
-                  <Input
-                    value={mockTradeDraft.asset}
-                    onChange={(event) => setMockTradeDraft((current) => ({ ...current, asset: event.target.value }))}
-                    className="bg-white border-2"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-neutral-700">Amount In USD</label>
-                  <Input
-                    value={mockTradeDraft.amountInUSD}
-                    onChange={(event) => setMockTradeDraft((current) => ({ ...current, amountInUSD: event.target.value }))}
-                    className="bg-white border-2"
-                    inputMode="decimal"
-                    placeholder="3.12"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-neutral-700">Crypto Received</label>
-                  <Input
-                    value={mockTradeDraft.cryptoReceived}
-                    onChange={(event) => setMockTradeDraft((current) => ({ ...current, cryptoReceived: event.target.value }))}
-                    className="bg-white border-2"
-                    inputMode="decimal"
-                    placeholder="3.12"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-neutral-700">Reference</label>
-                  <Input
-                    value={mockTradeDraft.reference}
-                    onChange={(event) => setMockTradeDraft((current) => ({ ...current, reference: event.target.value }))}
-                    className="bg-white border-2 font-mono text-xs"
-                    placeholder="plan-test-5000-001"
-                  />
-                </div>
-                <div className="space-y-2 xl:col-span-2">
-                  <label className="text-sm font-medium text-neutral-700">Transaction Hash</label>
-                  <Input
-                    value={mockTradeDraft.txHash}
-                    onChange={(event) => setMockTradeDraft((current) => ({ ...current, txHash: event.target.value }))}
-                    className="bg-white border-2 font-mono text-xs"
-                    placeholder="0xplan5000test001"
-                  />
-                </div>
-              </div>
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <p className="text-xs text-neutral-500">
-                  Reference and txHash must be unique. Secrets are never accepted from this form or shown in responses.
-                </p>
-                <Button
-                  onClick={() => void triggerMockTrade()}
-                  disabled={busy === "breet-mock-trade" || mockTradeDisabled || mockTradeInvalid}
-                  className="bg-purp-900 hover:bg-purp-800"
-                >
-                  {busy === "breet-mock-trade" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Trigger Mock Trade"}
-                </Button>
-              </div>
-              {mockTradeResult ? (
-                <div className={`rounded-xl border p-4 text-sm ${
-                  mockTradeResult.error ? "border-red-200 bg-red-50 text-red-700" : "border-emerald-200 bg-emerald-50 text-emerald-800"
-                }`}>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    <Info label="Breet response status" value={mockTradeResult.status ? String(mockTradeResult.status) : "-"} />
-                    <Info label="Provider message" value={mockTradeResult.providerMessage || mockTradeResult.error || "-"} />
-                    <Info label="Webhook expected" value={mockTradeResult.webhookExpected ? "Yes" : "No"} />
-                  </div>
-                </div>
-              ) : null}
-            </CardContent>
-          </Card>
+          {mockTradeCard}
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <Card className="border shadow-none">
@@ -1094,6 +1098,10 @@ export default function AdminTreasuryPage() {
               </CardContent>
             </Card>
           </div>
+        </TabsContent>
+
+        <TabsContent value="mock-trade" className="space-y-4">
+          {mockTradeCard}
         </TabsContent>
 
         <TabsContent value="platform-bank">
