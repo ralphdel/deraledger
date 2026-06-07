@@ -47,6 +47,7 @@ export const BREET_PLATFORM_SETTING_KEYS = [
   "breet_default_receive_currency",
   "breet_sandbox_force_platform_settlement",
   "breet_live_enabled",
+  "breet_allow_pending_as_completed_in_development",
   "crypto_session_ttl_minutes",
   "crypto_rate_lock_minutes",
   "crypto_underpayment_tolerance_bps",
@@ -78,6 +79,7 @@ export type BreetRuntimeConfig = {
   treasurySettlementAccountLabel: string | null;
   platformSettlementBankAccount: BreetSettlementBankAccount | null;
   liveEnabled: boolean;
+  allowPendingAsCompletedInDevelopment: boolean;
   sessionTtlMinutes: number;
   rateLockMinutes: number;
   underpaymentToleranceBps: number;
@@ -197,6 +199,9 @@ export function mapBreetEventToCryptoStatus(
   }
   if (event.includes("over") || status.includes("over") || payloadStatus.includes("over")) {
     return "crypto_overpaid";
+  }
+  if (event.includes("trade.pending")) {
+    return "crypto_payment_detected";
   }
   if (event.includes("confirm") || status.includes("confirm") || payloadStatus.includes("confirm")) {
     return "crypto_payment_confirming";
@@ -482,6 +487,11 @@ export async function loadBreetRuntimeConfig(supabase: SupabaseClient): Promise<
       ? platformBankAccount
       : null,
     liveEnabled: parseBooleanSetting(map, "breet_live_enabled", false),
+    allowPendingAsCompletedInDevelopment: parseBooleanSetting(
+      map,
+      "breet_allow_pending_as_completed_in_development",
+      false
+    ),
     sessionTtlMinutes: parseNumberSetting(map, "crypto_session_ttl_minutes", 30),
     rateLockMinutes: parseNumberSetting(map, "crypto_rate_lock_minutes", 15),
     underpaymentToleranceBps: parseNumberSetting(map, "crypto_underpayment_tolerance_bps", 100),

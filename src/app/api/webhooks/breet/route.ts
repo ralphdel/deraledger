@@ -94,6 +94,42 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
+function buildPendingObservation(payload: WebhookPayload, eventType: string) {
+  const confirmations =
+    numberValue(payload.confirmations) ||
+    numberValue(payload.confirmation_count) ||
+    numberValue(payload.confirmationCount) ||
+    0;
+  const amountInUSD = positiveNumberValue(payload.amountInUSD) || null;
+  const rate =
+    positiveNumberValue(payload.rate) ||
+    positiveNumberValue(payload.conversionRate) ||
+    null;
+  const estimatedNgn =
+    amountInUSD && rate ? Number((amountInUSD * rate).toFixed(2)) : null;
+
+  return {
+    latest_event: eventType,
+    latest_provider_status: stringValue(payload.status) || null,
+    latest_tx_hash: stringValue(payload.txHash) || stringValue(payload.tx_hash) || null,
+    latest_confirmation_count: confirmations,
+    latest_asset: stringValue(payload.asset) || null,
+    latest_amount_in_usd: amountInUSD,
+    latest_rate: rate,
+    latest_estimated_ngn: estimatedNgn,
+    latest_amount_settled: positiveNumberValue(payload.amountSettled) || null,
+  };
+}
+
+function getNonTerminalProcessingStatus(eventType: string, lifecycleStatus: string) {
+  const event = eventType.toLowerCase();
+  if (event === "trade.pending" || lifecycleStatus === "crypto_payment_detected" || lifecycleStatus === "crypto_payment_confirming") {
+    return "awaiting_provider_completion";
+  }
+
+  return "waiting_for_payment";
+}
+
 async function readSettings(keys: string[]) {
   const { data } = await supabase
     .from("platform_settings")
@@ -287,11 +323,27 @@ async function recordNonTerminalEvent(input: {
   );
   const now = new Date().toISOString();
   const isFlagged = isBreetFlaggedEvent(input.eventType, stringValue(input.payload.status), input.payload);
+  const pendingObservation = buildPendingObservation(input.payload, input.eventType);
+  const mergedMetadata = {
+    ...asRecord(input.session.metadata),
+    ...pendingObservation,
+  };
+  const confirmationCount = pendingObservation.latest_confirmation_count;
+  const convertedNgN =
+    pendingObservation.latest_amount_settled ||
+    confirmedBreetNgnAmount(input.payload, Number(input.session.converted_ngn_amount || input.session.amount_ngn || 0));
+  const cryptoAmountReceived =
+    positiveNumberValue(input.payload.cryptoAmount) ||
+    positiveNumberValue(eventDataValue(input.payload, ["crypto_amount"])) ||
+    positiveNumberValue(input.session.crypto_amount_received) ||
+    null;
+  const processingStatus = getNonTerminalProcessingStatus(input.eventType, lifecycleStatus);
   const updateBase = {
     provider_reference: input.providerReference || input.session.provider_reference || null,
     crypto_status: isFlagged ? "manual_review" : lifecycleStatus,
     webhook_status: "processed",
     raw_webhook_payload: input.payload,
+    metadata: mergedMetadata,
     manual_review_reason: isFlagged ? "Breet flagged the transaction for review." : String(input.session.manual_review_reason || "") || null,
     updated_at: now,
   };
@@ -300,12 +352,22 @@ async function recordNonTerminalEvent(input: {
     input.sessionTable === "crypto_payment_sessions"
       ? {
           ...updateBase,
+          provider_reference: input.providerReference || input.session.provider_reference || null,
+          converted_ngn_amount: convertedNgN,
+          crypto_amount_received: cryptoAmountReceived,
           settlement_status: isFlagged ? "manual_review" : String(input.session.settlement_status || "pending"),
           processed_at: isFlagged ? now : input.session.processed_at || null,
         }
       : {
           ...updateBase,
-          status: isFlagged ? "UNDER_REVIEW" : String(input.session.status || "PENDING"),
+          status: isFlagged
+            ? "UNDER_REVIEW"
+            : processingStatus === "awaiting_provider_completion"
+              ? "AWAITING_CONFIRMATION"
+              : String(input.session.status || "PENDING"),
+          confirmation_count: confirmationCount,
+          converted_ngn_amount: convertedNgN,
+          crypto_amount_received: cryptoAmountReceived,
           tx_hash: input.txHash || input.session.tx_hash || null,
         };
 
@@ -321,9 +383,24 @@ async function recordNonTerminalEvent(input: {
     event_type: input.eventType,
     processor: "breet",
     processor_ref: input.providerReference || input.txHash || null,
-    amount_kobo: 0,
+    amount_kobo: Math.round(Number(convertedNgN || 0) * 100),
     raw_payload: input.payload,
     idempotency_key: input.idempotencyKey || null,
+    payment_method: "crypto",
+    payment_purpose:
+      String(input.session.payment_purpose || input.session.payment_method || "") === "invoice_payment"
+        ? "invoice_payment"
+        : String(input.session.payment_purpose || "crypto_payment"),
+    payment_reference: String(input.session.reference || input.session.internal_reference || input.paymentSessionId),
+    provider_reference: input.providerReference || input.txHash || null,
+    expected_amount: Number(input.session.amount_ngn || input.session.expected_ngn_amount || 0) || null,
+    paid_amount: convertedNgN || null,
+    currency: "NGN",
+    plan_id: stringValue(input.session.plan_id) || null,
+    customer_email: stringValue(asRecord(input.session.metadata).email) || null,
+    processing_status: isFlagged ? "manual_review" : processingStatus,
+    failure_reason: isFlagged ? "breet_flagged" : null,
+    reconciliation_status: isFlagged ? "under_review" : "awaiting_terminal_breet_event",
   });
 
   await recordWebhookLog({
@@ -513,6 +590,7 @@ async function handleInvoiceWebhook(input: {
   const lifecycleStatus = normalizeCryptoLifecycleStatus(
     mapBreetEventToCryptoStatus(eventType, stringValue(payload.status), payload)
   );
+  const pendingObservation = buildPendingObservation(payload, eventType);
 
   if (!isBreetTerminalSuccessEvent(eventType, stringValue(payload.status), payload)) {
     return recordNonTerminalEvent({
@@ -539,6 +617,10 @@ async function handleInvoiceWebhook(input: {
         manual_review_reason: "Amount outside configured tolerance.",
         crypto_amount_received: amountCrypto || null,
         converted_ngn_amount: receivedNgN,
+        metadata: {
+          ...asRecord(session.metadata),
+          ...pendingObservation,
+        },
         webhook_status: "processed",
         raw_webhook_payload: payload,
         updated_at: new Date().toISOString(),
@@ -607,6 +689,11 @@ async function handleInvoiceWebhook(input: {
       settlement_mode: settlementMode,
       status: "PAID",
       crypto_status: lifecycleStatus,
+      confirmation_count: pendingObservation.latest_confirmation_count,
+      metadata: {
+        ...asRecord(session.metadata),
+        ...pendingObservation,
+      },
       webhook_status: "processed",
       raw_webhook_payload: payload,
       paid_at: new Date().toISOString(),
@@ -624,6 +711,16 @@ async function handleInvoiceWebhook(input: {
     amount_kobo: Math.round(expectedNgN * 100),
     raw_payload: payload,
     idempotency_key: idempotencyKey || null,
+    payment_method: "crypto",
+    payment_purpose: "invoice_payment",
+    payment_reference: String(session.reference || session.id),
+    provider_reference: providerReference || txHash || null,
+    expected_amount: expectedNgN,
+    paid_amount: receivedNgN,
+    currency: "NGN",
+    customer_email: stringValue(asRecord(session.metadata).client_email) || null,
+    processing_status: "completed",
+    reconciliation_status: "invoice_credited",
   });
 
   const { data: transactionRow } = await supabase

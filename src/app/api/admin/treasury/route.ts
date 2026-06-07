@@ -101,6 +101,7 @@ const CONFIG_KEYS = [
   "breet_default_receive_currency",
   "breet_sandbox_force_platform_settlement",
   "breet_live_enabled",
+  "breet_allow_pending_as_completed_in_development",
 ];
 
 export async function GET(request: Request) {
@@ -196,6 +197,9 @@ export async function GET(request: Request) {
     breet_supported_networks: settings.breet_supported_networks || runtimeConfig.supportedNetworks.join(","),
     breet_sandbox_force_platform_settlement: settings.breet_sandbox_force_platform_settlement || String(runtimeConfig.forcePlatformSettlementInSandbox),
     breet_live_enabled: settings.breet_live_enabled || String(runtimeConfig.liveEnabled),
+    breet_allow_pending_as_completed_in_development:
+      settings.breet_allow_pending_as_completed_in_development ||
+      String(runtimeConfig.allowPendingAsCompletedInDevelopment),
   };
   const breetSettlementRecords = ((settlementRes.data as BreetSettlementRecordRow[] | null) || []).map((record) => ({
     ...record,
@@ -818,6 +822,7 @@ function normalizeSettingValue(key: string, value: string) {
     "breet_merchant_auto_settlement_enabled",
     "breet_auto_settlement_enabled",
     "breet_sandbox_force_platform_settlement",
+    "breet_allow_pending_as_completed_in_development",
   ].includes(key)) {
     return trimmed === "true" ? "true" : "false";
   }

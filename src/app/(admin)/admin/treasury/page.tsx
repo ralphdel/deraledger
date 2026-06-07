@@ -252,6 +252,7 @@ const SETTING_LABELS: Record<string, string> = {
   breet_default_receive_currency: "Default Receive Currency",
   breet_sandbox_force_platform_settlement: "Force Platform Settlement in Sandbox",
   breet_live_enabled: "Breet Live Enabled",
+  breet_allow_pending_as_completed_in_development: "Allow Pending As Completed (Dev)",
 };
 const TREASURY_PAGE_SIZE = 10;
 

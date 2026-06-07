@@ -736,6 +736,26 @@ export default function AdminPaymentsPage() {
                                   <EventDetail label="Plan" value={details.planId} />
                                   <EventDetail label="Customer email" value={details.customerEmail} />
                                   <EventDetail label="Processing result" value={details.processingStatus} />
+                                  <EventDetail
+                                    label="Invoice credited"
+                                    value={
+                                      event.processor === "breet" &&
+                                      (details.processingStatus === "awaiting_provider_completion" || event.event_type === "trade.pending")
+                                        ? "No"
+                                        : event.processor === "breet" && details.processingStatus === "completed"
+                                          ? "Yes"
+                                          : null
+                                    }
+                                  />
+                                  <EventDetail
+                                    label="Reason"
+                                    value={
+                                      event.processor === "breet" &&
+                                      (details.processingStatus === "awaiting_provider_completion" || event.event_type === "trade.pending")
+                                        ? "Awaiting terminal Breet event"
+                                        : null
+                                    }
+                                  />
                                   <EventDetail label="Reconciliation" value={details.reconciliationStatus} />
                                   <EventDetail label="Failure reason" value={details.failureReason} />
                                 </dl>

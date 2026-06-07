@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useState, useEffect, useRef } from "react";
+import { use, useState, useEffect, useRef, useEffectEvent } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { formatNaira, calculateProportionalPayment, getMinimumPayment } from "@/lib/calculations";
@@ -26,6 +26,32 @@ type MethodAvailability = Record<
   "card" | "bank_transfer" | "ussd" | "crypto",
   { enabled: boolean; reason: string | null }
 >;
+
+type CryptoCheckoutStatus = {
+  sessionId: string;
+  invoiceId?: string;
+  status: "waiting_for_payment" | "payment_detected" | "awaiting_provider_completion" | "completed" | "failed" | "expired";
+  event?: string | null;
+  provider: "breet";
+  paymentMethod: string;
+  txHash?: string | null;
+  confirmations?: number | null;
+  asset?: string | null;
+  amountInUSD?: number | null;
+  rate?: number | null;
+  estimatedNgn?: number | null;
+  amountSettled?: number | null;
+  invoiceCredited: boolean;
+  message: string;
+  walletAddress?: string | null;
+  network?: string | null;
+  reference?: string | null;
+  fiatAmount?: number | null;
+  cryptoAmount?: number | null;
+  expiresAt?: string | null;
+  expectedConfirmations?: number | null;
+  latestProviderStatus?: string | null;
+};
 
 export default function PublicPaymentPortal({ params }: { params: Promise<{ invoiceId: string }> }) {
   const { invoiceId } = use(params);
@@ -58,7 +84,9 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
     reference: string;
     settlementMode?: string;
     settlementRecipientType?: string;
-  } | null>(null);
+    } | null>(null);
+  const [cryptoCheckoutStatus, setCryptoCheckoutStatus] = useState<CryptoCheckoutStatus | null>(null);
+  const [suppressRecoveredCryptoSession, setSuppressRecoveredCryptoSession] = useState(false);
 
   const [copied, setCopied] = useState(false);
   const [referenceContext, setReferenceContext] = useState<{
@@ -79,6 +107,34 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
+
+  const applyCryptoCheckoutStatus = useEffectEvent((status: CryptoCheckoutStatus) => {
+    setCryptoCheckoutStatus(status);
+    setCryptoDetails((current) => ({
+      paymentSessionId: status.sessionId,
+      providerReference: current?.providerReference || status.reference || null,
+      address: status.walletAddress || current?.address || "",
+      network: status.network || current?.network || "TRON",
+      coin: status.asset || current?.coin || "USDT",
+      fiatAmount: status.fiatAmount || current?.fiatAmount || 0,
+      cryptoAmount: status.cryptoAmount ?? current?.cryptoAmount,
+      exchangeRate: status.rate ?? current?.exchangeRate,
+      expiresAt: status.expiresAt || current?.expiresAt,
+      reference: status.reference || current?.reference || status.sessionId,
+      settlementMode: current?.settlementMode,
+      settlementRecipientType: current?.settlementRecipientType,
+    }));
+  });
+
+  const refreshInvoiceSnapshot = useEffectEvent(async () => {
+    try {
+      const res = await fetch(`/api/invoice/${invoiceId}`);
+      const result = await res.json();
+      if (result?.invoice) {
+        setRefreshedInvoice(result.invoice);
+      }
+    } catch {}
+  });
 
   useEffect(() => {
     const reference =
@@ -156,6 +212,41 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
   }, [invoiceId]);
 
   useEffect(() => {
+    if (!invoice || cryptoDetails || suppressRecoveredCryptoSession) return;
+    const invoicePaymentState = invoice as InvoiceWithLineItems & {
+      payment_provider?: string | null;
+      payment_method?: string | null;
+      payment_status?: string | null;
+    };
+    if (
+      invoicePaymentState.payment_provider !== "breet" &&
+      invoicePaymentState.payment_method !== "crypto" &&
+      invoicePaymentState.payment_status !== "AWAITING_CONFIRMATION"
+    ) {
+      return;
+    }
+
+    const controller = new AbortController();
+
+    fetch(`/api/checkout/crypto-invoice/status?invoiceId=${encodeURIComponent(invoice.id)}`, {
+      signal: controller.signal,
+      cache: "no-store",
+    })
+      .then(async (res) => {
+        if (!res.ok) return null;
+        return (await res.json()) as CryptoCheckoutStatus;
+      })
+      .then((payload) => {
+        if (!payload?.sessionId || !payload.walletAddress) return;
+        applyCryptoCheckoutStatus(payload);
+        setPaymentMethod("crypto");
+      })
+      .catch(() => {});
+
+    return () => controller.abort();
+  }, [invoice, cryptoDetails, suppressRecoveredCryptoSession]);
+
+  useEffect(() => {
     const controller = new AbortController();
     const selectedAmount = Number.parseFloat(inputAmount);
     const paymentMethodsUrl = new URL("/api/checkout/payment-methods", window.location.origin);
@@ -195,6 +286,57 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
       });
     return () => controller.abort();
   }, [invoiceId, paymentMethod, inputAmount]);
+
+  useEffect(() => {
+    const sessionId = cryptoDetails?.paymentSessionId;
+    if (!sessionId) return;
+
+    let cancelled = false;
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+
+    const pollStatus = async () => {
+      try {
+        const res = await fetch(`/api/checkout/crypto-invoice/status?sessionId=${encodeURIComponent(sessionId)}`, {
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const payload = await res.json() as CryptoCheckoutStatus;
+        if (cancelled) return;
+
+        applyCryptoCheckoutStatus(payload);
+
+        if (payload.status === "completed") {
+          setIsRefreshing(true);
+          await refreshInvoiceSnapshot();
+          if (!cancelled) {
+            setIsRefreshing(false);
+            setSuccess(true);
+          }
+        } else if (!cancelled) {
+          setIsRefreshing(false);
+        }
+
+        if (["completed", "failed", "expired"].includes(payload.status) && intervalId) {
+          clearInterval(intervalId);
+          intervalId = null;
+        }
+      } catch {
+        if (!cancelled) {
+          setIsRefreshing(false);
+        }
+      }
+    };
+
+    void pollStatus();
+    intervalId = setInterval(() => {
+      void pollStatus();
+    }, 5000);
+
+    return () => {
+      cancelled = true;
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [cryptoDetails?.paymentSessionId, invoiceId]);
 
   if (loading) {
     return (
@@ -400,7 +542,7 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
       const result = await res.json();
       
       if (result.success && result.isCrypto) {
-        setCryptoDetails({
+        const nextCryptoDetails = {
           paymentSessionId: result.paymentSessionId,
           providerReference: result.providerReference,
           address: result.cryptoAddress,
@@ -413,7 +555,34 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
           reference: result.reference,
           settlementMode: result.settlementMode,
           settlementRecipientType: result.settlementRecipientType,
+        };
+        setCryptoDetails(nextCryptoDetails);
+        setCryptoCheckoutStatus({
+          sessionId: result.paymentSessionId,
+          invoiceId: invoice.id,
+          status: "waiting_for_payment",
+          event: null,
+          provider: "breet",
+          paymentMethod: "crypto",
+          txHash: null,
+          confirmations: 0,
+          asset: result.cryptoCoin,
+          amountInUSD: null,
+          rate: result.exchangeRate ?? null,
+          estimatedNgn: null,
+          amountSettled: null,
+          invoiceCredited: false,
+          message: "Waiting for crypto payment. Send the exact amount to the wallet address below.",
+          walletAddress: result.cryptoAddress,
+          network: result.cryptoNetwork,
+          reference: result.reference,
+          fiatAmount: result.fiatAmount,
+          cryptoAmount: result.cryptoAmount ?? null,
+          expiresAt: result.expiresAt ?? null,
+          expectedConfirmations: null,
+          latestProviderStatus: null,
         });
+        setSuppressRecoveredCryptoSession(false);
         setIsProcessing(false);
       } else if (result.success && result.authorizationUrl) {
         // Redirect to Paystack standard checkout page
@@ -927,17 +1096,71 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                     <p className="text-xs uppercase tracking-wide text-purp-500 font-semibold">Provider Reference</p>
                     <p className="font-mono text-xs text-purp-900 break-all mt-1">{cryptoDetails.providerReference || cryptoDetails.reference}</p>
                   </div>
-                  <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-emerald-800">
-                    <p className="font-semibold">Waiting for payment confirmation</p>
-                    <p className="text-xs mt-1">The merchant receives NGN settlement through Breet auto-settlement after payment confirmation.</p>
+                  <div className={`rounded-xl border p-3 ${
+                    cryptoCheckoutStatus?.status === "completed"
+                      ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+                      : cryptoCheckoutStatus?.status === "failed" || cryptoCheckoutStatus?.status === "expired"
+                        ? "bg-red-50 border-red-200 text-red-800"
+                        : cryptoCheckoutStatus?.status === "awaiting_provider_completion" || cryptoCheckoutStatus?.status === "payment_detected"
+                          ? "bg-amber-50 border-amber-200 text-amber-800"
+                          : "bg-emerald-50 border-emerald-200 text-emerald-800"
+                  }`}>
+                    <p className="font-semibold">
+                      {cryptoCheckoutStatus?.status === "completed"
+                        ? "Payment confirmed"
+                        : cryptoCheckoutStatus?.status === "failed" || cryptoCheckoutStatus?.status === "expired"
+                          ? "Payment could not be completed"
+                          : cryptoCheckoutStatus?.status === "awaiting_provider_completion" || cryptoCheckoutStatus?.status === "payment_detected"
+                            ? "Payment detected"
+                            : "Waiting for payment"}
+                    </p>
+                    <p className="text-xs mt-1">
+                      {cryptoCheckoutStatus?.message || "Waiting for crypto payment. Send the exact amount to the wallet address below."}
+                    </p>
                   </div>
                 </div>
+                {(cryptoCheckoutStatus?.txHash || cryptoCheckoutStatus?.confirmations || cryptoCheckoutStatus?.estimatedNgn || cryptoCheckoutStatus?.amountSettled) ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-left text-sm">
+                    {cryptoCheckoutStatus?.txHash ? (
+                      <div className="bg-white border border-neutral-200 rounded-xl p-3">
+                        <p className="text-xs uppercase tracking-wide text-neutral-500 font-semibold">Transaction Hash</p>
+                        <p className="font-mono text-xs text-neutral-900 break-all mt-1">{cryptoCheckoutStatus.txHash}</p>
+                      </div>
+                    ) : null}
+                    {typeof cryptoCheckoutStatus?.confirmations === "number" ? (
+                      <div className="bg-white border border-neutral-200 rounded-xl p-3">
+                        <p className="text-xs uppercase tracking-wide text-neutral-500 font-semibold">Confirmations</p>
+                        <p className="font-semibold text-neutral-900 mt-1">
+                          {cryptoCheckoutStatus.confirmations}
+                          {typeof cryptoCheckoutStatus.expectedConfirmations === "number" && cryptoCheckoutStatus.expectedConfirmations > 0
+                            ? ` / ${cryptoCheckoutStatus.expectedConfirmations}`
+                            : ""}
+                        </p>
+                      </div>
+                    ) : null}
+                    {typeof cryptoCheckoutStatus?.estimatedNgn === "number" ? (
+                      <div className="bg-white border border-neutral-200 rounded-xl p-3">
+                        <p className="text-xs uppercase tracking-wide text-neutral-500 font-semibold">Estimated NGN</p>
+                        <p className="font-semibold text-neutral-900 mt-1">{formatNaira(cryptoCheckoutStatus.estimatedNgn)}</p>
+                      </div>
+                    ) : null}
+                    {typeof cryptoCheckoutStatus?.amountSettled === "number" ? (
+                      <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-amber-800">
+                        <p className="text-xs uppercase tracking-wide font-semibold">Provider Reported NGN</p>
+                        <p className="font-semibold mt-1">{formatNaira(cryptoCheckoutStatus.amountSettled)}</p>
+                        <p className="text-[11px] mt-1">Reported by provider; not final until confirmation.</p>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
                 <Button
                   type="button"
                   variant="outline"
                   className="w-full border-purp-200 text-purp-900"
                   onClick={() => {
                     setCryptoDetails(null);
+                    setCryptoCheckoutStatus(null);
+                    setSuppressRecoveredCryptoSession(true);
                     setPaymentError(null);
                   }}
                 >
