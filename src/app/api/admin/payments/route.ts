@@ -114,7 +114,7 @@ async function fetchRecentPaymentRecords(params: PaginationParams) {
   const withCreatedAt = await supabase
     .from("payment_records")
     .select("id, created_at, updated_at, provider_name, payment_method, payment_purpose, internal_reference, provider_reference, expected_amount, amount_paid, currency, payment_status, processing_status, account_setup_status, password_setup_required, customer_email, merchant_id, user_id, business_id, plan_id, plan_name, setup_recovery_email_sent_at, setup_recovery_email_count, setup_completed_at, reconciliation_status, failure_reason, raw_provider_payload", { count: "exact" })
-    .in("payment_purpose", ["plan_subscription", "plan_upgrade"])
+    .in("payment_purpose", ["plan_subscription", "plan_upgrade", "plan_renewal"])
     .order("created_at", { ascending: false })
     .range(from, to);
 
@@ -130,7 +130,7 @@ async function fetchRecentPaymentRecords(params: PaginationParams) {
   const fallback = await supabase
     .from("payment_records")
     .select("id, provider_name, payment_method, payment_purpose, internal_reference, provider_reference, expected_amount, amount_paid, currency, payment_status, processing_status, account_setup_status, password_setup_required, customer_email, merchant_id, user_id, business_id, plan_id, plan_name, setup_recovery_email_sent_at, setup_recovery_email_count, setup_completed_at, reconciliation_status, failure_reason, raw_provider_payload", { count: "exact" })
-    .in("payment_purpose", ["plan_subscription", "plan_upgrade"])
+    .in("payment_purpose", ["plan_subscription", "plan_upgrade", "plan_renewal"])
     .range(from, to);
 
   if (fallback.error) {
@@ -333,6 +333,7 @@ function isPurpose(value: unknown): value is string {
   return (
     value === "plan_subscription" ||
     value === "plan_upgrade" ||
+    value === "plan_renewal" ||
     value === "invoice_payment" ||
     value === "payment_link" ||
     value === "crypto_payment"

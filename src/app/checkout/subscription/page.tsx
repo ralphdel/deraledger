@@ -133,7 +133,11 @@ function SubscriptionCheckoutContent() {
       const raw = sessionStorage.getItem("subscriptionCheckout");
       if (raw) {
         try {
-          setCheckoutData({ ...JSON.parse(raw), context: "onboarding" });
+          const parsed = { ...JSON.parse(raw), context: "onboarding" } as CheckoutData;
+          const timer = window.setTimeout(() => {
+            setCheckoutData(parsed);
+          }, 0);
+          return () => window.clearTimeout(timer);
         } catch {
           router.replace("/onboarding");
         }
@@ -297,6 +301,7 @@ function SubscriptionCheckoutContent() {
           plan: checkoutData.plan,
           sessionId: checkoutData.sessionId,
           amountKobo: checkoutData.amountKobo,
+          context,
         }),
       });
       const data = await res.json();

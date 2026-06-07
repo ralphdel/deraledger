@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { PaymentService } from "@/lib/payment";
+import { createClient } from "@/lib/supabase/server";
 import {
   BREET_MIN_AMOUNT_ERROR_MESSAGE,
   buildBreetSettlementAccountSnapshot,
@@ -28,10 +29,46 @@ const supabase = createSupabaseClient(
 
 export async function POST(request: Request) {
   try {
-    const { email, plan, sessionId, amountKobo } = await request.json();
+    const { email, plan, sessionId, amountKobo, context } = await request.json();
+    const checkoutContext = context === "renewal" ? "renewal" : "onboarding";
 
     if (!email || !plan || !sessionId || !amountKobo) {
       return NextResponse.json({ error: "Missing required fields." }, { status: 400 });
+    }
+
+    let resolvedEmail = String(email);
+    let merchantId: string | null = null;
+    let userId: string | null = null;
+    let businessName: string | null = null;
+    let ownerName: string | null = null;
+    const paymentPurpose = checkoutContext === "renewal" ? "plan_renewal" : "plan_subscription";
+    const paymentType = checkoutContext === "renewal" ? "subscription_renewal" : "subscription";
+
+    if (checkoutContext === "renewal") {
+      const sessionSupabase = await createClient();
+      const { data: { user } } = await sessionSupabase.auth.getUser();
+
+      if (!user) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      }
+
+      const { data: merchant, error: merchantError } = await sessionSupabase
+        .from("merchants")
+        .select("id, email, business_name, owner_name")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (merchantError || !merchant) {
+        return NextResponse.json({ error: "Merchant account not found." }, { status: 404 });
+      }
+
+      merchantId = merchant.id;
+      userId = user.id;
+      resolvedEmail = user.email || merchant.email || resolvedEmail;
+      businessName = merchant.business_name || null;
+      ownerName = merchant.owner_name || null;
     }
 
     const environment = getPaymentEnvironment();
@@ -69,29 +106,36 @@ export async function POST(request: Request) {
       settlementMode,
     });
 
-    const reference = `CRYPTO-SUB-${plan.toUpperCase()}-${crypto.randomBytes(5).toString("hex").toUpperCase()}`;
+    const referencePrefix = checkoutContext === "renewal" ? "CRYPTO-RNW" : "CRYPTO-SUB";
+    const reference = `${referencePrefix}-${plan.toUpperCase()}-${crypto.randomBytes(5).toString("hex").toUpperCase()}`;
     await createPendingPlanPaymentRecord(supabase, {
       internalReference: reference,
       provider: "breet",
       paymentMethod: "crypto",
-      paymentPurpose: "plan_subscription",
-      customerEmail: email,
+      paymentPurpose,
+      customerEmail: resolvedEmail,
       expectedAmount: fiatAmount,
       planName: plan,
       planId: plan,
-      passwordSetupRequired: true,
+      userId,
+      merchantId,
+      passwordSetupRequired: checkoutContext === "onboarding",
       metadata: {
-        email,
+        email: resolvedEmail,
         plan,
         session_id: sessionId,
-        type: "subscription",
+        type: paymentType,
+        merchant_id: merchantId,
+        business_name: businessName,
+        owner_name: ownerName,
         amount_expected_kobo: amountKobo,
-        payment_purpose: "plan_subscription",
+        payment_purpose: paymentPurpose,
+        checkout_context: checkoutContext,
       },
     });
     const settlementBankPayload = buildSettlementBankPayload(
       platformSettlementAccount,
-      `Sub ${plan.toUpperCase()} ${reference.slice(-12)}`
+      `${checkoutContext === "renewal" ? "Renew" : "Sub"} ${plan.toUpperCase()} ${reference.slice(-12)}`
     );
     if (!settlementBankPayload) {
       return NextResponse.json({ error: "Platform settlement account is not configured." }, { status: 403 });
@@ -117,11 +161,11 @@ export async function POST(request: Request) {
     });
 
     const { error: sessionError } = await supabase.from("crypto_payment_sessions").insert({
-      merchant_id: null,
-      user_id: null,
+      merchant_id: merchantId,
+      user_id: userId,
       business_id: null,
       plan_id: plan,
-      payment_purpose: "plan_subscription",
+      payment_purpose: paymentPurpose,
       provider_name: "breet",
       internal_reference: reference,
       provider_reference: result.id || reference,
@@ -141,10 +185,13 @@ export async function POST(request: Request) {
       settlement_account_snapshot: settlementAccountSnapshot,
       expires_at: new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString(),
       metadata: {
-        email,
+        email: resolvedEmail,
         plan,
         session_id: sessionId,
-        type: "subscription",
+        type: paymentType,
+        merchant_id: merchantId,
+        business_name: businessName,
+        owner_name: ownerName,
         wallet_id: result.walletId || result.vaultId || result.id || null,
         wallet_address: result.address,
         settlement_bank_id_used: result.settlementBankId || settlementBankPayload.bankId,
@@ -154,6 +201,8 @@ export async function POST(request: Request) {
         settlement_recipient_type: settlementRecipientType,
         settlement_account_snapshot: settlementAccountSnapshot,
         exchange_rate: exchangeRate,
+        payment_purpose: paymentPurpose,
+        checkout_context: checkoutContext,
       },
       raw_payload: result.raw || {},
     });

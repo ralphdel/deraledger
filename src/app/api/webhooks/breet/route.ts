@@ -184,6 +184,42 @@ function getInvoiceSessionAccounting(
   };
 }
 
+function getPlanSessionAccounting(
+  session: Record<string, unknown>,
+  payload: WebhookPayload,
+  fallbackExpectedNgN: number
+) {
+  const metadata = asRecord(session.metadata);
+  const expectedAmountNgn = roundCurrency(
+    positiveNumberValue(session.expected_ngn_amount) ||
+      positiveNumberValue(metadata.customer_payable_amount) ||
+      fallbackExpectedNgN ||
+      0
+  );
+  const grossProviderValueNgn = roundCurrency(
+    estimateNgnFromBreetUsd(payload) ||
+      positiveNumberValue(metadata.customer_payable_amount) ||
+      expectedAmountNgn
+  );
+  const amountSettledNgn = roundCurrency(
+    positiveNumberValue(payload.amountSettled) ||
+      positiveNumberValue(session.amount_settled) ||
+      expectedAmountNgn
+  );
+  const providerFeeAmount = roundCurrency(
+    Math.max(0, grossProviderValueNgn - amountSettledNgn)
+  );
+
+  return {
+    feePayer: "business" as const,
+    expectedAmountNgn,
+    customerPayableAmount: expectedAmountNgn,
+    grossProviderValueNgn,
+    amountSettledNgn,
+    providerFeeAmount,
+  };
+}
+
 function extractSettlementSnapshot(session: Record<string, unknown>) {
   const directSnapshot = asRecord(session.settlement_account_snapshot);
   const metadataSnapshot = asRecord(asRecord(session.metadata).settlement_account_snapshot);
@@ -1072,8 +1108,9 @@ async function handlePlanWebhook(input: {
 }) {
   const { payload, eventType, providerReference, txHash, session, idempotencyKey } = input;
   const expectedNgN = Number(session.expected_ngn_amount || 0);
-  const convertedNgN = confirmedBreetNgnAmount(payload, expectedNgN);
-  const amountKobo = Math.round(convertedNgN * 100);
+  const planAccounting = getPlanSessionAccounting(session, payload, expectedNgN);
+  const grossPaidNgN = planAccounting.grossProviderValueNgn;
+  const amountKobo = Math.round(grossPaidNgN * 100);
   const amountCrypto =
     numberValue(payload.amount_crypto) ||
     numberValue(payload.cryptoAmount) ||
@@ -1126,8 +1163,8 @@ async function handlePlanWebhook(input: {
     return NextResponse.json({ received: true, mapped: true, skipped: true, reason: lifecycleStatus });
   }
 
-  if (expectedNgN > 0 && !withinTolerance(expectedNgN, convertedNgN, Number((await readSettings(["crypto_underpayment_tolerance_bps"])).get("crypto_underpayment_tolerance_bps") || "100"))) {
-    const cryptoStatus = convertedNgN < expectedNgN ? "crypto_underpaid" : "crypto_overpaid";
+  if (expectedNgN > 0 && !withinTolerance(expectedNgN, grossPaidNgN, Number((await readSettings(["crypto_underpayment_tolerance_bps"])).get("crypto_underpayment_tolerance_bps") || "100"))) {
+    const cryptoStatus = grossPaidNgN < expectedNgN ? "crypto_underpaid" : "crypto_overpaid";
     await supabase
       .from("crypto_payment_sessions")
       .update({
@@ -1135,9 +1172,25 @@ async function handlePlanWebhook(input: {
         settlement_status: "manual_review",
         manual_review_reason: cryptoStatus === "crypto_underpaid" ? "Underpayment requires manual review." : "Overpayment requires manual review.",
         crypto_amount_received: amountCrypto || null,
-        converted_ngn_amount: convertedNgN,
+        converted_ngn_amount: grossPaidNgN,
+        provider_fee: planAccounting.providerFeeAmount,
+        expected_settlement_ngn: planAccounting.amountSettledNgn,
+        actual_settlement_ngn: planAccounting.amountSettledNgn,
+        amount_settled: planAccounting.amountSettledNgn,
         webhook_status: "processed",
-        raw_webhook_payload: payload,
+        raw_webhook_payload: {
+          ...payload,
+          deraledger_accounting: {
+            fee_payer: planAccounting.feePayer,
+            customer_payable_amount: planAccounting.customerPayableAmount,
+            gross_provider_value_ngn: planAccounting.grossProviderValueNgn,
+            amount_settled_ngn: planAccounting.amountSettledNgn,
+            provider_fee_amount: planAccounting.providerFeeAmount,
+            expected_amount_ngn: planAccounting.expectedAmountNgn,
+            destination_address: stringValue(payload.destinationAddress) || stringValue(payload.address) || stringValue(asRecord(session.metadata).wallet_address) || null,
+            tx_hash: txHash || null,
+          },
+        },
         processed_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       })
@@ -1158,25 +1211,46 @@ async function handlePlanWebhook(input: {
   }
 
   const metadata = asRecord(session.metadata);
+  const paymentPurpose = String(session.payment_purpose || metadata.payment_purpose || "plan_subscription");
   const onboardingSessionId = stringValue(session.payment_session_reference);
+  const accountingPayload = {
+    ...payload,
+    deraledger_accounting: {
+      fee_payer: planAccounting.feePayer,
+      customer_payable_amount: planAccounting.customerPayableAmount,
+      gross_provider_value_ngn: planAccounting.grossProviderValueNgn,
+      amount_settled_ngn: planAccounting.amountSettledNgn,
+      provider_fee_amount: planAccounting.providerFeeAmount,
+      expected_amount_ngn: planAccounting.expectedAmountNgn,
+      destination_address: stringValue(payload.destinationAddress) || stringValue(payload.address) || stringValue(asRecord(session.metadata).wallet_address) || null,
+      tx_hash: txHash || null,
+    },
+  };
   const confirmation = await processSuccessfulFiatPayment(supabase, {
     provider: "breet",
     metadata: {
       ...metadata,
-      type: metadata.type || (session.payment_purpose === "plan_upgrade" ? "subscription_upgrade" : "subscription"),
+      type:
+        metadata.type ||
+        (paymentPurpose === "plan_upgrade"
+          ? "subscription_upgrade"
+          : paymentPurpose === "plan_renewal"
+            ? "subscription_renewal"
+            : "subscription"),
       merchant_id: session.merchant_id || metadata.merchant_id || null,
       session_id: onboardingSessionId || stringValue(metadata.session_id) || null,
       plan: session.plan_id || metadata.plan || null,
       new_plan: session.plan_id || metadata.new_plan || null,
       email: metadata.email || null,
       business_name: metadata.business_name || "DeraLedger",
+      payment_purpose: paymentPurpose,
     },
     amountKobo,
     reference: String(session.internal_reference),
     channel: "crypto",
-    feesKobo: Math.round(Number(session.provider_fee || 0) * 100) || null,
-    settlementAmountKobo: Math.round(convertedNgN * 100),
-    rawProviderPayload: payload,
+    feesKobo: Math.round(planAccounting.providerFeeAmount * 100) || null,
+    settlementAmountKobo: Math.round(planAccounting.amountSettledNgn * 100),
+    rawProviderPayload: accountingPayload,
   });
 
   const merchantId =
@@ -1191,16 +1265,21 @@ async function handlePlanWebhook(input: {
       {
         merchant_id: merchantId,
         customer_id: null,
-        payment_purpose: String(session.payment_purpose || "plan_subscription"),
+        payment_purpose: paymentPurpose,
         payment_method: "crypto",
         provider_name: "breet",
         internal_reference: String(session.internal_reference),
         provider_reference: providerReference || session.provider_reference || null,
-        amount_paid: convertedNgN,
+        expected_amount: planAccounting.expectedAmountNgn,
+        amount_paid: grossPaidNgN,
         currency: "NGN",
         payment_status: "successful",
+        processing_status: "processed",
+        reconciliation_status: "settlement_recorded",
         customer_email: metadata.email || null,
-        raw_provider_payload: payload,
+        plan_id: stringValue(session.plan_id) || stringValue(metadata.new_plan) || stringValue(metadata.plan) || null,
+        plan_name: stringValue(session.plan_id) || stringValue(metadata.new_plan) || stringValue(metadata.plan) || null,
+        raw_provider_payload: accountingPayload,
         paid_at: new Date().toISOString(),
       },
       { onConflict: "internal_reference" }
@@ -1209,6 +1288,7 @@ async function handlePlanWebhook(input: {
     .single();
 
   if (merchantId && !paymentRecord.error && paymentRecord.data?.id) {
+    const settlementSnapshot = extractSettlementSnapshot(session);
     await supabase.from("settlement_records").upsert(
       {
         payment_record_id: paymentRecord.data.id,
@@ -1219,14 +1299,14 @@ async function handlePlanWebhook(input: {
         payment_method: "crypto",
         settlement_recipient_type: "platform",
         settlement_currency: "NGN",
-        gross_amount: convertedNgN,
-        provider_fee: Number(session.provider_fee || 0),
+        gross_amount: grossPaidNgN,
+        provider_fee: planAccounting.providerFeeAmount,
         platform_fee: 0,
         customer_fee: 0,
-        merchant_fee: 0,
-        expected_settlement: convertedNgN,
-        actual_settlement: convertedNgN,
-        settlement_difference: null,
+        merchant_fee: planAccounting.providerFeeAmount,
+        expected_settlement: planAccounting.amountSettledNgn,
+        actual_settlement: planAccounting.amountSettledNgn,
+        settlement_difference: 0,
         fee_payer: "merchant_pays_fee",
         settlement_status: "completed",
         settlement_mode: settlementMode,
@@ -1234,8 +1314,15 @@ async function handlePlanWebhook(input: {
         payout_action_required: false,
         provider_settlement_reference: providerReference || session.provider_reference || session.internal_reference,
         provider_fee_source: "breet_payload",
-        expected_settlement_source: "crypto_session",
-        raw_settlement_payload: payload,
+        expected_settlement_source: "breet_trade_completed",
+        settlement_account_snapshot: settlementSnapshot.snapshot,
+        settlement_bank_name: settlementSnapshot.bankName,
+        settlement_account_name: settlementSnapshot.accountName,
+        settlement_account_number_masked: settlementSnapshot.accountNumberMasked,
+        provider_bank_id: settlementSnapshot.bankId,
+        wallet_address: stringValue(asRecord(session.metadata).wallet_address) || stringValue(payload.destinationAddress) || stringValue(payload.address) || null,
+        tx_hash: txHash || null,
+        raw_settlement_payload: accountingPayload,
       },
       { onConflict: "payment_record_id" }
     );
@@ -1246,12 +1333,16 @@ async function handlePlanWebhook(input: {
     .update({
       provider_reference: providerReference || session.provider_reference || null,
       crypto_amount_received: amountCrypto || null,
-      converted_ngn_amount: convertedNgN,
+      converted_ngn_amount: grossPaidNgN,
+      provider_fee: planAccounting.providerFeeAmount,
+      expected_settlement_ngn: planAccounting.amountSettledNgn,
+      actual_settlement_ngn: planAccounting.amountSettledNgn,
+      amount_settled: planAccounting.amountSettledNgn,
       settlement_mode: settlementMode,
       crypto_status: mapBreetEventToCryptoStatus(eventType, stringValue(payload.status), payload),
       settlement_status: "completed",
       webhook_status: "processed",
-      raw_webhook_payload: payload,
+      raw_webhook_payload: accountingPayload,
       payment_status: "successful",
       paid_at: new Date().toISOString(),
       processed_at: new Date().toISOString(),
@@ -1267,8 +1358,20 @@ async function handlePlanWebhook(input: {
     processor: "breet",
     processor_ref: providerReference || txHash || null,
     amount_kobo: amountKobo,
-    raw_payload: payload,
+    raw_payload: accountingPayload,
     idempotency_key: idempotencyKey || null,
+    payment_method: "crypto",
+    payment_purpose: paymentPurpose,
+    payment_reference: String(session.internal_reference || session.id),
+    provider_reference: providerReference || txHash || null,
+    expected_amount: planAccounting.expectedAmountNgn,
+    paid_amount: grossPaidNgN,
+    currency: "NGN",
+    fee: planAccounting.providerFeeAmount,
+    plan_id: stringValue(session.plan_id) || stringValue(metadata.new_plan) || stringValue(metadata.plan) || null,
+    customer_email: stringValue(metadata.email) || null,
+    processing_status: "completed",
+    reconciliation_status: "settlement_recorded",
   });
 
   await recordWebhookLog({
@@ -1278,7 +1381,7 @@ async function handlePlanWebhook(input: {
     merchantId,
     invoiceId: null,
     paymentSessionId: String(session.id),
-    rawPayload: payload,
+    rawPayload: accountingPayload,
   });
   await updateProviderWebhookHealth("success");
 

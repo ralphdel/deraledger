@@ -2,7 +2,7 @@ import { randomBytes, createHash } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 type SupportedProvider = "paystack" | "monnify" | "breet";
-type PlanPaymentPurpose = "plan_subscription" | "plan_upgrade";
+type PlanPaymentPurpose = "plan_subscription" | "plan_upgrade" | "plan_renewal";
 type PaymentMethod = "card" | "bank_transfer" | "ussd" | "crypto";
 type ProcessingStatus =
   | "pending_payment"

@@ -635,8 +635,9 @@ function formatMoneyDisplay(value: number | null) {
 
 function feePayerExplanation(row: SettlementRow) {
   const feePayer = settlementFeePayer(row);
+  const actor = row.settlement_recipient_type === "platform" ? "DeraLedger platform" : "Merchant";
   if (feePayer === "merchant_pays_fee" || feePayer === "business") {
-    return "Merchant bears provider fee. Invoice is credited with the full selected payment amount, while merchant settlement is net of provider fee.";
+    return `${actor} bears provider fee. The customer-facing payment amount remains intact, while settlement is net of provider fee.`;
   }
   if (feePayer === "customer_pays_fee" || feePayer === "customer") {
     return "Customer bears provider fee. Customer payable includes invoice amount plus fee.";

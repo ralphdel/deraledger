@@ -36,7 +36,7 @@ type PaymentProviderRow = {
 };
 
 type PaymentRouteRow = {
-  payment_purpose: "plan_subscription" | "plan_upgrade" | "invoice_payment" | "payment_link" | "crypto_payment";
+  payment_purpose: "plan_subscription" | "plan_upgrade" | "plan_renewal" | "invoice_payment" | "payment_link" | "crypto_payment";
   payment_method: "card" | "bank_transfer" | "ussd" | "crypto";
   primary_provider: "paystack" | "monnify" | "breet";
   fallback_provider: "paystack" | "monnify" | "breet" | null;
@@ -45,7 +45,7 @@ type PaymentRouteRow = {
 };
 
 type PaymentMethodRow = {
-  payment_purpose: "plan_subscription" | "plan_upgrade" | "invoice_payment" | "payment_link" | "crypto_payment";
+  payment_purpose: "plan_subscription" | "plan_upgrade" | "plan_renewal" | "invoice_payment" | "payment_link" | "crypto_payment";
   payment_method: "card" | "bank_transfer" | "ussd" | "crypto";
   environment: "sandbox" | "live";
   is_enabled: boolean;
@@ -155,7 +155,7 @@ type PaymentRecordRow = {
 };
 
 const PROVIDERS = ["paystack", "monnify", "breet"] as const;
-const PURPOSES = ["plan_subscription", "plan_upgrade", "invoice_payment", "payment_link"] as const;
+const PURPOSES = ["plan_subscription", "plan_upgrade", "plan_renewal", "invoice_payment", "payment_link"] as const;
 const DEFAULT_PAGINATION: PaginationMeta = { page: 1, pageSize: 10, total: 0, totalPages: 1 };
 const PAGE_SIZE_OPTIONS = [10, 25, 50] as const;
 
@@ -730,6 +730,7 @@ export default function AdminPaymentsPage() {
                                   <EventDetail label="Rate" value={details.conversionRate} />
                                   <EventDetail label="Estimated NGN" value={details.estimatedNgn ? formatNaira(details.estimatedNgn) : null} />
                                   <EventDetail label="Amount settled" value={details.amountSettledNgn !== null && details.amountSettledNgn !== undefined ? formatNaira(details.amountSettledNgn) : null} />
+                                  <EventDetail label="Fee payer" value={details.feePayer || null} />
                                   <EventDetail
                                     label="Invoice credit"
                                     value={
@@ -1088,6 +1089,7 @@ function getProviderEventDetails(event: PaymentEventRow) {
     conversionRate: null,
     estimatedNgn: null,
     amountSettledNgn: null,
+    feePayer: null,
     providerFeeUsd: null,
   };
 }
@@ -1125,7 +1127,7 @@ function getBreetProviderEventDetails(event: PaymentEventRow, payload: Record<st
     status,
     paymentReference: event.processor_ref,
     providerReference: stringValue(payload.id) || event.processor_ref,
-    purpose: event.invoice_id ? "invoice_payment" : null,
+    purpose: event.payment_purpose || (event.invoice_id ? "invoice_payment" : null),
     method: "crypto",
     currency: "NGN",
     invoiceId: event.invoice_id,
@@ -1149,6 +1151,7 @@ function getBreetProviderEventDetails(event: PaymentEventRow, payload: Record<st
     conversionRate,
     estimatedNgn,
     amountSettledNgn,
+    feePayer: stringValue(accounting.fee_payer),
     providerFeeUsd: numericValue(payload.feeAmountInUsd),
   };
 }
