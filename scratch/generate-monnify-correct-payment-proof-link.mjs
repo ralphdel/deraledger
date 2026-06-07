@@ -33,8 +33,8 @@ async function getMonnifyToken() {
 async function main() {
   const stamp = Date.now();
   const reference = `SUB-INDIVIDUAL-PROOF-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
-  const email = `proof-monnify-underpay-${stamp}@deraledger.app`;
-  const businessName = `Proof Monnify Underpay ${stamp}`;
+  const email = `proof-monnify-fullpay-${stamp}@deraledger.app`;
+  const businessName = `Proof Monnify Fullpay ${stamp}`;
 
   const { data: session, error: sessionError } = await supabase
     .from("onboarding_sessions")
@@ -116,7 +116,7 @@ async function main() {
       customerName: businessName,
       customerEmail: email,
       paymentReference: reference,
-      paymentDescription: "DeraLedger proof subscription underpayment",
+      paymentDescription: "DeraLedger proof subscription correct payment",
       redirectUrl: "https://www.deraledger.com/onboarding/payment-callback",
       currencyCode: "NGN",
       contractCode: process.env.MONNIFY_CONTRACT_CODE,
@@ -130,16 +130,22 @@ async function main() {
     throw new Error(payload.responseMessage || "Monnify transaction initialization failed.");
   }
 
-  console.log(JSON.stringify({
-    provider: "monnify",
-    test: "underpayment",
-    expectedAmount: 5000,
-    payAmount: 3000,
-    reference,
-    email,
-    checkoutUrl: payload.responseBody.checkoutUrl,
-    transactionReference: payload.responseBody.transactionReference || null,
-  }, null, 2));
+  console.log(
+    JSON.stringify(
+      {
+        provider: "monnify",
+        test: "correct_payment",
+        expectedAmount: 5000,
+        payAmount: 5000,
+        reference,
+        email,
+        checkoutUrl: payload.responseBody.checkoutUrl,
+        transactionReference: payload.responseBody.transactionReference || null,
+      },
+      null,
+      2
+    )
+  );
 }
 
 main().catch((error) => {
