@@ -433,7 +433,7 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
     <div className="space-y-6">
       <div className="space-y-3">
         <div className="relative">
-          <span className="absolute left-4 top-1/2 -translate-y-1/2 text-2xl font-bold text-neutral-400">N</span>
+          <span className="absolute left-4 top-1/2 -translate-y-1/2 text-xl sm:text-2xl font-bold text-neutral-400">₦</span>
           <Input
             type="number"
             value={inputAmount}
@@ -442,7 +442,7 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
             min={0}
             step="0.01"
             readOnly={!currentInvoice.allow_partial_payment || !!currentInvoice.partial_payment_pct}
-            className={`pl-12 h-20 text-3xl font-bold text-purp-900 border-2 rounded-xl ${
+            className={`pl-12 h-16 sm:h-20 text-2xl sm:text-3xl font-bold text-purp-900 border-2 rounded-xl ${
               isBelowMinimum || isAboveMax || isBelowCryptoMinimum
                 ? "border-red-400 focus:border-red-500 bg-red-50/50"
                 : "border-purp-200 focus:border-purp-700"
@@ -457,7 +457,7 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
           </div>
         )}
 
-        <div className="flex gap-2">
+        <div className="grid grid-cols-2 sm:flex gap-2">
           {currentInvoice.allow_partial_payment && currentInvoice.partial_payment_pct && (
             <Button type="button" variant="outline" className="flex-1 border-purp-200" onClick={() => handleQuickSelect(Number(currentInvoice.partial_payment_pct) / 100)}>{currentInvoice.partial_payment_pct}%</Button>
           )}
@@ -739,7 +739,7 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
       </div>
 
       {/* Right Panel: Payment Interaction */}
-      <div className="w-full md:w-7/12 lg:w-2/3 p-4 md:p-8 flex flex-col items-center justify-center gap-4">
+      <div className="w-full md:w-7/12 lg:w-2/3 p-4 sm:p-6 md:p-8 flex flex-col items-center justify-start md:justify-center gap-4">
 
         {/* Project Progress Card — only when project_total_value > 0 */}
         {referenceContext && referenceContext.hasProjectTotal && (
@@ -810,13 +810,13 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
           <CardContent>
             {/* Payment Method Tabs */}
             {!cryptoDetails && (
-              <div className="flex gap-2 mb-6 p-1 bg-neutral-100 rounded-xl">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-6 p-1.5 bg-neutral-100 rounded-xl">
                 {/* Card / Bank */}
                 <button
                   type="button"
                   onClick={() => setPaymentMethod("card")}
                   disabled={!availableMethods.some((method) => method.method === "card")}
-                  className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-lg text-xs font-semibold transition-all duration-200 ${
+                  className={`flex min-w-0 flex-col items-center gap-1 py-3 rounded-lg text-xs font-semibold transition-all duration-200 ${
                     paymentMethod === "card"
                       ? "bg-white shadow text-purp-900 ring-1 ring-purp-200"
                       : availableMethods.some((method) => method.method === "card")
@@ -832,7 +832,7 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                   type="button"
                   onClick={() => setPaymentMethod("bank_transfer")}
                   disabled={!availableMethods.some((method) => method.method === "bank_transfer")}
-                  className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-lg text-xs font-semibold transition-all duration-200 ${
+                  className={`flex min-w-0 flex-col items-center gap-1 py-3 rounded-lg text-xs font-semibold transition-all duration-200 ${
                     paymentMethod === "bank_transfer"
                       ? "bg-white shadow text-purp-900 ring-1 ring-purp-200"
                       : availableMethods.some((method) => method.method === "bank_transfer")
@@ -847,7 +847,7 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                   type="button"
                   onClick={() => setPaymentMethod("ussd")}
                   disabled={!availableMethods.some((method) => method.method === "ussd")}
-                  className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-lg text-xs font-semibold transition-all duration-200 ${
+                  className={`flex min-w-0 flex-col items-center gap-1 py-3 rounded-lg text-xs font-semibold transition-all duration-200 ${
                     paymentMethod === "ussd"
                       ? "bg-white shadow text-purp-900 ring-1 ring-purp-200"
                       : availableMethods.some((method) => method.method === "ussd")
@@ -863,7 +863,7 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                   type="button"
                   onClick={() => setPaymentMethod("crypto")}
                   disabled={!cryptoVisible}
-                  className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-lg text-xs font-semibold transition-all duration-200 relative ${
+                  className={`flex min-w-0 flex-col items-center gap-1 py-3 rounded-lg text-xs font-semibold transition-all duration-200 relative ${
                     paymentMethod === "crypto"
                       ? "bg-white shadow text-purp-900 ring-1 ring-purp-200"
                       : cryptoVisible
@@ -914,7 +914,7 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                     {cryptoDetails.expiresAt ? ` Expires ${new Date(cryptoDetails.expiresAt).toLocaleString("en-NG")}.` : ""}
                   </p>
                 </div>
-                <div className="grid grid-cols-1 gap-3 text-left text-sm">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-left text-sm">
                   <div className="bg-purp-50 border border-purp-200 rounded-xl p-3">
                     <p className="text-xs uppercase tracking-wide text-purp-500 font-semibold">Expected NGN Amount</p>
                     <p className="font-bold text-purp-900 mt-1">{formatNaira(cryptoDetails.fiatAmount)}</p>

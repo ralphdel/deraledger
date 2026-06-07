@@ -253,6 +253,7 @@ const SETTING_LABELS: Record<string, string> = {
   breet_sandbox_force_platform_settlement: "Force Platform Settlement in Sandbox",
   breet_live_enabled: "Breet Live Enabled",
 };
+const TREASURY_PAGE_SIZE = 10;
 
 export default function AdminTreasuryPage() {
   const [data, setData] = useState<TreasuryPayload | null>(null);
@@ -269,6 +270,26 @@ export default function AdminTreasuryPage() {
   const [merchantBreetBankId, setMerchantBreetBankId] = useState("");
   const [merchantValidationNote, setMerchantValidationNote] = useState<string | null>(null);
   const [showAdvancedFallback, setShowAdvancedFallback] = useState(false);
+  const [sessionsPage, setSessionsPage] = useState(1);
+  const [settlementsPage, setSettlementsPage] = useState(1);
+  const [ledgerPage, setLedgerPage] = useState(1);
+  const [webhooksPage, setWebhooksPage] = useState(1);
+  const [reviewPage, setReviewPage] = useState(1);
+  const [batchesPage, setBatchesPage] = useState(1);
+  const [mockTradeDraft, setMockTradeDraft] = useState({
+    walletAddress: "",
+    asset: "USDT_TRX_TEST2",
+    amountInUSD: "",
+    cryptoReceived: "",
+    reference: "",
+    txHash: "",
+  });
+  const [mockTradeResult, setMockTradeResult] = useState<{
+    status?: number;
+    providerMessage?: string;
+    webhookExpected?: boolean;
+    error?: string;
+  } | null>(null);
 
   const loadTreasury = useCallback(async () => {
     setLoading(true);
@@ -344,6 +365,12 @@ export default function AdminTreasuryPage() {
     ),
     [filteredSessions]
   );
+  const pagedSessions = paginateRows(filteredSessions, sessionsPage);
+  const pagedSettlements = paginateRows(filteredSettlements, settlementsPage);
+  const pagedTransactions = paginateRows(filteredTransactions, ledgerPage);
+  const pagedWebhooks = paginateRows(filteredWebhooks, webhooksPage);
+  const pagedReviewSessions = paginateRows(reviewSessions, reviewPage);
+  const pagedBatches = paginateRows(filteredBatches, batchesPage);
 
   async function queueSettlements() {
     setBusy("queue");
@@ -511,6 +538,41 @@ export default function AdminTreasuryPage() {
     setBusy(null);
   }
 
+  async function triggerMockTrade() {
+    setBusy("breet-mock-trade");
+    setFeedback(null);
+    setMockTradeResult(null);
+    const res = await fetch("/api/admin/treasury/breet/mock-trade", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        walletAddress: mockTradeDraft.walletAddress.trim(),
+        asset: mockTradeDraft.asset.trim(),
+        amountInUSD: Number(mockTradeDraft.amountInUSD),
+        cryptoReceived: Number(mockTradeDraft.cryptoReceived),
+        reference: mockTradeDraft.reference.trim(),
+        txHash: mockTradeDraft.txHash.trim(),
+      }),
+    });
+    const payload = await res.json().catch(() => ({})) as {
+      error?: string;
+      status?: number;
+      providerMessage?: string;
+      webhookExpected?: boolean;
+    };
+    if (!res.ok) {
+      setMockTradeResult({ status: res.status, error: payload.error || "Failed to trigger Breet mock trade." });
+    } else {
+      setMockTradeResult({
+        status: payload.status,
+        providerMessage: payload.providerMessage,
+        webhookExpected: payload.webhookExpected,
+      });
+      setFeedback("Breet sandbox mock trade triggered. Watch webhook events for the provider callback.");
+    }
+    setBusy(null);
+  }
+
   if (loading && !data) {
     return (
       <div className="flex items-center justify-center py-16 text-neutral-500">
@@ -529,6 +591,18 @@ export default function AdminTreasuryPage() {
       : "Pending Auto-Settlements";
   const checkoutSupportedAssets = data.configStatus.supportedAssets.filter((asset) => ["USDT", "USDC"].includes(asset));
   const showAdvancedTab = manualTreasuryEnabled || showAdvancedFallback;
+  const mockTradeDisabled =
+    data.configStatus.apiEnvironment !== "development" ||
+    data.configStatus.liveEnabled ||
+    !data.configStatus.appIdConfigured ||
+    !data.configStatus.appSecretConfigured;
+  const mockTradeInvalid =
+    !mockTradeDraft.walletAddress.trim() ||
+    !mockTradeDraft.asset.trim() ||
+    Number(mockTradeDraft.amountInUSD) <= 0 ||
+    Number(mockTradeDraft.cryptoReceived) <= 0 ||
+    !mockTradeDraft.reference.trim() ||
+    !mockTradeDraft.txHash.trim();
   const selectedPlatformBank = data.breetBanks.find((bank) => bank.id === platformBankId) || null;
   const selectedMerchantBank = data.breetBanks.find((bank) => bank.id === merchantBreetBankId) || null;
   const webhookUrlDraft = settingsDraft.breet_webhook_url || "";
@@ -595,7 +669,15 @@ export default function AdminTreasuryPage() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <Select value={merchantFilter} onValueChange={(val) => setMerchantFilter(val || "all")}>
+          <Select value={merchantFilter} onValueChange={(val) => {
+            setMerchantFilter(val || "all");
+            setSessionsPage(1);
+            setSettlementsPage(1);
+            setLedgerPage(1);
+            setWebhooksPage(1);
+            setReviewPage(1);
+            setBatchesPage(1);
+          }}>
             <SelectTrigger className="w-[220px] border-2 bg-white">
               <SelectValue placeholder="All Merchants" />
             </SelectTrigger>
@@ -647,7 +729,8 @@ export default function AdminTreasuryPage() {
       ) : null}
 
       <Tabs defaultValue="overview" className="space-y-4">
-        <TabsList className="bg-white border">
+        <div className="overflow-x-auto pb-1">
+        <TabsList className="inline-flex min-w-max bg-white border">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="platform-bank">Platform Bank Setup</TabsTrigger>
           <TabsTrigger value="sessions">Sessions</TabsTrigger>
@@ -656,6 +739,7 @@ export default function AdminTreasuryPage() {
           <TabsTrigger value="manual-review">Manual Review</TabsTrigger>
           {showAdvancedTab ? <TabsTrigger value="advanced">Advanced Fallback</TabsTrigger> : null}
         </TabsList>
+        </div>
 
         <TabsContent value="overview" className="space-y-4">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -805,6 +889,108 @@ export default function AdminTreasuryPage() {
               </CardContent>
             </Card>
           </div>
+
+          <Card className="border shadow-none">
+            <CardHeader>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <CardTitle className="text-base">Breet Sandbox Mock Trade</CardTitle>
+                <Badge variant="outline" className="w-fit border-2 bg-neutral-50">
+                  {data.configStatus.apiEnvironment}
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                This admin-only tool calls Breet&apos;s development mock-trade endpoint using server-side credentials.
+                It is disabled automatically when Breet live mode or production environment is active.
+              </div>
+              {mockTradeDisabled ? (
+                <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+                  Mock trades are unavailable because Breet is not fully configured for development mode or live mode is enabled.
+                </div>
+              ) : null}
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                <div className="space-y-2 md:col-span-2">
+                  <label className="text-sm font-medium text-neutral-700">Wallet Address</label>
+                  <Input
+                    value={mockTradeDraft.walletAddress}
+                    onChange={(event) => setMockTradeDraft((current) => ({ ...current, walletAddress: event.target.value }))}
+                    className="bg-white border-2 font-mono text-xs"
+                    placeholder="Breet generated wallet address"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-neutral-700">Asset</label>
+                  <Input
+                    value={mockTradeDraft.asset}
+                    onChange={(event) => setMockTradeDraft((current) => ({ ...current, asset: event.target.value }))}
+                    className="bg-white border-2"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-neutral-700">Amount In USD</label>
+                  <Input
+                    value={mockTradeDraft.amountInUSD}
+                    onChange={(event) => setMockTradeDraft((current) => ({ ...current, amountInUSD: event.target.value }))}
+                    className="bg-white border-2"
+                    inputMode="decimal"
+                    placeholder="3.12"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-neutral-700">Crypto Received</label>
+                  <Input
+                    value={mockTradeDraft.cryptoReceived}
+                    onChange={(event) => setMockTradeDraft((current) => ({ ...current, cryptoReceived: event.target.value }))}
+                    className="bg-white border-2"
+                    inputMode="decimal"
+                    placeholder="3.12"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-neutral-700">Reference</label>
+                  <Input
+                    value={mockTradeDraft.reference}
+                    onChange={(event) => setMockTradeDraft((current) => ({ ...current, reference: event.target.value }))}
+                    className="bg-white border-2 font-mono text-xs"
+                    placeholder="plan-test-5000-001"
+                  />
+                </div>
+                <div className="space-y-2 xl:col-span-2">
+                  <label className="text-sm font-medium text-neutral-700">Transaction Hash</label>
+                  <Input
+                    value={mockTradeDraft.txHash}
+                    onChange={(event) => setMockTradeDraft((current) => ({ ...current, txHash: event.target.value }))}
+                    className="bg-white border-2 font-mono text-xs"
+                    placeholder="0xplan5000test001"
+                  />
+                </div>
+              </div>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-xs text-neutral-500">
+                  Reference and txHash must be unique. Secrets are never accepted from this form or shown in responses.
+                </p>
+                <Button
+                  onClick={() => void triggerMockTrade()}
+                  disabled={busy === "breet-mock-trade" || mockTradeDisabled || mockTradeInvalid}
+                  className="bg-purp-900 hover:bg-purp-800"
+                >
+                  {busy === "breet-mock-trade" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Trigger Mock Trade"}
+                </Button>
+              </div>
+              {mockTradeResult ? (
+                <div className={`rounded-xl border p-4 text-sm ${
+                  mockTradeResult.error ? "border-red-200 bg-red-50 text-red-700" : "border-emerald-200 bg-emerald-50 text-emerald-800"
+                }`}>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <Info label="Breet response status" value={mockTradeResult.status ? String(mockTradeResult.status) : "-"} />
+                    <Info label="Provider message" value={mockTradeResult.providerMessage || mockTradeResult.error || "-"} />
+                    <Info label="Webhook expected" value={mockTradeResult.webhookExpected ? "Yes" : "No"} />
+                  </div>
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <Card className="border shadow-none">
@@ -1009,7 +1195,7 @@ export default function AdminTreasuryPage() {
               <div className="space-y-3">
                 <h3 className="text-sm font-semibold text-neutral-900">Saved Breet Integration Banks</h3>
                 <div className="overflow-x-auto">
-                  <Table>
+                  <Table className="min-w-[760px]">
                     <TableHeader>
                       <TableRow className="bg-neutral-50">
                         <TableHead>Bank</TableHead>
@@ -1047,7 +1233,7 @@ export default function AdminTreasuryPage() {
               <CardTitle className="text-base">Recent Breet Crypto Sessions</CardTitle>
             </CardHeader>
             <CardContent className="p-0 overflow-x-auto">
-              <Table>
+              <Table className="min-w-[1000px]">
                 <TableHeader>
                   <TableRow className="bg-neutral-50">
                     <TableHead>Merchant</TableHead>
@@ -1062,7 +1248,7 @@ export default function AdminTreasuryPage() {
                 <TableBody>
                   {filteredSessions.length === 0 ? (
                     <TableRow><TableCell colSpan={7} className="text-center py-10 text-neutral-500">No Breet crypto sessions yet.</TableCell></TableRow>
-                  ) : filteredSessions.map((session) => (
+                  ) : pagedSessions.rows.map((session) => (
                     <TableRow key={session.id}>
                       <TableCell className="font-medium">{session.merchant_name || "-"}</TableCell>
                       <TableCell className="text-xs">{labelValue(session.payment_purpose)}</TableCell>
@@ -1084,6 +1270,7 @@ export default function AdminTreasuryPage() {
                   ))}
                 </TableBody>
               </Table>
+              <TreasuryPaginationControls label="sessions" pagination={pagedSessions} onPageChange={setSessionsPage} />
             </CardContent>
           </Card>
 
@@ -1095,7 +1282,7 @@ export default function AdminTreasuryPage() {
               <CardTitle className="text-base">Settlement Records</CardTitle>
             </CardHeader>
             <CardContent className="p-0 overflow-x-auto">
-              <Table>
+              <Table className="min-w-[940px]">
                 <TableHeader>
                   <TableRow className="bg-neutral-50">
                     <TableHead>Merchant</TableHead>
@@ -1110,7 +1297,7 @@ export default function AdminTreasuryPage() {
                 <TableBody>
                   {filteredSettlements.length === 0 ? (
                     <TableRow><TableCell colSpan={7} className="text-center py-10 text-neutral-500">No Breet settlement records yet.</TableCell></TableRow>
-                  ) : filteredSettlements.map((row) => (
+                  ) : pagedSettlements.rows.map((row) => (
                     <TableRow key={row.id}>
                       <TableCell className="font-medium">{row.merchant_name || "-"}</TableCell>
                       <TableCell className="text-xs">{labelValue(row.settlement_mode)}</TableCell>
@@ -1123,6 +1310,7 @@ export default function AdminTreasuryPage() {
                   ))}
                 </TableBody>
               </Table>
+              <TreasuryPaginationControls label="settlement records" pagination={pagedSettlements} onPageChange={setSettlementsPage} />
             </CardContent>
           </Card>
 
@@ -1131,7 +1319,7 @@ export default function AdminTreasuryPage() {
               <CardTitle className="text-base">Treasury Ledger</CardTitle>
             </CardHeader>
             <CardContent className="p-0 overflow-x-auto">
-              <Table>
+              <Table className="min-w-[940px]">
                 <TableHeader>
                   <TableRow className="bg-neutral-50">
                     <TableHead>Merchant</TableHead>
@@ -1146,7 +1334,7 @@ export default function AdminTreasuryPage() {
                 <TableBody>
                   {filteredTransactions.length === 0 ? (
                     <TableRow><TableCell colSpan={7} className="text-center py-10 text-neutral-500">No Breet treasury transactions yet.</TableCell></TableRow>
-                  ) : filteredTransactions.map((tx) => (
+                  ) : pagedTransactions.rows.map((tx) => (
                     <TableRow key={tx.id}>
                       <TableCell className="font-medium">{tx.merchant_name || tx.merchant_id}</TableCell>
                       <TableCell className="uppercase">{tx.payment_rail || "-"}</TableCell>
@@ -1159,6 +1347,7 @@ export default function AdminTreasuryPage() {
                   ))}
                 </TableBody>
               </Table>
+              <TreasuryPaginationControls label="ledger entries" pagination={pagedTransactions} onPageChange={setLedgerPage} />
             </CardContent>
           </Card>
         </TabsContent>
@@ -1169,7 +1358,7 @@ export default function AdminTreasuryPage() {
               <CardTitle className="text-base">Recent Breet Webhook Events</CardTitle>
             </CardHeader>
             <CardContent className="p-0 overflow-x-auto">
-              <Table>
+              <Table className="min-w-[900px]">
                 <TableHeader>
                   <TableRow className="bg-neutral-50">
                     <TableHead>Time</TableHead>
@@ -1183,7 +1372,7 @@ export default function AdminTreasuryPage() {
                 <TableBody>
                   {filteredWebhooks.length === 0 ? (
                     <TableRow><TableCell colSpan={6} className="text-center py-10 text-neutral-500">No Breet webhook logs yet.</TableCell></TableRow>
-                  ) : filteredWebhooks.map((log) => (
+                  ) : pagedWebhooks.rows.map((log) => (
                     <TableRow key={log.id}>
                       <TableCell className="text-xs">{new Date(log.created_at).toLocaleString("en-NG")}</TableCell>
                       <TableCell><StatusBadge status={log.status} /></TableCell>
@@ -1195,6 +1384,7 @@ export default function AdminTreasuryPage() {
                   ))}
                 </TableBody>
               </Table>
+              <TreasuryPaginationControls label="webhook events" pagination={pagedWebhooks} onPageChange={setWebhooksPage} />
             </CardContent>
           </Card>
         </TabsContent>
@@ -1205,7 +1395,7 @@ export default function AdminTreasuryPage() {
               <CardTitle className="text-base">Manual Review Queue</CardTitle>
             </CardHeader>
             <CardContent className="p-0 overflow-x-auto">
-              <Table>
+              <Table className="min-w-[820px]">
                 <TableHeader>
                   <TableRow className="bg-neutral-50">
                     <TableHead>Merchant</TableHead>
@@ -1218,7 +1408,7 @@ export default function AdminTreasuryPage() {
                 <TableBody>
                   {reviewSessions.length === 0 ? (
                     <TableRow><TableCell colSpan={5} className="text-center py-10 text-neutral-500">No sessions currently under manual review.</TableCell></TableRow>
-                  ) : reviewSessions.map((session) => (
+                  ) : pagedReviewSessions.rows.map((session) => (
                     <TableRow key={session.id}>
                       <TableCell className="font-medium">{session.merchant_name || "-"}</TableCell>
                       <TableCell className="text-xs">{labelValue(session.payment_purpose)}</TableCell>
@@ -1229,6 +1419,7 @@ export default function AdminTreasuryPage() {
                   ))}
                 </TableBody>
               </Table>
+              <TreasuryPaginationControls label="review sessions" pagination={pagedReviewSessions} onPageChange={setReviewPage} />
             </CardContent>
           </Card>
         </TabsContent>
@@ -1304,7 +1495,7 @@ export default function AdminTreasuryPage() {
                   <CardTitle className="text-base">Manual Settlement Batches</CardTitle>
                 </CardHeader>
                 <CardContent className="p-0 overflow-x-auto">
-                  <Table>
+                  <Table className="min-w-[920px]">
                     <TableHeader>
                       <TableRow className="bg-neutral-50">
                         <TableHead>Merchant</TableHead>
@@ -1318,7 +1509,7 @@ export default function AdminTreasuryPage() {
                     <TableBody>
                       {filteredBatches.length === 0 ? (
                         <TableRow><TableCell colSpan={6} className="text-center py-10 text-neutral-500">No manual settlement batches yet.</TableCell></TableRow>
-                      ) : filteredBatches.map((batch) => (
+                      ) : pagedBatches.rows.map((batch) => (
                         <TableRow key={batch.id}>
                           <TableCell className="font-medium">{batch.merchant_name || batch.merchant_id}</TableCell>
                           <TableCell className="capitalize">{batch.payout_provider || "-"}</TableCell>
@@ -1339,6 +1530,7 @@ export default function AdminTreasuryPage() {
                       ))}
                     </TableBody>
                   </Table>
+                  <TreasuryPaginationControls label="manual batches" pagination={pagedBatches} onPageChange={setBatchesPage} />
                 </CardContent>
               </Card>
 
@@ -1460,6 +1652,64 @@ function ChecklistItem({ label, ok, note }: { label: string; ok: boolean; note?:
         </Badge>
       </div>
       {note ? <p className="mt-2 text-xs text-neutral-500">{note}</p> : null}
+    </div>
+  );
+}
+
+function paginateRows<T>(rows: T[], page: number) {
+  const total = rows.length;
+  const totalPages = Math.max(1, Math.ceil(total / TREASURY_PAGE_SIZE));
+  const currentPage = Math.min(Math.max(page, 1), totalPages);
+  const start = (currentPage - 1) * TREASURY_PAGE_SIZE;
+  return {
+    rows: rows.slice(start, start + TREASURY_PAGE_SIZE),
+    page: currentPage,
+    pageSize: TREASURY_PAGE_SIZE,
+    total,
+    totalPages,
+  };
+}
+
+function TreasuryPaginationControls({
+  label,
+  pagination,
+  onPageChange,
+}: {
+  label: string;
+  pagination: ReturnType<typeof paginateRows>;
+  onPageChange: (page: number) => void;
+}) {
+  const start = pagination.total === 0 ? 0 : (pagination.page - 1) * pagination.pageSize + 1;
+  const end = pagination.total === 0 ? 0 : Math.min(pagination.page * pagination.pageSize, pagination.total);
+
+  return (
+    <div className="flex flex-col gap-3 border-t border-neutral-200 px-4 py-3 text-xs text-neutral-500 sm:flex-row sm:items-center sm:justify-between">
+      <span>Showing {start}-{end} of {pagination.total} {label}</span>
+      <div className="flex items-center gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-8 border-2"
+          disabled={pagination.page <= 1}
+          onClick={() => onPageChange(pagination.page - 1)}
+        >
+          Previous
+        </Button>
+        <span className="min-w-[88px] text-center font-medium text-neutral-700">
+          Page {pagination.page} of {pagination.totalPages}
+        </span>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-8 border-2"
+          disabled={pagination.page >= pagination.totalPages}
+          onClick={() => onPageChange(pagination.page + 1)}
+        >
+          Next
+        </Button>
+      </div>
     </div>
   );
 }

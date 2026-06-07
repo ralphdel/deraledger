@@ -1,12 +1,13 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Loader2, Mail, RefreshCcw, Save, ShieldCheck } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 type ProviderStatus =
@@ -156,6 +157,7 @@ type PaymentRecordRow = {
 const PROVIDERS = ["paystack", "monnify", "breet"] as const;
 const PURPOSES = ["plan_subscription", "plan_upgrade", "invoice_payment", "payment_link"] as const;
 const DEFAULT_PAGINATION: PaginationMeta = { page: 1, pageSize: 10, total: 0, totalPages: 1 };
+const PAGE_SIZE_OPTIONS = [10, 25, 50] as const;
 
 export default function AdminPaymentsPage() {
   const [data, setData] = useState<PaymentAdminPayload | null>(null);
@@ -171,14 +173,20 @@ export default function AdminPaymentsPage() {
   const [transactionsPage, setTransactionsPage] = useState(1);
   const [recordsPage, setRecordsPage] = useState(1);
   const [eventsPage, setEventsPage] = useState(1);
+  const [transactionsPageSize, setTransactionsPageSize] = useState(10);
+  const [recordsPageSize, setRecordsPageSize] = useState(10);
+  const [eventsPageSize, setEventsPageSize] = useState(10);
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     setFeedback(null);
     const params = new URLSearchParams({
       transactionsPage: String(transactionsPage),
       recordsPage: String(recordsPage),
       eventsPage: String(eventsPage),
+      transactionsPageSize: String(transactionsPageSize),
+      recordsPageSize: String(recordsPageSize),
+      eventsPageSize: String(eventsPageSize),
     });
     const response = await fetch(`/api/admin/payments?${params.toString()}`);
     const payload = (await response.json()) as PaymentAdminPayload | { error?: string };
@@ -192,7 +200,7 @@ export default function AdminPaymentsPage() {
     setRoutes(payload.routes);
     setMethods(payload.methods);
     setLoading(false);
-  }
+  }, [transactionsPage, recordsPage, eventsPage, transactionsPageSize, recordsPageSize, eventsPageSize]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -200,7 +208,7 @@ export default function AdminPaymentsPage() {
     }, 0);
 
     return () => window.clearTimeout(timer);
-  }, [transactionsPage, recordsPage, eventsPage]);
+  }, [load]);
 
   const environment = data?.environment || "sandbox";
 
@@ -318,21 +326,21 @@ export default function AdminPaymentsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-4">
-        <div>
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold text-neutral-900">Payment Operations</h1>
           <p className="mt-1 text-sm text-neutral-500">
             Control provider status, checkout method visibility, and routing without changing checkout code.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
           <Badge variant="outline" className="border-2 bg-neutral-50 uppercase">
             Environment: {environment}
           </Badge>
-          <Button variant="outline" className="gap-2 border-2" onClick={() => void load()}>
+          <Button variant="outline" className="w-full gap-2 border-2 sm:w-auto" onClick={() => void load()}>
             <RefreshCcw className="h-4 w-4" /> Refresh
           </Button>
-          <Button className="gap-2 bg-purp-900 hover:bg-purp-800" onClick={() => void saveAll()} disabled={saving}>
+          <Button className="w-full gap-2 bg-purp-900 hover:bg-purp-800 sm:w-auto" onClick={() => void saveAll()} disabled={saving}>
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
             Save Settings
           </Button>
@@ -369,7 +377,7 @@ export default function AdminPaymentsPage() {
           <CardTitle className="text-base">Provider Status</CardTitle>
         </CardHeader>
         <CardContent className="overflow-x-auto p-0">
-          <Table>
+          <Table className="min-w-[900px]">
             <TableHeader>
               <TableRow className="bg-neutral-50">
                 <TableHead>Provider</TableHead>
@@ -419,7 +427,16 @@ export default function AdminPaymentsPage() {
         </CardContent>
       </Card>
 
-      <div className="space-y-6">
+      <Tabs defaultValue="recovery" className="min-w-0 max-w-full space-y-4 overflow-hidden">
+        <div className="overflow-x-auto pb-1">
+          <TabsList className="inline-flex min-w-max border bg-white">
+            <TabsTrigger value="recovery">Subscription Records</TabsTrigger>
+            <TabsTrigger value="events">Provider Events</TabsTrigger>
+            <TabsTrigger value="transactions">Transactions</TabsTrigger>
+          </TabsList>
+        </div>
+
+        <TabsContent value="transactions" className="mt-0">
         <Card className="border shadow-none">
           <CardHeader>
             <div className="flex items-center justify-between gap-4">
@@ -435,7 +452,7 @@ export default function AdminPaymentsPage() {
                 Transaction log query warning: {data.diagnostics.transactionsError}
               </div>
             ) : null}
-            <Table>
+            <Table className="min-w-[720px]">
               <TableHeader>
                 <TableRow className="bg-neutral-50">
                   <TableHead>Created</TableHead>
@@ -463,11 +480,17 @@ export default function AdminPaymentsPage() {
               label="transactions"
               pagination={transactionsPagination}
               onPageChange={setTransactionsPage}
+              onPageSizeChange={(size) => {
+                setTransactionsPage(1);
+                setTransactionsPageSize(size);
+              }}
             />
           </CardContent>
         </Card>
+        </TabsContent>
 
-        <Card className="border shadow-none">
+        <TabsContent value="recovery" className="mt-0 min-w-0 max-w-full overflow-hidden">
+        <Card className="min-w-0 max-w-full overflow-hidden border shadow-none">
           <CardHeader>
             <div className="flex items-center justify-between gap-4">
               <CardTitle className="text-base">Subscription Recovery Records</CardTitle>
@@ -476,7 +499,7 @@ export default function AdminPaymentsPage() {
               </Badge>
             </div>
           </CardHeader>
-          <CardContent className="overflow-x-auto p-0">
+          <CardContent className="min-w-0 max-w-full p-0">
             {data?.diagnostics?.paymentRecordsError ? (
               <div className="border-b border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700">
                 Recovery record query warning: {data.diagnostics.paymentRecordsError}
@@ -487,7 +510,8 @@ export default function AdminPaymentsPage() {
                 Recovery record schema warning: {data.diagnostics.paymentRecordsWarning}
               </div>
             ) : null}
-            <Table>
+            <div className="w-full max-w-full overflow-x-auto overscroll-x-contain">
+            <Table className="w-[1480px] min-w-[1480px]">
               <TableHeader>
                 <TableRow className="bg-neutral-50">
                   <TableHead className="w-10"></TableHead>
@@ -593,14 +617,21 @@ export default function AdminPaymentsPage() {
                 })}
               </TableBody>
             </Table>
+            </div>
             <PaginationControls
               label="recovery records"
               pagination={recordsPagination}
               onPageChange={setRecordsPage}
+              onPageSizeChange={(size) => {
+                setRecordsPage(1);
+                setRecordsPageSize(size);
+              }}
             />
           </CardContent>
         </Card>
+        </TabsContent>
 
+        <TabsContent value="events" className="mt-0">
         <Card className="border shadow-none">
           <CardHeader>
             <div className="flex items-center justify-between gap-4">
@@ -621,7 +652,7 @@ export default function AdminPaymentsPage() {
                 Provider event schema warning: {data.diagnostics.eventsWarning}
               </div>
             ) : null}
-            <Table>
+            <Table className="min-w-[1000px]">
               <TableHeader>
                 <TableRow className="bg-neutral-50">
                   <TableHead className="w-10"></TableHead>
@@ -728,10 +759,15 @@ export default function AdminPaymentsPage() {
               label="provider events"
               pagination={eventsPagination}
               onPageChange={setEventsPage}
+              onPageSizeChange={(size) => {
+                setEventsPage(1);
+                setEventsPageSize(size);
+              }}
             />
           </CardContent>
         </Card>
-      </div>
+        </TabsContent>
+      </Tabs>
 
       <Card className="border shadow-none">
         <CardHeader>
@@ -775,7 +811,7 @@ export default function AdminPaymentsPage() {
           <CardTitle className="text-base">Provider Routing</CardTitle>
         </CardHeader>
         <CardContent className="overflow-x-auto p-0">
-          <Table>
+          <Table className="min-w-[860px]">
             <TableHeader>
               <TableRow className="bg-neutral-50">
                 <TableHead>Purpose</TableHead>
@@ -864,10 +900,12 @@ function PaginationControls({
   label,
   pagination,
   onPageChange,
+  onPageSizeChange,
 }: {
   label: string;
   pagination: PaginationMeta;
   onPageChange: (page: number) => void;
+  onPageSizeChange: (pageSize: number) => void;
 }) {
   const currentPage = Math.min(Math.max(pagination.page || 1, 1), Math.max(pagination.totalPages || 1, 1));
   const totalPages = Math.max(pagination.totalPages || 1, 1);
@@ -876,11 +914,24 @@ function PaginationControls({
   const end = total === 0 ? 0 : Math.min(currentPage * pagination.pageSize, total);
 
   return (
-    <div className="flex flex-col gap-3 border-t border-neutral-200 px-4 py-3 text-xs text-neutral-500 sm:flex-row sm:items-center sm:justify-between">
+    <div className="flex flex-col gap-3 border-t border-neutral-200 px-4 py-3 text-xs text-neutral-500 lg:flex-row lg:items-center lg:justify-between">
       <span>
         Showing {start}-{end} of {total} {label}
       </span>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <div className="flex items-center gap-2">
+          <span>Rows</span>
+          <Select value={String(pagination.pageSize)} onValueChange={(value) => onPageSizeChange(Number(value) || 10)}>
+            <SelectTrigger className="h-8 w-[84px] border-2 bg-white">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {PAGE_SIZE_OPTIONS.map((size) => (
+                <SelectItem key={size} value={String(size)}>{size}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
         <Button
           type="button"
           variant="outline"
