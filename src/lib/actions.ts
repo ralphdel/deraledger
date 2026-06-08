@@ -409,9 +409,73 @@ export async function submitKycAction(merchantId: string, updates: any) {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 
+  const profileKeys = [
+    "business_name",
+    "trading_name",
+    "owner_name",
+    "business_street",
+    "business_city",
+    "business_state",
+    "business_country",
+    "phone",
+  ];
+  const touchesProfile = profileKeys.some((key) => key in updates);
+  let nextUpdates = { ...updates };
+
+  if (touchesProfile) {
+    const { data: existingMerchant } = await supabase
+      .from("merchants")
+      .select(
+        "verification_step_state, business_name, trading_name, owner_name, business_street, business_city, business_state, business_country, phone",
+      )
+      .eq("id", merchantId)
+      .maybeSingle();
+
+    const mergedProfile = {
+      business_name: updates.business_name ?? existingMerchant?.business_name ?? null,
+      trading_name: updates.trading_name ?? existingMerchant?.trading_name ?? null,
+      owner_name: updates.owner_name ?? existingMerchant?.owner_name ?? null,
+      business_street: updates.business_street ?? existingMerchant?.business_street ?? null,
+      business_city: updates.business_city ?? existingMerchant?.business_city ?? null,
+      business_state: updates.business_state ?? existingMerchant?.business_state ?? null,
+      business_country: updates.business_country ?? existingMerchant?.business_country ?? null,
+      phone: updates.phone ?? existingMerchant?.phone ?? null,
+    };
+
+    const basicProfileComplete = Boolean(
+      mergedProfile.business_name &&
+        mergedProfile.trading_name &&
+        mergedProfile.owner_name &&
+        mergedProfile.business_street &&
+        mergedProfile.business_city &&
+        mergedProfile.business_state &&
+        mergedProfile.business_country &&
+        mergedProfile.phone,
+    );
+
+    nextUpdates = {
+      ...nextUpdates,
+      verification_step_state: {
+        ...(existingMerchant?.verification_step_state || {}),
+        basic_profile: {
+          requirement_key: "basic_profile",
+          plan_tier: null,
+          status: basicProfileComplete ? "verified" : "pending",
+          provider: "internal_profile",
+          provider_reference: null,
+          submitted_at: new Date().toISOString(),
+          verified_at: basicProfileComplete ? new Date().toISOString() : null,
+          reviewed_at: null,
+          rejection_reason: null,
+          admin_reset_status: "not_requested",
+        },
+      },
+    };
+  }
+
   const { error } = await supabase
     .from("merchants")
-    .update(updates)
+    .update(nextUpdates)
     .eq("id", merchantId);
 
   if (error) {
@@ -419,7 +483,7 @@ export async function submitKycAction(merchantId: string, updates: any) {
     return { success: false, error: error.message };
   }
 
-  await logAudit("kyc_submit", merchantId, "merchant", { updates });
+  await logAudit("kyc_submit", merchantId, "merchant", { updates: nextUpdates });
   await syncMerchantSetupStatus(supabase, merchantId);
 
   revalidatePath("/settings");
@@ -1998,7 +2062,7 @@ export async function submitDojahKycAction(params: {
   // Rate limiting: max 5 attempts
   const { data: merchant } = await adminClient
     .from("merchants")
-    .select("kyc_attempt_count, kyc_locked_until, subscription_plan, merchant_tier, owner_name, business_name, selfie_url, bvn, bvn_status, selfie_status, dojah_match_score, dojah_reference")
+    .select("kyc_attempt_count, kyc_locked_until, subscription_plan, merchant_tier, owner_name, business_name, selfie_url, bvn, bvn_status, selfie_status, dojah_match_score, dojah_reference, cac_document_url, utility_document_url, verification_step_state")
     .eq("id", params.merchantId)
     .single();
 
@@ -2031,19 +2095,29 @@ export async function submitDojahKycAction(params: {
     let nameMatch = true;
     let selfieMatch = true;
 
-    // Only run BVN+Selfie verification if a new selfie is provided
-    if (params.bvn && params.selfieBase64 && params.selfieFileName) {
+    const identityAlreadyVerified =
+      merchant?.bvn_status === "verified" && merchant?.selfie_status === "verified";
+    const shouldRunIdentityVerification =
+      !identityAlreadyVerified && Boolean(params.bvn && params.selfieBase64 && params.selfieFileName);
+
+    if (identityAlreadyVerified) {
+      newBvnStatus = "verified";
+      newSelfieStatus = "verified";
+    }
+
+    // Only run BVN+Selfie verification when identity is not already locked in.
+    if (shouldRunIdentityVerification) {
       const primaryBase64 = params.selfieBase64;
-      const finalSelfieFileName = params.selfieFileName;
-      const primaryStoragePath = `${params.merchantId}/${finalSelfieFileName}`;
+      const nextSelfieFileName = params.selfieFileName;
+      const primaryStoragePath = `${params.merchantId}/${nextSelfieFileName}`;
 
       // ── Route through VerificationService (provider-agnostic) ──────────────
       // VerificationService handles: storage-first upload for Youverify URL,
       // provider selection, sandbox/production routing, name matching, and audit logging.
       const svcResult = await verifyMerchantIdentity({
         merchantId: params.merchantId,
-        bvn: params.bvn,
-        selfieBase64: primaryBase64,
+        bvn: params.bvn!,
+        selfieBase64: primaryBase64!,
         selfieStoragePath: primaryStoragePath,
         ownerName: merchant?.owner_name || undefined,
       });
@@ -2057,20 +2131,49 @@ export async function submitDojahKycAction(params: {
       const identityVerified = svcResult.success && svcResult.bvnExists && selfieMatch && nameMatch;
       newBvnStatus = identityVerified ? "verified" : "rejected";
       newSelfieStatus = identityVerified ? "verified" : "rejected";
+      finalSelfieFileName = nextSelfieFileName;
     }
 
     const plan = merchant?.subscription_plan || merchant?.merchant_tier || "starter";
+    const stepState = {
+      ...(merchant?.verification_step_state || {}),
+      bvn: {
+        requirement_key: "bvn",
+        plan_tier: plan,
+        status: newBvnStatus === "verified" ? "verified" : "pending",
+        provider: dojahReference ? "verification_gateway" : "internal",
+        provider_reference: dojahReference,
+        submitted_at: new Date().toISOString(),
+        verified_at: newBvnStatus === "verified" ? new Date().toISOString() : null,
+        reviewed_at: null,
+        rejection_reason: newBvnStatus === "verified" ? null : "BVN check incomplete or rejected",
+        admin_reset_status: "not_requested",
+      },
+      selfie_liveness: {
+        requirement_key: "selfie_liveness",
+        plan_tier: plan,
+        status: newSelfieStatus === "verified" ? "verified" : "pending",
+        provider: dojahReference ? "verification_gateway" : "internal",
+        provider_reference: dojahReference,
+        submitted_at: new Date().toISOString(),
+        verified_at: newSelfieStatus === "verified" ? new Date().toISOString() : null,
+        reviewed_at: null,
+        rejection_reason: newSelfieStatus === "verified" ? null : "Selfie or liveness check incomplete",
+        admin_reset_status: "not_requested",
+      },
+    } as Record<string, unknown>;
 
     const updates: Record<string, unknown> = {
       bvn: params.bvn || merchant?.bvn,
       bvn_status: newBvnStatus,
-      selfie_url: finalSelfieFileName,
+      selfie_url: finalSelfieFileName || merchant?.selfie_url || null,
       selfie_status: newSelfieStatus,
       dojah_reference: dojahReference,
       dojah_match_score: matchScore,
       kyc_attempt_count: attemptCount + 1,
       kyc_last_attempt_at: new Date().toISOString(),
       kyc_submitted_at: new Date().toISOString(),
+      verification_step_state: stepState,
     };
 
     let overallStatus: string;
@@ -2100,6 +2203,44 @@ export async function submitDojahKycAction(params: {
       await adminClient.storage.from("kyc-documents").upload(filename, buffer, { contentType: getMimeType(params.cacDocumentName), upsert: true });
       updates.cac_document_url = filename;
       updates.cac_status = "pending";
+      stepState.business_document = {
+        requirement_key: "business_document",
+        plan_tier: plan,
+        status: "pending",
+        provider: "merchant_upload",
+        provider_reference: filename,
+        submitted_at: new Date().toISOString(),
+        verified_at: null,
+        reviewed_at: null,
+        rejection_reason: null,
+        admin_reset_status: "not_requested",
+      };
+      stepState.business_documents = {
+        requirement_key: "business_documents",
+        plan_tier: plan,
+        status: "pending",
+        provider: "merchant_upload",
+        provider_reference: filename,
+        submitted_at: new Date().toISOString(),
+        verified_at: null,
+        reviewed_at: null,
+        rejection_reason: null,
+        admin_reset_status: "not_requested",
+      };
+      stepState.valid_id_document = {
+        requirement_key: "valid_id_document",
+        plan_tier: plan,
+        status: "pending",
+        provider: "merchant_upload",
+        provider_reference: filename,
+        submitted_at: new Date().toISOString(),
+        verified_at: null,
+        reviewed_at: null,
+        rejection_reason: null,
+        admin_reset_status: "not_requested",
+      };
+    } else if (merchant?.cac_document_url) {
+      updates.cac_document_url = merchant.cac_document_url;
     }
     if (params.utilityDocumentName && params.utilityFileBase64) {
       const buffer = Buffer.from(params.utilityFileBase64, "base64");
@@ -2107,6 +2248,32 @@ export async function submitDojahKycAction(params: {
       await adminClient.storage.from("kyc-documents").upload(filename, buffer, { contentType: getMimeType(params.utilityDocumentName), upsert: true });
       updates.utility_document_url = filename;
       updates.utility_status = "pending";
+      stepState.utility_bill = {
+        requirement_key: "utility_bill",
+        plan_tier: plan,
+        status: "pending",
+        provider: "merchant_upload",
+        provider_reference: filename,
+        submitted_at: new Date().toISOString(),
+        verified_at: null,
+        reviewed_at: null,
+        rejection_reason: null,
+        admin_reset_status: "not_requested",
+      };
+      stepState.proof_of_address = {
+        requirement_key: "proof_of_address",
+        plan_tier: plan,
+        status: "pending",
+        provider: "merchant_upload",
+        provider_reference: filename,
+        submitted_at: new Date().toISOString(),
+        verified_at: null,
+        reviewed_at: null,
+        rejection_reason: null,
+        admin_reset_status: "not_requested",
+      };
+    } else if (merchant?.utility_document_url) {
+      updates.utility_document_url = merchant.utility_document_url;
     }
 
     await adminClient.from("merchants").update(updates).eq("id", params.merchantId);
@@ -2586,7 +2753,7 @@ export async function verifyRcNumberAction(merchantId: string, rcNumber: string)
 
   const { data: merchant } = await adminClient
     .from("merchants")
-    .select("business_name, owner_name, business_type, relationship_claim")
+    .select("business_name, owner_name, business_type, relationship_claim, subscription_plan, merchant_tier, verification_step_state")
     .eq("id", merchantId)
     .single();
 
@@ -2622,9 +2789,28 @@ export async function verifyRcNumberAction(merchantId: string, rcNumber: string)
     }
 
     // Representative mismatch is non-fatal — admin reviews during approval
+    const planTier = merchant?.subscription_plan || merchant?.merchant_tier || "starter";
     await adminClient
       .from("merchants")
-      .update({ cac_number: normalizedRcNumber, cac_status: "verified" })
+      .update({
+        cac_number: normalizedRcNumber,
+        cac_status: "verified",
+        verification_step_state: {
+          ...(merchant?.verification_step_state || {}),
+          business_registration_check: {
+            requirement_key: "business_registration_check",
+            plan_tier: planTier,
+            status: "verified",
+            provider: "verification_gateway",
+            provider_reference: normalizedRcNumber,
+            submitted_at: new Date().toISOString(),
+            verified_at: new Date().toISOString(),
+            reviewed_at: null,
+            rejection_reason: null,
+            admin_reset_status: "not_requested",
+          },
+        },
+      })
       .eq("id", merchantId);
 
     await syncMerchantSetupStatus(adminClient, merchantId);

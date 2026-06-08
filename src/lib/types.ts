@@ -1,5 +1,7 @@
 // PurpLedger — Database Types (v2.1 — matches Supabase schema)
 
+import type { VerificationStepState } from "@/lib/verification-requirements";
+
 export interface Merchant {
   id: string;
   user_id: string | null;
@@ -17,9 +19,9 @@ export interface Merchant {
   fee_absorption_default: "business" | "customer";
   verification_status: "unverified" | "pending" | "pending_admin_review" | "requires_reupload" | "verified" | "rejected" | "suspended" | "restricted";
   // v2.1: subscription_plan replaces merchant_tier
-  subscription_plan: "starter" | "individual" | "corporate";
+  subscription_plan: "starter" | "individual" | "corporate" | string;
   // Keep merchant_tier during migration — both columns exist in DB
-  merchant_tier: "starter" | "individual" | "corporate";
+  merchant_tier: "starter" | "individual" | "corporate" | string;
   business_type?: string | null;
   kyc_submitted_at: string | null;
   kyc_notes: string | null;
@@ -69,6 +71,7 @@ export interface Merchant {
   payment_provider: string;
   subaccount_verified: boolean;
   settlement_activated_at: string | null;
+  verification_step_state?: VerificationStepState | null;
   monthly_collection_limit: number;
   holds_pending_review: boolean;
   platform_version: number;

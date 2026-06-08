@@ -123,9 +123,54 @@ export async function verifyDirectorIdentity(params: {
   faceMatchScore: number | null;
   status: "verified" | "failed" | "manual_review" | "pending";
   error?: string;
+  duplicatePrevented?: boolean;
 }> {
   const adminClient = getServiceClient();
   const sandbox = await isVerificationSandboxMode();
+
+  const normalizedDirectorName = normalizeName(params.directorName);
+  const existingQuery = adminClient
+    .from("business_director_verifications")
+    .select("id, director_name, verification_status, face_match_score, business_verification_id")
+    .eq("merchant_id", params.merchantId)
+    .order("created_at", { ascending: false });
+
+  const { data: existingRows } = await existingQuery;
+  const reusableVerification = (existingRows || []).find((row: {
+    id?: string | null;
+    verification_status?: string | null;
+    face_match_score?: number | null;
+    business_verification_id?: string | null;
+    director_name?: string | null;
+  }) => {
+    const sameBusinessContext =
+      !params.businessVerificationId ||
+      !row.business_verification_id ||
+      row.business_verification_id === params.businessVerificationId;
+
+    const currentName = normalizeName(String((row as { director_name?: string | null }).director_name || ""));
+    return sameBusinessContext && currentName === normalizedDirectorName;
+  });
+
+  if (reusableVerification?.verification_status === "verified") {
+    return {
+      success: true,
+      verificationId: reusableVerification.id || undefined,
+      faceMatchScore: reusableVerification.face_match_score ?? null,
+      status: "verified",
+      duplicatePrevented: true,
+    };
+  }
+
+  if (reusableVerification?.verification_status === "manual_review") {
+    return {
+      success: false,
+      verificationId: reusableVerification.id || undefined,
+      faceMatchScore: reusableVerification.face_match_score ?? null,
+      status: "manual_review",
+      duplicatePrevented: true,
+    };
+  }
 
   const providerKey = await getActiveProviderKey();
   const provider = await getActiveProvider();

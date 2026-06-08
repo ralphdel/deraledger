@@ -3,6 +3,12 @@
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SupabaseClient = any;
 
+import {
+  getIncompleteRequirements,
+  getVerificationRequirements,
+  hasVerificationRequirement,
+} from "@/lib/verification-requirements";
+
 export type PlanType = "starter" | "individual" | "corporate";
 export type RelationshipClaim = "owner_affiliated_claim" | "representative_claim";
 
@@ -40,27 +46,19 @@ export function isLiveFeatureEnabled(merchant: {
   setup_mode?: boolean | null;
   email?: string | null;
   is_super_admin?: boolean | null;
+  settlement_account_number?: string | null;
+  settlement_bank_name?: string | null;
+  settlement_account_name?: string | null;
+  verification_step_state?: Record<string, unknown> | null;
 }): boolean {
   if (isSuperadminSandboxMerchant(merchant)) return true;
-  const plan = merchant.subscription_plan || merchant.merchant_tier || "starter";
-  if (plan === "starter") return false;
   if (merchant.live_features_enabled !== true) return false;
   if (merchant.setup_mode === true) return false;
-  const kycReady = merchant.bvn_status === "verified" && merchant.selfie_status === "verified";
-  if (plan === "individual") {
-    return merchant.verification_status === "verified" && kycReady;
-  }
-  const authorityReady =
-    merchant.business_affiliation_status === "strong_match" ||
-    merchant.business_affiliation_status === "director_approved";
-  return (
-    merchant.verification_status === "verified" &&
-    merchant.bvn_status === "verified" &&
-    merchant.selfie_status === "verified" &&
-    merchant.cac_status === "verified" &&
-    merchant.utility_status === "verified" &&
-    authorityReady
+  const requirements = getVerificationRequirements(
+    merchant.subscription_plan || merchant.merchant_tier || "starter",
   );
+  if (requirements.includes("no_payment_collection")) return false;
+  return getIncompleteRequirements(merchant).length === 0;
 }
 
 export function getLiveFeatureLockReasons(merchant: {
@@ -76,32 +74,58 @@ export function getLiveFeatureLockReasons(merchant: {
   live_features_enabled?: boolean | null;
   email?: string | null;
   is_super_admin?: boolean | null;
+  settlement_account_number?: string | null;
+  settlement_bank_name?: string | null;
+  settlement_account_name?: string | null;
+  verification_step_state?: Record<string, unknown> | null;
 }): string[] {
   if (isSuperadminSandboxMerchant(merchant)) return [];
-  const plan = merchant.subscription_plan || merchant.merchant_tier || "starter";
-  if (plan === "starter") return ["Upgrade to Individual or Business to activate live payment collection."];
+  const planTier = merchant.subscription_plan || merchant.merchant_tier || "starter";
+  const requirements = getVerificationRequirements(planTier);
+  if (requirements.includes("no_payment_collection")) {
+    return ["Upgrade to a collection-enabled tier to activate live payment collection."];
+  }
 
   const reasons: string[] = [];
-  if (merchant.bvn_status !== "verified") reasons.push("Identity number verification");
-  if (merchant.selfie_status !== "verified") reasons.push("Selfie face match");
-
-  if (plan === "corporate") {
-    if (merchant.cac_status !== "verified") reasons.push("Business registration verification");
-    if (merchant.utility_status !== "verified") reasons.push("Business document approval");
-    const authorityReady =
-      merchant.business_affiliation_status === "strong_match" ||
-      merchant.business_affiliation_status === "director_approved";
-    if (!authorityReady) {
-      const affiliation = merchant.business_affiliation_status || "not_started";
-      if (affiliation === "partial_match" || affiliation === "manual_review") {
-        reasons.push("Admin review of business authority match");
-      } else {
-        reasons.push("Director/shareholder authority approval");
-      }
+  const missing = getIncompleteRequirements(merchant);
+  for (const requirement of missing) {
+    switch (requirement) {
+      case "bvn":
+        reasons.push("Identity number verification");
+        break;
+      case "selfie_liveness":
+        reasons.push("Selfie face match");
+        break;
+      case "business_registration_check":
+        reasons.push("Business registration verification");
+        break;
+      case "business_document":
+      case "business_documents":
+        reasons.push("Business document approval");
+        break;
+      case "utility_bill":
+      case "proof_of_address":
+        reasons.push("Address or utility document approval");
+        break;
+      case "director_or_representative_flow":
+      case "director_kyc":
+        reasons.push("Director or representative authority approval");
+        break;
+      case "settlement_account":
+        reasons.push("Settlement account readiness");
+        break;
+      case "valid_id_document":
+        reasons.push("Additional identity document");
+        break;
+      case "additional_manual_review":
+      case "admin_review":
+        reasons.push("Final admin approval");
+        break;
+      default:
+        break;
     }
   }
 
-  if (merchant.verification_status !== "verified") reasons.push("Final admin approval");
   if (reasons.length === 0 && merchant.setup_mode === true) reasons.push("Setup mode release");
   if (reasons.length === 0 && merchant.live_features_enabled !== true) reasons.push("Live payment feature activation");
   return reasons;
@@ -118,6 +142,10 @@ export function setupStatusForMerchant(merchant: {
   business_affiliation_status?: string | null;
   email?: string | null;
   is_super_admin?: boolean | null;
+  settlement_account_number?: string | null;
+  settlement_bank_name?: string | null;
+  settlement_account_name?: string | null;
+  verification_step_state?: Record<string, unknown> | null;
 }): {
   onboarding_status: string;
   setup_mode: boolean;
@@ -127,79 +155,67 @@ export function setupStatusForMerchant(merchant: {
     return { onboarding_status: "active", setup_mode: false, live_features_enabled: true };
   }
   const plan = merchant.subscription_plan || merchant.merchant_tier || "starter";
-  if (plan === "starter") {
+  const requirements = getVerificationRequirements(plan);
+  if (requirements.includes("no_payment_collection")) {
     return { onboarding_status: "active", setup_mode: false, live_features_enabled: false };
   }
-
-  const kycReady = merchant.bvn_status === "verified" && merchant.selfie_status === "verified";
-  const kybReady = merchant.cac_status === "verified";
-  const businessDocsReady = merchant.utility_status === "verified";
-  const affiliation = merchant.business_affiliation_status || "not_started";
-  const authorityReady = affiliation === "strong_match" || affiliation === "director_approved";
-
-  if (plan === "individual" && merchant.verification_status === "verified" && kycReady) {
+  const incomplete = getIncompleteRequirements(merchant);
+  if (incomplete.length === 0) {
     return { onboarding_status: "active", setup_mode: false, live_features_enabled: true };
   }
 
-  if (plan === "corporate" && merchant.verification_status === "verified" && kycReady && kybReady && businessDocsReady && authorityReady) {
-    return { onboarding_status: "active", setup_mode: false, live_features_enabled: true };
-  }
-
-  if (plan === "individual" && merchant.verification_status === "verified") {
+  if (
+    hasVerificationRequirement(plan, "bvn") &&
+    (merchant.bvn_status !== "verified" || merchant.selfie_status !== "verified")
+  ) {
     return { onboarding_status: "pending_kyc", setup_mode: true, live_features_enabled: false };
   }
 
-  if (plan === "corporate" && merchant.verification_status === "verified") {
-    if (!kycReady) {
-      return { onboarding_status: "pending_kyc", setup_mode: true, live_features_enabled: false };
-    }
-    if (!kybReady) {
-      return { onboarding_status: "pending_kyb", setup_mode: true, live_features_enabled: false };
-    }
-    if (!businessDocsReady) {
-      return { onboarding_status: "pending_kyb", setup_mode: true, live_features_enabled: false };
-    }
-    if (!authorityReady) {
-      return {
-        onboarding_status: affiliation === "no_match" || affiliation === "rejected" || affiliation === "not_started"
-          ? "pending_director_approval"
-          : "pending_affiliation_match",
-        setup_mode: true,
-        live_features_enabled: false,
-      };
-    }
-  }
-
-  if (merchant.verification_status === "pending" || merchant.verification_status === "pending_admin_review") {
-    return { onboarding_status: "pending_manual_review", setup_mode: true, live_features_enabled: false };
-  }
-
-  if (plan === "individual") {
-    if (!kycReady) {
-      return { onboarding_status: "pending_kyc", setup_mode: true, live_features_enabled: false };
-    }
-    return { onboarding_status: "pending_manual_review", setup_mode: true, live_features_enabled: false };
-  }
-
-  if (!kycReady) {
-    return { onboarding_status: "pending_kyc", setup_mode: true, live_features_enabled: false };
-  }
-
-  if (!kybReady) {
-    return { onboarding_status: "pending_kyb", setup_mode: true, live_features_enabled: false };
-  }
-  if (!businessDocsReady) {
+  if (
+    hasVerificationRequirement(plan, "business_registration_check") &&
+    merchant.cac_status !== "verified"
+  ) {
     return { onboarding_status: "pending_kyb", setup_mode: true, live_features_enabled: false };
   }
 
-  if (affiliation === "partial_match" || affiliation === "manual_review") {
-    return { onboarding_status: "pending_manual_review", setup_mode: true, live_features_enabled: false };
-  }
-  if (affiliation === "no_match") {
-    return { onboarding_status: "pending_director_approval", setup_mode: true, live_features_enabled: false };
+  if (
+    (hasVerificationRequirement(plan, "business_document") ||
+      hasVerificationRequirement(plan, "business_documents") ||
+      hasVerificationRequirement(plan, "utility_bill") ||
+      hasVerificationRequirement(plan, "proof_of_address")) &&
+    merchant.utility_status !== "verified"
+  ) {
+    return { onboarding_status: "pending_kyb", setup_mode: true, live_features_enabled: false };
   }
 
-  return { onboarding_status: "pending_affiliation_match", setup_mode: true, live_features_enabled: false };
+  if (
+    hasVerificationRequirement(plan, "director_or_representative_flow") ||
+    hasVerificationRequirement(plan, "director_kyc")
+  ) {
+    const affiliation = merchant.business_affiliation_status || "not_started";
+    if (affiliation === "no_match" || affiliation === "rejected" || affiliation === "not_started") {
+      return { onboarding_status: "pending_director_approval", setup_mode: true, live_features_enabled: false };
+    }
+    if (affiliation === "partial_match" || affiliation === "manual_review") {
+      return { onboarding_status: "pending_affiliation_match", setup_mode: true, live_features_enabled: false };
+    }
+  }
+
+  if (
+    merchant.verification_status === "pending" ||
+    merchant.verification_status === "pending_admin_review"
+  ) {
+    return { onboarding_status: "pending_manual_review", setup_mode: true, live_features_enabled: false };
+  }
+
+  if (
+    requirements.includes("additional_manual_review") ||
+    requirements.includes("admin_review")
+  ) {
+    return { onboarding_status: "pending_manual_review", setup_mode: true, live_features_enabled: false };
+  }
+
+  return { onboarding_status: "pending_kyc", setup_mode: true, live_features_enabled: false };
 }
 
 export async function getFeatureFlag(

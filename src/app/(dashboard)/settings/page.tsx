@@ -1,13 +1,31 @@
 "use client";
 
-import { useState, useEffect, useTransition } from "react";
-import { Country, State } from "country-state-city";
+import Image from "next/image";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Save, Shield, Upload, FileCheck, AlertTriangle, CheckCircle, Clock, ArrowRight, ExternalLink, Lock, Camera, User, Plus, Info, AlertCircle } from "lucide-react";
+import { Country, State } from "country-state-city";
+import {
+  AlertCircle,
+  AlertTriangle,
+  ArrowRight,
+  Camera,
+  CheckCircle,
+  Clock,
+  ExternalLink,
+  FileCheck,
+  Info,
+  Lock,
+  Plus,
+  Save,
+  Shield,
+  Upload,
+} from "lucide-react";
 import DirectorSelfieModal from "@/components/kyc/director-selfie-modal";
+import { LivenessCamera } from "@/components/kyc/liveness-camera";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Select,
@@ -16,23 +34,39 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
-import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { createClient } from "@/lib/supabase/client";
 import { getMerchant } from "@/lib/data";
 import {
-  submitDojahKycAction,
-  verifyRcNumberAction,
-  submitKycAction,
-  getDirectorApprovalContextAction,
   createDirectorInvitationAction,
+  getDirectorApprovalContextAction,
+  submitDojahKycAction,
+  submitKycAction,
+  verifyRcNumberAction,
 } from "@/lib/actions";
-import { CreateClientModal } from "@/components/CreateClientModal";
-import { LivenessCamera } from "@/components/kyc/liveness-camera";
-import { createClient } from "@/lib/supabase/client";
-import { getLiveFeatureLockReasons, isLiveFeatureEnabled } from "@/lib/services/onboarding-flow.service";
+import {
+  getLiveFeatureLockReasons,
+  isLiveFeatureEnabled,
+} from "@/lib/services/onboarding-flow.service";
 import type { Merchant } from "@/lib/types";
+import {
+  getCollectionLimitLabel,
+  getRequirementCompletion,
+  getVerificationRequirements,
+  hasVerificationRequirement,
+  type VerificationRequirementKey,
+} from "@/lib/verification-requirements";
 
 const CURRENT_PLATFORM_VERSION = 1;
+
+type DirectorRole =
+  | "director"
+  | "shareholder"
+  | "beneficial_owner"
+  | "signatory"
+  | "proprietor"
+  | "partner"
+  | "trustee";
 
 type DirectorVerificationRow = {
   id: string;
@@ -45,7 +79,7 @@ type RegistrySnapshotRow = {
   id: string;
   registered_name?: string | null;
   registration_number?: string | null;
-  directors_json?: { name?: string; role?: string }[] | null;
+  directors_json?: { id?: string; name?: string; role?: string }[] | null;
 };
 
 type DirectorInvitationRow = {
@@ -53,6 +87,159 @@ type DirectorInvitationRow = {
   selected_director_name?: string | null;
   status?: string | null;
 };
+
+const BUSINESS_TYPE_OPTIONS = [
+  { value: "sole_proprietorship", label: "Sole Proprietorship / Registered Business Name" },
+  { value: "ltd", label: "Private Limited Company (LTD)" },
+  { value: "plc", label: "Public Limited Company (PLC)" },
+  { value: "llp", label: "Limited Liability Partnership (LLP)" },
+  { value: "lp", label: "Limited Partnership (LP)" },
+  { value: "incorporated_trustees", label: "Incorporated Trustees (IT)" },
+  { value: "cooperative", label: "Cooperative Society" },
+] as const;
+
+function formatPlanLabel(plan: string | null | undefined) {
+  if (!plan) return "Starter";
+  if (plan === "corporate") return "Business";
+  return plan.charAt(0).toUpperCase() + plan.slice(1);
+}
+
+function formatStatusLabel(status: string | null | undefined) {
+  if (!status) return "Not started";
+  return status.replace(/_/g, " ");
+}
+
+function maskAccountNumber(value: string | null | undefined) {
+  if (!value) return "Not configured";
+  const trimmed = value.trim();
+  if (trimmed.length <= 4) return trimmed;
+  return `${"*".repeat(Math.max(0, trimmed.length - 4))}${trimmed.slice(-4)}`;
+}
+
+function statusBadge(status: string | null | undefined) {
+  if (!status || status === "unverified" || status === "not_started") {
+    return (
+      <Badge variant="outline" className="border-neutral-200 bg-neutral-50 text-neutral-600">
+        Not started
+      </Badge>
+    );
+  }
+
+  if (
+    status === "verified" ||
+    status === "active" ||
+    status === "strong_match" ||
+    status === "director_approved"
+  ) {
+    return (
+      <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
+        <CheckCircle className="mr-1 h-3 w-3" />
+        {formatStatusLabel(status)}
+      </Badge>
+    );
+  }
+
+  if (status.includes("pending") || status === "manual_review" || status === "partial_match") {
+    return (
+      <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">
+        <Clock className="mr-1 h-3 w-3" />
+        {formatStatusLabel(status)}
+      </Badge>
+    );
+  }
+
+  if (status === "rejected" || status === "requires_reupload" || status === "restricted") {
+    return (
+      <Badge variant="outline" className="border-red-200 bg-red-50 text-red-700">
+        <AlertTriangle className="mr-1 h-3 w-3" />
+        {formatStatusLabel(status)}
+      </Badge>
+    );
+  }
+
+  return (
+    <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">
+      {formatStatusLabel(status)}
+    </Badge>
+  );
+}
+
+function SectionCard({
+  title,
+  description,
+  action,
+  children,
+}: {
+  title: string;
+  description: string;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <Card className="border-2 border-purp-200 shadow-none">
+      <CardHeader className="gap-3 pb-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-1.5">
+            <CardTitle className="text-base font-bold text-purp-900">{title}</CardTitle>
+            <p className="text-sm leading-6 text-neutral-500">{description}</p>
+          </div>
+          {action ? <div className="shrink-0">{action}</div> : null}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-5">{children}</CardContent>
+    </Card>
+  );
+}
+
+function ChecklistRow({
+  title,
+  description,
+  status,
+}: {
+  title: string;
+  description: string;
+  status: "complete" | "pending" | "locked" | "rejected";
+}) {
+  return (
+    <div className="flex items-start gap-3 rounded-xl border border-neutral-200 bg-white p-4">
+      {status === "complete" ? (
+        <CheckCircle className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
+      ) : status === "rejected" ? (
+        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-600" />
+      ) : status === "pending" ? (
+        <Clock className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+      ) : (
+        <Lock className="mt-0.5 h-5 w-5 shrink-0 text-neutral-400" />
+      )}
+      <div className="space-y-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-sm font-semibold text-neutral-900">{title}</p>
+          <Badge
+            variant="outline"
+            className={
+              status === "complete"
+                ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                : status === "rejected"
+                ? "border-red-200 bg-red-50 text-red-700"
+                : status === "pending"
+                ? "border-amber-200 bg-amber-50 text-amber-700"
+                : "border-neutral-200 bg-neutral-50 text-neutral-600"
+            }
+          >
+            {status === "complete"
+              ? "Complete"
+              : status === "rejected"
+              ? "Rejected"
+              : status === "pending"
+              ? "Pending"
+              : "Locked"}
+          </Badge>
+        </div>
+        <p className="text-sm leading-6 text-neutral-500">{description}</p>
+      </div>
+    </div>
+  );
+}
 
 export default function SettingsPage() {
   const [businessName, setBusinessName] = useState("");
@@ -65,12 +252,12 @@ export default function SettingsPage() {
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [feeDefault, setFeeDefault] = useState<"business" | "customer">("business");
-  const [saving, setSaving] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [merchant, setMerchant] = useState<Merchant | null>(null);
   const [businessType, setBusinessType] = useState("sole_proprietorship");
+  const [loading, setLoading] = useState(true);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [savingFeeSettings, setSavingFeeSettings] = useState(false);
 
-  // KYC state
   const [cacFile, setCacFile] = useState<File | null>(null);
   const [cacNumber, setCacNumber] = useState("");
   const [utilityFile, setUtilityFile] = useState<File | null>(null);
@@ -81,9 +268,7 @@ export default function SettingsPage() {
   const [rcError, setRcError] = useState<string | null>(null);
   const [kycSuccess, setKycSuccess] = useState(false);
   const [kycError, setKycError] = useState<string | null>(null);
-  const [upgradingPlan, setUpgradingPlan] = useState<string | null>(null);
 
-  // Logo state
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
 
@@ -92,13 +277,11 @@ export default function SettingsPage() {
   const [livenessFallback, setLivenessFallback] = useState(false);
   const [isBvnLocked, setIsBvnLocked] = useState(false);
 
-  // Director KYB states
   const [directors, setDirectors] = useState<DirectorVerificationRow[]>([]);
   const [directorsLoading, setDirectorsLoading] = useState(false);
-  const [showVerifyDirectorModal, setShowVerifyDirectorModal] = useState(false);
   const [newDirectorName, setNewDirectorName] = useState("");
-  const [newDirectorRole, setNewDirectorRole] = useState<"director" | "shareholder" | "beneficial_owner" | "signatory" | "proprietor" | "partner" | "trustee">("director");
-  const [activeDirectorToVerify, setActiveDirectorToVerify] = useState<{ name: string; role: typeof newDirectorRole } | null>(null);
+  const [newDirectorRole, setNewDirectorRole] = useState<DirectorRole>("director");
+  const [activeDirectorToVerify, setActiveDirectorToVerify] = useState<{ name: string; role: DirectorRole } | null>(null);
   const [registrySnapshot, setRegistrySnapshot] = useState<RegistrySnapshotRow | null>(null);
   const [directorInvitations, setDirectorInvitations] = useState<DirectorInvitationRow[]>([]);
   const [selectedRegistryDirector, setSelectedRegistryDirector] = useState("");
@@ -107,7 +290,7 @@ export default function SettingsPage() {
   const [directorInviteMessage, setDirectorInviteMessage] = useState<string | null>(null);
   const [directorInviteError, setDirectorInviteError] = useState<string | null>(null);
 
-  const loadDirectors = async (merchantId: string) => {
+  const loadDirectors = useCallback(async (merchantId: string) => {
     setDirectorsLoading(true);
     try {
       const supabase = createClient();
@@ -115,80 +298,134 @@ export default function SettingsPage() {
         .from("business_director_verifications")
         .select("*")
         .eq("merchant_id", merchantId)
-        .order("created_at", { ascending: true });
+        .order("created_at", { ascending: false });
+
       if (!error && data) {
         setDirectors(data);
       }
-    } catch (err) {
-      console.error("Failed to load directors", err);
+    } catch (error) {
+      console.error("Failed to load directors", error);
     } finally {
       setDirectorsLoading(false);
     }
-  };
+  }, []);
 
-  const loadDirectorApprovalContext = async (merchantId: string) => {
+  const loadDirectorApprovalContext = useCallback(async (merchantId: string) => {
     try {
       const result = await getDirectorApprovalContextAction(merchantId);
       if (result.success) {
         setRegistrySnapshot(result.snapshot);
         setDirectorInvitations(result.invitations || []);
       }
-    } catch (err) {
-      console.error("Failed to load director approval context", err);
+    } catch (error) {
+      console.error("Failed to load director approval context", error);
     }
-  };
+  }, []);
+
+  const applyMerchantState = useCallback(async (nextMerchant: Merchant) => {
+    setMerchant(nextMerchant);
+    const tier = nextMerchant.subscription_plan || nextMerchant.merchant_tier || "starter";
+    const hasConfirmed = (nextMerchant.platform_version ?? 0) >= CURRENT_PLATFORM_VERSION;
+
+    if (tier === "corporate" && !hasConfirmed) {
+      setBusinessName("");
+    } else {
+      setBusinessName(nextMerchant.business_name || "");
+    }
+
+    setTradingName(nextMerchant.trading_name || nextMerchant.business_name || "");
+    setOwnerName(nextMerchant.owner_name || "");
+    setBusinessStreet(nextMerchant.business_street || "");
+    setBusinessCity(nextMerchant.business_city || "");
+    setBusinessState(nextMerchant.business_state || "");
+    setBusinessCountry(nextMerchant.business_country || "NG");
+    setEmail(nextMerchant.email || "");
+    setPhone(nextMerchant.phone || "");
+    setFeeDefault(nextMerchant.fee_absorption_default === "customer" ? "customer" : "business");
+    setBvnNumber(/^\d{11}$/.test(nextMerchant.bvn || "") ? nextMerchant.bvn || "" : "");
+    setCacNumber(nextMerchant.cac_number || "");
+    setLogoUrl(nextMerchant.logo_url || null);
+    setBusinessType(nextMerchant.business_type || "sole_proprietorship");
+
+    if (tier === "corporate" && nextMerchant.id) {
+      await Promise.all([
+        loadDirectors(nextMerchant.id),
+        loadDirectorApprovalContext(nextMerchant.id),
+      ]);
+    } else {
+      setDirectors([]);
+      setRegistrySnapshot(null);
+      setDirectorInvitations([]);
+    }
+  }, [loadDirectorApprovalContext, loadDirectors]);
+
+  const refreshMerchant = useCallback(async (merchantId?: string) => {
+    const freshMerchant = await getMerchant(merchantId);
+    if (freshMerchant) {
+      await applyMerchantState(freshMerchant as Merchant);
+    }
+  }, [applyMerchantState]);
 
   const handleCreateDirectorInvitation = async () => {
     if (!merchant) return;
     setDirectorInviteSubmitting(true);
     setDirectorInviteError(null);
     setDirectorInviteMessage(null);
+
     try {
       const result = await createDirectorInvitationAction({
         merchantId: merchant.id,
         selectedDirectorRecordId: selectedRegistryDirector,
         directorEmail: directorInviteEmail,
       });
-      if (!result.success) throw new Error(result.error || "Could not send director invitation.");
+
+      if (!result.success) {
+        throw new Error(result.error || "Could not send director invitation.");
+      }
+
       setDirectorInviteMessage("Director approval invitation sent.");
       setDirectorInviteEmail("");
       await loadDirectorApprovalContext(merchant.id);
-    } catch (err) {
-      setDirectorInviteError(err instanceof Error ? err.message : "Could not send director invitation.");
+    } catch (error) {
+      setDirectorInviteError(
+        error instanceof Error ? error.message : "Could not send director invitation.",
+      );
     } finally {
       setDirectorInviteSubmitting(false);
     }
   };
 
-  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+  const handleLogoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
     if (!file || !merchant) return;
 
     setUploadingLogo(true);
     setKycError(null);
     try {
       const supabase = createClient();
-      const fileExt = file.name.split('.').pop();
+      const fileExt = file.name.split(".").pop();
       const fileName = `${merchant.id}_${Date.now()}.${fileExt}`;
-      
-      const { data: uploadData, error: uploadError } = await supabase.storage
-        .from('merchant_logos')
+
+      const { error: uploadError } = await supabase.storage
+        .from("merchant_logos")
         .upload(fileName, file, { upsert: true });
 
       if (uploadError) throw uploadError;
 
-      const { data: { publicUrl } } = supabase.storage
-        .from('merchant_logos')
-        .getPublicUrl(fileName);
+      const {
+        data: { publicUrl },
+      } = supabase.storage.from("merchant_logos").getPublicUrl(fileName);
 
-      // Save to database
       await submitKycAction(merchant.id, { logo_url: publicUrl });
-      
       setLogoUrl(publicUrl);
-      setMerchant({ ...merchant, logo_url: publicUrl } as Merchant);
-    } catch (err) {
-      console.error("Error uploading logo:", err);
-      setKycError("Failed to upload logo: " + (err instanceof Error ? err.message : "Unknown error") + ". Please ensure your database storage policies are set up correctly.");
+      await refreshMerchant(merchant.id);
+    } catch (error) {
+      console.error("Error uploading logo:", error);
+      setKycError(
+        `Failed to upload logo: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }. Please ensure your storage policies are configured correctly.`,
+      );
     } finally {
       setUploadingLogo(false);
     }
@@ -196,132 +433,280 @@ export default function SettingsPage() {
 
   const handleRemoveLogo = async () => {
     if (!merchant) return;
+
     setUploadingLogo(true);
     setKycError(null);
     try {
       await submitKycAction(merchant.id, { logo_url: null });
       setLogoUrl(null);
-      setMerchant({ ...merchant, logo_url: null } as Merchant);
-    } catch (err) {
-      console.error("Error removing logo:", err);
-      setKycError("Failed to remove logo: " + (err instanceof Error ? err.message : "Unknown error"));
+      await refreshMerchant(merchant.id);
+    } catch (error) {
+      console.error("Error removing logo:", error);
+      setKycError(
+        `Failed to remove logo: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
     } finally {
       setUploadingLogo(false);
     }
   };
 
-  const handleUpgrade = async (newPlan: "individual" | "corporate") => {
-    setUpgradingPlan(newPlan);
-    setKycError(null);
-    try {
-      const res = await fetch("/api/payment/upgrade", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ newPlan }),
-      });
-      const data = await res.json();
-      if (data.authorizationUrl) {
-        window.location.href = data.authorizationUrl;
-      } else {
-        setKycError(data.error || "Failed to initialize upgrade");
-        setUpgradingPlan(null);
-      }
-    } catch (e) {
-      setKycError("An error occurred while initializing upgrade");
-      setUpgradingPlan(null);
-    }
-  };
-
   useEffect(() => {
-    getMerchant().then((m) => {
-      if (m) {
-        setMerchant(m);
-        const tier = m.subscription_plan || m.merchant_tier || "starter";
-        const hasConfirmed = (m.platform_version ?? 0) >= 1;
-        // For Corporate: only prefill business_name if they've already confirmed (platform_version >= 1)
-        // Otherwise leave blank so they must explicitly set or toggle "Same as Trading Name"
-        if (tier === "corporate" && !hasConfirmed) {
-          setBusinessName("");
-        } else {
-          setBusinessName(m.business_name || "");
-        }
-        setTradingName(m.trading_name || m.business_name || "");
-        setOwnerName(m.owner_name || "");
-        setBusinessStreet(m.business_street || "");
-        setBusinessCity(m.business_city || "");
-        setBusinessState(m.business_state || "");
-        setBusinessCountry(m.business_country || "NG");
-        setEmail(m.email || "");
-        setPhone(m.phone || "");
-        setFeeDefault(m.fee_absorption_default === "customer" ? "customer" : "business");
-        setBvnNumber(/^\d{11}$/.test(m.bvn || "") ? (m.bvn || "") : "");
-        setCacNumber(m.cac_number || "");
-        setLogoUrl(m.logo_url || null);
-        setBusinessType(m.business_type || "sole_proprietorship");
-
-        if (tier === "corporate" && m.id) {
-          loadDirectors(m.id);
-          loadDirectorApprovalContext(m.id);
-        }
+    let cancelled = false;
+    getMerchant().then(async (nextMerchant) => {
+      if (!nextMerchant || cancelled) {
+        setLoading(false);
+        return;
       }
-      setLoading(false);
+
+      await applyMerchantState(nextMerchant as Merchant);
+      if (!cancelled) {
+        setLoading(false);
+      }
     });
 
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [applyMerchantState]);
 
-  const handleSave = async () => {
+  const effectiveTier = merchant?.subscription_plan || merchant?.merchant_tier || "starter";
+  const planRequirements = getVerificationRequirements(effectiveTier);
+  const isStarter = planRequirements.includes("no_payment_collection");
+  const isCorporate =
+    hasVerificationRequirement(effectiveTier, "director_or_representative_flow") ||
+    hasVerificationRequirement(effectiveTier, "director_kyc");
+  const isIndividual = !isStarter && !isCorporate;
+  const requiresBvn = hasVerificationRequirement(effectiveTier, "bvn");
+  const requiresSelfie = hasVerificationRequirement(effectiveTier, "selfie_liveness");
+  const requiresBusinessRegistration = hasVerificationRequirement(
+    effectiveTier,
+    "business_registration_check",
+  );
+  const requiresBusinessDocument =
+    hasVerificationRequirement(effectiveTier, "business_document") ||
+    hasVerificationRequirement(effectiveTier, "business_documents");
+  const requiresUtilityBill =
+    hasVerificationRequirement(effectiveTier, "utility_bill") ||
+    hasVerificationRequirement(effectiveTier, "proof_of_address");
+  const requiresValidIdDocument = hasVerificationRequirement(effectiveTier, "valid_id_document");
+  const requiresDirectorApprovalFlow =
+    hasVerificationRequirement(effectiveTier, "director_or_representative_flow") ||
+    hasVerificationRequirement(effectiveTier, "director_kyc");
+  const requiresSettlementAccount = hasVerificationRequirement(effectiveTier, "settlement_account");
+  const liveFeaturesActive = merchant ? isLiveFeatureEnabled(merchant) : false;
+  const liveFeatureLockReasons = merchant ? getLiveFeatureLockReasons(merchant) : [];
+  const nextLiveUnlockStep = liveFeatureLockReasons[0] || null;
+  const verificationStatus = merchant?.verification_status || "unverified";
+  const isOwnerNameLocked =
+    merchant?.bvn_status === "verified" && merchant?.selfie_status === "verified";
+  const registryDirectors = Array.isArray(registrySnapshot?.directors_json)
+    ? registrySnapshot.directors_json
+    : [];
+  const authorityApproved =
+    merchant?.business_affiliation_status === "director_approved" ||
+    merchant?.business_affiliation_status === "strong_match";
+  const approvedDirectorInvite = directorInvitations.find((invite) => invite.status === "approved");
+  const approvedDirectorName =
+    approvedDirectorInvite?.selected_director_name ||
+    directors.find((director) => director.verification_status === "verified")?.director_name ||
+    null;
+  const needsDirectorApproval =
+    isCorporate &&
+    !authorityApproved &&
+    (["no_match", "rejected"].includes(String(merchant?.business_affiliation_status || "")) ||
+      merchant?.relationship_claim === "representative_claim");
+
+  let ownerLabel = "Owner's Full Name (matches BVN)";
+  if (isCorporate) {
+    if (merchant?.relationship_claim === "representative_claim") {
+      ownerLabel = "Authorized Representative Full Name";
+    } else if (businessType === "sole_proprietorship") {
+      ownerLabel = "Sole Proprietor / Business Owner Full Name";
+    } else if (businessType === "ltd" || businessType === "plc") {
+      ownerLabel = "Director or Shareholder Full Name";
+    } else if (businessType === "llp" || businessType === "lp") {
+      ownerLabel = "Designated Partner or Partner Full Name";
+    } else if (businessType === "incorporated_trustees") {
+      ownerLabel = "Trustee or Chairperson Full Name";
+    } else if (businessType === "cooperative") {
+      ownerLabel = "President or Trustee Full Name";
+    } else {
+      ownerLabel = "Primary Controller Full Name";
+    }
+  }
+
+  const ownerNameMissing = !isStarter && !ownerName.trim();
+  const businessNameMissing = isCorporate && !businessName.trim();
+  const businessAddressMissing =
+    !isStarter &&
+    (!businessStreet.trim() ||
+      !businessCity.trim() ||
+      !businessState.trim() ||
+      !businessCountry.trim());
+  const phoneMissing = !isStarter && !phone.trim();
+  const profileIncomplete =
+    ownerNameMissing || businessNameMissing || businessAddressMissing || phoneMissing;
+  const effectiveVerificationStatus = profileIncomplete ? "unverified" : verificationStatus;
+
+  const settlementConfigured = Boolean(
+    merchant?.settlement_account_number &&
+      merchant?.settlement_bank_name &&
+      merchant?.settlement_account_name,
+  );
+
+  const verificationChecklist = useMemo(() => {
+    const metadata: Record<
+      VerificationRequirementKey,
+      { title: string; description: string }
+    > = {
+      basic_profile: {
+        title: "Business profile",
+        description: "Identity-sensitive business fields must be present before verification can proceed.",
+      },
+      no_payment_collection: {
+        title: "Live collection locked",
+        description: "This tier does not unlock live collection yet.",
+      },
+      bvn: {
+        title: "BVN verification",
+        description: "Legal identity must match the submitted BVN.",
+      },
+      selfie_liveness: {
+        title: "Selfie face match",
+        description: "One confirmed selfie validates the account owner or representative.",
+      },
+      valid_id_document: {
+        title: "Identity document",
+        description: "Enhanced individual tiers can require an extra ID document without forcing business KYB.",
+      },
+      proof_of_address: {
+        title: "Proof of address",
+        description: "Some higher individual tiers can require address evidence even without business registration.",
+      },
+      additional_manual_review: {
+        title: "Additional review",
+        description: "Higher-risk tiers may require extra manual review before live collection unlocks.",
+      },
+      business_registration_check: {
+        title: "Business registration",
+        description: "Registered business details must be verified against registry data.",
+      },
+      owner_or_director_kyc: {
+        title: "Primary controller identity",
+        description: "The owner or principal controller must complete identity verification once.",
+      },
+      director_or_representative_flow: {
+        title: "Authority confirmation",
+        description: "Representative and director approval flows stay separate and must close independently.",
+      },
+      director_kyc: {
+        title: "Director verification",
+        description: "Where required, the director or approving authority is verified and locked after success.",
+      },
+      business_document: {
+        title: "Business document",
+        description: "Supporting business evidence is required for this tier.",
+      },
+      business_documents: {
+        title: "Business documents",
+        description: "Multiple business documents are required for this tier.",
+      },
+      utility_bill: {
+        title: "Utility bill",
+        description: "Business address proof is required for settlement and compliance readiness.",
+      },
+      settlement_account: {
+        title: "Settlement account",
+        description: "Live collection should not enable until the settlement destination is ready.",
+      },
+      admin_review: {
+        title: "Final platform review",
+        description: "Collections only go live after final admin approval.",
+      },
+      lower_collection_limit: {
+        title: "Lower collection limit",
+        description: "This tier operates under a lower live collection limit.",
+      },
+      higher_collection_limit: {
+        title: "Higher collection limit",
+        description: "This tier unlocks a higher live collection limit once all required steps are complete.",
+      },
+    };
+
+    return planRequirements.map((requirement) => ({
+      title: metadata[requirement]?.title || requirement,
+      description: metadata[requirement]?.description || "Requirement status",
+      status: merchant
+        ? getRequirementCompletion(merchant, requirement)
+        : ("pending" as const),
+    }));
+  }, [merchant, planRequirements]);
+
+  const handleSaveProfile = async () => {
     if (!merchant) return;
-    setSaving(true);
+    setSavingProfile(true);
     setKycError(null);
-    const effectiveTier = merchant.subscription_plan || merchant.merchant_tier || "starter";
+
     const normalizedBusinessName = businessName.trim();
     const normalizedTradingName = tradingName.trim();
     const normalizedOwnerName = ownerName.trim();
+
     const updates: Record<string, unknown> = {
-      business_name: effectiveTier === "corporate"
-        ? (normalizedBusinessName || normalizedTradingName)
-        : (normalizedTradingName || normalizedBusinessName),
-      trading_name: normalizedTradingName,
+      business_name: isCorporate
+        ? normalizedBusinessName || normalizedTradingName
+        : normalizedTradingName || normalizedBusinessName,
+      trading_name: normalizedTradingName || null,
       business_street: businessStreet.trim() || null,
       business_city: businessCity.trim() || null,
       business_state: businessState.trim() || null,
       business_country: businessCountry || null,
-      // Only write owner_name if it has NOT been identity-verified — prevents post-verification name changes
-      ...(!isOwnerNameLocked && { owner_name: normalizedOwnerName || null }),
       business_type: businessType,
       phone: phone.trim() || null,
-      fee_absorption_default: feeDefault,
       platform_version: CURRENT_PLATFORM_VERSION,
     };
+
+    if (!isOwnerNameLocked) {
+      updates.owner_name = normalizedOwnerName || null;
+    }
+
     const result = await submitKycAction(merchant.id, updates);
     if (!result.success) {
-      setKycError(result.error || "Failed to save profile.");
-      setSaving(false);
+      setKycError(result.error || "Failed to save business profile.");
+      setSavingProfile(false);
       return;
     }
 
-    const freshMerchant = await getMerchant(merchant.id);
-    if (freshMerchant) {
-      setMerchant(freshMerchant as Merchant);
-      setBusinessName(freshMerchant.business_name || "");
-      setTradingName(freshMerchant.trading_name || freshMerchant.business_name || "");
-      setOwnerName(freshMerchant.owner_name || "");
-    } else {
-      setMerchant({ ...merchant, ...updates } as Merchant);
-      setBusinessName(String(updates.business_name || ""));
-      setTradingName(String(updates.trading_name || ""));
-      if (!isOwnerNameLocked) setOwnerName(String(updates.owner_name || ""));
+    await refreshMerchant(merchant.id);
+    setSavingProfile(false);
+  };
+
+  const handleSaveFeeSettings = async () => {
+    if (!merchant) return;
+    setSavingFeeSettings(true);
+    setKycError(null);
+
+    const result = await submitKycAction(merchant.id, {
+      fee_absorption_default: feeDefault,
+    });
+
+    if (!result.success) {
+      setKycError(result.error || "Failed to save fee settings.");
+      setSavingFeeSettings(false);
+      return;
     }
-    setSaving(false);
+
+    await refreshMerchant(merchant.id);
+    setSavingFeeSettings(false);
   };
 
   const handleVerifyRcNumber = async () => {
+    if (!merchant?.id) return;
+
     const normalizedCacNumber = cacNumber.trim().toUpperCase().replace(/[\s-]/g, "");
     if (!normalizedCacNumber || normalizedCacNumber.length < 5) {
       setRcError("Please enter a valid business registration number.");
       return;
     }
-    if (!merchant?.id) return;
 
     const savedBusinessName = merchant.business_name?.trim() || "";
     const savedOwnerName = merchant.owner_name?.trim() || "";
@@ -329,29 +714,36 @@ export default function SettingsPage() {
       (businessName.trim() && businessName.trim() !== savedBusinessName) ||
       (ownerName.trim() && ownerName.trim() !== savedOwnerName)
     ) {
-      setRcError("You have unsaved profile changes. Please click 'Save Profile' in the profile identity section before verifying your business registration.");
+      setRcError(
+        "You have unsaved business profile changes. Save the Business Profile section before verifying registration.",
+      );
       return;
     }
 
     if (!savedBusinessName || !savedOwnerName) {
-      setRcError("Please complete your Business Profile and profile identity details, then click 'Save Profile' before verifying your business registration.");
+      setRcError(
+        "Complete the Business Profile section first, then verify the registration number.",
+      );
       return;
     }
 
     setRcSubmitting(true);
     setRcError(null);
     try {
-      const res = await verifyRcNumberAction(merchant.id, normalizedCacNumber);
-      if (res.success) {
-        setCacNumber(normalizedCacNumber);
-        setMerchant({ ...merchant, cac_number: normalizedCacNumber } as Merchant);
-        await loadDirectorApprovalContext(merchant.id);
-        setRcError(null);
-      } else {
-        setRcError(res.error || "Failed to verify business registration.");
+      const response = await verifyRcNumberAction(merchant.id, normalizedCacNumber);
+      if (!response.success) {
+        setRcError(response.error || "Failed to verify business registration.");
+        return;
       }
-    } catch (e) {
-      setRcError(e instanceof Error ? e.message : "An unexpected error occurred verifying your business registration.");
+
+      setCacNumber(normalizedCacNumber);
+      await refreshMerchant(merchant.id);
+    } catch (error) {
+      setRcError(
+        error instanceof Error
+          ? error.message
+          : "An unexpected error occurred verifying your business registration.",
+      );
     } finally {
       setRcSubmitting(false);
     }
@@ -360,33 +752,34 @@ export default function SettingsPage() {
   const handleKycSubmit = async () => {
     if (!merchant) return;
 
-    if (!isBvnLocked && merchant?.bvn_status !== "verified" && merchant?.bvn_status !== "pending") {
-      setKycError("Please lock your BVN first.");
+    if (!isBvnLocked && merchant.bvn_status !== "verified" && merchant.bvn_status !== "pending") {
+      setKycError("Lock the BVN first so the submitted identity cannot drift during review.");
       return;
     }
 
-    const selfieRequired = merchant?.selfie_status !== "verified";
-
+    const selfieRequired = merchant.selfie_status !== "verified";
     if (!bvnNumber || (selfieRequired && livenessImages.length === 0 && !selfieFile)) {
-      setKycError("Please provide your BVN and complete the selfie verification.");
+      setKycError("Provide your BVN and complete the selfie step before submitting.");
       return;
     }
 
-    // Corporate accounts must verify business registration first, then upload both evidence files.
-    if (isCorporate && !merchant?.cac_number) {
-      setKycError("Please verify your business registration first before submitting.");
+    if (requiresBusinessRegistration && !merchant.cac_number) {
+      setKycError("Verify the required registration step before submitting verification.");
       return;
     }
-    if (isCorporate && (!cacFile && !merchant?.cac_document_url)) {
-      setKycError("Business accounts require a registration document upload.");
+
+    if (requiresBusinessDocument && !cacFile && !merchant.cac_document_url) {
+      setKycError("This tier requires the supporting business document before submission.");
       return;
     }
-    if (isCorporate && !utilityFile && !merchant?.utility_document_url) {
-      setKycError("Business accounts require a Utility Bill upload.");
+
+    if (requiresUtilityBill && !utilityFile && !merchant.utility_document_url) {
+      setKycError("This tier requires proof of address or utility evidence before submission.");
       return;
     }
 
     setKycSubmitting(true);
+
     const toBase64 = (file: File) =>
       new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
@@ -399,8 +792,8 @@ export default function SettingsPage() {
       });
 
     try {
-      let finalSelfieBase64: string | string[] | undefined = undefined;
-      let finalSelfieFileName: string | string[] | undefined = undefined;
+      let finalSelfieBase64: string | undefined;
+      let finalSelfieFileName: string | undefined;
 
       if (livenessImages.length > 0) {
         finalSelfieBase64 = livenessImages[0];
@@ -410,35 +803,40 @@ export default function SettingsPage() {
         finalSelfieFileName = selfieFile.name;
       }
 
-      let finalCacBase64: string | undefined;
-      let finalUtilityBase64: string | undefined;
+      const cacBase64 = cacFile ? await toBase64(cacFile) : undefined;
+      const utilityBase64 = utilityFile ? await toBase64(utilityFile) : undefined;
 
-      if (cacFile) finalCacBase64 = await toBase64(cacFile);
-      if (utilityFile) finalUtilityBase64 = await toBase64(utilityFile);
-
-      const { success, error, updates } = await submitDojahKycAction({
+      const result = await submitDojahKycAction({
         merchantId: merchant.id,
         bvn: bvnNumber,
         selfieBase64: finalSelfieBase64,
         selfieFileName: finalSelfieFileName,
         cacDocumentName: cacFile?.name,
-        cacFileBase64: finalCacBase64,
+        cacFileBase64: cacBase64,
         utilityDocumentName: utilityFile?.name,
-        utilityFileBase64: finalUtilityBase64,
+        utilityFileBase64: utilityBase64,
       });
 
-      if (success) {
-        setMerchant({ ...merchant, ...(updates || {}) } as Merchant);
-        setKycSuccess(true);
-        setKycError(null);
-      } else {
-        if (updates) setMerchant({ ...merchant, ...updates } as Merchant);
-        setKycError("Submission failed: " + error);
+      if (!result.success) {
+        if (result.updates) {
+          setMerchant({ ...merchant, ...result.updates } as Merchant);
+        }
+        setKycError(`Submission failed: ${result.error}`);
         setIsBvnLocked(false);
         setLivenessImages([]);
+        return;
       }
-    } catch (err) {
-      setKycError(err instanceof Error ? err.message : "Could not read selfie image.");
+
+      setKycSuccess(true);
+      setKycError(null);
+      setIsBvnLocked(false);
+      setLivenessImages([]);
+      setSelfieFile(null);
+      setCacFile(null);
+      setUtilityFile(null);
+      await refreshMerchant(merchant.id);
+    } catch (error) {
+      setKycError(error instanceof Error ? error.message : "Could not read the verification files.");
       setIsBvnLocked(false);
       setLivenessImages([]);
     } finally {
@@ -446,75 +844,6 @@ export default function SettingsPage() {
     }
   };
 
-  const renderStatusBadge = (status: string | undefined) => {
-    if (!status || status === "unverified") return null;
-    if (status === "verified") return <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700 text-xs ml-2"><CheckCircle className="mr-1 h-3 w-3" /> Verified</Badge>;
-    if (status === "rejected") return <Badge variant="outline" className="border-red-200 bg-red-50 text-red-700 text-xs ml-2"><AlertTriangle className="mr-1 h-3 w-3" /> Rejected</Badge>;
-    return <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700 text-xs ml-2"><Clock className="mr-1 h-3 w-3" /> Pending</Badge>;
-  };
-
-  const verificationStatus = merchant?.verification_status || "unverified";
-  const effectiveTier = merchant?.subscription_plan || merchant?.merchant_tier || "starter";
-  const isStarter = effectiveTier === "starter";
-  const isIndividual = effectiveTier === "individual";
-  const isCorporate = effectiveTier === "corporate";
-  const liveFeaturesActive = merchant ? isLiveFeatureEnabled(merchant) : false;
-  const liveFeatureLockReasons = merchant ? getLiveFeatureLockReasons(merchant) : [];
-  const nextLiveUnlockStep = liveFeatureLockReasons[0] || null;
-  const lockReasonText = liveFeatureLockReasons.length > 0
-    ? liveFeatureLockReasons.join(", ")
-    : "final activation";
-
-  let ownerLabel = "Owner's Full Name";
-  if (isCorporate) {
-    if (merchant?.relationship_claim === "representative_claim") {
-      ownerLabel = "Account Representative Full Name";
-    } else if (businessType === "sole_proprietorship") {
-      ownerLabel = "Sole Proprietor / Business Owner Full Name";
-    } else if (businessType === "ltd" || businessType === "plc") {
-      ownerLabel = "Director or Shareholder Full Name";
-    } else if (businessType === "llp" || businessType === "lp") {
-      ownerLabel = "Designated Partner or Partner Full Name";
-    } else if (businessType === "incorporated_trustees") {
-      ownerLabel = "Trustee or Chairperson Full Name";
-    } else if (businessType === "cooperative") {
-      ownerLabel = "President or Trustee Full Name";
-    } else {
-      ownerLabel = "Highest Shareholder's Full Name";
-    }
-  } else {
-    ownerLabel = "Owner's Full Name (matches BVN)";
-  }
-
-  // If Individual/Corporate and owner_name is missing, treat as unverified
-  const ownerNameMissing = !isStarter && !ownerName.trim();
-  // If Corporate and business_name (registered name) is missing, also block
-  const businessNameMissing = isCorporate && !businessName.trim();
-  const businessAddressMissing = !isStarter && (!businessStreet.trim() || !businessCity.trim() || !businessState.trim() || !businessCountry.trim());
-  const phoneMissing = !isStarter && !phone.trim();
-  const profileIncomplete = ownerNameMissing || businessNameMissing || businessAddressMissing || phoneMissing;
-  const effectiveVerificationStatus = profileIncomplete ? "unverified" : verificationStatus;
-  // Lock owner_name once BVN or selfie has been verified — name is legally bound to identity
-  const isOwnerNameLocked = merchant?.bvn_status === "verified" && merchant?.selfie_status === "verified";
-  const registryDirectors = Array.isArray(registrySnapshot?.directors_json)
-    ? registrySnapshot.directors_json
-    : [];
-  const authorityApproved =
-    merchant?.business_affiliation_status === "director_approved" ||
-    merchant?.business_affiliation_status === "strong_match";
-  const approvedDirectorInvite = directorInvitations.find((invite) => invite.status === "approved");
-  const approvedDirectorName =
-    approvedDirectorInvite?.selected_director_name ||
-    directors.find((dir) => dir.verification_status === "verified")?.director_name ||
-    null;
-  const needsDirectorApproval =
-    isCorporate &&
-    !authorityApproved &&
-    (
-      ["no_match", "rejected"].includes(String(merchant?.business_affiliation_status || "")) ||
-      merchant?.relationship_claim === "representative_claim"
-    );
-  const rejectedDirectorInvites = directorInvitations.filter((invite) => invite.status === "rejected");
   const directorInvitationStatusLabel = (status?: string | null) => {
     switch (status) {
       case "sent":
@@ -522,1129 +851,1375 @@ export default function SettingsPage() {
       case "opened":
         return "Waiting for identity verification";
       case "verified":
-        return "Identity verified, waiting for director consent";
+        return "Identity verified, waiting for consent";
       case "approved":
         return "Director approved";
       case "rejected":
         return "Director rejected";
       case "expired":
-        return "Expired";
+        return "Invite expired";
       case "cancelled":
-        return "Cancelled";
+        return "Invite cancelled";
       default:
-        return status?.replace(/_/g, " ") || "Unknown";
+        return formatStatusLabel(status);
     }
   };
 
   if (loading) {
     return (
-      <div className="max-w-3xl mx-auto space-y-6">
-        <div><h1 className="text-2xl font-bold text-purp-900 dark:text-white">Settings</h1></div>
-        <Card className="border-2 border-purp-200 dark:border-white/10 shadow-none animate-pulse dark:bg-[#1A0B2E]">
-          <CardContent className="p-6"><div className="h-40 bg-purp-50 dark:bg-white/5 rounded" /></CardContent>
+      <div className="mx-auto max-w-6xl space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold text-purp-900">Settings</h1>
+          <p className="mt-1 text-sm text-neutral-500">Loading your workspace settings...</p>
+        </div>
+        <Card className="border-2 border-purp-200 shadow-none">
+          <CardContent className="p-6">
+            <div className="h-48 animate-pulse rounded-2xl bg-purp-50" />
+          </CardContent>
         </Card>
       </div>
     );
   }
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-purp-900 dark:text-white">Settings</h1>
-        <p className="text-neutral-500 dark:text-white/60 text-sm mt-1">
-          Manage your business profile and account preferences
-        </p>
-      </div>
-
-      {/* ── KYC Verification Section ── */}
-      {(!merchant?.permissions || merchant.permissions.manage_kyc) && (
-      <Card className={`border-2 shadow-none ${
-        (merchant?.subscription_plan || merchant?.merchant_tier) === "corporate"
-          ? "border-emerald-300 bg-emerald-50/30"
-          : (merchant?.subscription_plan || merchant?.merchant_tier) === "individual"
-          ? "border-blue-300 bg-blue-50/30"
-          : "border-purp-300 bg-purp-50/30"
-      }`}>
-        <CardHeader className="pb-4">
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-base font-bold text-purp-900 flex items-center gap-2">
-              <Shield className="h-5 w-5 text-purp-700" />
-              Account Verification & Limits
-            </CardTitle>
-            <Badge variant="outline" className={`border-2 text-xs font-semibold ${
-              (merchant?.subscription_plan || merchant?.merchant_tier) === "corporate"
-                ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                : (merchant?.subscription_plan || merchant?.merchant_tier) === "individual"
-                ? "bg-blue-50 text-blue-700 border-blue-200"
-                : "bg-neutral-50 text-neutral-600 border-neutral-200"
-            }`}>
-              <Shield className="mr-1 h-3 w-3" />
-              Tier: <span className="capitalize ml-1">{merchant?.subscription_plan || merchant?.merchant_tier || "Starter"}</span>
-            </Badge>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-5">
-          {/* Tier Informational Banner */}
-          {(merchant?.subscription_plan || merchant?.merchant_tier) === "corporate" ? (
-            <div className="flex items-start gap-3 p-4 bg-emerald-50 border border-emerald-200 rounded-lg mb-4">
-              {liveFeaturesActive ? (
-                <CheckCircle className="h-5 w-5 text-emerald-600 mt-0.5 flex-shrink-0" />
-              ) : (
-                <Lock className="h-5 w-5 text-amber-600 mt-0.5 flex-shrink-0" />
-              )}
-              <div>
-                <p className="text-sm font-semibold text-emerald-800">Business Account</p>
-                <p className="text-sm text-emerald-700 mt-1">
-                  {liveFeaturesActive
-                    ? "Your business is fully verified. Unlimited monthly collections and payment links are active."
-                    : `Live payment collection is still locked. Remaining requirement: ${lockReasonText}.`}
-                </p>
-                {!liveFeaturesActive && nextLiveUnlockStep && (
-                  <p className="text-xs text-amber-700 mt-2">Next step: {nextLiveUnlockStep}.</p>
-                )}
-              </div>
-            </div>
-          ) : (merchant?.subscription_plan || merchant?.merchant_tier) === "individual" ? (
-            <div className="flex items-start justify-between gap-3 p-4 bg-blue-50 border border-blue-200 rounded-lg mb-4 flex-col md:flex-row">
-              <div className="flex gap-3">
-                {liveFeaturesActive ? (
-                  <Shield className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
-                ) : (
-                  <Lock className="h-5 w-5 text-amber-600 mt-0.5 flex-shrink-0" />
-                )}
-                <div>
-                  <p className="text-sm font-semibold text-blue-800">Individual / Collections Account</p>
-                  <p className="text-sm text-blue-700 mt-1">
-                    {liveFeaturesActive
-                      ? "Your account is verified. You can collect up to NGN 5,000,000 per month. Upgrade to Business to unlock unlimited collections and advanced team controls."
-                      : `Live payment collection is still locked. Remaining requirement: ${lockReasonText}.`}
-                  </p>
-                  {!liveFeaturesActive && nextLiveUnlockStep && (
-                    <p className="text-xs text-amber-700 mt-2">Next step: {nextLiveUnlockStep}.</p>
-                  )}
-                </div>
-              </div>
-              <Link href="/settings/upgrade/corporate">
-                <Button className="bg-purp-900 hover:bg-purp-800 text-white shrink-0">
-                  Upgrade to Business
-                </Button>
-              </Link>
-            </div>
-          ) : (
-            <div className="flex items-start justify-between gap-3 p-4 bg-purp-50 border border-purp-200 rounded-lg mb-4 flex-col md:flex-row">
-              <div className="flex gap-3">
-                <Shield className="h-5 w-5 text-purp-700 mt-0.5 flex-shrink-0" />
-                <div>
-                  <p className="text-sm font-semibold text-purp-900">Starter Account (Free)</p>
-                  <p className="text-sm text-neutral-600 mt-1">
-                    You can create record invoices to test the workflow. To collect live payments, unlock payment links, and manage partial collections online, upgrade your plan.
-                  </p>
-                </div>
-              </div>
-              <div className="flex flex-col sm:flex-row gap-2 shrink-0">
-                <Link href="/settings/upgrade/individual">
-                  <Button className="w-full sm:w-auto bg-white border border-purp-200 text-purp-900 hover:bg-purp-50">
-                    Upgrade to Individual / Collections
-                  </Button>
-                </Link>
-                <Link href="/settings/upgrade/corporate">
-                  <Button className="w-full sm:w-auto bg-purp-900 hover:bg-purp-800 text-white">
-                    Upgrade to Business
-                  </Button>
-                </Link>
-              </div>
-            </div>
-          )}
-
-          {effectiveVerificationStatus === "pending" && (
-            <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-200 rounded-lg mb-4">
-              <Clock className="h-5 w-5 text-amber-600 mt-0.5 flex-shrink-0" />
-              <div>
-                <p className="text-sm font-semibold text-amber-800">Review In Progress</p>
-                <p className="text-sm text-amber-700 mt-1">
-                  Some of your documents are awaiting admin review. You cannot edit items that are currently pending.
-                </p>
-              </div>
-            </div>
-          )}
-
-          {effectiveVerificationStatus === "rejected" && (
-
-            <div className="flex items-start gap-3 p-4 bg-red-50 border border-red-200 rounded-lg mb-4">
-              <AlertTriangle className="h-5 w-5 text-red-600 mt-0.5 flex-shrink-0" />
-              <div>
-                <p className="text-sm font-semibold text-red-800">Action Required</p>
-                <p className="text-sm text-red-700 mt-1">
-                  {merchant?.kyc_notes || "One or more of your documents were rejected. Please check the status below and re-submit."}
-                </p>
-              </div>
-            </div>
-          )}
-
-          {kycSuccess && (
-            <div className="flex items-start gap-3 p-4 bg-emerald-50 border border-emerald-200 rounded-lg mb-4">
-              <CheckCircle className="h-5 w-5 text-emerald-600 mt-0.5 flex-shrink-0" />
-              <div>
-                <p className="text-sm font-semibold text-emerald-800">Documents Submitted!</p>
-                <p className="text-sm text-emerald-700 mt-1">
-                  Your verification documents have been submitted successfully. A platform admin will review them shortly.
-                </p>
-              </div>
-            </div>
-          )}
-
-          {profileIncomplete && (
-            <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-200 rounded-lg mb-4">
-              <AlertTriangle className="h-5 w-5 text-amber-600 mt-0.5 flex-shrink-0" />
-              <div>
-                <p className="text-sm font-semibold text-amber-800">Profile Update Required</p>
-                <ul className="text-sm text-amber-700 mt-1 space-y-1 list-disc list-inside">
-                  {ownerNameMissing && (
-                    <li>Provide your <strong>{ownerLabel}</strong> — required for BVN verification.</li>
-                  )}
-                  {businessNameMissing && (
-                    <li>Provide your <strong>Registered Business Name</strong> — required for business registration verification.</li>
-                  )}
-                  {businessAddressMissing && (
-                    <li>Provide your <strong>Business Address (Street, City, State, Country)</strong>.</li>
-                  )}
-                  {phoneMissing && (
-                    <li>Provide your <strong>Phone Number</strong>.</li>
-                  )}
-                </ul>
-                <p className="text-xs text-amber-600 mt-2">
-                  Complete these fields in the Business Profile section below and save to proceed with verification.
-                </p>
-              </div>
-            </div>
-          )}
-
-          {/* Document Upload Fields — Plan Gated */}
-          <div className="space-y-4">
-            {/* Starter: All locked */}
-            {isStarter && (
-              <div className="relative p-6 bg-neutral-50 border-2 border-neutral-200 rounded-lg text-center">
-                <Lock className="h-8 w-8 mx-auto text-neutral-400 mb-2" />
-                <p className="text-sm font-semibold text-neutral-700">Verification Locked</p>
-                <p className="text-xs text-neutral-500 mt-1 max-w-sm mx-auto">
-                  Upgrade to Individual / Collections or Business to submit verification documents and start collecting payments.
-                </p>
-                <div className="flex gap-2 justify-center mt-3">
-                  <Link href="/settings/upgrade/individual">
-                    <Button size="sm" variant="outline" className="border-2 text-sm">Upgrade to Individual / Collections</Button>
-                  </Link>
-                  <Link href="/settings/upgrade/corporate">
-                    <Button size="sm" className="bg-purp-900 hover:bg-purp-800 text-white text-sm">Upgrade to Business</Button>
-                  </Link>
-                </div>
-              </div>
-            )}
-
-            {/* BVN — available for Individual + Corporate */}
-            {!isStarter && (
-              <div className="space-y-2">
-                <Label className="text-sm font-medium flex items-center gap-2">
-                  <Shield className="h-4 w-4 text-purp-700" />
-                  BVN (Bank Verification Number)
-                  {renderStatusBadge(merchant?.bvn_status)}
-                </Label>
-                <p className="text-xs text-neutral-500">Must match the name: <strong>{ownerName || "Set owner name below"}</strong></p>
-                <div className="flex items-center gap-3">
-                  <Input
-                    type="text"
-                    maxLength={11}
-                    placeholder="22XXXXXXXXX"
-                    value={bvnNumber}
-                    onChange={(e) => setBvnNumber(e.target.value.replace(/\D/g, ""))}
-                    onBlur={() => {
-                      if (bvnNumber && bvnNumber.length !== 11) {
-                        setKycError("BVN must be exactly 11 digits.");
-                      } else {
-                        setKycError(null);
-                      }
-                    }}
-                    className="border-2 border-purp-200 bg-white h-11 max-w-xs"
-                    disabled={profileIncomplete || merchant?.bvn_status === "verified" || merchant?.bvn_status === "pending" || isBvnLocked}
-                  />
-                  {!(merchant?.bvn_status === "verified" || merchant?.bvn_status === "pending") && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => setIsBvnLocked(true)}
-                      disabled={bvnNumber.length !== 11 || isBvnLocked}
-                      className={`h-11 border-2 ${isBvnLocked ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'border-purp-200 text-purp-700'}`}
-                    >
-                      {isBvnLocked ? <><CheckCircle className="mr-2 h-4 w-4" /> Locked</> : "Lock & Continue"}
-                    </Button>
-                  )}
-                  {isBvnLocked && !(merchant?.bvn_status === "verified" || merchant?.bvn_status === "pending") && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      onClick={() => setIsBvnLocked(false)}
-                      className="text-neutral-500 hover:text-red-600"
-                    >
-                      Edit
-                    </Button>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {!isStarter && (
-              <div className="space-y-2">
-                <Label className="text-sm font-medium flex items-center gap-2">
-                  <Shield className="h-4 w-4 text-purp-700" />
-                  Live Selfie Capture
-                  {renderStatusBadge(merchant?.selfie_status)}
-                </Label>
-                <p className="text-xs text-neutral-500">Used with your BVN for secure face match verification.</p>
-                {!(isBvnLocked || merchant?.bvn_status === "verified" || merchant?.bvn_status === "pending") ? (
-                  <div className="p-4 bg-neutral-50 border border-neutral-200 rounded-lg text-sm text-neutral-500 flex items-center gap-2">
-                    <Lock className="h-4 w-4" /> Please enter and lock your 11-digit BVN above to unlock the secure camera.
-                  </div>
-                ) : (
-                <div className="flex items-center gap-3">
-                  {!livenessFallback && merchant?.selfie_status !== "verified" && merchant?.selfie_status !== "pending" ? (
-                    <Button 
-                      onClick={() => setShowLivenessCamera(true)}
-                      variant="outline"
-                      disabled={profileIncomplete}
-                      className="border-2 border-purp-200 bg-purp-50 hover:bg-purp-100 text-purp-700"
-                    >
-                      <Camera className="h-4 w-4 mr-2" />
-                      {livenessImages.length > 0 ? "Retake Live Pictures" : "Start Live Camera Capture"}
-                    </Button>
-                  ) : (
-                    <Input
-                      type="file"
-                      accept=".png,.jpg,.jpeg"
-                      onChange={(e) => setSelfieFile(e.target.files?.[0] || null)}
-                      className="border-2 border-purp-200 bg-white h-11 file:mr-3 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-purp-100 file:text-purp-700"
-                      disabled={profileIncomplete || merchant?.selfie_status === "verified" || merchant?.selfie_status === "pending"}
-                    />
-                  )}
-                  
-                  {(livenessImages.length > 0 || selfieFile || (merchant?.selfie_url && merchant?.selfie_status !== "rejected")) && (
-                    <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700 text-xs whitespace-nowrap">
-                      <CheckCircle className="mr-1 h-3 w-3" /> {merchant?.selfie_url && merchant?.selfie_status !== "rejected" ? "Submitted" : (livenessImages.length > 0 ? "1 Image Confirmed" : "Selected")}
-                    </Badge>
-                  )}
-                </div>
-                )}
-              </div>
-            )}
-
-            {/* Business registration number - Corporate only */}
-            {isCorporate ? (
-              <div className="space-y-2">
-                <Label className="text-sm font-medium flex items-center gap-2">
-                  <FileCheck className="h-4 w-4 text-purp-700" />
-                  Business Registration Verification
-                </Label>
-                <div className="flex items-center gap-3">
-                  <Input
-                    type="text"
-                    placeholder="Registration number"
-                    value={merchant?.cac_number || cacNumber}
-                    onChange={(e) => setCacNumber(e.target.value)}
-                    className="border-2 border-purp-200 bg-white h-11 max-w-xs font-mono"
-                    disabled={!!merchant?.cac_number}
-                  />
-                  {!merchant?.cac_number ? (
-                    <Button
-                      onClick={handleVerifyRcNumber}
-                      disabled={rcSubmitting || !cacNumber || cacNumber.length < 5}
-                      className="bg-purp-900 hover:bg-purp-800 text-white h-11 px-6"
-                    >
-                      {rcSubmitting ? "Verifying..." : "Verify Registration"}
-                    </Button>
-                  ) : (
-                    <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700 text-xs py-1.5 px-3 whitespace-nowrap">
-                      <CheckCircle className="mr-1.5 h-3.5 w-3.5" /> Registration Verified
-                    </Badge>
-                  )}
-                </div>
-                {rcError && (
-                  <div className="text-xs font-medium text-red-600 bg-red-50 border border-red-100 p-2.5 rounded-lg flex items-start gap-2">
-                    <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
-                    <span>{rcError}</span>
-                  </div>
-                )}
-                {!merchant?.cac_number && (
-                  <div className="space-y-1.5 max-w-sm">
-                    <p className="text-xs text-neutral-500">
-                      Your registration number will be verified against the official business registry to ensure it matches your business name.
-                    </p>
-                    <div className="bg-amber-50 border border-amber-200 text-amber-700 px-2.5 py-1.5 rounded text-xs flex gap-1.5 items-start mt-2">
-                      <AlertTriangle className="h-4 w-4 shrink-0" />
-                      <span><strong>Tip:</strong> Enter the number exactly as issued, including any registration prefix where applicable.</span>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ) : isIndividual ? (
-              <div className="relative p-4 bg-neutral-50 border border-neutral-200 rounded-lg opacity-60">
-                <div className="flex items-center gap-2 text-sm text-neutral-500">
-                  <Lock className="h-4 w-4" />
-                  <span>Business registration verification — <strong>Available on Business plan</strong></span>
-                </div>
-              </div>
-            ) : null}
-
-            {/* Business registration document - Corporate only */}
-            {isCorporate ? (
-              <div className="space-y-2">
-                <Label className="text-sm font-medium flex items-center gap-2">
-                  <FileCheck className="h-4 w-4 text-purp-700" />
-                  Business Registration Document
-                  {renderStatusBadge(merchant?.cac_status)}
-                </Label>
-                <div className="flex items-center gap-3">
-                  <Input
-                    type="file"
-                    accept=".pdf,.png,.jpg,.jpeg"
-                    onChange={(e) => setCacFile(e.target.files?.[0] || null)}
-                    className="border-2 border-purp-200 bg-white h-11 file:mr-3 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-purp-100 file:text-purp-700"
-                    disabled={!merchant?.cac_number || (merchant?.cac_status === "verified" && !!merchant?.cac_document_url) || merchant?.cac_status === "pending"}
-                  />
-                  {(cacFile || merchant?.cac_document_url) && (
-                    <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700 text-xs whitespace-nowrap">
-                      <CheckCircle className="mr-1 h-3 w-3" /> {merchant?.cac_document_url ? 'Uploaded' : 'Selected'}
-                    </Badge>
-                  )}
-                </div>
-              </div>
-            ) : isIndividual ? (
-              <div className="relative p-4 bg-neutral-50 border border-neutral-200 rounded-lg opacity-60">
-                <div className="flex items-center gap-2 text-sm text-neutral-500">
-                  <Lock className="h-4 w-4" />
-                  <span>Business registration document — <strong>Available on Business plan</strong></span>
-                </div>
-              </div>
-            ) : null}
-
-            {/* Utility Bill — Corporate only */}
-            {isCorporate ? (
-              <div className="space-y-2">
-                <Label className="text-sm font-medium flex items-center gap-2">
-                  <FileCheck className="h-4 w-4 text-purp-700" />
-                  Utility Bill (Proof of Address)
-                  {renderStatusBadge(merchant?.utility_status)}
-                </Label>
-                <div className="flex items-center gap-3">
-                  <Input
-                    type="file"
-                    accept=".pdf,.png,.jpg,.jpeg"
-                    onChange={(e) => setUtilityFile(e.target.files?.[0] || null)}
-                    className="border-2 border-purp-200 bg-white h-11 file:mr-3 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-purp-100 file:text-purp-700"
-                    disabled={(merchant?.utility_status === "verified" && !!merchant?.utility_document_url) || merchant?.utility_status === "pending"}
-                  />
-                  {(utilityFile || merchant?.utility_document_url) && (
-                    <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700 text-xs whitespace-nowrap">
-                      <CheckCircle className="mr-1 h-3 w-3" /> {merchant?.utility_document_url ? 'Uploaded' : 'Selected'}
-                    </Badge>
-                  )}
-                </div>
-              </div>
-            ) : isIndividual ? (
-              <div className="relative p-4 bg-neutral-50 border border-neutral-200 rounded-lg opacity-60">
-                <div className="flex items-center gap-2 text-sm text-neutral-500">
-                  <Lock className="h-4 w-4" />
-                  <span>Utility Bill — <strong>Available on Business plan</strong></span>
-                </div>
-              </div>
-            ) : null}
-
-            {/* Corporate Directors KYB Roster — Business Plan only */}
-            {isCorporate && merchant?.cac_number && (
-              <div className="space-y-4 pt-4 border-t border-purp-200">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <Label className="text-sm font-semibold flex items-center gap-2 text-purp-900">
-                      <User className="h-4.5 w-4.5 text-purp-700" />
-                      Corporate Directors & Shareholder KYB
-                    </Label>
-                    <p className="text-xs text-neutral-500 mt-0.5">
-                      Verify legal identities of business directors and stakeholders for account authority checks.
-                    </p>
-                  </div>
-                  <Badge variant="secondary" className="bg-purp-100 text-purp-700 font-bold text-xs border-0">
-                    {directors.length} Verified
-                  </Badge>
-                </div>
-
-                {directorsLoading ? (
-                  <div className="p-6 text-center text-xs text-neutral-400">
-                    Loading KYB roster...
-                  </div>
-                ) : directors.length > 0 ? (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {directors.map((dir) => (
-                      <div key={dir.id} className="p-3 bg-white border rounded-xl flex items-center justify-between gap-3 hover:border-purp-200 transition-colors">
-                        <div className="min-w-0">
-                          <span className="text-xs font-bold text-neutral-800 block truncate">
-                            {dir.director_name}
-                          </span>
-                          <span className="text-[10px] bg-neutral-100 text-neutral-600 px-1.5 py-0.5 rounded capitalize font-semibold inline-block mt-0.5">
-                            {dir.director_role?.replace(/_/g, " ")}
-                          </span>
-                        </div>
-                        <Badge
-                          variant="outline"
-                          className={`text-[9px] font-bold px-1.5 border capitalize shrink-0 ${
-                            dir.verification_status === "verified"
-                              ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                              : dir.verification_status === "failed"
-                              ? "bg-red-50 text-red-700 border-red-200"
-                              : "bg-amber-50 text-amber-700 border-amber-200"
-                          }`}
-                        >
-                          {dir.verification_status?.replace(/_/g, " ")}
-                        </Badge>
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-
-                {authorityApproved ? (
-                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="text-xs font-bold text-emerald-900">Director approved</p>
-                        <p className="mt-1 text-xs text-emerald-800">
-                          {approvedDirectorName
-                            ? `${approvedDirectorName} approved this business workspace.`
-                            : "A listed director approved this business workspace."}
-                        </p>
-                        <p className="mt-1 text-[11px] text-emerald-700">
-                          Authority verification is complete. Live payment collection still depends on the remaining platform checks shown above.
-                        </p>
-                      </div>
-                      <Badge variant="outline" className="border-emerald-200 bg-white text-[10px] font-bold uppercase text-emerald-700">
-                        Director approved
-                      </Badge>
-                    </div>
-                  </div>
-                ) : registrySnapshot ? (
-                  <div className="rounded-xl border border-neutral-200 bg-white p-4 space-y-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="text-xs font-bold text-neutral-900">Saved business registry snapshot</p>
-                        <p className="mt-0.5 text-[11px] text-neutral-500">
-                          {registrySnapshot.registered_name || "Registered business"} - {registrySnapshot.registration_number}
-                        </p>
-                      </div>
-                      <Badge variant="outline" className="text-[10px] uppercase">
-                        {merchant?.business_affiliation_status?.replace(/_/g, " ") || "not started"}
-                      </Badge>
-                    </div>
-
-                    {registryDirectors.length > 0 ? (
-                      <div className="space-y-2">
-                        <p className="text-[10px] font-bold uppercase text-neutral-500">Registry directors / owners</p>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                          {registryDirectors.map((person: { name?: string; role?: string }, index: number) => (
-                            <div key={`${person.name}-${index}`} className="rounded-lg border border-neutral-100 bg-neutral-50 px-3 py-2">
-                              <p className="truncate text-xs font-semibold text-neutral-800">{person.name || "Unnamed director"}</p>
-                              <p className="text-[10px] capitalize text-neutral-500">{String(person.role || "director").replace(/_/g, " ")}</p>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ) : (
-                      <p className="text-xs text-amber-700">The saved registry payload did not include a director list.</p>
-                    )}
-                  </div>
-                ) : null}
-
-                {needsDirectorApproval && registryDirectors.length > 0 && (
-                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 space-y-3">
-                    <div>
-                      <p className="text-xs font-bold text-amber-900">Director approval required</p>
-                      <p className="mt-0.5 text-[11px] text-amber-800">
-                        One listed director must verify identity and approve this workspace before live payment collection is enabled.
-                      </p>
-                      {rejectedDirectorInvites.length > 0 && (
-                        <p className="mt-1 text-[11px] font-medium text-red-700">
-                          A previous director rejected the request. Select another listed director or contact support for manual review.
-                        </p>
-                      )}
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-[1fr_1.2fr] gap-2">
-                      <select
-                        value={selectedRegistryDirector}
-                        onChange={(e) => setSelectedRegistryDirector(e.target.value)}
-                        className="h-10 rounded border border-amber-200 bg-white px-3 text-xs text-neutral-900 focus:outline-none focus:ring-1 focus:ring-amber-500"
-                      >
-                        <option value="">Select listed director</option>
-                        {registryDirectors.map((person: { name?: string; role?: string }, index: number) => (
-                          <option key={`${person.name}-${index}`} value={String(index)}>
-                            {person.name || `Director ${index + 1}`}
-                          </option>
-                        ))}
-                      </select>
-                      <Input
-                        type="email"
-                        placeholder="Director email"
-                        value={directorInviteEmail}
-                        onChange={(e) => setDirectorInviteEmail(e.target.value)}
-                        className="h-10 bg-white text-xs"
-                      />
-                    </div>
-                    <Button
-                      type="button"
-                      onClick={handleCreateDirectorInvitation}
-                      disabled={directorInviteSubmitting || !selectedRegistryDirector || !directorInviteEmail}
-                      className="w-full h-10 bg-amber-700 hover:bg-amber-800 text-white text-xs font-bold"
-                    >
-                      {directorInviteSubmitting ? "Sending invitation..." : "Send director approval invite"}
-                    </Button>
-                    {directorInviteMessage && <p className="text-xs font-semibold text-emerald-700">{directorInviteMessage}</p>}
-                    {directorInviteError && <p className="text-xs font-semibold text-red-700">{directorInviteError}</p>}
-                    {directorInvitations.length > 0 && (
-                      <div className="space-y-1.5 pt-1">
-                        <p className="text-[10px] font-bold uppercase text-amber-900">Recent invitations</p>
-                        {directorInvitations.slice(0, 3).map((invite) => (
-                          <div key={invite.id} className="flex items-center justify-between gap-2 rounded-lg bg-white px-3 py-2 text-xs">
-                            <span className="truncate font-medium text-neutral-700">{invite.selected_director_name}</span>
-                            <Badge variant="outline" className="text-[9px]">{directorInvitationStatusLabel(invite.status)}</Badge>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Add Director Form or trigger button */}
-                {authorityApproved ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled
-                    className="w-full h-10 border-2 border-emerald-200 bg-emerald-50 text-emerald-700 font-bold text-xs flex gap-1.5 opacity-100 disabled:opacity-100"
-                  >
-                    <CheckCircle className="h-4 w-4" /> Director approval completed
-                  </Button>
-                ) : showVerifyDirectorModal ? (
-                  <div className="p-4 bg-purp-50/50 border-2 border-purp-200 border-dashed rounded-xl space-y-3">
-                    <span className="text-xs font-bold text-purp-900 block">Add Director / Major Shareholder</span>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div className="space-y-1.5">
-                        <Label className="text-[10px] font-bold text-neutral-500 uppercase">Full Name (Matches BVN)</Label>
-                        <Input
-                          type="text"
-                          placeholder="e.g. Adebayo Olanrewaju"
-                          value={newDirectorName}
-                          onChange={(e) => setNewDirectorName(e.target.value)}
-                          className="bg-white h-9 text-xs"
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label className="text-[10px] font-bold text-neutral-500 uppercase">Company Role</Label>
-                        <select
-                          value={newDirectorRole}
-                          onChange={(e) => setNewDirectorRole(e.target.value as typeof newDirectorRole)}
-                          className="w-full h-9 rounded border border-neutral-200 bg-white px-3 py-1.5 text-xs text-neutral-900 focus:outline-none focus:ring-1 focus:ring-purp-500"
-                        >
-                          <option value="director">Director</option>
-                          <option value="shareholder">Major Shareholder</option>
-                          <option value="beneficial_owner">Ultimate Beneficial Owner</option>
-                          <option value="signatory">Authorized Signatory</option>
-                          <option value="proprietor">Proprietor</option>
-                          <option value="partner">Partner</option>
-                          <option value="trustee">Trustee</option>
-                        </select>
-                      </div>
-                    </div>
-                    <div className="flex gap-2 justify-end pt-1">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setShowVerifyDirectorModal(false)}
-                        className="text-xs h-8 text-neutral-500 hover:text-neutral-700"
-                      >
-                        Cancel
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        disabled={!newDirectorName.trim()}
-                        onClick={() => {
-                          setActiveDirectorToVerify({
-                            name: newDirectorName,
-                            role: newDirectorRole,
-                          });
-                        }}
-                        className="bg-purp-900 hover:bg-purp-800 text-white font-bold text-xs h-8 flex gap-1.5"
-                      >
-                        <Camera className="h-3.5 w-3.5" /> Continue to Selfie Verification
-                      </Button>
-                    </div>
-                  </div>
-                ) : (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => {
-                      setNewDirectorName("");
-                      setNewDirectorRole("director");
-                      setShowVerifyDirectorModal(true);
-                    }}
-                    className="w-full h-10 border-2 border-dashed border-purp-200 text-purp-700 font-bold text-xs flex gap-1.5 hover:bg-purp-50"
-                  >
-                    <Plus className="h-4 w-4" /> Add & Verify a Director / Shareholder
-                  </Button>
-                )}
-              </div>
-            )}
-          </div>
-
-          <Button
-            onClick={handleKycSubmit}
-            disabled={
-              profileIncomplete || 
-              kycSubmitting || 
-              !bvnNumber || 
-              (merchant?.selfie_status !== "verified" && !selfieFile && livenessImages.length === 0) ||
-              effectiveVerificationStatus === "verified" ||
-              (isIndividual && merchant?.bvn_status === "verified" && merchant?.selfie_status === "verified") ||
-              (isCorporate && merchant?.bvn_status === "verified" && merchant?.selfie_status === "verified" && merchant?.cac_status === "verified" && merchant?.utility_status === "verified")
-            }
-            className="w-full h-11 bg-purp-900 hover:bg-purp-700 text-white font-semibold"
-          >
-            {kycSubmitting ? (
-              <span className="flex items-center gap-2">
-                <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-                Submitting Documents...
-              </span>
-            ) : (
-              <span className="flex items-center gap-2">
-                <Upload className="h-4 w-4" />
-                Submit for Verification
-                <ArrowRight className="h-4 w-4" />
-              </span>
-            )}
-          </Button>
-
-          {kycError && (
-            <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm font-medium border border-red-100 flex items-start gap-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-red-600 shrink-0 mt-1.5" />
-              {kycError}
-            </div>
-          )}
-
-          {kycSuccess && (
-            <div className="bg-emerald-50 text-emerald-700 p-4 rounded-lg text-sm font-medium border border-emerald-200 flex items-start gap-3 animate-in fade-in zoom-in duration-300">
-              <CheckCircle className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
-              <div>
-                <p className="font-bold text-emerald-800">Verification Submitted Successfully</p>
-                <p className="text-emerald-700 mt-1">Your BVN and Liveness photos have been securely processed.</p>
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-      )}
-
-      {/* Business Profile */}
-      {(!merchant?.permissions || merchant.permissions.manage_business) && (
-      <Card className="border-2 border-purp-200 shadow-none">
-        <CardHeader className="pb-4">
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-base font-bold text-purp-900">
-              Business Profile
-            </CardTitle>
-            <Badge variant="outline" className={`border-2 text-xs font-semibold ${
-              effectiveVerificationStatus === "verified"
-                ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                : effectiveVerificationStatus === "pending"
-                ? "bg-amber-50 text-amber-700 border-amber-200"
-                : "bg-neutral-50 text-neutral-600 border-neutral-200"
-            }`}>
-              <Shield className="mr-1 h-3 w-3" />
-              {effectiveVerificationStatus === "verified" ? "Verified" : effectiveVerificationStatus === "pending" ? "Pending" : "Unverified"}
-            </Badge>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-4">
+    <div className="mx-auto max-w-7xl space-y-6">
+      <div className="space-y-3">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div className="space-y-2">
-            <Label className="text-sm font-medium">Trading Name <span className="text-red-500">*</span></Label>
-            <p className="text-xs text-neutral-500">The name your business trades under. Shown on invoices and payment links.</p>
-            <Input
-              value={tradingName}
-              onChange={(e) => setTradingName(e.target.value)}
-              placeholder="e.g. Adebayo Consulting"
-              className="border-2 border-purp-200 bg-purp-50 h-11"
-            />
-          </div>
-          {isCorporate && (
-            <div className="space-y-2">
-              <Label className="text-sm font-medium">Business Type <span className="text-red-500">*</span></Label>
-              <p className="text-xs text-neutral-500">Select your registered business type according to official registry standards.</p>
-              <select
-                value={businessType}
-                onChange={(e) => (!isOwnerNameLocked || !merchant?.business_type) && setBusinessType(e.target.value)}
-                disabled={isOwnerNameLocked && !!merchant?.business_type}
-                className="w-full h-11 rounded-md border-2 border-purp-200 bg-purp-50 px-3 py-2 text-sm text-neutral-900 focus:border-purp-500 focus:ring-purp-500 outline-none disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <option value="sole_proprietorship">Sole Proprietorship / Registered Business Name</option>
-                <option value="ltd">Private Limited Company (LTD)</option>
-                <option value="plc">Public Limited Company (PLC)</option>
-                <option value="llp">Limited Liability Partnership (LLP)</option>
-                <option value="lp">Limited Partnership (LP)</option>
-                <option value="incorporated_trustees">Incorporated Trustees (IT)</option>
-                <option value="cooperative">Cooperative Society</option>
-              </select>
-            </div>
-          )}
-          {isCorporate && (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <Label className="text-sm font-medium">Registered Business Name <span className="text-red-500">*</span></Label>
-                {!!merchant?.cac_number && (
-                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 rounded px-1.5 py-0.5">
-                    Registration Verified
-                  </span>
-                )}
-              </div>
-              <p className="text-xs text-neutral-500">The official registered name used for business registration checks and supporting documents.</p>
-              <div className="flex items-center gap-3 p-3 bg-purp-50/50 border border-purp-200 rounded-lg">
-                <input
-                  type="checkbox"
-                  checked={businessName.trim() !== "" && businessName.trim() === tradingName.trim()}
-                  onChange={(e) => {
-                    if (e.target.checked) {
-                      setBusinessName(tradingName);
-                    } else {
-                      setBusinessName("");
-                    }
-                  }}
-                  disabled={!!merchant?.cac_number}
-                  className="w-4 h-4 accent-purp-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                />
-                <span className="text-sm text-neutral-700">Same as Trading Name</span>
-              </div>
-              {!(businessName.trim() !== "" && businessName.trim() === tradingName.trim()) && (
-                <Input
-                  value={businessName}
-                  onChange={(e) => setBusinessName(e.target.value)}
-                  disabled={!!merchant?.cac_number}
-                  placeholder="e.g. Adebayo Consulting Limited"
-                  className={`border-2 h-11 ${
-                    !!merchant?.cac_number
-                      ? "border-emerald-200 bg-emerald-50 text-emerald-900 cursor-not-allowed"
-                      : "border-purp-200 bg-purp-50"
-                  }`}
-                />
-              )}
-              {businessNameMissing && (
-                <p className="text-xs text-red-500 font-medium">Required — business registration verification is blocked until this is provided.</p>
-              )}
-            </div>
-          )}
-          {!isStarter && (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <Label className="text-sm font-medium">{ownerLabel} <span className="text-red-500">*</span></Label>
-                {isOwnerNameLocked && (
-                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 rounded px-1.5 py-0.5">
-                    🔒 Identity Verified
-                  </span>
-                )}
-              </div>
-              <p className="text-xs text-neutral-500">
-                {isOwnerNameLocked
-                  ? "This name is locked — it has been matched and verified against your BVN identity. Contact admin to reset if a correction is needed."
-                  : isCorporate && merchant?.relationship_claim === "representative_claim"
-                  ? "Your own full legal name as the account representative. A listed director will verify and approve the business separately."
-                  : isCorporate
-                  ? "Full legal name of the director, owner, or shareholder opening this account. Used for BVN identity verification."
-                  : "Your full legal name as it appears on your BVN. Used for identity verification."}
-              </p>
-              <Input
-                value={ownerName}
-                onChange={(e) => !isOwnerNameLocked && setOwnerName(e.target.value)}
-                placeholder="e.g. Adebayo Olanrewaju"
-                disabled={isOwnerNameLocked}
-                className={`border-2 h-11 ${
-                  isOwnerNameLocked
-                    ? "border-emerald-200 bg-emerald-50 text-emerald-900 cursor-not-allowed"
-                    : "border-purp-200 bg-purp-50"
-                }`}
-              />
-              {isOwnerNameLocked && (
-                <p className="text-[11px] text-emerald-600">
-                  ✓ Name locked after successful BVN verification. Admin reset required to modify.
-                </p>
-              )}
-            </div>
-          )}
-          {!isStarter && (
-            <div className="space-y-4 p-4 bg-neutral-50 border border-neutral-200 rounded-lg">
-              <h4 className="text-sm font-semibold text-neutral-900 flex items-center gap-2">
-                Business Address
-                {businessAddressMissing && <span className="text-red-500">*</span>}
-              </h4>
-              <p className="text-xs text-neutral-500">This must match the address on your utility bill.</p>
-              <div className="grid sm:grid-cols-2 gap-4">
-                <div className="space-y-2 sm:col-span-2">
-                  <Label className="text-xs font-medium">Street Address <span className="text-red-500">*</span></Label>
-                  <Input
-                    value={businessStreet}
-                    onChange={(e) => setBusinessStreet(e.target.value)}
-                    placeholder="e.g. 12 Admiralty Way"
-                    className="border-2 border-purp-200 bg-white h-11"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs font-medium">City <span className="text-red-500">*</span></Label>
-                  <Input
-                    value={businessCity}
-                    onChange={(e) => setBusinessCity(e.target.value)}
-                    placeholder="e.g. Lekki"
-                    className="border-2 border-purp-200 bg-white h-11"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs font-medium">Country <span className="text-red-500">*</span></Label>
-                  <Select
-                    value={businessCountry}
-                    onValueChange={(val) => {
-                      if (val) setBusinessCountry(val);
-                      setBusinessState("");
-                    }}
-                  >
-                    <SelectTrigger className="border-2 border-purp-200 bg-white h-11">
-                      <SelectValue placeholder="Select Country" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {Country.getAllCountries().map((country) => (
-                        <SelectItem key={country.isoCode} value={country.isoCode}>
-                          {country.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs font-medium">State / Province <span className="text-red-500">*</span></Label>
-                  <Select
-                    value={businessState}
-                    onValueChange={(val) => { if (val) setBusinessState(val); }}
-                  >
-                    <SelectTrigger className="border-2 border-purp-200 bg-white h-11">
-                      <SelectValue placeholder="Select State" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {State.getStatesOfCountry(businessCountry).map((state) => (
-                        <SelectItem key={state.isoCode} value={state.isoCode}>
-                          {state.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-            </div>
-          )}
-          <div className="grid sm:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label className="text-sm font-medium">Email</Label>
-              <Input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="border-2 border-purp-200 bg-purp-50 h-11"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label className="text-sm font-medium">
-                Phone {!isStarter && <span className="text-red-500">*</span>}
-              </Label>
-              <Input
-                type="tel"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                className="border-2 border-purp-200 bg-purp-50 h-11"
-              />
-            </div>
-          </div>
-          <div className="space-y-2">
-            <Label className="text-sm font-medium">Business Logo</Label>
-            <div className="flex items-center gap-4">
-              <div className="w-16 h-16 bg-purp-100 border-2 border-purp-200 border-dashed rounded-lg flex items-center justify-center overflow-hidden">
-                {logoUrl ? (
-                  <img src={logoUrl} alt="Logo" className="w-full h-full object-cover" />
-                ) : (
-                  <span className="text-2xl font-bold text-purp-700">
-                    {businessName.charAt(0)}
-                  </span>
-                )}
-              </div>
-              <div className="flex items-center gap-3">
-                <div className="relative">
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={handleLogoUpload}
-                    disabled={uploadingLogo}
-                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
-                  />
-                  <Button variant="outline" disabled={uploadingLogo} className="border-2 border-purp-200 text-purp-700 pointer-events-none">
-                    {uploadingLogo ? "Uploading..." : "Upload Logo"}
-                  </Button>
-                </div>
-                {logoUrl && (
-                  <Button 
-                    variant="outline" 
-                    onClick={handleRemoveLogo}
-                    disabled={uploadingLogo} 
-                    className="border-2 border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800"
-                  >
-                    Remove Logo
-                  </Button>
-                )}
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-      )}
-
-      {/* Fee Settings */}
-      {(!merchant?.permissions || merchant.permissions.change_fee_settings) && (
-      <Card className="border-2 border-purp-200 shadow-none">
-        <CardHeader className="pb-4">
-          <CardTitle className="text-base font-bold text-purp-900">
-            Payment Fee Settings
-          </CardTitle>
-          <p className="text-xs text-neutral-500 mt-1">
-            Set who absorbs the processing fee by default. This can be overridden per invoice.
-          </p>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-2">
-            <Label className="text-sm font-medium">Global Default</Label>
-            <Select value={feeDefault} onValueChange={(v) => setFeeDefault((v ?? "business") as "business" | "customer")}>
-              <SelectTrigger className="border-2 border-purp-200 bg-purp-50 h-11 max-w-sm">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="border-2 border-purp-200">
-                <SelectItem value="business">Business Absorbs Fee</SelectItem>
-                <SelectItem value="customer">Customer Absorbs Fee</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="bg-purp-50 border border-purp-200 rounded-lg p-4 text-sm">
-            <p className="text-neutral-500">
-              <strong className="text-purp-900">Current Fee Structure:</strong> Online payment processing charges
-              1.5% + ₦100 per transaction, capped at ₦2,000.
+            <h1 className="text-2xl font-bold text-purp-900">Settings</h1>
+            <p className="max-w-3xl text-sm leading-6 text-neutral-500">
+              Manage verification, profile data, settlement readiness, billing, and business controls
+              without mixing unrelated actions into one long form.
             </p>
           </div>
-        </CardContent>
-      </Card>
-      )}
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="outline" className="border-purp-200 bg-purp-50 text-purp-800">
+              Plan: {formatPlanLabel(effectiveTier)}
+            </Badge>
+            {statusBadge(effectiveVerificationStatus)}
+          </div>
+        </div>
 
-      {/* Quick Links */}
-      {(!merchant?.permissions || merchant.permissions.manage_advance_settings || merchant.permissions.manage_settlement_account || merchant.permissions.manage_item_catalog || merchant.permissions.view_item_catalog || merchant.permissions.manage_discount_template || merchant.permissions.view_discount_template) && (
-      <Card className="border-2 border-purp-200 shadow-none">
-        <CardHeader className="pb-4">
-          <CardTitle className="text-base font-bold text-purp-900">
-            Advanced Settings
-          </CardTitle>
-          <p className="text-xs text-neutral-500 mt-1">
-            Manage your specialized platform configurations.
-          </p>
-        </CardHeader>
-        <CardContent>
-          <div className="grid sm:grid-cols-3 gap-4">
-            {(!merchant?.permissions || merchant.permissions.manage_advance_settings || merchant.permissions.manage_settlement_account) && (
-              isStarter ? (
-                <div className="block p-4 border border-neutral-200 rounded-lg bg-neutral-50 opacity-70">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="font-semibold text-neutral-500">Settlement Account</span>
-                    <Lock className="w-4 h-4 text-neutral-400" />
-                  </div>
-                  <p className="text-xs text-neutral-400">Upgrade to collect online payments and configure payouts.</p>
-                </div>
+        <div className="grid gap-4 md:grid-cols-3">
+          <div className="rounded-2xl border border-purp-200 bg-white p-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+              Live collection status
+            </p>
+            <div className="mt-2 flex items-center gap-2">
+              {liveFeaturesActive ? (
+                <CheckCircle className="h-5 w-5 text-emerald-600" />
               ) : (
-                <Link href="/settings/settlement-accounts" className="block p-4 border border-purp-200 rounded-lg hover:bg-purp-50 transition-colors group">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="font-semibold text-purp-900">Settlement Account</span>
-                    <ExternalLink className="w-4 h-4 text-purp-300 group-hover:text-purp-700 transition-colors" />
+                <Lock className="h-5 w-5 text-amber-600" />
+              )}
+              <p className="text-sm font-semibold text-neutral-900">
+                {liveFeaturesActive ? "Enabled" : "Locked until verification completes"}
+              </p>
+            </div>
+            <p className="mt-2 text-sm leading-6 text-neutral-500">
+              {liveFeaturesActive
+                ? "Your workspace can use live payment collection and settlement features."
+                : nextLiveUnlockStep || "Complete the required verification steps to enable live collection."}
+            </p>
+          </div>
+
+          <div className="rounded-2xl border border-purp-200 bg-white p-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+              Settlement readiness
+            </p>
+            <div className="mt-2 flex items-center gap-2">
+              {settlementConfigured ? (
+                <CheckCircle className="h-5 w-5 text-emerald-600" />
+              ) : (
+                <Clock className="h-5 w-5 text-amber-600" />
+              )}
+              <p className="text-sm font-semibold text-neutral-900">
+                {settlementConfigured ? "Account captured" : "Action still required"}
+              </p>
+            </div>
+            <p className="mt-2 text-sm leading-6 text-neutral-500">
+              {settlementConfigured
+                ? `${merchant?.settlement_bank_name || "Bank"} • ${maskAccountNumber(
+                    merchant?.settlement_account_number,
+                  )}`
+                : "Add and validate the bank account that should receive settlement payouts."}
+            </p>
+          </div>
+
+          <div className="rounded-2xl border border-purp-200 bg-white p-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+              Verified field lock
+            </p>
+            <div className="mt-2 flex items-center gap-2">
+              {isOwnerNameLocked ? (
+                <Lock className="h-5 w-5 text-emerald-600" />
+              ) : (
+                <Info className="h-5 w-5 text-blue-600" />
+              )}
+              <p className="text-sm font-semibold text-neutral-900">
+                {isOwnerNameLocked ? "Identity fields locked" : "Fields still editable"}
+              </p>
+            </div>
+            <p className="mt-2 text-sm leading-6 text-neutral-500">
+              Once BVN and selfie are verified, identity-bound profile fields stop accepting edits until
+              an admin reset is performed.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {kycError ? (
+        <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
+            <p>{kycError}</p>
+          </div>
+        </div>
+      ) : null}
+
+      {rcError ? (
+        <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+            <p>{rcError}</p>
+          </div>
+        </div>
+      ) : null}
+
+      {kycSuccess ? (
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700">
+          <div className="flex items-start gap-3">
+            <CheckCircle className="mt-0.5 h-5 w-5 shrink-0" />
+            <p>
+              Verification details submitted successfully. The completed steps are now locked and the
+              workspace remains in setup mode until final review is complete.
+            </p>
+          </div>
+        </div>
+      ) : null}
+
+      <Tabs defaultValue="verification" className="space-y-6">
+        <div className="overflow-x-auto">
+          <TabsList className="inline-flex min-w-full justify-start gap-2 rounded-2xl border border-purp-200 bg-white p-2">
+            <TabsTrigger value="verification">Account Status & Verification</TabsTrigger>
+            <TabsTrigger value="profile">Business Profile</TabsTrigger>
+            <TabsTrigger value="settlement">Settlement Account</TabsTrigger>
+            <TabsTrigger value="fees">Payment Fee Settings</TabsTrigger>
+            <TabsTrigger value="billing">Billing & Subscription</TabsTrigger>
+            <TabsTrigger value="tools">Business Tools</TabsTrigger>
+            <TabsTrigger value="advanced">Advanced Settings</TabsTrigger>
+          </TabsList>
+        </div>
+
+        <TabsContent value="verification" className="space-y-6">
+          <SectionCard
+            title="Account Status & Verification"
+            description="Verification is now grouped by actual plan requirements. Only the steps for your current plan remain active."
+          >
+            {isStarter ? (
+              <div className="space-y-5">
+                <div className="rounded-2xl border border-purp-200 bg-purp-50 p-5">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="space-y-2">
+                      <p className="text-base font-semibold text-purp-900">This tier keeps live verification locked</p>
+                      <p className="max-w-2xl text-sm leading-6 text-neutral-600">
+                        You can explore record-only invoicing, but live collection, KYC, settlement account
+                        setup, and payment routing stay locked until you upgrade.
+                      </p>
+                    </div>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <Link href="/settings/upgrade/individual">
+                        <Button variant="outline" className="border-purp-200 text-purp-900">
+                          Upgrade tier
+                        </Button>
+                      </Link>
+                      <Link href="/settings/upgrade/corporate">
+                        <Button className="bg-purp-900 text-white hover:bg-purp-800">
+                          View higher tier
+                        </Button>
+                      </Link>
+                    </div>
                   </div>
-                  <p className="text-xs text-neutral-500">Configure your payout bank account for online payments.</p>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  {verificationChecklist.map((item) => (
+                    <ChecklistRow
+                      key={item.title}
+                      title={item.title}
+                      description={item.description}
+                      status={item.status}
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+                  <div className="rounded-2xl border border-purp-200 bg-purp-50/60 p-5">
+                    <div className="flex items-start gap-3">
+                      {liveFeaturesActive ? (
+                        <Shield className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
+                      ) : (
+                        <Lock className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+                      )}
+                      <div className="space-y-2">
+                        <p className="text-base font-semibold text-purp-900">
+                          {isCorporate ? "Advanced verification path" : "Current tier verification path"}
+                        </p>
+                        <p className="text-sm leading-6 text-neutral-600">
+                          {isCorporate
+                            ? merchant?.relationship_claim === "representative_claim"
+                              ? "This business is using an authorized representative flow. Representative identity and director approval remain separate and are tracked independently."
+                              : "This business is using the owner or principal flow. Once the primary identity is verified, the profile locks and only business authority or final review can remain."
+                            : "Only the requirements tied to this tier remain active here. Future tiers can add more identity or document steps without forcing business KYB by default."}
+                        </p>
+                        {!liveFeaturesActive && liveFeatureLockReasons.length > 0 ? (
+                          <div className="rounded-xl border border-amber-200 bg-white p-3 text-sm text-amber-700">
+                            <p className="font-medium">Still blocking live collection</p>
+                            <ul className="mt-2 list-disc space-y-1 pl-5">
+                              {liveFeatureLockReasons.map((reason) => (
+                                <li key={reason}>{reason}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    {verificationChecklist.map((item) => (
+                      <ChecklistRow
+                        key={item.title}
+                        title={item.title}
+                        description={item.description}
+                        status={item.status}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                {profileIncomplete ? (
+                  <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-700">
+                    <div className="flex items-start gap-3">
+                      <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+                      <div className="space-y-2">
+                        <p className="font-semibold">Business profile still blocks verification</p>
+                        <ul className="list-disc space-y-1 pl-5">
+                          {ownerNameMissing ? <li>Add {ownerLabel.toLowerCase()} in Business Profile.</li> : null}
+                          {businessNameMissing ? <li>Add the registered business name in Business Profile.</li> : null}
+                          {businessAddressMissing ? <li>Complete the full business address in Business Profile.</li> : null}
+                          {phoneMissing ? <li>Add the workspace phone number in Business Profile.</li> : null}
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+                  <SectionCard
+                    title={isCorporate && merchant?.relationship_claim === "representative_claim" ? "Authorized Representative Identity" : "Primary Identity Verification"}
+                    description={
+                      isCorporate && merchant?.relationship_claim === "representative_claim"
+                        ? "The representative verifies their own BVN and selfie once. Director approval happens separately below."
+                        : isCorporate
+                        ? "The business owner or principal controller verifies once, then the identity-bound fields are locked."
+                        : "This tier currently requires identity verification here. Extra document steps can be added later through the requirement map without changing the page structure."
+                    }
+                    action={
+                      !profileIncomplete && requiresBvn && merchant?.bvn_status !== "verified" ? (
+                        <Button
+                          onClick={handleKycSubmit}
+                          disabled={kycSubmitting}
+                          className="bg-purp-900 text-white hover:bg-purp-800"
+                        >
+                          {kycSubmitting ? "Submitting..." : "Submit Verification"}
+                        </Button>
+                      ) : null
+                    }
+                  >
+                    <div className="space-y-4">
+                      {requiresBvn ? (
+                      <div className="space-y-2">
+                        <Label className="flex items-center gap-2 text-sm font-medium">
+                          <Shield className="h-4 w-4 text-purp-700" />
+                          BVN
+                          {statusBadge(merchant?.bvn_status)}
+                        </Label>
+                        <p className="text-xs text-neutral-500">
+                          The legal identity must match <strong>{ownerName || "the saved profile name"}</strong>.
+                        </p>
+                        <div className="flex flex-col gap-3 sm:flex-row">
+                          <Input
+                            type="text"
+                            maxLength={11}
+                            placeholder="22XXXXXXXXX"
+                            value={bvnNumber}
+                            onChange={(event) => setBvnNumber(event.target.value.replace(/\D/g, ""))}
+                            className="h-11 border-2 border-purp-200 bg-white sm:max-w-xs"
+                            disabled={
+                              profileIncomplete ||
+                              merchant?.bvn_status === "verified" ||
+                              merchant?.bvn_status === "pending" ||
+                              isBvnLocked
+                            }
+                          />
+                          {merchant?.bvn_status === "verified" || merchant?.bvn_status === "pending" ? null : (
+                            <div className="flex gap-2">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                onClick={() => setIsBvnLocked(true)}
+                                disabled={bvnNumber.length !== 11 || isBvnLocked}
+                                className="h-11 border-2 border-purp-200 text-purp-700"
+                              >
+                                {isBvnLocked ? "Locked" : "Lock BVN"}
+                              </Button>
+                              {isBvnLocked ? (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  onClick={() => setIsBvnLocked(false)}
+                                  className="h-11 text-neutral-500"
+                                >
+                                  Edit
+                                </Button>
+                              ) : null}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      ) : null}
+
+                      {requiresSelfie ? (
+                      <div className="space-y-2">
+                        <Label className="flex items-center gap-2 text-sm font-medium">
+                          <Camera className="h-4 w-4 text-purp-700" />
+                          Selfie / Liveness
+                          {statusBadge(merchant?.selfie_status)}
+                        </Label>
+                        <p className="text-xs text-neutral-500">
+                          One successful selfie is enough. After verification, the identity path should close and stop calling the provider again.
+                        </p>
+                        {!(isBvnLocked || merchant?.bvn_status === "verified" || merchant?.bvn_status === "pending") ? (
+                          <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4 text-sm text-neutral-500">
+                            Lock the BVN first to unlock selfie capture.
+                          </div>
+                        ) : (
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                            {!livenessFallback &&
+                            merchant?.selfie_status !== "verified" &&
+                            merchant?.selfie_status !== "pending" ? (
+                              <Button
+                                onClick={() => setShowLivenessCamera(true)}
+                                variant="outline"
+                                disabled={profileIncomplete}
+                                className="border-2 border-purp-200 bg-purp-50 text-purp-700 hover:bg-purp-100"
+                              >
+                                <Camera className="mr-2 h-4 w-4" />
+                                {livenessImages.length > 0 ? "Retake selfie" : "Start live capture"}
+                              </Button>
+                            ) : (
+                              <Input
+                                type="file"
+                                accept=".png,.jpg,.jpeg"
+                                onChange={(event) => setSelfieFile(event.target.files?.[0] || null)}
+                                className="h-11 border-2 border-purp-200 bg-white file:mr-3 file:rounded-md file:border-0 file:bg-purp-100 file:px-3 file:py-1 file:text-sm file:font-medium file:text-purp-700"
+                                disabled={
+                                  profileIncomplete ||
+                                  merchant?.selfie_status === "verified" ||
+                                  merchant?.selfie_status === "pending"
+                                }
+                              />
+                            )}
+                            {livenessImages.length > 0 || selfieFile || (merchant?.selfie_url && merchant?.selfie_status !== "rejected") ? (
+                              <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
+                                <CheckCircle className="mr-1 h-3 w-3" />
+                                {merchant?.selfie_url && merchant?.selfie_status !== "rejected"
+                                  ? "Existing selfie on file"
+                                  : livenessImages.length > 0
+                                  ? "Capture ready"
+                                  : "File selected"}
+                              </Badge>
+                            ) : null}
+                          </div>
+                        )}
+                      </div>
+                      ) : null}
+
+                      {(requiresBusinessRegistration ||
+                        requiresBusinessDocument ||
+                        requiresUtilityBill ||
+                        requiresValidIdDocument) ? (
+                        <div className="space-y-4 rounded-2xl border border-neutral-200 bg-neutral-50 p-4">
+                          <div className="space-y-1">
+                            <p className="text-sm font-semibold text-neutral-900">Requirement-driven document evidence</p>
+                            <p className="text-sm leading-6 text-neutral-500">
+                              These fields only appear because the current tier requires them. Future enhanced individual tiers can add their own document steps without pretending to be business KYB.
+                            </p>
+                          </div>
+
+                          {requiresBusinessRegistration ? (
+                            <div className="space-y-2">
+                              <Label className="flex items-center gap-2 text-sm font-medium">
+                                <FileCheck className="h-4 w-4 text-purp-700" />
+                                Tier registration or business number
+                                {statusBadge(merchant?.cac_status)}
+                              </Label>
+                              <div className="flex flex-col gap-3 sm:flex-row">
+                                <Input
+                                  type="text"
+                                  value={merchant?.cac_number || cacNumber}
+                                  onChange={(event) => setCacNumber(event.target.value)}
+                                  placeholder="Registration or record number"
+                                  className="h-11 border-2 border-purp-200 bg-white font-mono sm:max-w-xs"
+                                  disabled={Boolean(merchant?.cac_number)}
+                                />
+                                {!merchant?.cac_number ? (
+                                  <Button
+                                    onClick={handleVerifyRcNumber}
+                                    disabled={rcSubmitting || cacNumber.trim().length < 5}
+                                    className="bg-purp-900 text-white hover:bg-purp-800"
+                                  >
+                                    {rcSubmitting ? "Verifying..." : "Verify registration"}
+                                  </Button>
+                                ) : (
+                                  <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
+                                    <CheckCircle className="mr-1 h-3 w-3" />
+                                    Registration locked
+                                  </Badge>
+                                )}
+                              </div>
+                            </div>
+                          ) : null}
+
+                          <div className="grid gap-4 lg:grid-cols-2">
+                            {requiresBusinessDocument || requiresValidIdDocument ? (
+                              <div className="space-y-2">
+                                <Label className="flex items-center gap-2 text-sm font-medium">
+                                  <Upload className="h-4 w-4 text-purp-700" />
+                                  {requiresValidIdDocument && !requiresBusinessDocument
+                                    ? "Valid ID document"
+                                    : "Supporting document"}
+                                  {statusBadge(merchant?.cac_status)}
+                                </Label>
+                                <Input
+                                  type="file"
+                                  accept=".pdf,.png,.jpg,.jpeg"
+                                  onChange={(event) => setCacFile(event.target.files?.[0] || null)}
+                                  className="h-11 border-2 border-purp-200 bg-white file:mr-3 file:rounded-md file:border-0 file:bg-purp-100 file:px-3 file:py-1 file:text-sm file:font-medium file:text-purp-700"
+                                />
+                                {merchant?.cac_document_url ? (
+                                  <p className="text-xs text-emerald-600">Existing document already uploaded.</p>
+                                ) : null}
+                              </div>
+                            ) : null}
+
+                            {requiresUtilityBill ? (
+                              <div className="space-y-2">
+                                <Label className="flex items-center gap-2 text-sm font-medium">
+                                  <Upload className="h-4 w-4 text-purp-700" />
+                                  Proof of address / utility evidence
+                                  {statusBadge(merchant?.utility_status)}
+                                </Label>
+                                <Input
+                                  type="file"
+                                  accept=".pdf,.png,.jpg,.jpeg"
+                                  onChange={(event) => setUtilityFile(event.target.files?.[0] || null)}
+                                  className="h-11 border-2 border-purp-200 bg-white file:mr-3 file:rounded-md file:border-0 file:bg-purp-100 file:px-3 file:py-1 file:text-sm file:font-medium file:text-purp-700"
+                                />
+                                {merchant?.utility_document_url ? (
+                                  <p className="text-xs text-emerald-600">Existing utility document already uploaded.</p>
+                                ) : null}
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  </SectionCard>
+
+                  {requiresDirectorApprovalFlow ? (
+                    <SectionCard
+                      title="Business Authority & Director Approval"
+                      description={
+                        merchant?.relationship_claim === "representative_claim"
+                          ? "Representative identity and business authority are separated clearly here. A listed director still needs to approve the business."
+                          : "If registry auto-match succeeds, this section closes automatically. Otherwise use a director approval invite or a one-time manual director verification."
+                      }
+                    >
+                      <div className="space-y-4">
+                        <div className="rounded-2xl border border-neutral-200 bg-white p-4">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-semibold text-neutral-900">Authority status</p>
+                              <p className="text-sm text-neutral-500">
+                                {authorityApproved
+                                  ? approvedDirectorName
+                                    ? `Approved by ${approvedDirectorName}. This section is effectively closed.`
+                                    : "Authority matched automatically from verified business records."
+                                  : "Business authority is still open and cannot be assumed from identity alone."}
+                              </p>
+                            </div>
+                            {statusBadge(merchant?.business_affiliation_status)}
+                          </div>
+                        </div>
+
+                        {registrySnapshot ? (
+                          <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4">
+                            <div className="space-y-2">
+                              <p className="text-sm font-semibold text-neutral-900">Registry snapshot</p>
+                              <p className="text-sm text-neutral-500">
+                                {registrySnapshot.registered_name || "Registered business"} • RC{" "}
+                                {registrySnapshot.registration_number || merchant?.cac_number || "pending"}
+                              </p>
+                            </div>
+                            <div className="mt-3 space-y-2">
+                              {registryDirectors.length > 0 ? (
+                                registryDirectors.map((director) => (
+                                  <div
+                                    key={`${director.id || director.name}-${director.role}`}
+                                    className="flex items-center justify-between rounded-xl border border-white bg-white p-3"
+                                  >
+                                    <div>
+                                      <p className="text-sm font-medium text-neutral-900">
+                                        {director.name || "Unnamed director"}
+                                      </p>
+                                      <p className="text-xs text-neutral-500">{director.role || "Director"}</p>
+                                    </div>
+                                    {approvedDirectorName === director.name ? (
+                                      <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
+                                        Approved
+                                      </Badge>
+                                    ) : null}
+                                  </div>
+                                ))
+                              ) : (
+                                <p className="text-sm text-neutral-500">
+                                  Registry directors have not been synced yet.
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-700">
+                            Verify the business registration number first to load listed directors and approval options.
+                          </div>
+                        )}
+
+                        {needsDirectorApproval ? (
+                          <div className="space-y-4 rounded-2xl border border-purp-200 bg-purp-50/40 p-4">
+                            <div className="space-y-1">
+                              <p className="text-sm font-semibold text-purp-900">Director approval invite</p>
+                              <p className="text-sm leading-6 text-neutral-600">
+                                Use this when the representative is not a listed owner or when the principal was not matched automatically.
+                              </p>
+                            </div>
+
+                            <div className="grid gap-4">
+                              <div className="space-y-2">
+                                <Label className="text-sm font-medium">Select listed director</Label>
+                                <Select
+                                  value={selectedRegistryDirector || null}
+                                  onValueChange={(value) => setSelectedRegistryDirector(value ?? "")}
+                                >
+                                  <SelectTrigger className="h-11 border-2 border-purp-200 bg-white">
+                                    <SelectValue placeholder="Choose a registry director" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {registryDirectors.map((director) => (
+                                      <SelectItem
+                                        key={director.id || director.name}
+                                        value={director.id || director.name || ""}
+                                      >
+                                        {director.name || "Unnamed director"} {director.role ? `(${director.role})` : ""}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+
+                              <div className="space-y-2">
+                                <Label className="text-sm font-medium">Director email</Label>
+                                <Input
+                                  type="email"
+                                  value={directorInviteEmail}
+                                  onChange={(event) => setDirectorInviteEmail(event.target.value)}
+                                  placeholder="director@company.com"
+                                  className="h-11 border-2 border-purp-200 bg-white"
+                                />
+                              </div>
+
+                              <div className="flex flex-wrap gap-3">
+                                <Button
+                                  onClick={handleCreateDirectorInvitation}
+                                  disabled={
+                                    directorInviteSubmitting ||
+                                    !selectedRegistryDirector ||
+                                    !directorInviteEmail.trim()
+                                  }
+                                  className="bg-purp-900 text-white hover:bg-purp-800"
+                                >
+                                  {directorInviteSubmitting ? "Sending..." : "Send approval invite"}
+                                </Button>
+                                {directorInviteMessage ? (
+                                  <p className="text-sm text-emerald-700">{directorInviteMessage}</p>
+                                ) : null}
+                                {directorInviteError ? (
+                                  <p className="text-sm text-red-700">{directorInviteError}</p>
+                                ) : null}
+                              </div>
+                            </div>
+                          </div>
+                        ) : null}
+
+                        <details className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4">
+                          <summary className="cursor-pointer text-sm font-semibold text-neutral-900">
+                            One-time manual director verification fallback
+                          </summary>
+                          <div className="mt-4 grid gap-4">
+                            <div className="grid gap-4 lg:grid-cols-2">
+                              <div className="space-y-2">
+                                <Label className="text-sm font-medium">Director name</Label>
+                                <Input
+                                  value={newDirectorName}
+                                  onChange={(event) => setNewDirectorName(event.target.value)}
+                                  placeholder="Full legal name"
+                                  className="h-11 border-2 border-purp-200 bg-white"
+                                />
+                              </div>
+                              <div className="space-y-2">
+                                <Label className="text-sm font-medium">Role</Label>
+                                <Select
+                                  value={newDirectorRole}
+                                  onValueChange={(value) =>
+                                    setNewDirectorRole((value as DirectorRole | null) || "director")
+                                  }
+                                >
+                                  <SelectTrigger className="h-11 border-2 border-purp-200 bg-white">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="director">Director</SelectItem>
+                                    <SelectItem value="shareholder">Shareholder</SelectItem>
+                                    <SelectItem value="beneficial_owner">Beneficial Owner</SelectItem>
+                                    <SelectItem value="signatory">Authorized Signatory</SelectItem>
+                                    <SelectItem value="proprietor">Proprietor</SelectItem>
+                                    <SelectItem value="partner">Partner</SelectItem>
+                                    <SelectItem value="trustee">Trustee</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            </div>
+
+                            <Button
+                              variant="outline"
+                              className="w-full border-2 border-purp-200 text-purp-700 hover:bg-purp-50"
+                              disabled={!newDirectorName.trim()}
+                              onClick={() =>
+                                setActiveDirectorToVerify({
+                                  name: newDirectorName.trim(),
+                                  role: newDirectorRole,
+                                })
+                              }
+                            >
+                              <Plus className="mr-2 h-4 w-4" />
+                              Verify this director once
+                            </Button>
+                          </div>
+                        </details>
+
+                        <div className="space-y-3">
+                          <p className="text-sm font-semibold text-neutral-900">Director activity</p>
+                          <div className="space-y-2">
+                            {directorsLoading ? (
+                              <p className="text-sm text-neutral-500">Loading director verification history...</p>
+                            ) : directors.length > 0 ? (
+                              directors.map((director) => (
+                                <div
+                                  key={director.id}
+                                  className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-neutral-200 bg-white p-3"
+                                >
+                                  <div>
+                                    <p className="text-sm font-medium text-neutral-900">
+                                      {director.director_name || "Unnamed director"}
+                                    </p>
+                                    <p className="text-xs text-neutral-500">
+                                      {director.director_role || "Director"}
+                                    </p>
+                                  </div>
+                                  {statusBadge(director.verification_status)}
+                                </div>
+                              ))
+                            ) : (
+                              <p className="text-sm text-neutral-500">
+                                No manual director verifications have been recorded yet.
+                              </p>
+                            )}
+                          </div>
+
+                          <div className="space-y-2">
+                            {directorInvitations.length > 0 ? (
+                              directorInvitations.map((invite) => (
+                                <div
+                                  key={invite.id}
+                                  className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-neutral-200 bg-white p-3"
+                                >
+                                  <div>
+                                    <p className="text-sm font-medium text-neutral-900">
+                                      {invite.selected_director_name || "Director invite"}
+                                    </p>
+                                    <p className="text-xs text-neutral-500">
+                                      {directorInvitationStatusLabel(invite.status)}
+                                    </p>
+                                  </div>
+                                  {statusBadge(invite.status)}
+                                </div>
+                              ))
+                            ) : null}
+                          </div>
+                        </div>
+                      </div>
+                    </SectionCard>
+                  ) : null}
+                </div>
+              </div>
+            )}
+          </SectionCard>
+        </TabsContent>
+
+        <TabsContent value="profile" className="space-y-6">
+          <SectionCard
+            title="Business Profile"
+            description="Profile and verification are now separated. Editable fields stay here, while verified identity fields lock after approval."
+            action={
+              merchant?.permissions && !merchant.permissions.manage_business ? null : (
+                <Button
+                  onClick={handleSaveProfile}
+                  disabled={savingProfile}
+                  className="bg-purp-900 text-white hover:bg-purp-800"
+                >
+                  <Save className="mr-2 h-4 w-4" />
+                  {savingProfile ? "Saving..." : "Save Business Profile"}
+                </Button>
+              )
+            }
+          >
+            <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+              <div className="space-y-5">
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium">
+                    Trading Name <span className="text-red-500">*</span>
+                  </Label>
+                  <p className="text-xs text-neutral-500">
+                    This name is shown to customers on invoices and payment pages.
+                  </p>
+                  <Input
+                    value={tradingName}
+                    onChange={(event) => setTradingName(event.target.value)}
+                    placeholder="e.g. DeraLedger Consulting"
+                    className="h-11 border-2 border-purp-200 bg-purp-50"
+                  />
+                </div>
+
+                {requiresBusinessRegistration ? (
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">
+                      Business Type <span className="text-red-500">*</span>
+                    </Label>
+                    <Select
+                      value={businessType || null}
+                      onValueChange={(value) => {
+                        if (!isOwnerNameLocked || !merchant?.business_type) {
+                          setBusinessType(value ?? "sole_proprietorship");
+                        }
+                      }}
+                    >
+                      <SelectTrigger className="h-11 border-2 border-purp-200 bg-purp-50">
+                        <SelectValue placeholder="Choose business type" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {BUSINESS_TYPE_OPTIONS.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : null}
+
+                {requiresBusinessRegistration ? (
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">
+                      Registered Business Name <span className="text-red-500">*</span>
+                    </Label>
+                    <p className="text-xs text-neutral-500">
+                      This field syncs with business registration checks and becomes effectively fixed once RC verification succeeds.
+                    </p>
+                    <label className="flex items-center gap-3 rounded-xl border border-purp-200 bg-purp-50/50 p-3 text-sm text-neutral-700">
+                      <input
+                        type="checkbox"
+                        checked={businessName.trim() !== "" && businessName.trim() === tradingName.trim()}
+                        onChange={(event) => {
+                          if (event.target.checked) {
+                            setBusinessName(tradingName);
+                          } else {
+                            setBusinessName("");
+                          }
+                        }}
+                        disabled={Boolean(merchant?.cac_number)}
+                        className="h-4 w-4 accent-purp-700"
+                      />
+                      Same as Trading Name
+                    </label>
+                    {!(businessName.trim() !== "" && businessName.trim() === tradingName.trim()) ? (
+                      <Input
+                        value={businessName}
+                        onChange={(event) => setBusinessName(event.target.value)}
+                        disabled={Boolean(merchant?.cac_number)}
+                        placeholder="Registered business name"
+                        className={`h-11 border-2 ${
+                          merchant?.cac_number
+                            ? "cursor-not-allowed border-emerald-200 bg-emerald-50 text-emerald-900"
+                            : "border-purp-200 bg-purp-50"
+                        }`}
+                      />
+                    ) : null}
+                    {merchant?.cac_number ? (
+                      <p className="text-xs text-emerald-600">
+                        Registration is already verified, so the registered business name should no longer drift.
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {!isStarter ? (
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">
+                      {ownerLabel} <span className="text-red-500">*</span>
+                    </Label>
+                    <p className="text-xs text-neutral-500">
+                      {isOwnerNameLocked
+                        ? "This field is locked because identity verification has already been completed."
+                        : requiresDirectorApprovalFlow && merchant?.relationship_claim === "representative_claim"
+                        ? "This is the representative's legal name. Director approval remains separate."
+                        : "This legal name is the source of truth for BVN verification."}
+                    </p>
+                    <Input
+                      value={ownerName}
+                      onChange={(event) => {
+                        if (!isOwnerNameLocked) {
+                          setOwnerName(event.target.value);
+                        }
+                      }}
+                      disabled={isOwnerNameLocked}
+                      placeholder="Full legal name"
+                      className={`h-11 border-2 ${
+                        isOwnerNameLocked
+                          ? "cursor-not-allowed border-emerald-200 bg-emerald-50 text-emerald-900"
+                          : "border-purp-200 bg-purp-50"
+                      }`}
+                    />
+                  </div>
+                ) : null}
+
+                {!isStarter ? (
+                  <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4">
+                    <div className="space-y-4">
+                      <div>
+                        <p className="text-sm font-semibold text-neutral-900">Business Address</p>
+                        <p className="text-xs text-neutral-500">
+                          This should match the settlement-ready business address on your utility document.
+                        </p>
+                      </div>
+
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <div className="space-y-2 sm:col-span-2">
+                          <Label className="text-xs font-medium">
+                            Street Address <span className="text-red-500">*</span>
+                          </Label>
+                          <Input
+                            value={businessStreet}
+                            onChange={(event) => setBusinessStreet(event.target.value)}
+                            placeholder="12 Admiralty Way"
+                            className="h-11 border-2 border-purp-200 bg-white"
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label className="text-xs font-medium">
+                            City <span className="text-red-500">*</span>
+                          </Label>
+                          <Input
+                            value={businessCity}
+                            onChange={(event) => setBusinessCity(event.target.value)}
+                            placeholder="Lekki"
+                            className="h-11 border-2 border-purp-200 bg-white"
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label className="text-xs font-medium">
+                            Country <span className="text-red-500">*</span>
+                          </Label>
+                          <Select
+                            value={businessCountry || null}
+                            onValueChange={(value) => {
+                              setBusinessCountry(value ?? "");
+                              setBusinessState("");
+                            }}
+                          >
+                            <SelectTrigger className="h-11 border-2 border-purp-200 bg-white">
+                              <SelectValue placeholder="Select country" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {Country.getAllCountries().map((country) => (
+                                <SelectItem key={country.isoCode} value={country.isoCode}>
+                                  {country.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label className="text-xs font-medium">
+                            State / Province <span className="text-red-500">*</span>
+                          </Label>
+                          <Select
+                            value={businessState || null}
+                            onValueChange={(value) => setBusinessState(value ?? "")}
+                          >
+                            <SelectTrigger className="h-11 border-2 border-purp-200 bg-white">
+                              <SelectValue placeholder="Select state" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {State.getStatesOfCountry(businessCountry).map((state) => (
+                                <SelectItem key={state.isoCode} value={state.isoCode}>
+                                  {state.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">Email</Label>
+                    <Input
+                      type="email"
+                      value={email}
+                      onChange={(event) => setEmail(event.target.value)}
+                      className="h-11 border-2 border-purp-200 bg-purp-50"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">
+                      Phone {!isStarter ? <span className="text-red-500">*</span> : null}
+                    </Label>
+                    <Input
+                      type="tel"
+                      value={phone}
+                      onChange={(event) => setPhone(event.target.value)}
+                      className="h-11 border-2 border-purp-200 bg-purp-50"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-5">
+                <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4">
+                  <div className="space-y-3">
+                    <p className="text-sm font-semibold text-neutral-900">Field lock summary</p>
+                    <ChecklistRow
+                      title="Legal identity fields"
+                      description="Owner or representative name locks after a successful BVN and selfie match."
+                      status={isOwnerNameLocked ? "complete" : "pending"}
+                    />
+                    <ChecklistRow
+                      title="Registered business details"
+                      description="RC verification prevents the official business name from drifting after business checks."
+                      status={merchant?.cac_number ? "complete" : "pending"}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-3 rounded-2xl border border-neutral-200 bg-white p-4">
+                  <div>
+                    <p className="text-sm font-semibold text-neutral-900">Business Logo</p>
+                    <p className="text-xs text-neutral-500">
+                      This upload is separate from verification and saves immediately.
+                    </p>
+                  </div>
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+                    <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed border-purp-200 bg-purp-50">
+                      {logoUrl ? (
+                        <Image
+                          src={logoUrl}
+                          alt="Business logo"
+                          width={80}
+                          height={80}
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <span className="text-2xl font-bold text-purp-700">
+                          {(tradingName || businessName || "B").charAt(0).toUpperCase()}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap gap-3">
+                      <div className="relative">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={handleLogoUpload}
+                          disabled={uploadingLogo}
+                          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                        />
+                        <Button variant="outline" disabled={uploadingLogo} className="pointer-events-none border-2 border-purp-200 text-purp-700">
+                          {uploadingLogo ? "Uploading..." : "Upload Logo"}
+                        </Button>
+                      </div>
+                      {logoUrl ? (
+                        <Button
+                          variant="outline"
+                          disabled={uploadingLogo}
+                          onClick={handleRemoveLogo}
+                          className="border-2 border-red-200 text-red-700 hover:bg-red-50"
+                        >
+                          Remove Logo
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </SectionCard>
+        </TabsContent>
+
+        <TabsContent value="settlement" className="space-y-6">
+          <SectionCard
+            title="Settlement Account"
+            description="Settlement account readiness is separated from verification, but both must align before live collection is truly ready."
+            action={
+              !requiresSettlementAccount ? null : (
+                <Link href="/settings/settlement-accounts">
+                  <Button className="bg-purp-900 text-white hover:bg-purp-800">
+                    Manage Settlement Account
+                  </Button>
                 </Link>
               )
-            )}
-            
-            {(!merchant?.permissions || merchant.permissions.manage_advance_settings || merchant.permissions.manage_billing) && (
-              <Link href="/settings/billing" className="block p-4 border border-purp-200 rounded-lg hover:bg-purp-50 transition-colors group">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="font-semibold text-purp-900">Billing &amp; Subscription</span>
-                  <ExternalLink className="w-4 h-4 text-purp-300 group-hover:text-purp-700 transition-colors" />
+            }
+          >
+            {!requiresSettlementAccount ? (
+              <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-5 text-sm text-neutral-600">
+                This tier does not currently expose settlement account setup. Upgrade to a settlement-enabled tier to configure payouts.
+              </div>
+            ) : (
+              <div className="grid gap-4 lg:grid-cols-[1fr_0.8fr]">
+                <div className="space-y-4 rounded-2xl border border-neutral-200 bg-white p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-neutral-900">Current account snapshot</p>
+                      <p className="text-xs text-neutral-500">
+                        This is the merchant-facing settlement identity used for payout readiness.
+                      </p>
+                    </div>
+                    {settlementConfigured ? (
+                      <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
+                        Configured
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">
+                        Incomplete
+                      </Badge>
+                    )}
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-3">
+                      <p className="text-xs font-medium text-neutral-500">Bank</p>
+                      <p className="mt-1 text-sm font-semibold text-neutral-900">
+                        {merchant?.settlement_bank_name || "Not configured"}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-3">
+                      <p className="text-xs font-medium text-neutral-500">Account Number</p>
+                      <p className="mt-1 text-sm font-semibold text-neutral-900">
+                        {maskAccountNumber(merchant?.settlement_account_number)}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-3 sm:col-span-2">
+                      <p className="text-xs font-medium text-neutral-500">Account Name</p>
+                      <p className="mt-1 text-sm font-semibold text-neutral-900">
+                        {merchant?.settlement_account_name || "Not configured"}
+                      </p>
+                    </div>
+                  </div>
                 </div>
-                <p className="text-xs text-neutral-500">Manage your subscription, renewals, and billing history.</p>
+
+                <div className="space-y-3">
+                  <ChecklistRow
+                    title="Settlement account present"
+                    description="A payout-ready bank account should exist before live collection is released."
+                    status={settlementConfigured ? "complete" : "pending"}
+                  />
+                  <ChecklistRow
+                    title="Verification alignment"
+                    description="Settlement readiness helps complete onboarding, but does not replace plan-based verification."
+                    status={liveFeaturesActive ? "complete" : "pending"}
+                  />
+                  <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-700">
+                    Settlement is treated as its own first-class area so merchants can see payout readiness without digging through verification forms.
+                  </div>
+                </div>
+              </div>
+            )}
+          </SectionCard>
+        </TabsContent>
+
+        <TabsContent value="fees" className="space-y-6">
+          <SectionCard
+            title="Payment Fee Settings"
+            description="Customer pricing and fee absorption are managed separately from profile and verification. This section has its own save action."
+            action={
+              merchant?.permissions && !merchant.permissions.change_fee_settings ? null : (
+                <Button
+                  onClick={handleSaveFeeSettings}
+                  disabled={savingFeeSettings}
+                  className="bg-purp-900 text-white hover:bg-purp-800"
+                >
+                  <Save className="mr-2 h-4 w-4" />
+                  {savingFeeSettings ? "Saving..." : "Save Fee Settings"}
+                </Button>
+              )
+            }
+          >
+            <div className="grid gap-6 lg:grid-cols-[1fr_0.8fr]">
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium">Default fee payer</Label>
+                  <Select
+                    value={feeDefault}
+                    onValueChange={(value) =>
+                      setFeeDefault(((value as "business" | "customer" | null) || "business"))
+                    }
+                  >
+                    <SelectTrigger className="h-11 max-w-sm border-2 border-purp-200 bg-purp-50">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="business">Business absorbs fee</SelectItem>
+                      <SelectItem value="customer">Customer absorbs fee</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="rounded-2xl border border-purp-200 bg-purp-50 p-4 text-sm text-neutral-600">
+                  <p>
+                    <strong className="text-purp-900">How this works:</strong> this is only the default for
+                    new invoices and payment links. It can still be overridden per transaction where allowed.
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <ChecklistRow
+                  title="Fee ownership policy"
+                  description="Keep a clear default so staff do not accidentally change who bears charges from one invoice to another."
+                  status="complete"
+                />
+                <ChecklistRow
+                  title="Independent save control"
+                  description="This section now saves independently, so changing a fee policy does not quietly modify business profile data."
+                  status="complete"
+                />
+              </div>
+            </div>
+          </SectionCard>
+        </TabsContent>
+
+        <TabsContent value="billing" className="space-y-6">
+          <SectionCard
+            title="Billing & Subscription"
+            description="Your plan, upgrade path, and billing management are now separate from business verification and profile editing."
+            action={
+              <Link href="/settings/billing">
+                <Button className="bg-purp-900 text-white hover:bg-purp-800">
+                  Open Billing
+                </Button>
               </Link>
-            )}
-            
-            {(!merchant?.permissions || merchant.permissions.manage_advance_settings || merchant.permissions.manage_item_catalog || merchant.permissions.view_item_catalog) && (
-            <Link href="/settings/catalog" className="block p-4 border border-purp-200 rounded-lg hover:bg-purp-50 transition-colors group">
-              <div className="flex items-center justify-between mb-2">
-                <span className="font-semibold text-purp-900">Item Catalog</span>
-                <ExternalLink className="w-4 h-4 text-purp-300 group-hover:text-purp-700 transition-colors" />
+            }
+          >
+            <div className="grid gap-4 lg:grid-cols-3">
+              <div className="rounded-2xl border border-neutral-200 bg-white p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+                  Current plan
+                </p>
+                <p className="mt-2 text-lg font-semibold text-neutral-900">
+                  {formatPlanLabel(effectiveTier)}
+                </p>
+                <p className="mt-2 text-sm text-neutral-500">
+                  {getCollectionLimitLabel(effectiveTier)}. Upgrade when you need a broader verification path, more collection capability, or business controls.
+                </p>
               </div>
-              <p className="text-xs text-neutral-500">Manage your reusable products and services for invoicing.</p>
-            </Link>
-            )}
 
-            {(!merchant?.permissions || merchant.permissions.manage_advance_settings || merchant.permissions.manage_discount_template || merchant.permissions.view_discount_template) && (
-            <Link href="/settings/discount-templates" className="block p-4 border border-purp-200 rounded-lg hover:bg-purp-50 transition-colors group">
-              <div className="flex items-center justify-between mb-2">
-                <span className="font-semibold text-purp-900">Discount Templates</span>
-                <ExternalLink className="w-4 h-4 text-purp-300 group-hover:text-purp-700 transition-colors" />
+              <div className="rounded-2xl border border-neutral-200 bg-white p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+                  Recommended next step
+                </p>
+                <p className="mt-2 text-sm font-semibold text-neutral-900">
+                  {isStarter
+                    ? "Upgrade to Individual or Business"
+                    : isIndividual
+                    ? "Finish identity verification or upgrade to Business"
+                    : "Finish KYB and authority checks"}
+                </p>
+                <p className="mt-2 text-sm text-neutral-500">
+                  {nextLiveUnlockStep || "Open billing to manage renewals, status, and history."}
+                </p>
               </div>
-              <p className="text-xs text-neutral-500">Save predefined discount rates for quick application.</p>
-            </Link>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-      )}
 
-      <Separator className="bg-purp-200" />
+              <div className="flex flex-col gap-3 rounded-2xl border border-neutral-200 bg-white p-4">
+                <Link
+                  href="/settings/upgrade/individual"
+                  className="flex items-center justify-between rounded-xl border border-purp-200 px-4 py-3 text-sm font-medium text-purp-900 transition hover:bg-purp-50"
+                >
+                  Upgrade to Individual
+                  <ArrowRight className="h-4 w-4" />
+                </Link>
+                <Link
+                  href="/settings/upgrade/corporate"
+                  className="flex items-center justify-between rounded-xl border border-purp-200 px-4 py-3 text-sm font-medium text-purp-900 transition hover:bg-purp-50"
+                >
+                  Upgrade to Business
+                  <ArrowRight className="h-4 w-4" />
+                </Link>
+              </div>
+            </div>
+          </SectionCard>
+        </TabsContent>
 
-      {(!merchant?.permissions || merchant.permissions.manage_business || merchant.permissions.change_fee_settings) && (
-      <div className="flex justify-end">
-        <Button
-          onClick={handleSave}
-          disabled={saving}
-          className="bg-purp-900 hover:bg-purp-700 text-white font-semibold px-8"
-        >
-          {saving ? (
-            <span className="flex items-center gap-2">
-              <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-              </svg>
-              Saving...
-            </span>
-          ) : (
-            <span className="flex items-center gap-2">
-              <Save className="h-4 w-4" />
-              Save Settings
-            </span>
-          )}
-        </Button>
-      </div>
-      )}
-      {showLivenessCamera && (
-        <div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-4">
+        <TabsContent value="tools" className="space-y-6">
+          <SectionCard
+            title="Business Tools"
+            description="Operational tools are grouped here so merchants can navigate without the settings page growing into one long unstructured list."
+          >
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <Link
+                href="/clients"
+                className="rounded-2xl border border-purp-200 bg-white p-4 transition hover:bg-purp-50"
+              >
+                <div className="flex items-center justify-between">
+                  <p className="font-semibold text-purp-900">Clients</p>
+                  <ExternalLink className="h-4 w-4 text-purp-400" />
+                </div>
+                <p className="mt-2 text-sm text-neutral-500">
+                  Manage client records and reminders.
+                </p>
+              </Link>
+
+              <Link
+                href="/settings/catalog"
+                className="rounded-2xl border border-purp-200 bg-white p-4 transition hover:bg-purp-50"
+              >
+                <div className="flex items-center justify-between">
+                  <p className="font-semibold text-purp-900">Item Catalog</p>
+                  <ExternalLink className="h-4 w-4 text-purp-400" />
+                </div>
+                <p className="mt-2 text-sm text-neutral-500">
+                  Reusable products and services for invoicing.
+                </p>
+              </Link>
+
+              <Link
+                href="/settings/discount-templates"
+                className="rounded-2xl border border-purp-200 bg-white p-4 transition hover:bg-purp-50"
+              >
+                <div className="flex items-center justify-between">
+                  <p className="font-semibold text-purp-900">Discount Templates</p>
+                  <ExternalLink className="h-4 w-4 text-purp-400" />
+                </div>
+                <p className="mt-2 text-sm text-neutral-500">
+                  Save discount presets for faster quoting.
+                </p>
+              </Link>
+
+              <Link
+                href="/settings/billing"
+                className="rounded-2xl border border-purp-200 bg-white p-4 transition hover:bg-purp-50"
+              >
+                <div className="flex items-center justify-between">
+                  <p className="font-semibold text-purp-900">Billing History</p>
+                  <ExternalLink className="h-4 w-4 text-purp-400" />
+                </div>
+                <p className="mt-2 text-sm text-neutral-500">
+                  View payment history, renewals, and subscription activity.
+                </p>
+              </Link>
+            </div>
+          </SectionCard>
+        </TabsContent>
+
+        <TabsContent value="advanced" className="space-y-6">
+          <SectionCard
+            title="Advanced Settings"
+            description="Operational guidance, lock-state explanation, and specialist links live here instead of being mixed with profile save actions."
+          >
+            <div className="grid gap-4 lg:grid-cols-[1fr_0.95fr]">
+              <div className="space-y-4">
+                <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4">
+                  <p className="text-sm font-semibold text-neutral-900">Why fields lock after verification</p>
+                  <p className="mt-2 text-sm leading-6 text-neutral-600">
+                    Verified identity and registered business details become constrained to protect compliance
+                    evidence, keep provider checks idempotent, and prevent merchants from silently changing legal identity after approval.
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-neutral-200 bg-white p-4">
+                  <p className="text-sm font-semibold text-neutral-900">Admin reset path</p>
+                  <p className="mt-2 text-sm leading-6 text-neutral-600">
+                    If a verified legal name or authority mapping is genuinely wrong, an admin reset should be
+                    audited before re-opening the affected verification step. That keeps the reset explicit instead of allowing casual drift in production data.
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <Link
+                  href="/settings/settlement-accounts"
+                  className="flex items-center justify-between rounded-2xl border border-purp-200 bg-white px-4 py-4 transition hover:bg-purp-50"
+                >
+                  <div>
+                    <p className="font-semibold text-purp-900">Settlement Accounts</p>
+                    <p className="mt-1 text-sm text-neutral-500">Open the dedicated payout account manager.</p>
+                  </div>
+                  <ExternalLink className="h-4 w-4 text-purp-400" />
+                </Link>
+
+                <Link
+                  href="/team"
+                  className="flex items-center justify-between rounded-2xl border border-purp-200 bg-white px-4 py-4 transition hover:bg-purp-50"
+                >
+                  <div>
+                    <p className="font-semibold text-purp-900">Team & Roles</p>
+                    <p className="mt-1 text-sm text-neutral-500">Manage operational access separately from verification.</p>
+                  </div>
+                  <ExternalLink className="h-4 w-4 text-purp-400" />
+                </Link>
+              </div>
+            </div>
+          </SectionCard>
+        </TabsContent>
+      </Tabs>
+
+      {showLivenessCamera ? (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4">
           <div className="w-full max-w-md">
             <LivenessCamera
               onComplete={(images) => {
@@ -1655,30 +2230,26 @@ export default function SettingsPage() {
               onFallback={(error) => {
                 setLivenessFallback(true);
                 setShowLivenessCamera(false);
-                setKycError("Camera failed: " + error + ". Please use the manual file upload.");
+                setKycError(`Camera failed: ${error}. Please use the manual file upload.`);
               }}
             />
           </div>
         </div>
-      )}
+      ) : null}
 
-      {activeDirectorToVerify && merchant && (
+      {activeDirectorToVerify && merchant ? (
         <DirectorSelfieModal
           merchantId={merchant.id}
           directorName={activeDirectorToVerify.name}
           directorRole={activeDirectorToVerify.role}
-          onClose={() => {
+          onClose={() => setActiveDirectorToVerify(null)}
+          onSuccess={async () => {
+            await loadDirectors(merchant.id);
+            await loadDirectorApprovalContext(merchant.id);
             setActiveDirectorToVerify(null);
-            setShowVerifyDirectorModal(false);
-          }}
-          onSuccess={() => {
-            loadDirectors(merchant.id);
-            setActiveDirectorToVerify(null);
-            setShowVerifyDirectorModal(false);
           }}
         />
-      )}
-
+      ) : null}
     </div>
   );
 }
