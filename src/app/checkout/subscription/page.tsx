@@ -239,6 +239,17 @@ function SubscriptionCheckoutContent() {
   }, [context, cryptoCheckoutStatus?.status, cryptoStorageKey, router]);
 
   useEffect(() => {
+    if (context !== "onboarding" || cryptoCheckoutStatus?.status !== "completed" || !cryptoDetails) return;
+    const timer = window.setTimeout(() => {
+      sessionStorage.removeItem(cryptoStorageKey);
+      sessionStorage.removeItem("subscriptionCheckout");
+      const reference = encodeURIComponent(cryptoDetails.reference || cryptoDetails.providerReference || "");
+      router.replace(`/onboarding/payment-callback?reference=${reference}&provider=breet`);
+    }, 2500);
+    return () => window.clearTimeout(timer);
+  }, [context, cryptoCheckoutStatus?.status, cryptoDetails, cryptoStorageKey, router]);
+
+  useEffect(() => {
     if (!cryptoDetails?.reference && !cryptoDetails?.paymentSessionId) return;
     if (
       cryptoCheckoutStatus?.status === "completed" ||
