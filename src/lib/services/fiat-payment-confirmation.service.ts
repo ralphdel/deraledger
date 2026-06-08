@@ -955,7 +955,7 @@ function normalizePaymentMethod(channel: string) {
   return "ussd";
 }
 
-async function sendInvoiceReceipt(
+export async function sendInvoiceReceipt(
   supabase: SupabaseClient,
   invoice: Record<string, unknown>,
   invoiceId: string,

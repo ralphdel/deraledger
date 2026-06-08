@@ -231,11 +231,14 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
       payment_method?: string | null;
       payment_status?: string | null;
     };
-    if (
-      invoicePaymentState.payment_provider !== "breet" &&
-      invoicePaymentState.payment_method !== "crypto" &&
-      invoicePaymentState.payment_status !== "AWAITING_CONFIRMATION"
-    ) {
+    const outstandingBalance = Number(invoice.outstanding_balance || 0);
+    const awaitingCryptoConfirmation =
+      invoicePaymentState.payment_provider === "breet" &&
+      invoicePaymentState.payment_method === "crypto" &&
+      invoicePaymentState.payment_status === "AWAITING_CONFIRMATION" &&
+      outstandingBalance > 0;
+
+    if (!awaitingCryptoConfirmation) {
       return;
     }
 

@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { PaymentService } from "@/lib/payment";
-import { processSuccessfulFiatPayment } from "@/lib/services/fiat-payment-confirmation.service";
+import {
+  processSuccessfulFiatPayment,
+  sendInvoiceReceipt,
+} from "@/lib/services/fiat-payment-confirmation.service";
 import {
   buildBreetWebhookIdempotencyKey,
   mapBreetEventToCryptoStatus,
@@ -926,6 +929,8 @@ async function handleInvoiceWebhook(input: {
     return NextResponse.json({ error: "Breet invoice confirmation failed" }, { status: 500 });
   }
 
+  const isDuplicateConfirmation = Boolean(rpcResult.data?.duplicate);
+
   const { error: paymentSessionUpdateError } = await supabase
     .from("payment_sessions")
     .update({
@@ -1031,6 +1036,21 @@ async function handleInvoiceWebhook(input: {
     })
     .eq("id", String(session.invoice_id));
 
+  if (!isDuplicateConfirmation && invoice) {
+    try {
+      await sendInvoiceReceipt(
+        supabase,
+        invoice,
+        String(session.invoice_id),
+        providerReference || txHash || String(session.reference || session.id),
+        accounting.selectedInvoiceAmount,
+        Math.max(0, Number(invoice.outstanding_balance || 0) - accounting.selectedInvoiceAmount)
+      );
+    } catch (error) {
+      console.error("Failed to send Breet invoice receipt:", error);
+    }
+  }
+
   await supabase
     .from("treasury_transactions")
     .update({
@@ -1127,7 +1147,7 @@ async function handleInvoiceWebhook(input: {
     received: true,
     mapped: true,
     settlementStatus: rpcResult.data.payment_status,
-    duplicate: Boolean(rpcResult.data.duplicate),
+    duplicate: isDuplicateConfirmation,
   });
 }
 
