@@ -230,6 +230,15 @@ function SubscriptionCheckoutContent() {
   }, [cryptoCheckoutStatus, cryptoDetails, cryptoStorageKey]);
 
   useEffect(() => {
+    if (context !== "renewal" || cryptoCheckoutStatus?.status !== "completed") return;
+    const timer = window.setTimeout(() => {
+      sessionStorage.removeItem(cryptoStorageKey);
+      router.replace("/settings/billing");
+    }, 2500);
+    return () => window.clearTimeout(timer);
+  }, [context, cryptoCheckoutStatus?.status, cryptoStorageKey, router]);
+
+  useEffect(() => {
     if (!cryptoDetails?.reference && !cryptoDetails?.paymentSessionId) return;
     if (
       cryptoCheckoutStatus?.status === "completed" ||
@@ -672,11 +681,6 @@ function SubscriptionCheckoutContent() {
                     {" "}for NGN {cryptoDetails.fiatAmount.toLocaleString()}
                     {cryptoDetails.exchangeRate ? ` at NGN ${cryptoDetails.exchangeRate.toLocaleString()} per ${cryptoDetails.coin}.` : "."}
                   </p>
-                  {!cryptoDetails.providerQuoteAvailable && cryptoDetails.quoteSource === "buffered_platform_estimate" ? (
-                    <p className="text-[11px] text-orange-700 text-center">
-                      Includes a rate buffer; Breet webhook confirmation is final.
-                    </p>
-                  ) : null}
                   {cryptoCheckoutStatus ? (
                     <div className="rounded-lg border border-orange-200 bg-white p-3 text-sm text-orange-900">
                       <p className="font-semibold">
@@ -694,11 +698,6 @@ function SubscriptionCheckoutContent() {
                       {cryptoCheckoutStatus.shortfallAmount && cryptoCheckoutStatus.shortfallAmount > 0 ? (
                         <p className="mt-2 text-xs font-semibold text-orange-900">
                           Shortfall: NGN {cryptoCheckoutStatus.shortfallAmount.toLocaleString()}
-                        </p>
-                      ) : null}
-                      {cryptoCheckoutStatus.overpaymentAmount && cryptoCheckoutStatus.overpaymentAmount > 0 ? (
-                        <p className="mt-2 text-xs font-semibold text-orange-900">
-                          Overpayment: NGN {cryptoCheckoutStatus.overpaymentAmount.toLocaleString()}
                         </p>
                       ) : null}
                     </div>

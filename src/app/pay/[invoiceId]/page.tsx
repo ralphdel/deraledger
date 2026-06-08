@@ -1098,9 +1098,6 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                     {" "}on <strong>{cryptoDetails.network}</strong>.
                     {cryptoDetails.exchangeRate ? ` Rate locked at ${formatNaira(cryptoDetails.exchangeRate)} per ${cryptoDetails.coin.toUpperCase()}.` : ""}
                     {cryptoDetails.expiresAt ? ` Expires ${new Date(cryptoDetails.expiresAt).toLocaleString("en-NG")}.` : ""}
-                    {cryptoDetails.providerQuoteAvailable === false && cryptoDetails.quoteSource === "buffered_platform_estimate"
-                      ? " Includes a rate buffer; Breet webhook confirmation is final."
-                      : ""}
                   </p>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-left text-sm">
@@ -1141,7 +1138,7 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                     </p>
                   </div>
                 </div>
-                {(cryptoCheckoutStatus?.txHash || cryptoCheckoutStatus?.confirmations || cryptoCheckoutStatus?.estimatedNgn || cryptoCheckoutStatus?.invoiceCreditAmount || cryptoCheckoutStatus?.amountSettled || cryptoCheckoutStatus?.shortfallAmount || cryptoCheckoutStatus?.overpaymentAmount) ? (
+                {(cryptoCheckoutStatus?.txHash || cryptoCheckoutStatus?.confirmations || cryptoCheckoutStatus?.estimatedNgn || cryptoCheckoutStatus?.invoiceCreditAmount || cryptoCheckoutStatus?.amountSettled || cryptoCheckoutStatus?.shortfallAmount) ? (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-left text-sm">
                     {cryptoCheckoutStatus?.txHash ? (
                       <div className="bg-white border border-neutral-200 rounded-xl p-3">
@@ -1178,13 +1175,6 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                         <p className="text-xs uppercase tracking-wide font-semibold">Shortfall</p>
                         <p className="font-semibold mt-1">{formatNaira(cryptoCheckoutStatus.shortfallAmount)}</p>
                         <p className="text-[11px] mt-1">This payment needs review before invoice credit.</p>
-                      </div>
-                    ) : null}
-                    {typeof cryptoCheckoutStatus?.overpaymentAmount === "number" && cryptoCheckoutStatus.overpaymentAmount > 0 ? (
-                      <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-blue-800">
-                        <p className="text-xs uppercase tracking-wide font-semibold">Overpayment</p>
-                        <p className="font-semibold mt-1">{formatNaira(cryptoCheckoutStatus.overpaymentAmount)}</p>
-                        <p className="text-[11px] mt-1">The excess is tracked for reconciliation.</p>
                       </div>
                     ) : null}
                     {typeof cryptoCheckoutStatus?.amountSettled === "number" ? (
