@@ -72,6 +72,8 @@ type CryptoCheckoutDetails = {
   fiatAmount: number;
   cryptoAmount: number | null;
   exchangeRate: number | null;
+  quoteSource: string | null;
+  providerQuoteAvailable: boolean;
   reference: string;
   providerReference: string | null;
   paymentSessionId: string | null;
@@ -269,6 +271,8 @@ function SubscriptionCheckoutContent() {
           fiatAmount: payload.expectedAmount ?? current.fiatAmount,
           cryptoAmount: payload.cryptoAmount ?? current.cryptoAmount,
           exchangeRate: payload.exchangeRate ?? current.exchangeRate,
+          quoteSource: payload.quoteSource || current.quoteSource,
+          providerQuoteAvailable: payload.providerQuoteAvailable ?? current.providerQuoteAvailable,
           providerReference: payload.providerReference || current.providerReference,
           paymentSessionId: payload.sessionId || current.paymentSessionId,
           expiresAt: payload.expiresAt || current.expiresAt,
@@ -434,6 +438,8 @@ function SubscriptionCheckoutContent() {
         coin: data.cryptoCoin, fiatAmount: data.fiatAmount, reference: data.reference,
         cryptoAmount: data.cryptoAmount ?? null,
         exchangeRate: data.exchangeRate ?? null,
+        quoteSource: data.quoteSource || null,
+        providerQuoteAvailable: data.providerQuoteAvailable === true,
         providerReference: data.providerReference || null,
         paymentSessionId: data.paymentSessionId || null,
         expiresAt: data.expiresAt || null,
@@ -666,6 +672,11 @@ function SubscriptionCheckoutContent() {
                     {" "}for NGN {cryptoDetails.fiatAmount.toLocaleString()}
                     {cryptoDetails.exchangeRate ? ` at NGN ${cryptoDetails.exchangeRate.toLocaleString()} per ${cryptoDetails.coin}.` : "."}
                   </p>
+                  {!cryptoDetails.providerQuoteAvailable && cryptoDetails.quoteSource === "buffered_platform_estimate" ? (
+                    <p className="text-[11px] text-orange-700 text-center">
+                      Includes a rate buffer; Breet webhook confirmation is final.
+                    </p>
+                  ) : null}
                   {cryptoCheckoutStatus ? (
                     <div className="rounded-lg border border-orange-200 bg-white p-3 text-sm text-orange-900">
                       <p className="font-semibold">

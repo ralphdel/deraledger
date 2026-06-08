@@ -12,7 +12,7 @@ import {
 } from "@/lib/services/breet-crypto.service";
 import { getPaymentEnvironment } from "@/lib/services/payment-routing.service";
 import { createPendingPlanPaymentRecord } from "@/lib/services/plan-payment-recovery.service";
-import { computeCryptoAmount, defaultNetworkForRail, rateSettingKeyForRail } from "@/lib/treasury";
+import { defaultNetworkForRail, rateSettingKeyForRail, resolveBreetCheckoutQuote } from "@/lib/treasury";
 import crypto from "crypto";
 
 /**
@@ -114,11 +114,11 @@ export async function POST(request: Request) {
     const { data: settings } = await supabase
       .from("platform_settings")
       .select("key, value")
-      .in("key", [rateSettingKeyForRail("USDT"), "crypto_session_ttl_minutes"]);
+      .in("key", [rateSettingKeyForRail("USDT"), "crypto_session_ttl_minutes", "breet_quote_fallback_buffer_bps"]);
     const settingsMap = new Map((settings || []).map((row) => [row.key, row.value]));
     const exchangeRate = Number(settingsMap.get(rateSettingKeyForRail("USDT")) || 1650);
-    const cryptoAmount = computeCryptoAmount(amountNgn, exchangeRate);
     const ttlMinutes = Number(settingsMap.get("crypto_session_ttl_minutes") || 30);
+    const fallbackBufferBps = Number(settingsMap.get("breet_quote_fallback_buffer_bps") || 300);
 
     const result = await PaymentService.generatePlatformPaymentAddress({
       assetId: "USDT",
@@ -129,6 +129,12 @@ export async function POST(request: Request) {
       paymentType: "upgrade",
       providerEnvironment: eligibility.config.apiEnvironment,
       network: defaultNetworkForRail("USDT"),
+    });
+    const quote = resolveBreetCheckoutQuote({
+      amountNgn,
+      fallbackExchangeRate: exchangeRate,
+      providerRaw: result.raw,
+      fallbackBufferBps,
     });
 
     const { data: createdSession, error: sessionError } = await supabase.from("crypto_payment_sessions").insert({
@@ -144,7 +150,7 @@ export async function POST(request: Request) {
       expected_ngn_amount: amountNgn,
       crypto_asset: result.asset || "USDT",
       crypto_network: (typeof result.raw?.network === "string" ? result.raw.network : null) || defaultNetworkForRail("USDT"),
-      crypto_amount_expected: cryptoAmount,
+      crypto_amount_expected: quote.cryptoAmount,
       settlement_mode: settlementMode,
       settlement_recipient_type: settlementRecipientType,
       crypto_status: "crypto_payment_initialized",
@@ -167,7 +173,11 @@ export async function POST(request: Request) {
         settlement_mode: settlementMode,
         settlement_recipient_type: settlementRecipientType,
         settlement_account_snapshot: settlementAccountSnapshot,
-        exchange_rate: exchangeRate,
+        exchange_rate: quote.exchangeRate,
+        configured_exchange_rate: exchangeRate,
+        quote_source: quote.quoteSource,
+        provider_quote_available: quote.providerQuoteAvailable,
+        fallback_quote_buffer_bps: quote.fallbackBufferBps,
       },
       raw_payload: result.raw || {},
     }).select("id, expires_at").single();
@@ -183,8 +193,10 @@ export async function POST(request: Request) {
       cryptoNetwork: (typeof result.raw?.network === "string" ? result.raw.network : null) || defaultNetworkForRail("USDT"),
       cryptoCoin: result.asset || "USDT",
       fiatAmount: amountNgn,
-      cryptoAmount,
-      exchangeRate,
+      cryptoAmount: quote.cryptoAmount,
+      exchangeRate: quote.exchangeRate,
+      quoteSource: quote.quoteSource,
+      providerQuoteAvailable: quote.providerQuoteAvailable,
       reference,
       paymentSessionId: createdSession?.id || null,
       providerReference: result.id || reference,

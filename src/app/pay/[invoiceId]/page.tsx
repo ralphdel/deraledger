@@ -39,6 +39,8 @@ type CryptoCheckoutStatus = {
   asset?: string | null;
   amountInUSD?: number | null;
   rate?: number | null;
+  quoteSource?: string | null;
+  providerQuoteAvailable?: boolean | null;
   estimatedNgn?: number | null;
   invoiceCreditAmount?: number | null;
   shortfallAmount?: number | null;
@@ -87,6 +89,8 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
     fiatAmount: number;
     cryptoAmount?: number;
     exchangeRate?: number;
+    quoteSource?: string | null;
+    providerQuoteAvailable?: boolean;
     expiresAt?: string;
     reference: string;
     settlementMode?: string;
@@ -126,6 +130,8 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
       fiatAmount: status.fiatAmount || current?.fiatAmount || 0,
       cryptoAmount: status.cryptoAmount ?? current?.cryptoAmount,
       exchangeRate: status.rate ?? current?.exchangeRate,
+      quoteSource: status.quoteSource || current?.quoteSource || null,
+      providerQuoteAvailable: status.providerQuoteAvailable ?? current?.providerQuoteAvailable,
       expiresAt: status.expiresAt || current?.expiresAt,
       reference: status.reference || current?.reference || status.sessionId,
       settlementMode: current?.settlementMode,
@@ -558,6 +564,8 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
           fiatAmount: result.fiatAmount,
           cryptoAmount: result.cryptoAmount,
           exchangeRate: result.exchangeRate,
+          quoteSource: result.quoteSource || null,
+          providerQuoteAvailable: result.providerQuoteAvailable === true,
           expiresAt: result.expiresAt,
           reference: result.reference,
           settlementMode: result.settlementMode,
@@ -576,6 +584,8 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
           asset: result.cryptoCoin,
           amountInUSD: null,
           rate: result.exchangeRate ?? null,
+          quoteSource: result.quoteSource || null,
+          providerQuoteAvailable: result.providerQuoteAvailable === true,
           estimatedNgn: null,
           amountSettled: null,
           invoiceCredited: false,
@@ -1088,6 +1098,9 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                     {" "}on <strong>{cryptoDetails.network}</strong>.
                     {cryptoDetails.exchangeRate ? ` Rate locked at ${formatNaira(cryptoDetails.exchangeRate)} per ${cryptoDetails.coin.toUpperCase()}.` : ""}
                     {cryptoDetails.expiresAt ? ` Expires ${new Date(cryptoDetails.expiresAt).toLocaleString("en-NG")}.` : ""}
+                    {cryptoDetails.providerQuoteAvailable === false && cryptoDetails.quoteSource === "buffered_platform_estimate"
+                      ? " Includes a rate buffer; Breet webhook confirmation is final."
+                      : ""}
                   </p>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-left text-sm">

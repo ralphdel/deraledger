@@ -16,12 +16,12 @@ import {
 } from "@/lib/services/breet-crypto.service";
 import { getPaymentEnvironmentForMerchantEmail } from "@/lib/services/payment-routing.service";
 import {
-  computeCryptoAmount,
   confirmationSettingKeyForRail,
   defaultConfirmationsForRail,
   defaultNetworkForRail,
   normalizeCryptoRail,
   rateSettingKeyForRail,
+  resolveBreetCheckoutQuote,
 } from "@/lib/treasury";
 import { calculateProportionalPayment } from "@/lib/calculations";
 
@@ -251,6 +251,7 @@ export async function POST(request: Request) {
       rateSettingKeyForRail(rail),
       confirmationSettingKeyForRail(rail),
       "crypto_session_ttl_minutes",
+      "breet_quote_fallback_buffer_bps",
     ];
 
     const { data: settings } = await supabase
@@ -268,7 +269,7 @@ export async function POST(request: Request) {
       defaultConfirmationsForRail(rail)
     );
     const ttlMinutes = parseNumericSetting(settingsMap.get("crypto_session_ttl_minutes"), 30);
-    const cryptoAmount = computeCryptoAmount(customerPayableAmount, exchangeRate);
+    const fallbackBufferBps = parseNumericSetting(settingsMap.get("breet_quote_fallback_buffer_bps"), 300);
     const expiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString();
     const paymentSessionId = crypto.randomUUID();
     const reference = `INV-CRYPTO-${invoice.id.slice(0, 8).toUpperCase()}-${Date.now()}`;
@@ -297,6 +298,12 @@ export async function POST(request: Request) {
     });
 
     const network = (typeof addressResult.raw?.network === "string" ? addressResult.raw.network : null) || defaultNetworkForRail(rail);
+    const quote = resolveBreetCheckoutQuote({
+      amountNgn: customerPayableAmount,
+      fallbackExchangeRate: exchangeRate,
+      providerRaw: addressResult.raw,
+      fallbackBufferBps,
+    });
 
     const { error: sessionError } = await supabase.from("payment_sessions").insert({
       id: paymentSessionId,
@@ -311,8 +318,8 @@ export async function POST(request: Request) {
       source_currency: rail,
       destination_currency: "NGN",
       amount_ngn: intendedPaymentAmount,
-      amount_crypto: cryptoAmount,
-      exchange_rate: exchangeRate,
+      amount_crypto: quote.cryptoAmount,
+      exchange_rate: quote.exchangeRate,
       wallet_address: addressResult.address,
       wallet_provider_id: addressResult.walletId || addressResult.vaultId || addressResult.id || null,
       network,
@@ -348,6 +355,10 @@ export async function POST(request: Request) {
         wallet_address: addressResult.address,
         auto_settlement_enabled: addressResult.autoSettlementEnabled === true,
         settlement_account_snapshot: settlementAccountSnapshot,
+        quote_source: quote.quoteSource,
+        provider_quote_available: quote.providerQuoteAvailable,
+        fallback_quote_buffer_bps: quote.fallbackBufferBps,
+        configured_exchange_rate: exchangeRate,
       },
       expires_at: expiresAt,
     });
@@ -381,8 +392,10 @@ export async function POST(request: Request) {
         payment_session_id: paymentSessionId,
         payment_rail: rail,
         amount_ngn: intendedPaymentAmount,
-        amount_crypto: cryptoAmount,
-        exchange_rate: exchangeRate,
+        amount_crypto: quote.cryptoAmount,
+        exchange_rate: quote.exchangeRate,
+        quote_source: quote.quoteSource,
+        provider_quote_available: quote.providerQuoteAvailable,
         wallet_address: addressResult.address,
         reference,
         settlement_mode: settlementMode,
@@ -399,8 +412,10 @@ export async function POST(request: Request) {
       cryptoNetwork: network,
       cryptoCoin: rail,
       fiatAmount: intendedPaymentAmount,
-      cryptoAmount,
-      exchangeRate,
+      cryptoAmount: quote.cryptoAmount,
+      exchangeRate: quote.exchangeRate,
+      quoteSource: quote.quoteSource,
+      providerQuoteAvailable: quote.providerQuoteAvailable,
       reference,
       expiresAt,
       settlementMode,

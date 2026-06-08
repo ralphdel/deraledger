@@ -290,6 +290,9 @@ export async function GET(request: Request) {
     exchangeRate:
       numberValue(metadata.exchange_rate) ??
       numberValue(payload.rate),
+    quoteSource: stringValue(metadata.quote_source),
+    providerQuoteAvailable: metadata.provider_quote_available === true,
+    configuredExchangeRate: numberValue(metadata.configured_exchange_rate),
     expectedAmount: numberValue(session.expected_ngn_amount),
     shortfallAmount: amountReview.shortfallAmount,
     overpaymentAmount: amountReview.overpaymentAmount,
