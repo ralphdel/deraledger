@@ -20,6 +20,14 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Missing reference" }, { status: 400 });
   }
 
+  if (provider === "breet") {
+    const breetResult = await verifyProcessedBreetPlanPayment(reference);
+    if (breetResult) {
+      return NextResponse.json(breetResult, { status: breetResult.success || breetResult.status === "manual_review" ? 200 : 400 });
+    }
+    return NextResponse.json({ error: "Payment not verified" }, { status: 400 });
+  }
+
   const verification = await verifyProviderTransaction(reference, provider);
   if (!verification) {
     return NextResponse.json({ error: "Payment not verified" }, { status: 400 });
@@ -91,6 +99,103 @@ export async function POST(request: Request) {
     paymentReference: reference,
     already_processed: result?.already_processed === true,
   });
+}
+
+async function verifyProcessedBreetPlanPayment(reference: string) {
+  const paymentRecord = await findPaymentRecordByReference(supabase, reference, "breet");
+  if (paymentRecord) {
+    const paymentStatus = String(paymentRecord.payment_status || "").toLowerCase();
+    const processingStatus = String(paymentRecord.processing_status || "").toLowerCase();
+    const accountSetupStatus = String(paymentRecord.account_setup_status || "").toLowerCase();
+    const successfulStatuses = new Set(["successful", "paid", "completed"]);
+    const processedStatuses = new Set(["processed", "paid_pending_setup", "active_pending_password", "active", "account_setup_completed"]);
+
+    if (accountSetupStatus === "manual_review" || processingStatus === "manual_review") {
+      return {
+        success: false,
+        status: "manual_review",
+        message: "Payment was received, but it needs manual review before activation.",
+        paymentReference: paymentRecord.internal_reference || reference,
+      };
+    }
+
+    if (
+      successfulStatuses.has(paymentStatus) ||
+      processedStatuses.has(processingStatus) ||
+      processedStatuses.has(accountSetupStatus)
+    ) {
+      return {
+        success: true,
+        status: paymentRecord.account_setup_status || paymentRecord.processing_status || "paid_pending_setup",
+        message:
+          accountSetupStatus === "active" || accountSetupStatus === "account_setup_completed"
+            ? "Payment already processed and account setup is complete."
+            : "Payment received. Continue account setup from the email we sent you.",
+        paymentReference: paymentRecord.internal_reference || reference,
+        already_processed: true,
+      };
+    }
+
+    return {
+      success: false,
+      status: paymentRecord.processing_status || "pending_payment",
+      message: "We could not confirm your setup automatically yet.",
+      paymentReference: paymentRecord.internal_reference || reference,
+    };
+  }
+
+  const { data: session, error } = await supabase
+    .from("crypto_payment_sessions")
+    .select("internal_reference, payment_status, crypto_status, settlement_status, payment_purpose")
+    .or(`internal_reference.eq.${reference},provider_reference.eq.${reference},payment_session_reference.eq.${reference}`)
+    .eq("provider_name", "breet")
+    .eq("payment_method", "crypto")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Failed to load Breet crypto session: ${error.message}`);
+  }
+
+  if (!session) {
+    return null;
+  }
+
+  const paymentStatus = String(session.payment_status || "").toLowerCase();
+  const cryptoStatus = String(session.crypto_status || "").toLowerCase();
+  const settlementStatus = String(session.settlement_status || "").toLowerCase();
+
+  if (cryptoStatus === "manual_review" || settlementStatus === "manual_review") {
+    return {
+      success: false,
+      status: "manual_review",
+      message: "Payment was received, but it needs manual review before activation.",
+      paymentReference: String(session.internal_reference || reference),
+    };
+  }
+
+  if (
+    paymentStatus === "successful" ||
+    cryptoStatus === "crypto_payment_confirmed" ||
+    cryptoStatus === "crypto_settlement_completed" ||
+    settlementStatus === "completed"
+  ) {
+    return {
+      success: true,
+      status: "paid_pending_setup",
+      message: "Payment received. Continue account setup from the email we sent you.",
+      paymentReference: String(session.internal_reference || reference),
+      already_processed: true,
+    };
+  }
+
+  return {
+    success: false,
+    status: "pending_payment",
+    message: "We could not confirm your setup automatically yet.",
+    paymentReference: String(session.internal_reference || reference),
+  };
 }
 
 async function verifyProviderTransaction(reference: string, provider?: string) {
