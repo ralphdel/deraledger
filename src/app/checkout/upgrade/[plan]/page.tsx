@@ -184,6 +184,16 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
   }, [cryptoCheckoutStatus, cryptoDetails, cryptoStorageKey]);
 
   useEffect(() => {
+    if (cryptoCheckoutStatus?.status !== "completed" || !cryptoDetails) return;
+    const timer = window.setTimeout(() => {
+      sessionStorage.removeItem(cryptoStorageKey);
+      const reference = encodeURIComponent(cryptoDetails.reference || cryptoDetails.providerReference || "");
+      router.replace(`/settings/upgrade-success?reference=${reference}&plan=${encodeURIComponent(plan)}&provider=breet`);
+    }, 2500);
+    return () => window.clearTimeout(timer);
+  }, [cryptoCheckoutStatus?.status, cryptoDetails, cryptoStorageKey, plan, router]);
+
+  useEffect(() => {
     if (!cryptoDetails?.reference && !cryptoDetails?.paymentSessionId) return;
     if (
       cryptoCheckoutStatus?.status === "completed" ||
