@@ -203,6 +203,16 @@ function SubscriptionCheckoutContent() {
   }, [context, plan, tab]);
 
   useEffect(() => {
+    if (!cryptoDetails) return;
+    if (!availableMethods.some((method) => method.method === "crypto")) return;
+    if (tab === "crypto") return;
+    const timer = window.setTimeout(() => {
+      setTab("crypto");
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [availableMethods, cryptoDetails, tab]);
+
+  useEffect(() => {
     if (!cryptoDetails) {
       sessionStorage.removeItem(cryptoStorageKey);
       return;
