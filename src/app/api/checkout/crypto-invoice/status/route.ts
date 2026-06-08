@@ -60,16 +60,48 @@ function numberValue(value: unknown) {
 }
 
 type CheckoutStatusInfo = {
-  status: "waiting_for_payment" | "awaiting_provider_completion" | "completed" | "failed" | "expired";
+  status: "waiting_for_payment" | "awaiting_provider_completion" | "completed" | "failed" | "expired" | "manual_review";
   message: string;
   latestEvent?: string | null;
   latestProviderStatus?: string | null;
 };
 
+function getAmountReview(session: SessionRow) {
+  const payload = asRecord(session.raw_webhook_payload);
+  const metadata = asRecord(session.metadata);
+  const accounting = asRecord(payload.deraledger_accounting);
+  const expectedAmount =
+    numberValue(accounting.expected_coverage_amount) ??
+    numberValue(accounting.customer_payable_amount) ??
+    numberValue(metadata.customer_payable_amount) ??
+    numberValue(session.amount_ngn) ??
+    0;
+  const detectedAmount =
+    numberValue(accounting.coverage_amount) ??
+    numberValue(accounting.gross_provider_value_ngn) ??
+    numberValue(metadata.latest_estimated_ngn) ??
+    numberValue(metadata.latest_amount_settled) ??
+    numberValue(session.converted_ngn_amount) ??
+    0;
+  const explicitShortfallAmount =
+    numberValue(accounting.shortfall_amount_ngn) ??
+    numberValue(metadata.pending_shortfall_amount_ngn);
+  const explicitOverpaymentAmount =
+    numberValue(accounting.overpayment_amount_ngn) ??
+    numberValue(metadata.pending_overpayment_amount_ngn);
+  const hasDetectedAmount = detectedAmount > 0;
+
+  return {
+    shortfallAmount: Number((explicitShortfallAmount ?? (hasDetectedAmount ? Math.max(0, expectedAmount - detectedAmount) : 0)).toFixed(2)),
+    overpaymentAmount: Number((explicitOverpaymentAmount ?? (hasDetectedAmount ? Math.max(0, detectedAmount - expectedAmount) : 0)).toFixed(2)),
+  };
+}
+
 function toCheckoutStatus(session: SessionRow): CheckoutStatusInfo {
   const status = String(session.status || "").toUpperCase();
   const cryptoStatus = String(session.crypto_status || "").toLowerCase();
   const payload = asRecord(session.raw_webhook_payload);
+  const amountReview = getAmountReview(session);
   const latestEvent =
     stringValue(asRecord(session.metadata).latest_event) ||
     stringValue(payload.event) ||
@@ -92,6 +124,17 @@ function toCheckoutStatus(session: SessionRow): CheckoutStatusInfo {
     };
   }
 
+  if (status === "UNDER_REVIEW" || cryptoStatus === "manual_review" || cryptoStatus === "crypto_underpaid" || cryptoStatus === "crypto_overpaid") {
+    return {
+      status: "manual_review" as const,
+      message: amountReview.shortfallAmount > 0
+        ? `Payment is under review because the confirmed amount is short by NGN ${amountReview.shortfallAmount.toLocaleString()}.`
+        : "Payment is under review. We could not complete this automatically yet.",
+      latestEvent,
+      latestProviderStatus,
+    };
+  }
+
   if (status === "PAID" || status === "CONFIRMED" || status === "SETTLED" || Boolean(session.paid_at) || cryptoStatus === "crypto_payment_confirmed" || cryptoStatus === "crypto_settlement_completed") {
     return {
       status: "completed" as const,
@@ -107,7 +150,9 @@ function toCheckoutStatus(session: SessionRow): CheckoutStatusInfo {
   ) {
     return {
       status: "awaiting_provider_completion" as const,
-      message: "Crypto payment detected. Awaiting final confirmation from Breet.",
+      message: amountReview.shortfallAmount > 0
+        ? `Crypto payment detected, but the amount is below the expected invoice payment by NGN ${amountReview.shortfallAmount.toLocaleString()}. Awaiting final Breet confirmation and admin review.`
+        : "Crypto payment detected. Awaiting final confirmation from Breet.",
       latestEvent,
       latestProviderStatus,
     };
@@ -166,6 +211,7 @@ export async function GET(request: Request) {
   const payload = asRecord(session.raw_webhook_payload);
   const metadata = asRecord(session.metadata);
   const statusInfo = toCheckoutStatus(session);
+  const amountReview = getAmountReview(session);
   const confirmations =
     numberValue(metadata.latest_confirmation_count) ??
     numberValue(payload.confirmations) ??
@@ -232,6 +278,8 @@ export async function GET(request: Request) {
     rate,
     estimatedNgn,
     invoiceCreditAmount,
+    shortfallAmount: amountReview.shortfallAmount,
+    overpaymentAmount: amountReview.overpaymentAmount,
     customerPayableAmount,
     grossProviderValueNgn,
     amountSettled,

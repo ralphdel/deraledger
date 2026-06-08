@@ -209,6 +209,8 @@ function getPlanSessionAccounting(
   const providerFeeAmount = roundCurrency(
     Math.max(0, grossProviderValueNgn - amountSettledNgn)
   );
+  const shortfallAmount = roundCurrency(Math.max(0, expectedAmountNgn - grossProviderValueNgn));
+  const overpaymentAmount = roundCurrency(Math.max(0, grossProviderValueNgn - expectedAmountNgn));
 
   return {
     feePayer: "business" as const,
@@ -217,6 +219,8 @@ function getPlanSessionAccounting(
     grossProviderValueNgn,
     amountSettledNgn,
     providerFeeAmount,
+    shortfallAmount,
+    overpaymentAmount,
   };
 }
 
@@ -444,6 +448,15 @@ async function recordNonTerminalEvent(input: {
   const convertedNgN =
     pendingObservation.latest_amount_settled ||
     confirmedBreetNgnAmount(input.payload, Number(input.session.converted_ngn_amount || input.session.amount_ngn || 0));
+  const expectedNgN = Number(input.session.expected_ngn_amount || input.session.amount_ngn || 0);
+  const detectedNgN = Number(
+    pendingObservation.latest_estimated_ngn ||
+      pendingObservation.latest_amount_settled ||
+      convertedNgN ||
+      0
+  );
+  const pendingShortfallAmount = roundCurrency(Math.max(0, expectedNgN - detectedNgN));
+  const pendingOverpaymentAmount = roundCurrency(Math.max(0, detectedNgN - expectedNgN));
   const cryptoAmountReceived =
     positiveNumberValue(input.payload.cryptoAmount) ||
     positiveNumberValue(eventDataValue(input.payload, ["crypto_amount"])) ||
@@ -455,8 +468,16 @@ async function recordNonTerminalEvent(input: {
     crypto_status: isFlagged ? "manual_review" : lifecycleStatus,
     webhook_status: "processed",
     raw_webhook_payload: input.payload,
-    metadata: mergedMetadata,
-    manual_review_reason: isFlagged ? "Breet flagged the transaction for review." : String(input.session.manual_review_reason || "") || null,
+    metadata: {
+      ...mergedMetadata,
+      pending_shortfall_amount_ngn: pendingShortfallAmount,
+      pending_overpayment_amount_ngn: pendingOverpaymentAmount,
+    },
+    manual_review_reason: isFlagged
+      ? "Breet flagged the transaction for review."
+      : pendingShortfallAmount > 0 && processingStatus === "awaiting_provider_completion"
+        ? `Payment detected below expected amount. Shortfall: NGN ${pendingShortfallAmount.toFixed(2)}.`
+        : String(input.session.manual_review_reason || "") || null,
     updated_at: now,
   };
 
@@ -511,8 +532,12 @@ async function recordNonTerminalEvent(input: {
     plan_id: stringValue(input.session.plan_id) || null,
     customer_email: stringValue(asRecord(input.session.metadata).email) || null,
     processing_status: isFlagged ? "manual_review" : processingStatus,
-    failure_reason: isFlagged ? "breet_flagged" : null,
-    reconciliation_status: isFlagged ? "under_review" : "awaiting_terminal_breet_event",
+    failure_reason: isFlagged ? "breet_flagged" : pendingShortfallAmount > 0 ? "amount_below_expected" : null,
+    reconciliation_status: isFlagged
+      ? "under_review"
+      : pendingShortfallAmount > 0
+        ? "amount_under_review"
+        : "awaiting_terminal_breet_event",
   });
 
   await recordWebhookLog({
@@ -762,6 +787,8 @@ async function handleInvoiceWebhook(input: {
         invoice_credit_amount: 0,
         coverage_amount: coverageAmount,
         expected_coverage_amount: expectedCoverageAmount,
+        shortfall_amount_ngn: roundCurrency(Math.max(0, expectedCoverageAmount - coverageAmount)),
+        overpayment_amount_ngn: roundCurrency(Math.max(0, coverageAmount - expectedCoverageAmount)),
       },
     };
 
@@ -853,6 +880,8 @@ async function handleInvoiceWebhook(input: {
       amount_settled_ngn: accounting.amountSettledNgn,
       provider_fee_amount: accounting.providerFeeAmount,
       invoice_credit_amount: accounting.selectedInvoiceAmount,
+      shortfall_amount_ngn: roundCurrency(Math.max(0, accounting.customerPayableAmount - accounting.grossProviderValueNgn)),
+      overpayment_amount_ngn: roundCurrency(Math.max(0, accounting.grossProviderValueNgn - accounting.customerPayableAmount)),
       destination_address: stringValue(payload.destinationAddress) || stringValue(payload.address) || stringValue(session.wallet_address),
       tx_hash: txHash || null,
     },
@@ -1163,14 +1192,20 @@ async function handlePlanWebhook(input: {
     return NextResponse.json({ received: true, mapped: true, skipped: true, reason: lifecycleStatus });
   }
 
-  if (expectedNgN > 0 && !withinTolerance(expectedNgN, grossPaidNgN, Number((await readSettings(["crypto_underpayment_tolerance_bps"])).get("crypto_underpayment_tolerance_bps") || "100"))) {
-    const cryptoStatus = grossPaidNgN < expectedNgN ? "crypto_underpaid" : "crypto_overpaid";
+  const toleranceBps = Number((await readSettings(["crypto_underpayment_tolerance_bps"])).get("crypto_underpayment_tolerance_bps") || "100");
+  const isUnderpaidBeyondTolerance =
+    expectedNgN > 0 &&
+    grossPaidNgN < expectedNgN &&
+    !withinTolerance(expectedNgN, grossPaidNgN, toleranceBps);
+
+  if (isUnderpaidBeyondTolerance) {
+    const cryptoStatus = "crypto_underpaid";
     await supabase
       .from("crypto_payment_sessions")
       .update({
         crypto_status: cryptoStatus,
         settlement_status: "manual_review",
-        manual_review_reason: cryptoStatus === "crypto_underpaid" ? "Underpayment requires manual review." : "Overpayment requires manual review.",
+        manual_review_reason: `Underpayment requires manual review. Shortfall: NGN ${planAccounting.shortfallAmount.toFixed(2)}.`,
         crypto_amount_received: amountCrypto || null,
         converted_ngn_amount: grossPaidNgN,
         provider_fee: planAccounting.providerFeeAmount,
@@ -1187,6 +1222,8 @@ async function handlePlanWebhook(input: {
             amount_settled_ngn: planAccounting.amountSettledNgn,
             provider_fee_amount: planAccounting.providerFeeAmount,
             expected_amount_ngn: planAccounting.expectedAmountNgn,
+            shortfall_amount_ngn: planAccounting.shortfallAmount,
+            overpayment_amount_ngn: 0,
             destination_address: stringValue(payload.destinationAddress) || stringValue(payload.address) || stringValue(asRecord(session.metadata).wallet_address) || null,
             tx_hash: txHash || null,
           },
@@ -1206,6 +1243,44 @@ async function handlePlanWebhook(input: {
       errorMessage: cryptoStatus,
       rawPayload: payload,
     });
+    await supabase.from("payment_events").insert({
+      merchant_id: stringValue(session.merchant_id) || null,
+      invoice_id: null,
+      transaction_id: null,
+      event_type: eventType,
+      processor: "breet",
+      processor_ref: providerReference || txHash || null,
+      amount_kobo: amountKobo,
+      raw_payload: {
+        ...payload,
+        deraledger_accounting: {
+          fee_payer: planAccounting.feePayer,
+          customer_payable_amount: planAccounting.customerPayableAmount,
+          gross_provider_value_ngn: planAccounting.grossProviderValueNgn,
+          amount_settled_ngn: planAccounting.amountSettledNgn,
+          provider_fee_amount: planAccounting.providerFeeAmount,
+          expected_amount_ngn: planAccounting.expectedAmountNgn,
+          shortfall_amount_ngn: planAccounting.shortfallAmount,
+          overpayment_amount_ngn: 0,
+          destination_address: stringValue(payload.destinationAddress) || stringValue(payload.address) || stringValue(asRecord(session.metadata).wallet_address) || null,
+          tx_hash: txHash || null,
+        },
+      },
+      idempotency_key: idempotencyKey || null,
+      payment_method: "crypto",
+      payment_purpose: String(session.payment_purpose || asRecord(session.metadata).payment_purpose || "plan_subscription"),
+      payment_reference: String(session.internal_reference || session.id),
+      provider_reference: providerReference || txHash || null,
+      expected_amount: planAccounting.expectedAmountNgn,
+      paid_amount: grossPaidNgN,
+      currency: "NGN",
+      fee: planAccounting.providerFeeAmount,
+      plan_id: stringValue(session.plan_id) || stringValue(asRecord(session.metadata).new_plan) || stringValue(asRecord(session.metadata).plan) || null,
+      customer_email: stringValue(asRecord(session.metadata).email) || null,
+      processing_status: "manual_review",
+      failure_reason: "amount_below_expected",
+      reconciliation_status: "underpaid_manual_review",
+    });
     await updateProviderWebhookHealth("success");
     return NextResponse.json({ received: true, mapped: true, underReview: true });
   }
@@ -1222,6 +1297,8 @@ async function handlePlanWebhook(input: {
       amount_settled_ngn: planAccounting.amountSettledNgn,
       provider_fee_amount: planAccounting.providerFeeAmount,
       expected_amount_ngn: planAccounting.expectedAmountNgn,
+      shortfall_amount_ngn: 0,
+      overpayment_amount_ngn: planAccounting.overpaymentAmount,
       destination_address: stringValue(payload.destinationAddress) || stringValue(payload.address) || stringValue(asRecord(session.metadata).wallet_address) || null,
       tx_hash: txHash || null,
     },
@@ -1275,7 +1352,7 @@ async function handlePlanWebhook(input: {
         currency: "NGN",
         payment_status: "successful",
         processing_status: "processed",
-        reconciliation_status: "settlement_recorded",
+        reconciliation_status: planAccounting.overpaymentAmount > 0 ? "settlement_recorded_overpayment" : "settlement_recorded",
         customer_email: metadata.email || null,
         plan_id: stringValue(session.plan_id) || stringValue(metadata.new_plan) || stringValue(metadata.plan) || null,
         plan_name: stringValue(session.plan_id) || stringValue(metadata.new_plan) || stringValue(metadata.plan) || null,
@@ -1371,7 +1448,7 @@ async function handlePlanWebhook(input: {
     plan_id: stringValue(session.plan_id) || stringValue(metadata.new_plan) || stringValue(metadata.plan) || null,
     customer_email: stringValue(metadata.email) || null,
     processing_status: "completed",
-    reconciliation_status: "settlement_recorded",
+    reconciliation_status: planAccounting.overpaymentAmount > 0 ? "settlement_recorded_overpayment" : "settlement_recorded",
   });
 
   await recordWebhookLog({

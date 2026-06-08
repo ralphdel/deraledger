@@ -47,6 +47,8 @@ type CryptoCheckoutStatus = {
   message: string;
   providerReference?: string | null;
   paymentSessionId?: string | null;
+  shortfallAmount?: number | null;
+  overpaymentAmount?: number | null;
 };
 
 type CryptoCheckoutDetails = {
@@ -210,6 +212,8 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
           message: payload.message,
           providerReference: payload.providerReference || null,
           paymentSessionId: payload.sessionId || null,
+          shortfallAmount: payload.shortfallAmount ?? null,
+          overpaymentAmount: payload.overpaymentAmount ?? null,
         });
         setCryptoDetails((current) => current ? {
           ...current,
@@ -355,6 +359,8 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
         message: "Waiting for crypto payment. Send the exact amount to the wallet address below.",
         providerReference: data.providerReference || null,
         paymentSessionId: data.paymentSessionId || null,
+        shortfallAmount: null,
+        overpaymentAmount: null,
       });
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Something went wrong.");
@@ -579,6 +585,16 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
                                 : "Waiting for Payment"}
                       </p>
                       <p className="mt-1 text-xs text-orange-800">{cryptoCheckoutStatus.message}</p>
+                      {cryptoCheckoutStatus.shortfallAmount && cryptoCheckoutStatus.shortfallAmount > 0 ? (
+                        <p className="mt-2 text-xs font-semibold text-orange-900">
+                          Shortfall: NGN {cryptoCheckoutStatus.shortfallAmount.toLocaleString()}
+                        </p>
+                      ) : null}
+                      {cryptoCheckoutStatus.overpaymentAmount && cryptoCheckoutStatus.overpaymentAmount > 0 ? (
+                        <p className="mt-2 text-xs font-semibold text-orange-900">
+                          Overpayment: NGN {cryptoCheckoutStatus.overpaymentAmount.toLocaleString()}
+                        </p>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>

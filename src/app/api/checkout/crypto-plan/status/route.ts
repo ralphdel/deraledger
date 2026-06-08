@@ -63,10 +63,44 @@ function numberValue(value: unknown) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function getAmountReview(session: CryptoPlanSessionRow) {
+  const payload = asRecord(session.raw_webhook_payload);
+  const metadata = asRecord(session.metadata);
+  const accounting = asRecord(payload.deraledger_accounting);
+  const expectedAmount = numberValue(session.expected_ngn_amount) ?? 0;
+  const explicitShortfallAmount =
+    numberValue(accounting.shortfall_amount_ngn) ??
+    numberValue(metadata.pending_shortfall_amount_ngn);
+  const explicitOverpaymentAmount =
+    numberValue(accounting.overpayment_amount_ngn) ??
+    numberValue(metadata.pending_overpayment_amount_ngn);
+  const detectedAmount =
+    numberValue(accounting.gross_provider_value_ngn) ??
+    numberValue(metadata.latest_estimated_ngn) ??
+    numberValue(metadata.latest_amount_settled) ??
+    numberValue(session.converted_ngn_amount) ??
+    0;
+  const hasDetectedAmount = detectedAmount > 0;
+  const shortfallAmount =
+    explicitShortfallAmount ??
+    (hasDetectedAmount ? Math.max(0, expectedAmount - detectedAmount) : 0);
+  const overpaymentAmount =
+    explicitOverpaymentAmount ??
+    (hasDetectedAmount ? Math.max(0, detectedAmount - expectedAmount) : 0);
+
+  return {
+    expectedAmount,
+    detectedAmount,
+    shortfallAmount: Number(shortfallAmount.toFixed(2)),
+    overpaymentAmount: Number(overpaymentAmount.toFixed(2)),
+  };
+}
+
 function statusMessage(session: CryptoPlanSessionRow, status: CheckoutStatus) {
   const purpose = String(session.payment_purpose || "");
   const metadata = asRecord(session.metadata);
   const paymentType = String(metadata.type || "");
+  const amountReview = getAmountReview(session);
 
   if (status === "completed") {
     if (purpose === "plan_renewal" || paymentType === "subscription_renewal") {
@@ -79,10 +113,16 @@ function statusMessage(session: CryptoPlanSessionRow, status: CheckoutStatus) {
   }
 
   if (status === "awaiting_provider_completion") {
+    if (amountReview.shortfallAmount > 0) {
+      return `Payment detected, but the confirmed amount is below the expected plan amount by NGN ${amountReview.shortfallAmount.toLocaleString()}. Awaiting final Breet confirmation and admin review.`;
+    }
     return "Payment detected. Awaiting final confirmation from Breet.";
   }
 
   if (status === "manual_review") {
+    if (amountReview.shortfallAmount > 0) {
+      return `Payment is under review because the confirmed amount is short by NGN ${amountReview.shortfallAmount.toLocaleString()}.`;
+    }
     return "Payment is under review. We could not complete this automatically yet.";
   }
 
@@ -217,6 +257,7 @@ export async function GET(request: Request) {
   const metadata = asRecord(session.metadata);
   const accounting = asRecord(payload.deraledger_accounting);
   const statusInfo = toCheckoutStatus(session);
+  const amountReview = getAmountReview(session);
 
   return NextResponse.json({
     sessionId: session.id,
@@ -246,6 +287,8 @@ export async function GET(request: Request) {
       numberValue(metadata.exchange_rate) ??
       numberValue(payload.rate),
     expectedAmount: numberValue(session.expected_ngn_amount),
+    shortfallAmount: amountReview.shortfallAmount,
+    overpaymentAmount: amountReview.overpaymentAmount,
     customerPayableAmount:
       numberValue(accounting.customer_payable_amount) ??
       numberValue(session.expected_ngn_amount),

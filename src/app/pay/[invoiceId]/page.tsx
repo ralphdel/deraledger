@@ -30,7 +30,7 @@ type MethodAvailability = Record<
 type CryptoCheckoutStatus = {
   sessionId: string;
   invoiceId?: string;
-  status: "waiting_for_payment" | "payment_detected" | "awaiting_provider_completion" | "completed" | "failed" | "expired";
+  status: "waiting_for_payment" | "payment_detected" | "awaiting_provider_completion" | "completed" | "failed" | "expired" | "manual_review";
   event?: string | null;
   provider: "breet";
   paymentMethod: string;
@@ -41,6 +41,8 @@ type CryptoCheckoutStatus = {
   rate?: number | null;
   estimatedNgn?: number | null;
   invoiceCreditAmount?: number | null;
+  shortfallAmount?: number | null;
+  overpaymentAmount?: number | null;
   customerPayableAmount?: number | null;
   grossProviderValueNgn?: number | null;
   amountSettled?: number | null;
@@ -321,7 +323,7 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
           setIsRefreshing(false);
         }
 
-        if (["completed", "failed", "expired"].includes(payload.status) && intervalId) {
+        if (["completed", "failed", "expired", "manual_review"].includes(payload.status) && intervalId) {
           clearInterval(intervalId);
           intervalId = null;
         }
@@ -1106,14 +1108,16 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                       ? "bg-emerald-50 border-emerald-200 text-emerald-800"
                       : cryptoCheckoutStatus?.status === "failed" || cryptoCheckoutStatus?.status === "expired"
                         ? "bg-red-50 border-red-200 text-red-800"
-                        : cryptoCheckoutStatus?.status === "awaiting_provider_completion" || cryptoCheckoutStatus?.status === "payment_detected"
+                        : cryptoCheckoutStatus?.status === "manual_review" || cryptoCheckoutStatus?.status === "awaiting_provider_completion" || cryptoCheckoutStatus?.status === "payment_detected"
                           ? "bg-amber-50 border-amber-200 text-amber-800"
                           : "bg-emerald-50 border-emerald-200 text-emerald-800"
                   }`}>
                     <p className="font-semibold">
                       {cryptoCheckoutStatus?.status === "completed"
                         ? "Payment confirmed"
-                        : cryptoCheckoutStatus?.status === "failed" || cryptoCheckoutStatus?.status === "expired"
+                        : cryptoCheckoutStatus?.status === "manual_review"
+                          ? "Payment under review"
+                          : cryptoCheckoutStatus?.status === "failed" || cryptoCheckoutStatus?.status === "expired"
                           ? "Payment could not be completed"
                           : cryptoCheckoutStatus?.status === "awaiting_provider_completion" || cryptoCheckoutStatus?.status === "payment_detected"
                             ? "Payment detected"
@@ -1124,7 +1128,7 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                     </p>
                   </div>
                 </div>
-                {(cryptoCheckoutStatus?.txHash || cryptoCheckoutStatus?.confirmations || cryptoCheckoutStatus?.estimatedNgn || cryptoCheckoutStatus?.invoiceCreditAmount || cryptoCheckoutStatus?.amountSettled) ? (
+                {(cryptoCheckoutStatus?.txHash || cryptoCheckoutStatus?.confirmations || cryptoCheckoutStatus?.estimatedNgn || cryptoCheckoutStatus?.invoiceCreditAmount || cryptoCheckoutStatus?.amountSettled || cryptoCheckoutStatus?.shortfallAmount || cryptoCheckoutStatus?.overpaymentAmount) ? (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-left text-sm">
                     {cryptoCheckoutStatus?.txHash ? (
                       <div className="bg-white border border-neutral-200 rounded-xl p-3">
@@ -1154,6 +1158,20 @@ export default function PublicPaymentPortal({ params }: { params: Promise<{ invo
                         <p className="text-xs uppercase tracking-wide font-semibold">Invoice Payment Amount</p>
                         <p className="font-semibold mt-1">{formatNaira(cryptoCheckoutStatus.invoiceCreditAmount)}</p>
                         <p className="text-[11px] mt-1">This is the amount credited to your invoice after confirmation.</p>
+                      </div>
+                    ) : null}
+                    {typeof cryptoCheckoutStatus?.shortfallAmount === "number" && cryptoCheckoutStatus.shortfallAmount > 0 ? (
+                      <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-red-800">
+                        <p className="text-xs uppercase tracking-wide font-semibold">Shortfall</p>
+                        <p className="font-semibold mt-1">{formatNaira(cryptoCheckoutStatus.shortfallAmount)}</p>
+                        <p className="text-[11px] mt-1">This payment needs review before invoice credit.</p>
+                      </div>
+                    ) : null}
+                    {typeof cryptoCheckoutStatus?.overpaymentAmount === "number" && cryptoCheckoutStatus.overpaymentAmount > 0 ? (
+                      <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-blue-800">
+                        <p className="text-xs uppercase tracking-wide font-semibold">Overpayment</p>
+                        <p className="font-semibold mt-1">{formatNaira(cryptoCheckoutStatus.overpaymentAmount)}</p>
+                        <p className="text-[11px] mt-1">The excess is tracked for reconciliation.</p>
                       </div>
                     ) : null}
                     {typeof cryptoCheckoutStatus?.amountSettled === "number" ? (
