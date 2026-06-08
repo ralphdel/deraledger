@@ -218,6 +218,8 @@ export async function POST(request: Request) {
       cryptoNetwork: (typeof result.raw?.network === "string" ? result.raw.network : null) || defaultNetworkForRail("USDT"),
       cryptoCoin: result.asset || "USDT",
       fiatAmount,
+      cryptoAmount,
+      exchangeRate,
       reference,
       paymentSessionId: createdSession?.id || null,
       providerReference: result.id || reference,

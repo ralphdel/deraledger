@@ -68,6 +68,8 @@ type CryptoCheckoutDetails = {
   network: string;
   coin: string;
   fiatAmount: number;
+  cryptoAmount: number | null;
+  exchangeRate: number | null;
   reference: string;
   providerReference: string | null;
   paymentSessionId: string | null;
@@ -261,6 +263,8 @@ function SubscriptionCheckoutContent() {
           network: payload.network || current.network,
           coin: payload.asset || current.coin,
           fiatAmount: payload.expectedAmount ?? current.fiatAmount,
+          cryptoAmount: payload.cryptoAmount ?? current.cryptoAmount,
+          exchangeRate: payload.exchangeRate ?? current.exchangeRate,
           providerReference: payload.providerReference || current.providerReference,
           paymentSessionId: payload.sessionId || current.paymentSessionId,
           expiresAt: payload.expiresAt || current.expiresAt,
@@ -424,6 +428,8 @@ function SubscriptionCheckoutContent() {
       setCryptoDetails({
         address: data.cryptoAddress, network: data.cryptoNetwork,
         coin: data.cryptoCoin, fiatAmount: data.fiatAmount, reference: data.reference,
+        cryptoAmount: data.cryptoAmount ?? null,
+        exchangeRate: data.exchangeRate ?? null,
         providerReference: data.providerReference || null,
         paymentSessionId: data.paymentSessionId || null,
         expiresAt: data.expiresAt || null,
@@ -647,7 +653,12 @@ function SubscriptionCheckoutContent() {
                     {copied ? <><Check className="h-3.5 w-3.5 mr-1" />Copied</> : <><Copy className="h-3.5 w-3.5 mr-1" />Copy Address</>}
                   </Button>
                   <p className="text-xs text-orange-700 text-center">
-                    Send equivalent of <strong>NGN {cryptoDetails.fiatAmount.toLocaleString()}</strong> in {cryptoDetails.coin}
+                    Send{" "}
+                    <strong>
+                      {cryptoDetails.cryptoAmount?.toFixed(8) || "the quoted amount"} {cryptoDetails.coin}
+                    </strong>
+                    {" "}for NGN {cryptoDetails.fiatAmount.toLocaleString()}
+                    {cryptoDetails.exchangeRate ? ` at NGN ${cryptoDetails.exchangeRate.toLocaleString()} per ${cryptoDetails.coin}.` : "."}
                   </p>
                   {cryptoCheckoutStatus ? (
                     <div className="rounded-lg border border-orange-200 bg-white p-3 text-sm text-orange-900">

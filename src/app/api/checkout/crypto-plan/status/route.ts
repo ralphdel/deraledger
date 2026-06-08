@@ -242,6 +242,9 @@ export async function GET(request: Request) {
       numberValue(session.crypto_amount_received) ??
       numberValue(payload.cryptoAmount) ??
       numberValue(session.crypto_amount_expected),
+    exchangeRate:
+      numberValue(metadata.exchange_rate) ??
+      numberValue(payload.rate),
     expectedAmount: numberValue(session.expected_ngn_amount),
     customerPayableAmount:
       numberValue(accounting.customer_payable_amount) ??
