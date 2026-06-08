@@ -67,13 +67,17 @@ function getAmountReview(session: CryptoPlanSessionRow) {
   const payload = asRecord(session.raw_webhook_payload);
   const metadata = asRecord(session.metadata);
   const accounting = asRecord(payload.deraledger_accounting);
+  const latestEvent =
+    stringValue(metadata.latest_event) ||
+    stringValue(payload.event) ||
+    stringValue(metadata.latest_provider_event);
   const expectedAmount = numberValue(session.expected_ngn_amount) ?? 0;
   const explicitShortfallAmount =
     numberValue(accounting.shortfall_amount_ngn) ??
-    numberValue(metadata.pending_shortfall_amount_ngn);
+    (latestEvent === "trade.pending" ? numberValue(metadata.pending_shortfall_amount_ngn) : null);
   const explicitOverpaymentAmount =
     numberValue(accounting.overpayment_amount_ngn) ??
-    numberValue(metadata.pending_overpayment_amount_ngn);
+    (latestEvent === "trade.pending" ? numberValue(metadata.pending_overpayment_amount_ngn) : null);
   const detectedAmount =
     numberValue(accounting.gross_provider_value_ngn) ??
     numberValue(metadata.latest_estimated_ngn) ??

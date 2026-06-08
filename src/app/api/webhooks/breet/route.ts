@@ -455,14 +455,19 @@ async function recordNonTerminalEvent(input: {
       convertedNgN ||
       0
   );
-  const pendingShortfallAmount = roundCurrency(Math.max(0, expectedNgN - detectedNgN));
-  const pendingOverpaymentAmount = roundCurrency(Math.max(0, detectedNgN - expectedNgN));
   const cryptoAmountReceived =
     positiveNumberValue(input.payload.cryptoAmount) ||
     positiveNumberValue(eventDataValue(input.payload, ["crypto_amount"])) ||
     positiveNumberValue(input.session.crypto_amount_received) ||
     null;
   const processingStatus = getNonTerminalProcessingStatus(input.eventType, lifecycleStatus);
+  const hasDetectedPaymentAmount = processingStatus === "awaiting_provider_completion" && detectedNgN > 0;
+  const pendingShortfallAmount = hasDetectedPaymentAmount
+    ? roundCurrency(Math.max(0, expectedNgN - detectedNgN))
+    : 0;
+  const pendingOverpaymentAmount = hasDetectedPaymentAmount
+    ? roundCurrency(Math.max(0, detectedNgN - expectedNgN))
+    : 0;
   const updateBase = {
     provider_reference: input.providerReference || input.session.provider_reference || null,
     crypto_status: isFlagged ? "manual_review" : lifecycleStatus,
