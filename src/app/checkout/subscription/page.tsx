@@ -56,6 +56,24 @@ type AvailableMethod = {
   fallbackProvider: "paystack" | "monnify" | "breet" | null;
 };
 
+type CryptoCheckoutStatus = {
+  status: "waiting_for_payment" | "awaiting_provider_completion" | "completed" | "failed" | "expired" | "manual_review";
+  message: string;
+  providerReference?: string | null;
+  paymentSessionId?: string | null;
+};
+
+type CryptoCheckoutDetails = {
+  address: string;
+  network: string;
+  coin: string;
+  fiatAmount: number;
+  reference: string;
+  providerReference: string | null;
+  paymentSessionId: string | null;
+  expiresAt: string | null;
+};
+
 // ─── Context: 'onboarding' (new subscription) | 'renewal' (existing merchant) ─
 type CheckoutContext = "onboarding" | "renewal";
 
@@ -85,12 +103,12 @@ function SubscriptionCheckoutContent() {
   const [tab, setTab] = useState<Tab>("card");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [cryptoDetails, setCryptoDetails] = useState<{
-    address: string; network: string; coin: string; fiatAmount: number; reference: string;
-  } | null>(null);
+  const [cryptoDetails, setCryptoDetails] = useState<CryptoCheckoutDetails | null>(null);
+  const [cryptoCheckoutStatus, setCryptoCheckoutStatus] = useState<CryptoCheckoutStatus | null>(null);
   const [availableMethods, setAvailableMethods] = useState<AvailableMethod[]>([]);
   const [copied, setCopied] = useState(false);
   const paystackLoaded = useRef(false);
+  const cryptoStorageKey = `breet-subscription-crypto:${context}:${plan}`;
 
   // Load Paystack inline JS
   useEffect(() => {
@@ -148,6 +166,24 @@ function SubscriptionCheckoutContent() {
   }, [context, plan, router, config]);
 
   useEffect(() => {
+    const raw = sessionStorage.getItem(cryptoStorageKey);
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw) as {
+        details?: CryptoCheckoutDetails | null;
+        status?: CryptoCheckoutStatus | null;
+      };
+      const timer = window.setTimeout(() => {
+        setCryptoDetails(parsed.details || null);
+        setCryptoCheckoutStatus(parsed.status || null);
+      }, 0);
+      return () => window.clearTimeout(timer);
+    } catch {
+      sessionStorage.removeItem(cryptoStorageKey);
+    }
+  }, [cryptoStorageKey]);
+
+  useEffect(() => {
     const controller = new AbortController();
     fetch(`/api/checkout/payment-methods?kind=subscription&plan=${plan}&context=${context}`, {
       signal: controller.signal,
@@ -165,6 +201,75 @@ function SubscriptionCheckoutContent() {
       });
     return () => controller.abort();
   }, [context, plan, tab]);
+
+  useEffect(() => {
+    if (!cryptoDetails) {
+      sessionStorage.removeItem(cryptoStorageKey);
+      return;
+    }
+    sessionStorage.setItem(cryptoStorageKey, JSON.stringify({
+      details: cryptoDetails,
+      status: cryptoCheckoutStatus,
+    }));
+  }, [cryptoCheckoutStatus, cryptoDetails, cryptoStorageKey]);
+
+  useEffect(() => {
+    if (!cryptoDetails?.reference && !cryptoDetails?.paymentSessionId) return;
+    if (
+      cryptoCheckoutStatus?.status === "completed" ||
+      cryptoCheckoutStatus?.status === "failed" ||
+      cryptoCheckoutStatus?.status === "expired" ||
+      cryptoCheckoutStatus?.status === "manual_review"
+    ) {
+      return;
+    }
+
+    let active = true;
+    const params = new URLSearchParams();
+    if (cryptoDetails.paymentSessionId) {
+      params.set("sessionId", cryptoDetails.paymentSessionId);
+    } else if (cryptoDetails.reference) {
+      params.set("reference", cryptoDetails.reference);
+    }
+
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/checkout/crypto-plan/status?${params.toString()}`, {
+          cache: "no-store",
+        });
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok || !active) return;
+        setCryptoCheckoutStatus({
+          status: payload.status,
+          message: payload.message,
+          providerReference: payload.providerReference || null,
+          paymentSessionId: payload.sessionId || null,
+        });
+        setCryptoDetails((current) => current ? {
+          ...current,
+          address: payload.walletAddress || current.address,
+          network: payload.network || current.network,
+          coin: payload.asset || current.coin,
+          fiatAmount: payload.expectedAmount ?? current.fiatAmount,
+          providerReference: payload.providerReference || current.providerReference,
+          paymentSessionId: payload.sessionId || current.paymentSessionId,
+          expiresAt: payload.expiresAt || current.expiresAt,
+        } : current);
+      } catch {
+        // keep the last visible status; polling will retry
+      }
+    };
+
+    void poll();
+    const interval = window.setInterval(() => {
+      void poll();
+    }, 5000);
+
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [cryptoCheckoutStatus?.status, cryptoDetails?.paymentSessionId, cryptoDetails?.reference]);
 
   if (!config) {
     return (
@@ -309,6 +414,15 @@ function SubscriptionCheckoutContent() {
       setCryptoDetails({
         address: data.cryptoAddress, network: data.cryptoNetwork,
         coin: data.cryptoCoin, fiatAmount: data.fiatAmount, reference: data.reference,
+        providerReference: data.providerReference || null,
+        paymentSessionId: data.paymentSessionId || null,
+        expiresAt: data.expiresAt || null,
+      });
+      setCryptoCheckoutStatus({
+        status: "waiting_for_payment",
+        message: "Waiting for crypto payment. Send the exact amount to the wallet address below.",
+        providerReference: data.providerReference || null,
+        paymentSessionId: data.paymentSessionId || null,
       });
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Something went wrong.");
@@ -510,12 +624,37 @@ function SubscriptionCheckoutContent() {
                     <span className="text-xs bg-orange-200 text-orange-900 rounded px-2 py-0.5 font-medium">{cryptoDetails.network}</span>
                   </div>
                   <div className="bg-white rounded-lg border border-orange-200 p-3 font-mono text-xs text-neutral-700 break-all">{cryptoDetails.address}</div>
+                  <div className="grid gap-2 rounded-lg border border-orange-200 bg-white p-3 text-xs text-neutral-700">
+                    <p><span className="font-semibold text-neutral-900">Reference:</span> <span className="font-mono break-all">{cryptoDetails.reference}</span></p>
+                    {cryptoDetails.providerReference ? (
+                      <p><span className="font-semibold text-neutral-900">Provider Reference:</span> <span className="font-mono break-all">{cryptoDetails.providerReference}</span></p>
+                    ) : null}
+                    {cryptoDetails.paymentSessionId ? (
+                      <p><span className="font-semibold text-neutral-900">Payment Session:</span> <span className="font-mono break-all">{cryptoDetails.paymentSessionId}</span></p>
+                    ) : null}
+                  </div>
                   <Button variant="outline" size="sm" onClick={() => handleCopy(cryptoDetails.address)} className="w-full border-orange-300 text-orange-700">
                     {copied ? <><Check className="h-3.5 w-3.5 mr-1" />Copied</> : <><Copy className="h-3.5 w-3.5 mr-1" />Copy Address</>}
                   </Button>
                   <p className="text-xs text-orange-700 text-center">
                     Send equivalent of <strong>NGN {cryptoDetails.fiatAmount.toLocaleString()}</strong> in {cryptoDetails.coin}
                   </p>
+                  {cryptoCheckoutStatus ? (
+                    <div className="rounded-lg border border-orange-200 bg-white p-3 text-sm text-orange-900">
+                      <p className="font-semibold">
+                        {cryptoCheckoutStatus.status === "awaiting_provider_completion"
+                          ? "Payment Detected"
+                          : cryptoCheckoutStatus.status === "completed"
+                            ? "Payment Confirmed"
+                            : cryptoCheckoutStatus.status === "manual_review"
+                              ? "Payment Under Review"
+                              : cryptoCheckoutStatus.status === "failed" || cryptoCheckoutStatus.status === "expired"
+                                ? "Payment Unavailable"
+                                : "Waiting for Payment"}
+                      </p>
+                      <p className="mt-1 text-xs text-orange-800">{cryptoCheckoutStatus.message}</p>
+                    </div>
+                  ) : null}
                 </div>
               ) : (
                 <div className="rounded-xl border-2 border-orange-100 bg-orange-50 p-5">

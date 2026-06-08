@@ -131,7 +131,7 @@ export async function POST(request: Request) {
       network: defaultNetworkForRail("USDT"),
     });
 
-    const { error: sessionError } = await supabase.from("crypto_payment_sessions").insert({
+    const { data: createdSession, error: sessionError } = await supabase.from("crypto_payment_sessions").insert({
       merchant_id: merchant.id,
       user_id: user.id,
       business_id: null,
@@ -170,7 +170,7 @@ export async function POST(request: Request) {
         exchange_rate: exchangeRate,
       },
       raw_payload: result.raw || {},
-    });
+    }).select("id, expires_at").single();
 
     if (sessionError) {
       console.error("Failed to create upgrade crypto payment session:", sessionError.message);
@@ -184,10 +184,12 @@ export async function POST(request: Request) {
       cryptoCoin: result.asset || "USDT",
       fiatAmount: amountNgn,
       reference,
+      paymentSessionId: createdSession?.id || null,
       providerReference: result.id || reference,
       settlementMode,
       settlementRecipientType,
       minimumAutoSettlementNgn,
+      expiresAt: createdSession?.expires_at || null,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to generate crypto address.";
