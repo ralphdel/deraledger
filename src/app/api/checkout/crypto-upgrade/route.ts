@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
 import { PaymentService } from "@/lib/payment";
 import {
@@ -21,6 +22,11 @@ import crypto from "crypto";
  * Generates a Breet crypto deposit address for an existing merchant plan upgrade.
  * Feature-flagged: returns a "coming_soon" response until Breet credentials are configured.
  */
+const serviceSupabase = createSupabaseClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
+
 export async function POST(request: Request) {
   try {
     const supabase = await createClient();
@@ -50,7 +56,7 @@ export async function POST(request: Request) {
 
     const environment = getPaymentEnvironment();
     const eligibility = await canUseBreetCryptoCheckout({
-      supabase,
+      supabase: serviceSupabase,
       purpose: "plan_upgrade",
       merchantId: merchant.id,
       environment,
@@ -85,7 +91,7 @@ export async function POST(request: Request) {
     });
 
     const reference = `CRYPTO-UPG-${newPlan.toUpperCase()}-${crypto.randomBytes(5).toString("hex").toUpperCase()}`;
-    await createPendingPlanPaymentRecord(supabase, {
+    await createPendingPlanPaymentRecord(serviceSupabase, {
       internalReference: reference,
       provider: "breet",
       paymentMethod: "crypto",
@@ -111,7 +117,7 @@ export async function POST(request: Request) {
     if (!settlementBankPayload) {
       return NextResponse.json({ error: "Platform settlement account is not configured." }, { status: 403 });
     }
-    const { data: settings } = await supabase
+    const { data: settings } = await serviceSupabase
       .from("platform_settings")
       .select("key, value")
       .in("key", [rateSettingKeyForRail("USDT"), "crypto_session_ttl_minutes", "breet_quote_fallback_buffer_bps"]);
@@ -137,7 +143,7 @@ export async function POST(request: Request) {
       fallbackBufferBps,
     });
 
-    const { data: createdSession, error: sessionError } = await supabase.from("crypto_payment_sessions").insert({
+    const { data: createdSession, error: sessionError } = await serviceSupabase.from("crypto_payment_sessions").insert({
       merchant_id: merchant.id,
       user_id: user.id,
       business_id: null,
