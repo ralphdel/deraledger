@@ -131,7 +131,7 @@ export function hasVerificationRequirement(
 
 export function getCollectionLimitLabel(planTier: string | null | undefined) {
   const requirements = getVerificationRequirements(planTier);
-  if (requirements.includes("no_payment_collection")) return "No live collection";
+  if (requirements.includes("no_payment_collection")) return "Payment collection not available";
   if (requirements.includes("higher_collection_limit")) return "Higher collection limit";
   if (requirements.includes("lower_collection_limit")) return "Lower collection limit";
   return "Plan-defined collection limit";

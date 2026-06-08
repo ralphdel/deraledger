@@ -104,6 +104,35 @@ function formatPlanLabel(plan: string | null | undefined) {
   return plan.charAt(0).toUpperCase() + plan.slice(1);
 }
 
+function getPlanProgressTitle(isStarter: boolean, isCorporate: boolean, relationshipClaim?: string | null) {
+  if (isStarter) return "Starter Plan";
+  if (isCorporate && relationshipClaim === "representative_claim") {
+    return "Business & Director Approval Progress";
+  }
+  if (isCorporate) return "Director-Owned Business Verification";
+  return "Your Individual Verification Progress";
+}
+
+function getIdentitySectionTitle(isCorporate: boolean, relationshipClaim?: string | null) {
+  if (isCorporate && relationshipClaim === "representative_claim") {
+    return "Representative Identity Verification";
+  }
+  if (isCorporate) return "Director/Owner Identity Verification";
+  return "Identity Verification";
+}
+
+function getProfileNameLabel(isCorporate: boolean, relationshipClaim?: string | null) {
+  if (isCorporate && relationshipClaim === "representative_claim") return "Representative Full Name";
+  if (isCorporate) return "Director/Owner Full Name";
+  return "Full Name on BVN";
+}
+
+function getOwnerDisplayLabel(isCorporate: boolean, relationshipClaim?: string | null) {
+  if (isCorporate && relationshipClaim === "representative_claim") return "Representative";
+  if (isCorporate) return "Director/Owner";
+  return "Verified name";
+}
+
 function formatStatusLabel(status: string | null | undefined) {
   if (!status) return "Not started";
   return status.replace(/_/g, " ");
@@ -516,24 +545,29 @@ export default function SettingsPage() {
     (["no_match", "rejected"].includes(String(merchant?.business_affiliation_status || "")) ||
       merchant?.relationship_claim === "representative_claim");
 
-  let ownerLabel = "Owner's Full Name (matches BVN)";
-  if (isCorporate) {
-    if (merchant?.relationship_claim === "representative_claim") {
-      ownerLabel = "Authorized Representative Full Name";
-    } else if (businessType === "sole_proprietorship") {
-      ownerLabel = "Sole Proprietor / Business Owner Full Name";
-    } else if (businessType === "ltd" || businessType === "plc") {
-      ownerLabel = "Director or Shareholder Full Name";
-    } else if (businessType === "llp" || businessType === "lp") {
-      ownerLabel = "Designated Partner or Partner Full Name";
-    } else if (businessType === "incorporated_trustees") {
-      ownerLabel = "Trustee or Chairperson Full Name";
-    } else if (businessType === "cooperative") {
-      ownerLabel = "President or Trustee Full Name";
-    } else {
-      ownerLabel = "Primary Controller Full Name";
-    }
-  }
+  const planProgressTitle = getPlanProgressTitle(
+    isStarter,
+    isCorporate,
+    merchant?.relationship_claim,
+  );
+  const identitySectionTitle = getIdentitySectionTitle(
+    isCorporate,
+    merchant?.relationship_claim,
+  );
+  const profileNameLabel = getProfileNameLabel(isCorporate, merchant?.relationship_claim);
+  const verifiedOwnerLabel = getOwnerDisplayLabel(isCorporate, merchant?.relationship_claim);
+  const verifiedIdentityComplete =
+    merchant?.bvn_status === "verified" && merchant?.selfie_status === "verified";
+  const verificationCompleteCopy = isCorporate
+    ? merchant?.relationship_claim === "representative_claim"
+      ? "Representative identity verified."
+      : "Director/owner identity verified."
+    : "Identity verification completed.";
+  const verificationPendingCopy = isCorporate
+    ? merchant?.relationship_claim === "representative_claim"
+      ? "Verify your BVN and selfie as the person opening this business account. Director approval is handled separately."
+      : "Verify your BVN and selfie as the director or owner opening this business account."
+    : "Verify your BVN and take a live selfie to confirm your identity.";
 
   const ownerNameMissing = !isStarter && !ownerName.trim();
   const businessNameMissing = isCorporate && !businessName.trim();
@@ -561,75 +595,75 @@ export default function SettingsPage() {
     > = {
       basic_profile: {
         title: "Business profile",
-        description: "Identity-sensitive business fields must be present before verification can proceed.",
+        description: "Complete your profile before verification can proceed.",
       },
       no_payment_collection: {
-        title: "Live collection locked",
-        description: "This tier does not unlock live collection yet.",
+        title: "Payment collection",
+        description: "Payment collection is not available on this plan yet.",
       },
       bvn: {
         title: "BVN verification",
         description: "Legal identity must match the submitted BVN.",
       },
       selfie_liveness: {
-        title: "Selfie face match",
-        description: "One confirmed selfie validates the account owner or representative.",
+        title: "Selfie Verification",
+        description: "One live selfie confirms the account owner or representative.",
       },
       valid_id_document: {
         title: "Identity document",
-        description: "Enhanced individual tiers can require an extra ID document without forcing business KYB.",
+        description: "Some plans require an extra identity document.",
       },
       proof_of_address: {
-        title: "Proof of address",
-        description: "Some higher individual tiers can require address evidence even without business registration.",
+        title: "Proof of Address",
+        description: "Some plans require a proof of address document.",
       },
       additional_manual_review: {
-        title: "Additional review",
-        description: "Higher-risk tiers may require extra manual review before live collection unlocks.",
+        title: "Final review",
+        description: "Some plans need a final review before payment collection starts.",
       },
       business_registration_check: {
         title: "Business registration",
-        description: "Registered business details must be verified against registry data.",
+        description: "Verify the business registration number and registered name.",
       },
       owner_or_director_kyc: {
-        title: "Primary controller identity",
-        description: "The owner or principal controller must complete identity verification once.",
+        title: "Representative Identity",
+        description: "Verify the person opening the account.",
       },
       director_or_representative_flow: {
-        title: "Authority confirmation",
-        description: "Representative and director approval flows stay separate and must close independently.",
+        title: "Director Approval",
+        description: "A listed director must approve the business account.",
       },
       director_kyc: {
-        title: "Director verification",
-        description: "Where required, the director or approving authority is verified and locked after success.",
+        title: "Director Match",
+        description: "Match the director name to the business record.",
       },
       business_document: {
-        title: "Business document",
-        description: "Supporting business evidence is required for this tier.",
+        title: "Business Registration Document",
+        description: "Upload the required business registration document.",
       },
       business_documents: {
-        title: "Business documents",
-        description: "Multiple business documents are required for this tier.",
+        title: "Business Verification Documents",
+        description: "Upload the required business verification documents.",
       },
       utility_bill: {
-        title: "Utility bill",
-        description: "Business address proof is required for settlement and compliance readiness.",
+        title: "Proof of Business Address",
+        description: "Upload proof of the business address.",
       },
       settlement_account: {
-        title: "Settlement account",
-        description: "Live collection should not enable until the settlement destination is ready.",
+        title: "Payout Account",
+        description: "Add the bank account where customer payments should be sent.",
       },
       admin_review: {
-        title: "Final platform review",
-        description: "Collections only go live after final admin approval.",
+        title: "Final Review",
+        description: "Collections only start after final review.",
       },
       lower_collection_limit: {
         title: "Lower collection limit",
-        description: "This tier operates under a lower live collection limit.",
+        description: "This tier operates under a lower payment collection limit.",
       },
       higher_collection_limit: {
         title: "Higher collection limit",
-        description: "This tier unlocks a higher live collection limit once all required steps are complete.",
+        description: "This tier unlocks a higher payment collection limit once all required steps are complete.",
       },
     };
 
@@ -753,7 +787,7 @@ export default function SettingsPage() {
     if (!merchant) return;
 
     if (!isBvnLocked && merchant.bvn_status !== "verified" && merchant.bvn_status !== "pending") {
-      setKycError("Lock the BVN first so the submitted identity cannot drift during review.");
+      setKycError("Save the BVN first so the submitted identity cannot drift during review.");
       return;
     }
 
@@ -888,7 +922,7 @@ export default function SettingsPage() {
           <div className="space-y-2">
             <h1 className="text-2xl font-bold text-purp-900">Settings</h1>
             <p className="max-w-3xl text-sm leading-6 text-neutral-500">
-              Manage verification, profile data, settlement readiness, billing, and business controls
+              Manage verification, profile data, payout account setup, billing, and business controls
               without mixing unrelated actions into one long form.
             </p>
           </div>
@@ -903,7 +937,7 @@ export default function SettingsPage() {
         <div className="grid gap-4 md:grid-cols-3">
           <div className="rounded-2xl border border-purp-200 bg-white p-4">
             <p className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
-              Live collection status
+              Payment Collection
             </p>
             <div className="mt-2 flex items-center gap-2">
               {liveFeaturesActive ? (
@@ -912,19 +946,19 @@ export default function SettingsPage() {
                 <Lock className="h-5 w-5 text-amber-600" />
               )}
               <p className="text-sm font-semibold text-neutral-900">
-                {liveFeaturesActive ? "Enabled" : "Locked until verification completes"}
+                {liveFeaturesActive ? "Enabled" : "Locked for now"}
               </p>
             </div>
             <p className="mt-2 text-sm leading-6 text-neutral-500">
               {liveFeaturesActive
-                ? "Your workspace can use live payment collection and settlement features."
-                : nextLiveUnlockStep || "Complete the required verification steps to enable live collection."}
+                ? "Your workspace can use payment collection and payout features."
+                : nextLiveUnlockStep || "Complete the required verification steps to enable payment collection."}
             </p>
           </div>
 
           <div className="rounded-2xl border border-purp-200 bg-white p-4">
             <p className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
-              Settlement readiness
+              Payout Account
             </p>
             <div className="mt-2 flex items-center gap-2">
               {settlementConfigured ? (
@@ -933,7 +967,7 @@ export default function SettingsPage() {
                 <Clock className="h-5 w-5 text-amber-600" />
               )}
               <p className="text-sm font-semibold text-neutral-900">
-                {settlementConfigured ? "Account captured" : "Action still required"}
+                {settlementConfigured ? "Added" : "Action required"}
               </p>
             </div>
             <p className="mt-2 text-sm leading-6 text-neutral-500">
@@ -941,13 +975,13 @@ export default function SettingsPage() {
                 ? `${merchant?.settlement_bank_name || "Bank"} • ${maskAccountNumber(
                     merchant?.settlement_account_number,
                   )}`
-                : "Add and validate the bank account that should receive settlement payouts."}
+                : "Add the bank account where customer payments should be sent."}
             </p>
           </div>
 
           <div className="rounded-2xl border border-purp-200 bg-white p-4">
             <p className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
-              Verified field lock
+              Verified Details
             </p>
             <div className="mt-2 flex items-center gap-2">
               {isOwnerNameLocked ? (
@@ -956,7 +990,7 @@ export default function SettingsPage() {
                 <Info className="h-5 w-5 text-blue-600" />
               )}
               <p className="text-sm font-semibold text-neutral-900">
-                {isOwnerNameLocked ? "Identity fields locked" : "Fields still editable"}
+                {isOwnerNameLocked ? "Locked for safety" : "Editable for now"}
               </p>
             </div>
             <p className="mt-2 text-sm leading-6 text-neutral-500">
@@ -1013,28 +1047,27 @@ export default function SettingsPage() {
         <TabsContent value="verification" className="space-y-6">
           <SectionCard
             title="Account Status & Verification"
-            description="Verification is now grouped by actual plan requirements. Only the steps for your current plan remain active."
+            description="Only the steps for your current plan remain active."
           >
             {isStarter ? (
               <div className="space-y-5">
                 <div className="rounded-2xl border border-purp-200 bg-purp-50 p-5">
                   <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                     <div className="space-y-2">
-                      <p className="text-base font-semibold text-purp-900">This tier keeps live verification locked</p>
+                      <p className="text-base font-semibold text-purp-900">Starter Plan</p>
                       <p className="max-w-2xl text-sm leading-6 text-neutral-600">
-                        You can explore record-only invoicing, but live collection, KYC, settlement account
-                        setup, and payment routing stay locked until you upgrade.
+                        Create invoices now. Upgrade when you are ready to collect payments online.
                       </p>
                     </div>
                     <div className="flex flex-col gap-2 sm:flex-row">
                       <Link href="/settings/upgrade/individual">
                         <Button variant="outline" className="border-purp-200 text-purp-900">
-                          Upgrade tier
+                          Upgrade Plan
                         </Button>
                       </Link>
                       <Link href="/settings/upgrade/corporate">
                         <Button className="bg-purp-900 text-white hover:bg-purp-800">
-                          View higher tier
+                          Compare Plans
                         </Button>
                       </Link>
                     </div>
@@ -1064,18 +1097,20 @@ export default function SettingsPage() {
                       )}
                       <div className="space-y-2">
                         <p className="text-base font-semibold text-purp-900">
-                          {isCorporate ? "Advanced verification path" : "Current tier verification path"}
+                          {planProgressTitle}
                         </p>
                         <p className="text-sm leading-6 text-neutral-600">
-                          {isCorporate
+                          {isStarter
+                            ? "You can create invoices now. Upgrade and complete verification when you are ready to collect payments online."
+                            : isCorporate
                             ? merchant?.relationship_claim === "representative_claim"
-                              ? "This business is using an authorized representative flow. Representative identity and director approval remain separate and are tracked independently."
-                              : "This business is using the owner or principal flow. Once the primary identity is verified, the profile locks and only business authority or final review can remain."
-                            : "Only the requirements tied to this tier remain active here. Future tiers can add more identity or document steps without forcing business KYB by default."}
+                              ? "You are opening this account as a representative of the business. We verify you, verify the business, and then ask a listed director to approve access."
+                              : "You are registering as a director or owner of this business. We verify your identity, match it with the business record, and then complete the business checks."
+                            : "Complete these steps to unlock payment collection on your Individual plan."}
                         </p>
                         {!liveFeaturesActive && liveFeatureLockReasons.length > 0 ? (
                           <div className="rounded-xl border border-amber-200 bg-white p-3 text-sm text-amber-700">
-                            <p className="font-medium">Still blocking live collection</p>
+                            <p className="font-medium">Still needed before payment collection starts</p>
                             <ul className="mt-2 list-disc space-y-1 pl-5">
                               {liveFeatureLockReasons.map((reason) => (
                                 <li key={reason}>{reason}</li>
@@ -1106,7 +1141,7 @@ export default function SettingsPage() {
                       <div className="space-y-2">
                         <p className="font-semibold">Business profile still blocks verification</p>
                         <ul className="list-disc space-y-1 pl-5">
-                          {ownerNameMissing ? <li>Add {ownerLabel.toLowerCase()} in Business Profile.</li> : null}
+                          {ownerNameMissing ? <li>Add the verified name in Business Profile.</li> : null}
                           {businessNameMissing ? <li>Add the registered business name in Business Profile.</li> : null}
                           {businessAddressMissing ? <li>Complete the full business address in Business Profile.</li> : null}
                           {phoneMissing ? <li>Add the workspace phone number in Business Profile.</li> : null}
@@ -1118,14 +1153,8 @@ export default function SettingsPage() {
 
                 <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
                   <SectionCard
-                    title={isCorporate && merchant?.relationship_claim === "representative_claim" ? "Authorized Representative Identity" : "Primary Identity Verification"}
-                    description={
-                      isCorporate && merchant?.relationship_claim === "representative_claim"
-                        ? "The representative verifies their own BVN and selfie once. Director approval happens separately below."
-                        : isCorporate
-                        ? "The business owner or principal controller verifies once, then the identity-bound fields are locked."
-                        : "This tier currently requires identity verification here. Extra document steps can be added later through the requirement map without changing the page structure."
-                    }
+                    title={identitySectionTitle}
+                    description={verificationPendingCopy}
                     action={
                       !profileIncomplete && requiresBvn && merchant?.bvn_status !== "verified" ? (
                         <Button
@@ -1133,129 +1162,157 @@ export default function SettingsPage() {
                           disabled={kycSubmitting}
                           className="bg-purp-900 text-white hover:bg-purp-800"
                         >
-                          {kycSubmitting ? "Submitting..." : "Submit Verification"}
+                          {kycSubmitting ? "Submitting..." : "Verify BVN"}
                         </Button>
                       ) : null
                     }
                   >
                     <div className="space-y-4">
-                      {requiresBvn ? (
-                      <div className="space-y-2">
-                        <Label className="flex items-center gap-2 text-sm font-medium">
-                          <Shield className="h-4 w-4 text-purp-700" />
-                          BVN
-                          {statusBadge(merchant?.bvn_status)}
-                        </Label>
-                        <p className="text-xs text-neutral-500">
-                          The legal identity must match <strong>{ownerName || "the saved profile name"}</strong>.
-                        </p>
-                        <div className="flex flex-col gap-3 sm:flex-row">
-                          <Input
-                            type="text"
-                            maxLength={11}
-                            placeholder="22XXXXXXXXX"
-                            value={bvnNumber}
-                            onChange={(event) => setBvnNumber(event.target.value.replace(/\D/g, ""))}
-                            className="h-11 border-2 border-purp-200 bg-white sm:max-w-xs"
-                            disabled={
-                              profileIncomplete ||
-                              merchant?.bvn_status === "verified" ||
-                              merchant?.bvn_status === "pending" ||
-                              isBvnLocked
-                            }
-                          />
-                          {merchant?.bvn_status === "verified" || merchant?.bvn_status === "pending" ? null : (
-                            <div className="flex gap-2">
-                              <Button
-                                type="button"
-                                variant="outline"
-                                onClick={() => setIsBvnLocked(true)}
-                                disabled={bvnNumber.length !== 11 || isBvnLocked}
-                                className="h-11 border-2 border-purp-200 text-purp-700"
-                              >
-                                {isBvnLocked ? "Locked" : "Lock BVN"}
-                              </Button>
-                              {isBvnLocked ? (
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  onClick={() => setIsBvnLocked(false)}
-                                  className="h-11 text-neutral-500"
-                                >
-                                  Edit
-                                </Button>
-                              ) : null}
+                      {verifiedIdentityComplete ? (
+                        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+                          <div className="flex items-start gap-3">
+                            <CheckCircle className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
+                            <div className="space-y-2">
+                              <p className="text-sm font-semibold text-emerald-900">
+                                {verificationCompleteCopy}
+                              </p>
+                              <p className="text-sm leading-6 text-emerald-700">
+                                BVN: Verified
+                                <br />
+                                Selfie: Verified
+                                <br />
+                                {verifiedOwnerLabel}: {ownerName || "Not available"}
+                              </p>
+                              <p className="text-sm text-emerald-700">
+                                These details are now locked for safety. Contact support if anything needs to change.
+                              </p>
                             </div>
-                          )}
+                          </div>
                         </div>
-                      </div>
-                      ) : null}
+                      ) : (
+                        <>
+                          {requiresBvn ? (
+                            <div className="space-y-2">
+                              <Label className="flex items-center gap-2 text-sm font-medium">
+                                <Shield className="h-4 w-4 text-purp-700" />
+                                BVN
+                                {statusBadge(merchant?.bvn_status)}
+                              </Label>
+                              <p className="text-xs text-neutral-500">
+                                Enter the BVN that matches <strong>{ownerName || "the saved profile name"}</strong>.
+                              </p>
+                              <div className="flex flex-col gap-3 sm:flex-row">
+                                <Input
+                                  type="text"
+                                  maxLength={11}
+                                  placeholder="22XXXXXXXXX"
+                                  value={bvnNumber}
+                                  onChange={(event) => setBvnNumber(event.target.value.replace(/\D/g, ""))}
+                                  className="h-11 border-2 border-purp-200 bg-white sm:max-w-xs"
+                                  disabled={
+                                    profileIncomplete ||
+                                    merchant?.bvn_status === "verified" ||
+                                    merchant?.bvn_status === "pending" ||
+                                    isBvnLocked
+                                  }
+                                />
+                                {merchant?.bvn_status === "verified" || merchant?.bvn_status === "pending" ? null : (
+                                  <div className="flex gap-2">
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      onClick={() => setIsBvnLocked(true)}
+                                      disabled={bvnNumber.length !== 11 || isBvnLocked}
+                                      className="h-11 border-2 border-purp-200 text-purp-700"
+                                    >
+                                      {isBvnLocked ? "Saved" : "Save BVN"}
+                                    </Button>
+                                    {isBvnLocked ? (
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        onClick={() => setIsBvnLocked(false)}
+                                        className="h-11 text-neutral-500"
+                                      >
+                                        Edit
+                                      </Button>
+                                    ) : null}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          ) : null}
 
-                      {requiresSelfie ? (
-                      <div className="space-y-2">
-                        <Label className="flex items-center gap-2 text-sm font-medium">
-                          <Camera className="h-4 w-4 text-purp-700" />
-                          Selfie / Liveness
-                          {statusBadge(merchant?.selfie_status)}
-                        </Label>
-                        <p className="text-xs text-neutral-500">
-                          One successful selfie is enough. After verification, the identity path should close and stop calling the provider again.
-                        </p>
-                        {!(isBvnLocked || merchant?.bvn_status === "verified" || merchant?.bvn_status === "pending") ? (
-                          <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4 text-sm text-neutral-500">
-                            Lock the BVN first to unlock selfie capture.
-                          </div>
-                        ) : (
-                          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                            {!livenessFallback &&
-                            merchant?.selfie_status !== "verified" &&
-                            merchant?.selfie_status !== "pending" ? (
-                              <Button
-                                onClick={() => setShowLivenessCamera(true)}
-                                variant="outline"
-                                disabled={profileIncomplete}
-                                className="border-2 border-purp-200 bg-purp-50 text-purp-700 hover:bg-purp-100"
-                              >
-                                <Camera className="mr-2 h-4 w-4" />
-                                {livenessImages.length > 0 ? "Retake selfie" : "Start live capture"}
-                              </Button>
-                            ) : (
-                              <Input
-                                type="file"
-                                accept=".png,.jpg,.jpeg"
-                                onChange={(event) => setSelfieFile(event.target.files?.[0] || null)}
-                                className="h-11 border-2 border-purp-200 bg-white file:mr-3 file:rounded-md file:border-0 file:bg-purp-100 file:px-3 file:py-1 file:text-sm file:font-medium file:text-purp-700"
-                                disabled={
-                                  profileIncomplete ||
-                                  merchant?.selfie_status === "verified" ||
-                                  merchant?.selfie_status === "pending"
-                                }
-                              />
-                            )}
-                            {livenessImages.length > 0 || selfieFile || (merchant?.selfie_url && merchant?.selfie_status !== "rejected") ? (
-                              <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
-                                <CheckCircle className="mr-1 h-3 w-3" />
-                                {merchant?.selfie_url && merchant?.selfie_status !== "rejected"
-                                  ? "Existing selfie on file"
-                                  : livenessImages.length > 0
-                                  ? "Capture ready"
-                                  : "File selected"}
-                              </Badge>
-                            ) : null}
-                          </div>
-                        )}
-                      </div>
-                      ) : null}
+                          {requiresSelfie ? (
+                            <div className="space-y-2">
+                              <Label className="flex items-center gap-2 text-sm font-medium">
+                                <Camera className="h-4 w-4 text-purp-700" />
+                                Selfie / Liveness
+                                {statusBadge(merchant?.selfie_status)}
+                              </Label>
+                              <p className="text-xs text-neutral-500">
+                                {merchant?.bvn_status === "verified"
+                                  ? "Now complete selfie verification."
+                                  : "Verify your BVN first, then complete selfie verification."}
+                              </p>
+                              {!(isBvnLocked || merchant?.bvn_status === "verified" || merchant?.bvn_status === "pending") ? (
+                                <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4 text-sm text-neutral-500">
+                                  Verify your BVN first, then complete selfie verification.
+                                </div>
+                              ) : (
+                                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                                  {!livenessFallback &&
+                                  merchant?.selfie_status !== "verified" &&
+                                  merchant?.selfie_status !== "pending" ? (
+                                    <Button
+                                      onClick={() => setShowLivenessCamera(true)}
+                                      variant="outline"
+                                      disabled={profileIncomplete}
+                                      className="border-2 border-purp-200 bg-purp-50 text-purp-700 hover:bg-purp-100"
+                                    >
+                                      <Camera className="mr-2 h-4 w-4" />
+                                      {livenessImages.length > 0 ? "Retake selfie" : "Start Selfie Verification"}
+                                    </Button>
+                                  ) : (
+                                    <Input
+                                      type="file"
+                                      accept=".png,.jpg,.jpeg"
+                                      onChange={(event) => setSelfieFile(event.target.files?.[0] || null)}
+                                      className="h-11 border-2 border-purp-200 bg-white file:mr-3 file:rounded-md file:border-0 file:bg-purp-100 file:px-3 file:py-1 file:text-sm file:font-medium file:text-purp-700"
+                                      disabled={
+                                        profileIncomplete ||
+                                        merchant?.selfie_status === "verified" ||
+                                        merchant?.selfie_status === "pending"
+                                      }
+                                    />
+                                  )}
+                                  {livenessImages.length > 0 || selfieFile || (merchant?.selfie_url && merchant?.selfie_status !== "rejected") ? (
+                                    <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
+                                      <CheckCircle className="mr-1 h-3 w-3" />
+                                      {merchant?.selfie_url && merchant?.selfie_status !== "rejected"
+                                        ? "Existing selfie on file"
+                                        : livenessImages.length > 0
+                                        ? "Capture ready"
+                                        : "File selected"}
+                                    </Badge>
+                                  ) : null}
+                                </div>
+                              )}
+                            </div>
+                          ) : null}
+                        </>
+                      )}
 
-                      {(requiresBusinessRegistration ||
+                      {!verifiedIdentityComplete &&
+                      (requiresBusinessRegistration ||
                         requiresBusinessDocument ||
                         requiresUtilityBill ||
                         requiresValidIdDocument) ? (
                         <div className="space-y-4 rounded-2xl border border-neutral-200 bg-neutral-50 p-4">
                           <div className="space-y-1">
-                            <p className="text-sm font-semibold text-neutral-900">Requirement-driven document evidence</p>
+                            <p className="text-sm font-semibold text-neutral-900">Business Verification Documents</p>
                             <p className="text-sm leading-6 text-neutral-500">
-                              These fields only appear because the current tier requires them. Future enhanced individual tiers can add their own document steps without pretending to be business KYB.
+                              Upload the documents required for your current plan.
                             </p>
                           </div>
 
@@ -1263,7 +1320,7 @@ export default function SettingsPage() {
                             <div className="space-y-2">
                               <Label className="flex items-center gap-2 text-sm font-medium">
                                 <FileCheck className="h-4 w-4 text-purp-700" />
-                                Tier registration or business number
+                                Business Registration Number
                                 {statusBadge(merchant?.cac_status)}
                               </Label>
                               <div className="flex flex-col gap-3 sm:flex-row">
@@ -1281,7 +1338,7 @@ export default function SettingsPage() {
                                     disabled={rcSubmitting || cacNumber.trim().length < 5}
                                     className="bg-purp-900 text-white hover:bg-purp-800"
                                   >
-                                    {rcSubmitting ? "Verifying..." : "Verify registration"}
+                                    {rcSubmitting ? "Verifying..." : "Verify Business Registration"}
                                   </Button>
                                 ) : (
                                   <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
@@ -1299,8 +1356,8 @@ export default function SettingsPage() {
                                 <Label className="flex items-center gap-2 text-sm font-medium">
                                   <Upload className="h-4 w-4 text-purp-700" />
                                   {requiresValidIdDocument && !requiresBusinessDocument
-                                    ? "Valid ID document"
-                                    : "Supporting document"}
+                                    ? "Business Registration Document"
+                                    : "Business Registration Document"}
                                   {statusBadge(merchant?.cac_status)}
                                 </Label>
                                 <Input
@@ -1319,7 +1376,7 @@ export default function SettingsPage() {
                               <div className="space-y-2">
                                 <Label className="flex items-center gap-2 text-sm font-medium">
                                   <Upload className="h-4 w-4 text-purp-700" />
-                                  Proof of address / utility evidence
+                                  Proof of Business Address
                                   {statusBadge(merchant?.utility_status)}
                                 </Label>
                                 <Input
@@ -1334,6 +1391,28 @@ export default function SettingsPage() {
                               </div>
                             ) : null}
                           </div>
+                          <div className="pt-2">
+                            <Button
+                              onClick={handleKycSubmit}
+                              disabled={
+                                kycSubmitting ||
+                                (requiresBvn && bvnNumber.trim().length !== 11) ||
+                                (requiresSelfie &&
+                                  !(merchant?.selfie_status === "verified" ||
+                                    merchant?.selfie_status === "pending" ||
+                                    livenessImages.length > 0 ||
+                                    selfieFile ||
+                                    merchant?.selfie_url)) ||
+                                (requiresBusinessRegistration && !merchant?.cac_number && cacNumber.trim().length < 5) ||
+                                (requiresBusinessDocument && !cacFile && !merchant?.cac_document_url) ||
+                                (requiresUtilityBill && !utilityFile && !merchant?.utility_document_url)
+                              }
+                              className="bg-purp-900 text-white hover:bg-purp-800"
+                            >
+                              <Save className="mr-2 h-4 w-4" />
+                              {kycSubmitting ? "Submitting..." : "Submit for Review"}
+                            </Button>
+                          </div>
                         </div>
                       ) : null}
                     </div>
@@ -1341,11 +1420,15 @@ export default function SettingsPage() {
 
                   {requiresDirectorApprovalFlow ? (
                     <SectionCard
-                      title="Business Authority & Director Approval"
+                      title={
+                        merchant?.relationship_claim === "representative_claim"
+                          ? "Business & Director Approval Progress"
+                          : "Director Match & Business Authority"
+                      }
                       description={
                         merchant?.relationship_claim === "representative_claim"
-                          ? "Representative identity and business authority are separated clearly here. A listed director still needs to approve the business."
-                          : "If registry auto-match succeeds, this section closes automatically. Otherwise use a director approval invite or a one-time manual director verification."
+                          ? "You are registering this business as a representative. We will verify your identity, confirm the business, and ask a listed director to approve your access."
+                          : "You are registering as a director or owner. We will verify your identity, match it to the business record, and complete the business checks."
                       }
                     >
                       <div className="space-y-4">
@@ -1356,9 +1439,11 @@ export default function SettingsPage() {
                               <p className="text-sm text-neutral-500">
                                 {authorityApproved
                                   ? approvedDirectorName
-                                    ? `Approved by ${approvedDirectorName}. This section is effectively closed.`
+                                    ? `Approved by ${approvedDirectorName}. This section is now complete.`
                                     : "Authority matched automatically from verified business records."
-                                  : "Business authority is still open and cannot be assumed from identity alone."}
+                                  : merchant?.relationship_claim === "representative_claim"
+                                  ? "Director approval is still required before payment collection can start."
+                                  : "Director match is still pending and cannot be assumed from identity alone."}
                               </p>
                             </div>
                             {statusBadge(merchant?.business_affiliation_status)}
@@ -1412,7 +1497,7 @@ export default function SettingsPage() {
                             <div className="space-y-1">
                               <p className="text-sm font-semibold text-purp-900">Director approval invite</p>
                               <p className="text-sm leading-6 text-neutral-600">
-                                Use this when the representative is not a listed owner or when the principal was not matched automatically.
+                                Use this when a listed director needs to approve the account.
                               </p>
                             </div>
 
@@ -1475,7 +1560,7 @@ export default function SettingsPage() {
 
                         <details className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4">
                           <summary className="cursor-pointer text-sm font-semibold text-neutral-900">
-                            One-time manual director verification fallback
+                            Need help confirming director?
                           </summary>
                           <div className="mt-4 grid gap-4">
                             <div className="grid gap-4 lg:grid-cols-2">
@@ -1591,7 +1676,7 @@ export default function SettingsPage() {
         <TabsContent value="profile" className="space-y-6">
           <SectionCard
             title="Business Profile"
-            description="Profile and verification are now separated. Editable fields stay here, while verified identity fields lock after approval."
+            description="Update the business details shown on invoices, payment pages, and verification records."
             action={
               merchant?.permissions && !merchant.permissions.manage_business ? null : (
                 <Button
@@ -1655,7 +1740,7 @@ export default function SettingsPage() {
                       Registered Business Name <span className="text-red-500">*</span>
                     </Label>
                     <p className="text-xs text-neutral-500">
-                      This field syncs with business registration checks and becomes effectively fixed once RC verification succeeds.
+                      This should match the official business name on the registration record.
                     </p>
                     <label className="flex items-center gap-3 rounded-xl border border-purp-200 bg-purp-50/50 p-3 text-sm text-neutral-700">
                       <input
@@ -1697,14 +1782,14 @@ export default function SettingsPage() {
                 {!isStarter ? (
                   <div className="space-y-2">
                     <Label className="text-sm font-medium">
-                      {ownerLabel} <span className="text-red-500">*</span>
+                      {profileNameLabel} <span className="text-red-500">*</span>
                     </Label>
                     <p className="text-xs text-neutral-500">
                       {isOwnerNameLocked
-                        ? "This field is locked because identity verification has already been completed."
+                        ? "Verified Details"
                         : requiresDirectorApprovalFlow && merchant?.relationship_claim === "representative_claim"
-                        ? "This is the representative's legal name. Director approval remains separate."
-                        : "This legal name is the source of truth for BVN verification."}
+                        ? "This should match the person opening this account. Director approval is handled separately."
+                        : "This name should match your BVN and the business registration record."}
                     </p>
                     <Input
                       value={ownerName}
@@ -1730,7 +1815,7 @@ export default function SettingsPage() {
                       <div>
                         <p className="text-sm font-semibold text-neutral-900">Business Address</p>
                         <p className="text-xs text-neutral-500">
-                          This should match the settlement-ready business address on your utility document.
+                          This should match the business address on your proof of address document.
                         </p>
                       </div>
 
@@ -1837,13 +1922,13 @@ export default function SettingsPage() {
                   <div className="space-y-3">
                     <p className="text-sm font-semibold text-neutral-900">Field lock summary</p>
                     <ChecklistRow
-                      title="Legal identity fields"
+                      title="Verified Details"
                       description="Owner or representative name locks after a successful BVN and selfie match."
                       status={isOwnerNameLocked ? "complete" : "pending"}
                     />
                     <ChecklistRow
                       title="Registered business details"
-                      description="RC verification prevents the official business name from drifting after business checks."
+                      description="Registration verification prevents the official business name from drifting after business checks."
                       status={merchant?.cac_number ? "complete" : "pending"}
                     />
                   </div>
@@ -1905,8 +1990,8 @@ export default function SettingsPage() {
 
         <TabsContent value="settlement" className="space-y-6">
           <SectionCard
-            title="Settlement Account"
-            description="Settlement account readiness is separated from verification, but both must align before live collection is truly ready."
+            title="Payout Account"
+            description="Add the bank account where customer payments should be sent. This must be completed before payment collection starts."
             action={
               !requiresSettlementAccount ? null : (
                 <Link href="/settings/settlement-accounts">
@@ -1919,16 +2004,16 @@ export default function SettingsPage() {
           >
             {!requiresSettlementAccount ? (
               <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-5 text-sm text-neutral-600">
-                This tier does not currently expose settlement account setup. Upgrade to a settlement-enabled tier to configure payouts.
+                Payout account is not needed on Starter. Upgrade to a payment collection plan to add the bank account where payouts should be sent.
               </div>
             ) : (
               <div className="grid gap-4 lg:grid-cols-[1fr_0.8fr]">
                 <div className="space-y-4 rounded-2xl border border-neutral-200 bg-white p-4">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
-                      <p className="text-sm font-semibold text-neutral-900">Current account snapshot</p>
+                      <p className="text-sm font-semibold text-neutral-900">Current payout account</p>
                       <p className="text-xs text-neutral-500">
-                        This is the merchant-facing settlement identity used for payout readiness.
+                        This is the bank account that will receive customer payments.
                       </p>
                     </div>
                     {settlementConfigured ? (
@@ -1965,17 +2050,17 @@ export default function SettingsPage() {
 
                 <div className="space-y-3">
                   <ChecklistRow
-                    title="Settlement account present"
-                    description="A payout-ready bank account should exist before live collection is released."
+                    title="Payout account added"
+                    description="Add and verify a payout account before payment collection can start."
                     status={settlementConfigured ? "complete" : "pending"}
                   />
                   <ChecklistRow
-                    title="Verification alignment"
-                    description="Settlement readiness helps complete onboarding, but does not replace plan-based verification."
+                    title="Verification still required"
+                    description="Adding a payout account does not replace identity, business, or director verification."
                     status={liveFeaturesActive ? "complete" : "pending"}
                   />
                   <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-700">
-                    Settlement is treated as its own first-class area so merchants can see payout readiness without digging through verification forms.
+                    Payout account setup is shown separately so merchants can complete it without digging through verification forms.
                   </div>
                 </div>
               </div>
@@ -1986,7 +2071,7 @@ export default function SettingsPage() {
         <TabsContent value="fees" className="space-y-6">
           <SectionCard
             title="Payment Fee Settings"
-            description="Customer pricing and fee absorption are managed separately from profile and verification. This section has its own save action."
+            description="Who pays payment charges can be managed separately from profile and verification. This section has its own save action."
             action={
               merchant?.permissions && !merchant.permissions.change_fee_settings ? null : (
                 <Button
@@ -2003,7 +2088,7 @@ export default function SettingsPage() {
             <div className="grid gap-6 lg:grid-cols-[1fr_0.8fr]">
               <div className="space-y-4">
                 <div className="space-y-2">
-                  <Label className="text-sm font-medium">Default fee payer</Label>
+                  <Label className="text-sm font-medium">Who pays payment charges?</Label>
                   <Select
                     value={feeDefault}
                     onValueChange={(value) =>
@@ -2014,8 +2099,8 @@ export default function SettingsPage() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="business">Business absorbs fee</SelectItem>
-                      <SelectItem value="customer">Customer absorbs fee</SelectItem>
+                      <SelectItem value="business">Business pays</SelectItem>
+                      <SelectItem value="customer">Customer pays</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -2023,7 +2108,7 @@ export default function SettingsPage() {
                 <div className="rounded-2xl border border-purp-200 bg-purp-50 p-4 text-sm text-neutral-600">
                   <p>
                     <strong className="text-purp-900">How this works:</strong> this is only the default for
-                    new invoices and payment links. It can still be overridden per transaction where allowed.
+                    new invoices and payment links. It can still be overridden per invoice where allowed.
                   </p>
                 </div>
               </div>
@@ -2047,7 +2132,7 @@ export default function SettingsPage() {
         <TabsContent value="billing" className="space-y-6">
           <SectionCard
             title="Billing & Subscription"
-            description="Your plan, upgrade path, and billing management are now separate from business verification and profile editing."
+            description="Your plan, upgrade path, and billing management are separate from business verification and profile editing."
             action={
               <Link href="/settings/billing">
                 <Button className="bg-purp-900 text-white hover:bg-purp-800">
@@ -2065,7 +2150,7 @@ export default function SettingsPage() {
                   {formatPlanLabel(effectiveTier)}
                 </p>
                 <p className="mt-2 text-sm text-neutral-500">
-                  {getCollectionLimitLabel(effectiveTier)}. Upgrade when you need a broader verification path, more collection capability, or business controls.
+                  {getCollectionLimitLabel(effectiveTier)}. Upgrade when you need more collection capability or business controls.
                 </p>
               </div>
 
@@ -2077,8 +2162,8 @@ export default function SettingsPage() {
                   {isStarter
                     ? "Upgrade to Individual or Business"
                     : isIndividual
-                    ? "Finish identity verification or upgrade to Business"
-                    : "Finish KYB and authority checks"}
+                    ? "Complete your Individual verification to start collecting payments"
+                    : "Complete Business verification"}
                 </p>
                 <p className="mt-2 text-sm text-neutral-500">
                   {nextLiveUnlockStep || "Open billing to manage renewals, status, and history."}
@@ -2086,20 +2171,58 @@ export default function SettingsPage() {
               </div>
 
               <div className="flex flex-col gap-3 rounded-2xl border border-neutral-200 bg-white p-4">
-                <Link
-                  href="/settings/upgrade/individual"
-                  className="flex items-center justify-between rounded-xl border border-purp-200 px-4 py-3 text-sm font-medium text-purp-900 transition hover:bg-purp-50"
-                >
-                  Upgrade to Individual
-                  <ArrowRight className="h-4 w-4" />
-                </Link>
-                <Link
-                  href="/settings/upgrade/corporate"
-                  className="flex items-center justify-between rounded-xl border border-purp-200 px-4 py-3 text-sm font-medium text-purp-900 transition hover:bg-purp-50"
-                >
-                  Upgrade to Business
-                  <ArrowRight className="h-4 w-4" />
-                </Link>
+                {isStarter ? (
+                  <>
+                    <Link
+                      href="/settings/upgrade/individual"
+                      className="flex items-center justify-between rounded-xl border border-purp-200 px-4 py-3 text-sm font-medium text-purp-900 transition hover:bg-purp-50"
+                    >
+                      Upgrade to Individual
+                      <ArrowRight className="h-4 w-4" />
+                    </Link>
+                    <Link
+                      href="/settings/upgrade/corporate"
+                      className="flex items-center justify-between rounded-xl border border-purp-200 px-4 py-3 text-sm font-medium text-purp-900 transition hover:bg-purp-50"
+                    >
+                      Upgrade to Business
+                      <ArrowRight className="h-4 w-4" />
+                    </Link>
+                  </>
+                ) : isIndividual ? (
+                  <>
+                    <Link
+                      href="/settings/billing"
+                      className="flex items-center justify-between rounded-xl border border-purp-200 px-4 py-3 text-sm font-medium text-purp-900 transition hover:bg-purp-50"
+                    >
+                      Complete Verification
+                      <ArrowRight className="h-4 w-4" />
+                    </Link>
+                    <Link
+                      href="/settings/upgrade/corporate"
+                      className="flex items-center justify-between rounded-xl border border-purp-200 px-4 py-3 text-sm font-medium text-purp-900 transition hover:bg-purp-50"
+                    >
+                      Upgrade to Business
+                      <ArrowRight className="h-4 w-4" />
+                    </Link>
+                  </>
+                ) : (
+                  <>
+                    <Link
+                      href="/settings/billing"
+                      className="flex items-center justify-between rounded-xl border border-purp-200 px-4 py-3 text-sm font-medium text-purp-900 transition hover:bg-purp-50"
+                    >
+                      Complete Business Verification
+                      <ArrowRight className="h-4 w-4" />
+                    </Link>
+                    <Link
+                      href="/settings/billing"
+                      className="flex items-center justify-between rounded-xl border border-purp-200 px-4 py-3 text-sm font-medium text-purp-900 transition hover:bg-purp-50"
+                    >
+                      Manage Billing
+                      <ArrowRight className="h-4 w-4" />
+                    </Link>
+                  </>
+                )}
               </div>
             </div>
           </SectionCard>
@@ -2176,16 +2299,15 @@ export default function SettingsPage() {
                 <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4">
                   <p className="text-sm font-semibold text-neutral-900">Why fields lock after verification</p>
                   <p className="mt-2 text-sm leading-6 text-neutral-600">
-                    Verified identity and registered business details become constrained to protect compliance
-                    evidence, keep provider checks idempotent, and prevent merchants from silently changing legal identity after approval.
+                    After verification, legal identity and business details can only be changed after review.
+                    This protects your account and prevents mistakes.
                   </p>
                 </div>
 
                 <div className="rounded-2xl border border-neutral-200 bg-white p-4">
-                  <p className="text-sm font-semibold text-neutral-900">Admin reset path</p>
+                  <p className="text-sm font-semibold text-neutral-900">Requesting a change</p>
                   <p className="mt-2 text-sm leading-6 text-neutral-600">
-                    If a verified legal name or authority mapping is genuinely wrong, an admin reset should be
-                    audited before re-opening the affected verification step. That keeps the reset explicit instead of allowing casual drift in production data.
+                    If a verified detail is wrong, contact support or request admin review.
                   </p>
                 </div>
               </div>

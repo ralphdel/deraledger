@@ -17,7 +17,7 @@ export const SUPERADMIN_SANDBOX_EMAIL =
   (process.env.SUPERADMIN_SANDBOX_EMAIL || "ralphdel14@yahoo.com").toLowerCase();
 
 export const LIVE_FEATURE_LOCK_MESSAGE =
-  "Live payment collection is disabled until verification is completed. You can continue setting up your workspace.";
+  "Payment collection is disabled until verification is completed. You can continue setting up your workspace.";
 
 export function isSuperadminSandboxMerchant(merchant: {
   email?: string | null;
@@ -83,7 +83,7 @@ export function getLiveFeatureLockReasons(merchant: {
   const planTier = merchant.subscription_plan || merchant.merchant_tier || "starter";
   const requirements = getVerificationRequirements(planTier);
   if (requirements.includes("no_payment_collection")) {
-    return ["Upgrade to a collection-enabled tier to activate live payment collection."];
+    return ["Upgrade to a collection-enabled tier to activate payment collection."];
   }
 
   const reasons: string[] = [];
@@ -91,7 +91,7 @@ export function getLiveFeatureLockReasons(merchant: {
   for (const requirement of missing) {
     switch (requirement) {
       case "bvn":
-        reasons.push("Identity number verification");
+        reasons.push("BVN verification");
         break;
       case "selfie_liveness":
         reasons.push("Selfie face match");
@@ -109,17 +109,17 @@ export function getLiveFeatureLockReasons(merchant: {
         break;
       case "director_or_representative_flow":
       case "director_kyc":
-        reasons.push("Director or representative authority approval");
+        reasons.push("Director approval");
         break;
       case "settlement_account":
-        reasons.push("Settlement account readiness");
+        reasons.push("Payout account setup");
         break;
       case "valid_id_document":
         reasons.push("Additional identity document");
         break;
       case "additional_manual_review":
       case "admin_review":
-        reasons.push("Final admin approval");
+        reasons.push("Final review");
         break;
       default:
         break;
@@ -535,7 +535,7 @@ export async function persistBusinessRegistrySnapshot(
     });
   } else if (params.relationshipClaim === "representative_claim") {
     affiliationStatus = "no_match";
-    matchReason = "Requester selected representative setup path; director approval is required.";
+    matchReason = "Representative setup selected; director approval is required.";
 
     await adminClient.from("business_affiliations").insert({
       business_workspace_id: workspace?.id || null,
