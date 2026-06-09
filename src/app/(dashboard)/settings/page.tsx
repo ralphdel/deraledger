@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { Country, State } from "country-state-city";
 import {
@@ -85,6 +85,13 @@ type RegistrySnapshotRow = {
 type DirectorInvitationRow = {
   id: string;
   selected_director_name?: string | null;
+  status?: string | null;
+};
+
+type DirectorAffiliationRow = {
+  matched_registry_name?: string | null;
+  match_reason?: string | null;
+  match_score?: number | null;
   status?: string | null;
 };
 
@@ -313,8 +320,10 @@ export default function SettingsPage() {
   const [activeDirectorToVerify, setActiveDirectorToVerify] = useState<{ name: string; role: DirectorRole } | null>(null);
   const [registrySnapshot, setRegistrySnapshot] = useState<RegistrySnapshotRow | null>(null);
   const [directorInvitations, setDirectorInvitations] = useState<DirectorInvitationRow[]>([]);
+  const [directorAffiliation, setDirectorAffiliation] = useState<DirectorAffiliationRow | null>(null);
   const [selectedRegistryDirector, setSelectedRegistryDirector] = useState("");
   const [directorInviteEmail, setDirectorInviteEmail] = useState("");
+  const [lastDirectorInvite, setLastDirectorInvite] = useState<{ directorName: string; email: string } | null>(null);
   const [directorInviteSubmitting, setDirectorInviteSubmitting] = useState(false);
   const [directorInviteMessage, setDirectorInviteMessage] = useState<string | null>(null);
   const [directorInviteError, setDirectorInviteError] = useState<string | null>(null);
@@ -345,6 +354,7 @@ export default function SettingsPage() {
       if (result.success) {
         setRegistrySnapshot(result.snapshot);
         setDirectorInvitations(result.invitations || []);
+        setDirectorAffiliation(result.affiliation || null);
       }
     } catch (error) {
       console.error("Failed to load director approval context", error);
@@ -385,6 +395,7 @@ export default function SettingsPage() {
       setDirectors([]);
       setRegistrySnapshot(null);
       setDirectorInvitations([]);
+      setDirectorAffiliation(null);
     }
   }, [loadDirectorApprovalContext, loadDirectors]);
 
@@ -412,8 +423,15 @@ export default function SettingsPage() {
         throw new Error(result.error || "Could not send director invitation.");
       }
 
-      setDirectorInviteMessage("Director approval invitation sent.");
-      setDirectorInviteEmail("");
+      const selectedDirectorName =
+        uniqueRegistryDirectors.find((director) => (director.id || director.name || "") === selectedRegistryDirector)?.name ||
+        selectedRegistryDirector ||
+        "Selected director";
+      setLastDirectorInvite({
+        directorName: selectedDirectorName,
+        email: directorInviteEmail,
+      });
+      setDirectorInviteMessage("Director approval request sent.");
       await loadDirectorApprovalContext(merchant.id);
     } catch (error) {
       setDirectorInviteError(
@@ -531,6 +549,44 @@ export default function SettingsPage() {
   const registryDirectors = Array.isArray(registrySnapshot?.directors_json)
     ? registrySnapshot.directors_json
     : [];
+  const uniqueRegistryDirectors = (() => {
+    const seen = new Set<string>();
+    return registryDirectors.filter((director) => {
+      const key = `${(director.name || "").trim().toLowerCase()}|${(director.role || "").trim().toLowerCase()}`;
+      if (!key.trim() || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  })();
+  const registryDirectorsByRole = uniqueRegistryDirectors.reduce<Record<string, typeof uniqueRegistryDirectors>>((acc, director) => {
+    const roleKey = director.role || "Director";
+    if (!acc[roleKey]) acc[roleKey] = [];
+    acc[roleKey].push(director);
+    return acc;
+  }, {});
+  const closestRegistryDirector = (() => {
+    const matchedName = directorAffiliation?.matched_registry_name?.trim().toLowerCase();
+    if (matchedName) {
+      return uniqueRegistryDirectors.find((director) => director.name?.trim().toLowerCase() === matchedName) || null;
+    }
+    return uniqueRegistryDirectors[0] || null;
+  })();
+  const pendingDirectorInvite = directorInvitations.find((invite) =>
+    ["sent", "opened"].includes(String(invite.status || "")),
+  );
+  const shouldShowManualFallback =
+    Boolean(
+      merchant?.business_affiliation_status === "partial_match" ||
+        merchant?.business_affiliation_status === "no_match" ||
+        merchant?.business_affiliation_status === "rejected" ||
+        merchant?.business_affiliation_status === "manual_review" ||
+        !registrySnapshot ||
+        uniqueRegistryDirectors.length === 0 ||
+        directorInviteError ||
+        directorInvitations.some((invite) =>
+          ["expired", "rejected", "cancelled"].includes(String(invite.status || "")),
+        ),
+    );
   const authorityApproved =
     merchant?.business_affiliation_status === "director_approved" ||
     merchant?.business_affiliation_status === "strong_match";
@@ -588,7 +644,7 @@ export default function SettingsPage() {
       merchant?.settlement_account_name,
   );
 
-  const verificationChecklist = useMemo(() => {
+  const verificationChecklist = (() => {
     const metadata: Record<
       VerificationRequirementKey,
       { title: string; description: string }
@@ -626,8 +682,14 @@ export default function SettingsPage() {
         description: "Verify the business registration number and registered name.",
       },
       owner_or_director_kyc: {
-        title: "Representative Identity",
-        description: "Verify the person opening the account.",
+        title:
+          isCorporate && merchant?.relationship_claim !== "representative_claim"
+            ? "Director/Owner Identity"
+            : "Representative Identity",
+        description:
+          isCorporate && merchant?.relationship_claim !== "representative_claim"
+            ? "Verify the director or owner opening the account."
+            : "Verify the person opening the account.",
       },
       director_or_representative_flow: {
         title: "Director Approval",
@@ -674,7 +736,7 @@ export default function SettingsPage() {
         ? getRequirementCompletion(merchant, requirement)
         : ("pending" as const),
     }));
-  }, [merchant, planRequirements]);
+  })();
 
   const handleSaveProfile = async () => {
     if (!merchant) return;
@@ -1366,6 +1428,9 @@ export default function SettingsPage() {
                                   onChange={(event) => setCacFile(event.target.files?.[0] || null)}
                                   className="h-11 border-2 border-purp-200 bg-white file:mr-3 file:rounded-md file:border-0 file:bg-purp-100 file:px-3 file:py-1 file:text-sm file:font-medium file:text-purp-700"
                                 />
+                                {cacFile ? (
+                                  <p className="text-xs text-neutral-500">Selected file: {cacFile.name}</p>
+                                ) : null}
                                 {merchant?.cac_document_url ? (
                                   <p className="text-xs text-emerald-600">Existing document already uploaded.</p>
                                 ) : null}
@@ -1385,6 +1450,9 @@ export default function SettingsPage() {
                                   onChange={(event) => setUtilityFile(event.target.files?.[0] || null)}
                                   className="h-11 border-2 border-purp-200 bg-white file:mr-3 file:rounded-md file:border-0 file:bg-purp-100 file:px-3 file:py-1 file:text-sm file:font-medium file:text-purp-700"
                                 />
+                                {utilityFile ? (
+                                  <p className="text-xs text-neutral-500">Selected file: {utilityFile.name}</p>
+                                ) : null}
                                 {merchant?.utility_document_url ? (
                                   <p className="text-xs text-emerald-600">Existing utility document already uploaded.</p>
                                 ) : null}
@@ -1450,6 +1518,61 @@ export default function SettingsPage() {
                           </div>
                         </div>
 
+                        {merchant?.business_affiliation_status === "partial_match" && directorAffiliation ? (
+                          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                            <div className="space-y-2">
+                              <p className="text-sm font-semibold text-amber-900">
+                                Director match needs confirmation
+                              </p>
+                              <p className="text-sm text-amber-800">
+                                We found a similar name in the registry, but it does not fully match the name you entered.
+                              </p>
+                              <div className="space-y-1 text-sm text-amber-800">
+                                <p>Entered name: {ownerName || "Not provided"}</p>
+                                <p>Closest registry name: {directorAffiliation.matched_registry_name || "Not available"}</p>
+                                <p>Role: {closestRegistryDirector?.role || "Director"}</p>
+                              </div>
+                            </div>
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                className="border-amber-300 text-amber-900 hover:bg-amber-100"
+                                onClick={() => {
+                                  if (directorAffiliation.matched_registry_name) {
+                                    setOwnerName(directorAffiliation.matched_registry_name);
+                                  }
+                                }}
+                              >
+                                Use registry name
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                className="border-amber-300 text-amber-900 hover:bg-amber-100"
+                                onClick={() => setDirectorInviteMessage("Manual review requested.")}
+                              >
+                                Request manual review
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                className="border-amber-300 text-amber-900 hover:bg-amber-100"
+                                onClick={() => {
+                                  if (closestRegistryDirector?.id || closestRegistryDirector?.name) {
+                                    setSelectedRegistryDirector(
+                                      closestRegistryDirector.id || closestRegistryDirector.name || "",
+                                    );
+                                  }
+                                  setDirectorInviteMessage("Invite flow prepared for the listed director.");
+                                }}
+                              >
+                                Invite listed director instead
+                              </Button>
+                            </div>
+                          </div>
+                        ) : null}
+
                         {registrySnapshot ? (
                           <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4">
                             <div className="space-y-2">
@@ -1459,32 +1582,59 @@ export default function SettingsPage() {
                                 {registrySnapshot.registration_number || merchant?.cac_number || "pending"}
                               </p>
                             </div>
-                            <div className="mt-3 space-y-2">
-                              {registryDirectors.length > 0 ? (
-                                registryDirectors.map((director) => (
-                                  <div
-                                    key={`${director.id || director.name}-${director.role}`}
-                                    className="flex items-center justify-between rounded-xl border border-white bg-white p-3"
-                                  >
-                                    <div>
-                                      <p className="text-sm font-medium text-neutral-900">
-                                        {director.name || "Unnamed director"}
-                                      </p>
-                                      <p className="text-xs text-neutral-500">{director.role || "Director"}</p>
-                                    </div>
-                                    {approvedDirectorName === director.name ? (
-                                      <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
-                                        Approved
-                                      </Badge>
-                                    ) : null}
-                                  </div>
-                                ))
-                              ) : (
-                                <p className="text-sm text-neutral-500">
-                                  Registry directors have not been synced yet.
+                            {closestRegistryDirector ? (
+                              <div className="mt-3 rounded-xl border border-white bg-white p-3">
+                                <p className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+                                  Closest match
                                 </p>
-                              )}
-                            </div>
+                                <p className="mt-1 text-sm font-medium text-neutral-900">
+                                  {closestRegistryDirector.name || "Unnamed director"}
+                                </p>
+                                <p className="text-xs text-neutral-500">
+                                  {closestRegistryDirector.role || "Director"}
+                                </p>
+                              </div>
+                            ) : null}
+                            <details className="mt-3 rounded-xl border border-white bg-white p-3">
+                              <summary className="cursor-pointer text-sm font-medium text-neutral-900">
+                                View all registry names
+                              </summary>
+                              <div className="mt-3 space-y-3">
+                                {Object.keys(registryDirectorsByRole).length > 0 ? (
+                                  Object.entries(registryDirectorsByRole).map(([role, directorsForRole]) => (
+                                    <div key={role} className="space-y-2">
+                                      <p className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+                                        {role}
+                                      </p>
+                                      <div className="space-y-2">
+                                        {directorsForRole.map((director) => (
+                                          <div
+                                            key={`${director.id || director.name}-${director.role}`}
+                                            className="flex items-center justify-between rounded-xl border border-neutral-200 bg-neutral-50 p-3"
+                                          >
+                                            <div>
+                                              <p className="text-sm font-medium text-neutral-900">
+                                                {director.name || "Unnamed director"}
+                                              </p>
+                                              <p className="text-xs text-neutral-500">{director.role || "Director"}</p>
+                                            </div>
+                                            {approvedDirectorName === director.name ? (
+                                              <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
+                                                Approved
+                                              </Badge>
+                                            ) : null}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  ))
+                                ) : (
+                                  <p className="text-sm text-neutral-500">
+                                    Registry directors have not been synced yet.
+                                  </p>
+                                )}
+                              </div>
+                            </details>
                           </div>
                         ) : (
                           <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-700">
@@ -1512,7 +1662,7 @@ export default function SettingsPage() {
                                     <SelectValue placeholder="Choose a registry director" />
                                   </SelectTrigger>
                                   <SelectContent>
-                                    {registryDirectors.map((director) => (
+                                    {uniqueRegistryDirectors.map((director) => (
                                       <SelectItem
                                         key={director.id || director.name}
                                         value={director.id || director.name || ""}
@@ -1535,91 +1685,109 @@ export default function SettingsPage() {
                                 />
                               </div>
 
-                              <div className="flex flex-wrap gap-3">
-                                <Button
-                                  onClick={handleCreateDirectorInvitation}
-                                  disabled={
-                                    directorInviteSubmitting ||
-                                    !selectedRegistryDirector ||
-                                    !directorInviteEmail.trim()
-                                  }
-                                  className="bg-purp-900 text-white hover:bg-purp-800"
-                                >
-                                  {directorInviteSubmitting ? "Sending..." : "Send approval invite"}
-                                </Button>
-                                {directorInviteMessage ? (
-                                  <p className="text-sm text-emerald-700">{directorInviteMessage}</p>
-                                ) : null}
-                                {directorInviteError ? (
-                                  <p className="text-sm text-red-700">{directorInviteError}</p>
-                                ) : null}
+                            <div className="flex flex-wrap gap-3">
+                              <Button
+                                onClick={handleCreateDirectorInvitation}
+                                disabled={
+                                  directorInviteSubmitting ||
+                                  Boolean(pendingDirectorInvite) ||
+                                  !selectedRegistryDirector ||
+                                  !directorInviteEmail.trim()
+                                }
+                                className="bg-purp-900 text-white hover:bg-purp-800"
+                              >
+                                  {directorInviteSubmitting
+                                    ? "Sending..."
+                                    : pendingDirectorInvite
+                                    ? "Invite pending"
+                                    : "Send approval invite"}
+                              </Button>
                               </div>
+                            {directorInviteMessage || pendingDirectorInvite || lastDirectorInvite ? (
+                              <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+                                <p className="font-medium">
+                                  {directorInviteMessage || "Director approval request sent."}
+                                </p>
+                                <p className="mt-1">
+                                  {lastDirectorInvite?.directorName || pendingDirectorInvite?.selected_director_name || "Selected director"}{" "}
+                                  {pendingDirectorInvite?.status ? `- ${directorInvitationStatusLabel(pendingDirectorInvite.status)}` : null}
+                                </p>
+                                <p className="text-xs text-emerald-700">
+                                  {lastDirectorInvite?.email || directorInviteEmail || "Director email not captured"}
+                                </p>
+                              </div>
+                            ) : null}
+                            {directorInviteError ? (
+                              <p className="text-sm text-red-700">{directorInviteError}</p>
+                            ) : null}
                             </div>
                           </div>
                         ) : null}
 
-                        <details className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4">
-                          <summary className="cursor-pointer text-sm font-semibold text-neutral-900">
-                            Need help confirming director?
-                          </summary>
-                          <div className="mt-4 grid gap-4">
-                            <div className="grid gap-4 lg:grid-cols-2">
-                              <div className="space-y-2">
-                                <Label className="text-sm font-medium">Director name</Label>
-                                <Input
-                                  value={newDirectorName}
-                                  onChange={(event) => setNewDirectorName(event.target.value)}
-                                  placeholder="Full legal name"
-                                  className="h-11 border-2 border-purp-200 bg-white"
-                                />
+                        {shouldShowManualFallback ? (
+                          <details className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4">
+                            <summary className="cursor-pointer text-sm font-semibold text-neutral-900">
+                              Need help confirming director?
+                            </summary>
+                            <div className="mt-4 grid gap-4">
+                              <div className="grid gap-4 lg:grid-cols-2">
+                                <div className="space-y-2">
+                                  <Label className="text-sm font-medium">Director name</Label>
+                                  <Input
+                                    value={newDirectorName}
+                                    onChange={(event) => setNewDirectorName(event.target.value)}
+                                    placeholder="Full legal name"
+                                    className="h-11 border-2 border-purp-200 bg-white"
+                                  />
+                                </div>
+                                <div className="space-y-2">
+                                  <Label className="text-sm font-medium">Role</Label>
+                                  <Select
+                                    value={newDirectorRole}
+                                    onValueChange={(value) =>
+                                      setNewDirectorRole((value as DirectorRole | null) || "director")
+                                    }
+                                  >
+                                    <SelectTrigger className="h-11 border-2 border-purp-200 bg-white">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="director">Director</SelectItem>
+                                      <SelectItem value="shareholder">Shareholder</SelectItem>
+                                      <SelectItem value="beneficial_owner">Beneficial Owner</SelectItem>
+                                      <SelectItem value="signatory">Authorized Signatory</SelectItem>
+                                      <SelectItem value="proprietor">Proprietor</SelectItem>
+                                      <SelectItem value="partner">Partner</SelectItem>
+                                      <SelectItem value="trustee">Trustee</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
                               </div>
-                              <div className="space-y-2">
-                                <Label className="text-sm font-medium">Role</Label>
-                                <Select
-                                  value={newDirectorRole}
-                                  onValueChange={(value) =>
-                                    setNewDirectorRole((value as DirectorRole | null) || "director")
-                                  }
-                                >
-                                  <SelectTrigger className="h-11 border-2 border-purp-200 bg-white">
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="director">Director</SelectItem>
-                                    <SelectItem value="shareholder">Shareholder</SelectItem>
-                                    <SelectItem value="beneficial_owner">Beneficial Owner</SelectItem>
-                                    <SelectItem value="signatory">Authorized Signatory</SelectItem>
-                                    <SelectItem value="proprietor">Proprietor</SelectItem>
-                                    <SelectItem value="partner">Partner</SelectItem>
-                                    <SelectItem value="trustee">Trustee</SelectItem>
-                                  </SelectContent>
-                                </Select>
-                              </div>
+
+                              <Button
+                                variant="outline"
+                                className="w-full border-2 border-purp-200 text-purp-700 hover:bg-purp-50"
+                                disabled={!newDirectorName.trim()}
+                                onClick={() =>
+                                  setActiveDirectorToVerify({
+                                    name: newDirectorName.trim(),
+                                    role: newDirectorRole,
+                                  })
+                                }
+                              >
+                                <Plus className="mr-2 h-4 w-4" />
+                                Verify this director once
+                              </Button>
                             </div>
+                          </details>
+                        ) : null}
 
-                            <Button
-                              variant="outline"
-                              className="w-full border-2 border-purp-200 text-purp-700 hover:bg-purp-50"
-                              disabled={!newDirectorName.trim()}
-                              onClick={() =>
-                                setActiveDirectorToVerify({
-                                  name: newDirectorName.trim(),
-                                  role: newDirectorRole,
-                                })
-                              }
-                            >
-                              <Plus className="mr-2 h-4 w-4" />
-                              Verify this director once
-                            </Button>
-                          </div>
-                        </details>
-
-                        <div className="space-y-3">
-                          <p className="text-sm font-semibold text-neutral-900">Director activity</p>
-                          <div className="space-y-2">
-                            {directorsLoading ? (
-                              <p className="text-sm text-neutral-500">Loading director verification history...</p>
-                            ) : directors.length > 0 ? (
+                          <div className="space-y-3">
+                            <p className="text-sm font-semibold text-neutral-900">Director activity</p>
+                            <div className="space-y-2">
+                              {directorsLoading ? (
+                                <p className="text-sm text-neutral-500">Loading director verification history...</p>
+                              ) : directors.length > 0 ? (
                               directors.map((director) => (
                                 <div
                                   key={director.id}

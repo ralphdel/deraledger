@@ -3243,7 +3243,7 @@ export async function verifyDirectorAction(params: {
 
 export async function getDirectorApprovalContextAction(merchantId: string) {
   const guard = await requireMerchantOwner(merchantId);
-  if (!guard.permitted) return { success: false, error: guard.error, snapshot: null, invitations: [] };
+  if (!guard.permitted) return { success: false, error: guard.error, snapshot: null, invitations: [], affiliation: null };
 
   const adminClient = getServiceClient();
   const { data: merchant, error: merchantError } = await adminClient
@@ -3253,14 +3253,14 @@ export async function getDirectorApprovalContextAction(merchantId: string) {
     .maybeSingle();
 
   if (merchantError) {
-    return { success: false, error: merchantError.message, snapshot: null, invitations: [] };
+    return { success: false, error: merchantError.message, snapshot: null, invitations: [], affiliation: null };
   }
 
   if (!merchant?.business_registry_snapshot_id) {
-    return { success: true, snapshot: null, invitations: [] };
+    return { success: true, snapshot: null, invitations: [], affiliation: null };
   }
 
-  const [snapshotResult, invitationsResult] = await Promise.all([
+  const [snapshotResult, invitationsResult, affiliationResult] = await Promise.all([
     adminClient
       .from("business_registry_snapshots")
       .select("*")
@@ -3273,13 +3273,21 @@ export async function getDirectorApprovalContextAction(merchantId: string) {
       .eq("registry_snapshot_id", merchant.business_registry_snapshot_id)
       .neq("status", "cancelled")
       .order("created_at", { ascending: false }),
+    adminClient
+      .from("business_affiliations")
+      .select("*")
+      .eq("merchant_id", merchantId)
+      .eq("registry_snapshot_id", merchant.business_registry_snapshot_id)
+      .order("created_at", { ascending: false })
+      .limit(1)
   ]);
 
   return {
-    success: !snapshotResult.error && !invitationsResult.error,
-    error: snapshotResult.error?.message || invitationsResult.error?.message,
+    success: !snapshotResult.error && !invitationsResult.error && !affiliationResult.error,
+    error: snapshotResult.error?.message || invitationsResult.error?.message || affiliationResult.error?.message,
     snapshot: snapshotResult.data || null,
     invitations: invitationsResult.data || [],
+    affiliation: affiliationResult.data?.[0] || null,
   };
 }
 
