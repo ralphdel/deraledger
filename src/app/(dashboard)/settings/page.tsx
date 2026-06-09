@@ -279,6 +279,7 @@ function ChecklistRow({
 }
 
 export default function SettingsPage() {
+  const [activeTab, setActiveTab] = useState("verification");
   const [businessName, setBusinessName] = useState("");
   const [tradingName, setTradingName] = useState("");
   const [ownerName, setOwnerName] = useState("");
@@ -562,8 +563,7 @@ export default function SettingsPage() {
   const liveFeatureLockReasons = merchant ? getLiveFeatureLockReasons(merchant) : [];
   const nextLiveUnlockStep = liveFeatureLockReasons[0] || null;
   const verificationStatus = merchant?.verification_status || "unverified";
-  const isOwnerNameLocked =
-    merchant?.bvn_status === "verified" && merchant?.selfie_status === "verified";
+  const isOwnerNameLocked = Boolean(merchant?.bvn_status === "verified" && merchant?.selfie_status === "verified");
   const registryDirectors = Array.isArray(registrySnapshot?.directors_json)
     ? registrySnapshot.directors_json
     : [];
@@ -654,6 +654,13 @@ export default function SettingsPage() {
   const phoneMissing = !isStarter && !phone.trim();
   const profileIncomplete =
     ownerNameMissing || businessNameMissing || businessAddressMissing || phoneMissing;
+
+  const missingProfileFields: string[] = [];
+  if (ownerNameMissing) missingProfileFields.push(isCorporate && merchant?.relationship_claim === "representative_claim" ? "Representative full name" : isCorporate ? "Director/Owner full name" : "Full name");
+  if (businessNameMissing) missingProfileFields.push("Registered business name");
+  if (businessAddressMissing) missingProfileFields.push("Business address");
+  if (phoneMissing) missingProfileFields.push("Phone number");
+
   const effectiveVerificationStatus = profileIncomplete ? "unverified" : verificationStatus;
 
   const settlementConfigured = Boolean(
@@ -866,6 +873,15 @@ export default function SettingsPage() {
   const handleKycSubmit = async () => {
     if (!merchant) return;
 
+    if (profileIncomplete) {
+      setKycError(
+        isCorporate
+          ? "Complete and save the required Business Profile details before starting verification."
+          : "Complete your required profile details first."
+      );
+      return;
+    }
+
     if (!isBvnLocked && merchant.bvn_status !== "verified" && merchant.bvn_status !== "pending") {
       setKycError("Save the BVN first so the submitted identity cannot drift during review.");
       return;
@@ -877,17 +893,19 @@ export default function SettingsPage() {
       return;
     }
 
-    if (requiresBusinessRegistration && !merchant.cac_number) {
-      setKycError("Verify the required registration step before submitting verification.");
+    const isSubmittingDocuments = !!(cacFile || utilityFile);
+
+    if (requiresBusinessRegistration && !merchant.cac_number && isSubmittingDocuments) {
+      setKycError("Verify the business registration number before continuing.");
       return;
     }
 
-    if (requiresBusinessDocument && !cacFile && !merchant.cac_document_url) {
+    if (requiresBusinessDocument && !cacFile && !merchant.cac_document_url && isSubmittingDocuments) {
       setKycError("This tier requires the supporting business document before submission.");
       return;
     }
 
-    if (requiresUtilityBill && !utilityFile && !merchant.utility_document_url) {
+    if (requiresUtilityBill && !utilityFile && !merchant.utility_document_url && isSubmittingDocuments) {
       setKycError("This tier requires proof of address or utility evidence before submission.");
       return;
     }
@@ -1111,9 +1129,9 @@ export default function SettingsPage() {
         </div>
       ) : null}
 
-      <Tabs defaultValue="verification" className="space-y-6">
-        <div className="overflow-x-auto">
-          <TabsList className="inline-flex min-w-full justify-start gap-2 rounded-2xl border border-purp-200 bg-white p-2">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+        <div className="overflow-x-auto pb-2">
+          <TabsList className="inline-flex min-w-max justify-start gap-2 rounded-2xl border border-purp-200 bg-white p-2">
             <TabsTrigger value="verification">Account Status & Verification</TabsTrigger>
             <TabsTrigger value="profile">Business Profile</TabsTrigger>
             <TabsTrigger value="settlement">Settlement Account</TabsTrigger>
@@ -1215,17 +1233,30 @@ export default function SettingsPage() {
                 </div>
 
                 {profileIncomplete ? (
-                  <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-700">
-                    <div className="flex items-start gap-3">
-                      <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
-                      <div className="space-y-2">
-                        <p className="font-semibold">Business profile still blocks verification</p>
-                        <ul className="list-disc space-y-1 pl-5">
-                          {ownerNameMissing ? <li>Add the verified name in Business Profile.</li> : null}
-                          {businessNameMissing ? <li>Add the registered business name in Business Profile.</li> : null}
-                          {businessAddressMissing ? <li>Complete the full business address in Business Profile.</li> : null}
-                          {phoneMissing ? <li>Add the workspace phone number in Business Profile.</li> : null}
+                  <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
+                    <div className="flex items-start gap-4">
+                      <AlertTriangle className="mt-0.5 h-6 w-6 shrink-0 text-amber-600" />
+                      <div className="space-y-3">
+                        <p className="text-base font-bold text-amber-900">
+                          {isCorporate ? "Complete your Business Profile first" : "Complete your profile first"}
+                        </p>
+                        <p className="text-sm text-amber-800">
+                          {isCorporate
+                            ? "Before you can start business verification, please complete and save the required business details."
+                            : "Before you can verify your identity, please complete and save the required profile fields."}
+                        </p>
+                        <ul className="list-disc space-y-1 pl-5 text-amber-800 font-medium">
+                          {missingProfileFields.map(field => <li key={field}>{field}</li>)}
                         </ul>
+                        <div className="pt-2">
+                           <Button
+                             type="button"
+                             onClick={() => setActiveTab("profile")}
+                             className="bg-amber-600 text-white hover:bg-amber-700 shadow-sm"
+                           >
+                             Go to Business Profile
+                           </Button>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1236,10 +1267,10 @@ export default function SettingsPage() {
                     title={identitySectionTitle}
                     description={verificationPendingCopy}
                     action={
-                      !profileIncomplete && requiresBvn && merchant?.bvn_status !== "verified" ? (
+                      requiresBvn && merchant?.bvn_status !== "verified" ? (
                         <Button
                           onClick={handleKycSubmit}
-                          disabled={kycSubmitting}
+                          disabled={kycSubmitting || profileIncomplete}
                           className="bg-purp-900 text-white hover:bg-purp-800"
                         >
                           {kycSubmitting ? "Submitting..." : "Verify BVN"}
@@ -1429,7 +1460,7 @@ export default function SettingsPage() {
                                 {!merchant?.cac_number ? (
                                   <Button
                                     onClick={handleVerifyRcNumber}
-                                    disabled={rcSubmitting || cacNumber.trim().length < 5}
+                                    disabled={rcSubmitting || cacNumber.trim().length < 5 || profileIncomplete}
                                     className="bg-purp-900 text-white hover:bg-purp-800"
                                   >
                                     {rcSubmitting ? "Verifying..." : "Verify Business Registration"}
@@ -1458,6 +1489,7 @@ export default function SettingsPage() {
                                   type="file"
                                   accept=".pdf,.png,.jpg,.jpeg"
                                   onChange={(event) => setCacFile(event.target.files?.[0] || null)}
+                                  disabled={!merchant?.cac_number}
                                   className="h-11 border-2 border-purp-200 bg-white file:mr-3 file:rounded-md file:border-0 file:bg-purp-100 file:px-3 file:py-1 file:text-sm file:font-medium file:text-purp-700"
                                 />
                                 {cacFile ? (
@@ -1480,6 +1512,7 @@ export default function SettingsPage() {
                                   type="file"
                                   accept=".pdf,.png,.jpg,.jpeg"
                                   onChange={(event) => setUtilityFile(event.target.files?.[0] || null)}
+                                  disabled={!merchant?.cac_number && requiresBusinessRegistration}
                                   className="h-11 border-2 border-purp-200 bg-white file:mr-3 file:rounded-md file:border-0 file:bg-purp-100 file:px-3 file:py-1 file:text-sm file:font-medium file:text-purp-700"
                                 />
                                 {utilityFile ? (
@@ -1646,10 +1679,10 @@ export default function SettingsPage() {
                                         {directorsForRole.map((director) => (
                                           <div
                                             key={`${director.id || director.name}-${director.role}`}
-                                            className="flex items-center justify-between rounded-xl border border-neutral-200 bg-neutral-50 p-3"
+                                            className="flex items-center justify-between rounded-xl border border-neutral-200 bg-neutral-50 p-3 overflow-hidden"
                                           >
-                                            <div>
-                                              <p className="text-sm font-medium text-neutral-900">
+                                            <div className="min-w-0 flex-1 pr-2">
+                                              <p className="text-sm font-medium text-neutral-900 break-words whitespace-normal">
                                                 {director.name || "Unnamed director"}
                                               </p>
                                               <p className="text-xs text-neutral-500">{director.role || "Director"}</p>
@@ -1919,10 +1952,11 @@ export default function SettingsPage() {
                     <Select
                       value={businessType || null}
                       onValueChange={(value) => {
-                        if (!isOwnerNameLocked || !merchant?.business_type) {
+                        if (!merchant?.cac_number || !merchant?.business_type) {
                           setBusinessType(value ?? "sole_proprietorship");
                         }
                       }}
+                      disabled={Boolean(merchant?.cac_number)}
                     >
                       <SelectTrigger className="h-11 border-2 border-purp-200 bg-purp-50">
                         <SelectValue placeholder="Choose business type" />
