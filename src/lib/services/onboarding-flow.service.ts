@@ -439,7 +439,7 @@ export function matchAffiliationByName(
     const surname = registryTokens[0] || "";
     const surnameMatch = verifiedTokens.some((token) => tokensMatch(token, surname));
     const status =
-      surnameMatch && matchedCount >= 2 ? "strong_match"
+      (surnameMatch && matchedCount >= 2 && score >= 70) ? "strong_match"
       : matchedCount >= 2 ? "partial_match"
       : matchedCount === 1 ? "partial_match"
       : "no_match";

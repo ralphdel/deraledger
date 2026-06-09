@@ -237,7 +237,7 @@ export default function AccountingReportPage() {
             <div>
               <h2 className="text-xl font-bold text-purp-900 dark:text-white mb-2">Advanced Analytics — Business Plan</h2>
               <p className="text-neutral-600 dark:text-white/60 max-w-md text-sm leading-relaxed">
-                The Accounting Report gives you a full breakdown of revenue, client performance, and outstanding balances. This feature is available exclusively on the <strong>Business (Corporate)</strong> plan.
+                The Accounting Report gives you a full breakdown of revenue, client performance, and outstanding balances. This feature is available exclusively on the <strong>Business</strong> plan.
                 {isStarter && " Your current Starter plan includes basic invoice tracking only."}
               </p>
             </div>

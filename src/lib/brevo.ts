@@ -343,7 +343,7 @@ export async function sendOnboardingWelcomeEmail(
   setPasswordLink: string,
   expiryDate?: string
 ) {
-  const planLabel = plan === "starter" ? "Starter" : plan === "individual" ? "Individual" : "Corporate";
+  const planLabel = plan === "starter" ? "Starter" : plan === "individual" ? "Individual" : "Business";
   const planPrice = plan === "starter" ? "Free" : plan === "individual" ? "₦5,000/month" : "₦20,000/month";
   const appUrl = getAppUrl();
 

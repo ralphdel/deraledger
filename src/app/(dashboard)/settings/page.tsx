@@ -523,8 +523,8 @@ export default function SettingsPage() {
     hasVerificationRequirement(effectiveTier, "director_or_representative_flow") ||
     hasVerificationRequirement(effectiveTier, "director_kyc");
   const isIndividual = !isStarter && !isCorporate;
-  const requiresBvn = hasVerificationRequirement(effectiveTier, "bvn");
-  const requiresSelfie = hasVerificationRequirement(effectiveTier, "selfie_liveness");
+  const requiresBvn = hasVerificationRequirement(effectiveTier, "bvn") || isCorporate;
+  const requiresSelfie = hasVerificationRequirement(effectiveTier, "selfie_liveness") || isCorporate;
   const requiresBusinessRegistration = hasVerificationRequirement(
     effectiveTier,
     "business_registration_check",
@@ -1365,8 +1365,7 @@ export default function SettingsPage() {
                         </>
                       )}
 
-                      {!verifiedIdentityComplete &&
-                      (requiresBusinessRegistration ||
+                      {(requiresBusinessRegistration ||
                         requiresBusinessDocument ||
                         requiresUtilityBill ||
                         requiresValidIdDocument) ? (

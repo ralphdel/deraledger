@@ -441,7 +441,7 @@ export default function MerchantDetailPage() {
             <SelectContent>
               <SelectItem value="starter">Starter (Free)</SelectItem>
               <SelectItem value="individual">Individual (₦5,000/mo)</SelectItem>
-              <SelectItem value="corporate">Corporate (₦20,000/mo)</SelectItem>
+              <SelectItem value="corporate">Business (₦20,000/mo)</SelectItem>
             </SelectContent>
           </Select>
           <DialogFooter>

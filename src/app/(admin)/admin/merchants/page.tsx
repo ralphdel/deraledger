@@ -272,7 +272,7 @@ export default function AdminMerchantsPage() {
               <SelectItem value="all">All Plans</SelectItem>
               <SelectItem value="starter">Starter</SelectItem>
               <SelectItem value="individual">Individual</SelectItem>
-              <SelectItem value="corporate">Corporate</SelectItem>
+              <SelectItem value="corporate">Business</SelectItem>
             </SelectContent>
           </Select>
           <Select value={statusFilter} onValueChange={(v) => v && setStatusFilter(v)}>

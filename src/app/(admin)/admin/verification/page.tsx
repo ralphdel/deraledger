@@ -574,7 +574,7 @@ export default function VerificationQueuePage() {
                         </div>
                       </div>
 
-                      {/* Corporate Directors & Shareholders Panel */}
+                      {/* Business Directors & Shareholders Panel */}
                       {(selectedMerchant.subscription_plan === "corporate" || selectedMerchant.merchant_tier === "corporate") && (
                         <div className="border border-neutral-200 rounded-xl overflow-hidden bg-white shadow-sm">
                           <button
@@ -584,7 +584,7 @@ export default function VerificationQueuePage() {
                           >
                             <span className="font-bold text-sm text-neutral-800 flex items-center gap-2">
                               <User className="h-4.5 w-4.5 text-[#7B2FF7]" />
-                              CAC Corporate Directors & KYB Roster
+                              CAC Business Directors & KYB Roster
                               <Badge className="ml-1 bg-[#E9D5FF] text-[#6F2CFF] text-[10px] font-extrabold border-0">
                                 {directors.length} Listed
                               </Badge>

@@ -287,7 +287,7 @@ export function SubscriptionTable({ initialSubs }: SubscriptionTableProps) {
                   checked={planFilter.includes("corporate")}
                   onCheckedChange={() => togglePlanFilter("corporate")}
                 >
-                  Corporate
+                  Business
                 </DropdownMenuCheckboxItem>
               </DropdownMenuGroup>
             </DropdownMenuContent>

@@ -44,7 +44,7 @@ const plans = [
     href: "/onboarding/corporate",
     price: "Business Verified",
     bestFor: "Collections infrastructure for growing teams",
-    verification: "Corporate vetting required",
+    verification: "Business vetting required",
     cta: "Set up business",
     featured: false,
     included: [
