@@ -40,9 +40,14 @@ type DirectorVerificationRow = {
   selfie_url?: string | null;
   verification_status?: string | null;
   face_match_score?: number | null;
+  liveness_score?: number | null;
   admin_notes?: string | null;
   verification_log_id?: string | null;
   verification_id?: string | null;
+  invitation_id?: string | null;
+  normalized_response?: Record<string, unknown> | null;
+  manual_review_required?: boolean | null;
+  created_at?: string | null;
 };
 type RegistrySnapshotRow = {
   id: string;
@@ -50,6 +55,7 @@ type RegistrySnapshotRow = {
   registered_name?: string | null;
   registration_number?: string | null;
   directors_json?: { name?: string; role?: string }[] | null;
+  raw_response_encrypted?: Record<string, unknown> | null;
 };
 type BusinessAffiliationRow = {
   id: string;
@@ -62,6 +68,7 @@ type DirectorInvitationRow = {
   selected_director_name?: string | null;
   director_email?: string | null;
   status?: string | null;
+  registry_snapshot_id?: string | null;
 };
 type VerificationCostRow = {
   id: string;
@@ -157,6 +164,13 @@ export default function VerificationQueuePage() {
     }
   };
 
+  /** Maps internal plan keys to user-facing labels. "corporate" → "Business". */
+  const formatPlanLabel = (plan: string | null | undefined): string => {
+    if (!plan) return "Starter";
+    if (plan === "corporate") return "Business";
+    return plan.charAt(0).toUpperCase() + plan.slice(1);
+  };
+
   const updateItemStatus = async (merchant: Merchant, field: "cac_status" | "bvn_status" | "utility_status" | "selfie_status", status: "verified" | "rejected") => {
     const { success, error, updates } = await adminUpdateKycDocumentStatusAction(merchant.id, field, status, reviewNotes || undefined);
     if (success) refreshMerchant(updates || {});
@@ -243,12 +257,14 @@ export default function VerificationQueuePage() {
     setVerificationCosts([]);
 
     const plan = m.subscription_plan || m.merchant_tier || "starter";
+    const isBusinessPlan = plan === "corporate" || plan === "business";
     const sb = createClient();
-    if (plan === "corporate") {
+    if (isBusinessPlan) {
       setDirectorsLoading(true);
       sb.from("business_director_verifications")
         .select("*")
         .eq("merchant_id", m.id)
+        .order("created_at", { ascending: false })
         .then(({ data }) => {
           setDirectors(data || []);
           setDirectorsLoading(false);
@@ -257,17 +273,54 @@ export default function VerificationQueuePage() {
       setDirectors([]);
     }
 
-    const snapshotQuery = m.business_registry_snapshot_id
-      ? sb.from("business_registry_snapshots").select("*").eq("id", m.business_registry_snapshot_id).maybeSingle()
-      : Promise.resolve({ data: null, error: null });
+    // Snapshot lookup — 3-step fallback:
+    // 1. direct link via business_registry_snapshot_id
+    // 2. latest snapshot by merchant_id
+    // 3. snapshot linked via a director_invitation.registry_snapshot_id
+    const resolveSnapshot = async (): Promise<RegistrySnapshotRow | null> => {
+      // Step 1
+      if (m.business_registry_snapshot_id) {
+        const { data } = await sb
+          .from("business_registry_snapshots")
+          .select("*")
+          .eq("id", m.business_registry_snapshot_id)
+          .maybeSingle();
+        if (data) return data as RegistrySnapshotRow;
+      }
+      // Step 2
+      const { data: byMerchant } = await sb
+        .from("business_registry_snapshots")
+        .select("*")
+        .eq("merchant_id", m.id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (byMerchant) return byMerchant as RegistrySnapshotRow;
+      return null;
+    };
 
     Promise.all([
-      snapshotQuery,
+      resolveSnapshot(),
       sb.from("business_affiliations").select("*").eq("merchant_id", m.id).order("created_at", { ascending: false }),
       sb.from("director_invitations").select("*").eq("merchant_id", m.id).order("created_at", { ascending: false }),
       sb.from("verification_costs").select("*").eq("merchant_id", m.id).order("created_at", { ascending: false }).limit(10),
-    ]).then(([snapshotRes, affiliationRes, invitationRes, costRes]) => {
-      setRegistrySnapshot(snapshotRes.data || null);
+    ]).then(async ([snapshotData, affiliationRes, invitationRes, costRes]) => {
+      let resolvedSnapshot = snapshotData;
+      // Step 3: fallback via director_invitations.registry_snapshot_id
+      if (!resolvedSnapshot && invitationRes.data) {
+        const snapshotId = invitationRes.data.find(
+          (inv: DirectorInvitationRow) => inv.registry_snapshot_id
+        )?.registry_snapshot_id;
+        if (snapshotId) {
+          const { data: invSnap } = await sb
+            .from("business_registry_snapshots")
+            .select("*")
+            .eq("id", snapshotId)
+            .maybeSingle();
+          if (invSnap) resolvedSnapshot = invSnap as RegistrySnapshotRow;
+        }
+      }
+      setRegistrySnapshot(resolvedSnapshot || null);
       setBusinessAffiliations(affiliationRes.data || []);
       setDirectorInvitations(invitationRes.data || []);
       setVerificationCosts(costRes.data || []);
@@ -366,7 +419,7 @@ export default function VerificationQueuePage() {
                 <p className="text-xs text-neutral-500 truncate">{m.email}</p>
                 <div className="flex flex-wrap items-center gap-2 mt-1.5">
                   <Badge variant="outline" className="text-[10px] capitalize border bg-purple-50 text-purple-700 border-purple-200 px-1.5">
-                    {m.subscription_plan || m.merchant_tier}
+                    {formatPlanLabel(m.subscription_plan || m.merchant_tier)}
                   </Badge>
                   <Badge variant="outline" className={`text-[10px] capitalize border flex items-center gap-1 px-1.5 ${statusColor(status)}`}>
                     {statusIcon(status)}
@@ -410,7 +463,7 @@ export default function VerificationQueuePage() {
                           {statusIcon(getEffectiveStatus(selectedMerchant))}
                           <span>{getEffectiveStatus(selectedMerchant).replace(/_/g, " ")}</span>
                         </Badge>
-                        <span className="text-xs text-neutral-400 capitalize">{selectedMerchant.subscription_plan || selectedMerchant.merchant_tier} plan</span>
+                        <span className="text-xs text-neutral-400 capitalize">{formatPlanLabel(selectedMerchant.subscription_plan || selectedMerchant.merchant_tier)} plan</span>
                       </div>
 
                       {/* Merchant info grid */}
@@ -500,18 +553,26 @@ export default function VerificationQueuePage() {
                               </div>
                               <Badge variant="outline" className="text-[10px] uppercase">{registrySnapshot.provider_name}</Badge>
                             </div>
-                            {Array.isArray(registrySnapshot.directors_json) && registrySnapshot.directors_json.length > 0 ? (
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                                {registrySnapshot.directors_json.slice(0, 6).map((person: { name?: string; role?: string }, index: number) => (
-                                  <div key={`${person.name}-${index}`} className="rounded border bg-neutral-50 px-2 py-1.5">
-                                    <p className="truncate text-xs font-semibold text-neutral-800">{person.name || "Unnamed director"}</p>
-                                    <p className="text-[10px] text-neutral-500 capitalize">{String(person.role || "director").replace(/_/g, " ")}</p>
-                                  </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <p className="text-xs text-amber-700">No director roster was returned in the saved snapshot.</p>
-                            )}
+                            {(() => {
+                              const roster = extractKeyPersonnel(registrySnapshot);
+                              return roster.length > 0 ? (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                  {roster.slice(0, 6).map((person: any, index: number) => (
+                                    <div key={`${person.name}-${index}`} className="rounded border bg-neutral-50 px-2 py-1.5">
+                                      <p className="truncate text-xs font-semibold text-neutral-800">{person.name || "Unnamed director"}</p>
+                                      <p className="text-[10px] text-neutral-500 capitalize">
+                                        {String(person.designation || person.role || "director").replace(/_/g, " ")}
+                                      </p>
+                                      {person.status && (
+                                        <p className="text-[9px] text-neutral-400 uppercase tracking-wide">{person.status}</p>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <p className="text-xs text-amber-700">No director roster was returned in the saved snapshot.</p>
+                              );
+                            })()}
                           </div>
                         ) : selectedMerchant.cac_number ? (
                           <div className="rounded-lg bg-white border border-dashed border-amber-200 p-3 text-xs text-amber-700 font-semibold">
@@ -605,9 +666,8 @@ export default function VerificationQueuePage() {
                         </div>
                       </div>
 
-                      {/* Business Directors & Shareholders Panel */}
-                      {/* Business Directors & Shareholders Panel */}
-                      {(selectedMerchant.subscription_plan === "corporate" || selectedMerchant.merchant_tier === "corporate") && (
+                      {/* Business Directors & KYB Panel */}
+                      {(selectedMerchant.subscription_plan === "corporate" || selectedMerchant.merchant_tier === "corporate" || selectedMerchant.subscription_plan === "business" || selectedMerchant.merchant_tier === "business") && (
                         <div className="space-y-4">
                           <div className="border border-neutral-200 rounded-xl overflow-hidden bg-white shadow-sm">
                             <button
@@ -617,7 +677,7 @@ export default function VerificationQueuePage() {
                             >
                               <span className="font-bold text-sm text-neutral-800 flex items-center gap-2">
                                 <User className="h-4.5 w-4.5 text-[#7B2FF7]" />
-                                CAC Business Directors & KYB Roster
+                                CAC Business Directors &amp; KYB Roster
                                 <Badge className="ml-1 bg-[#E9D5FF] text-[#6F2CFF] text-[10px] font-extrabold border-0">
                                   {registrySnapshot ? extractKeyPersonnel(registrySnapshot).length : 0} Listed
                                 </Badge>
@@ -632,9 +692,8 @@ export default function VerificationQueuePage() {
                             {directorsExpanded && (
                               <div className="p-3.5 space-y-3.5 divide-y divide-neutral-100">
                                 {!registrySnapshot ? (
-                                  <div className="py-6 text-center text-xs text-neutral-400 flex items-center justify-center gap-2">
-                                    <Info className="h-4 w-4 text-neutral-300" />
-                                    <span>No registry snapshot available.</span>
+                                  <div className="rounded-lg bg-amber-50 border border-dashed border-amber-200 p-3 text-xs text-amber-700 font-semibold">
+                                    CAC number exists, but registry snapshot was not found. Re-run CAC lookup or repair snapshot link.
                                   </div>
                                 ) : extractKeyPersonnel(registrySnapshot).length === 0 ? (
                                   <div className="py-6 text-center text-xs text-neutral-400 flex items-center justify-center gap-2">
@@ -649,7 +708,7 @@ export default function VerificationQueuePage() {
                                           <h5 className="font-semibold text-sm text-neutral-900 flex items-center gap-1.5">
                                             {person.name}
                                             {person.isCorporate && (
-                                              <Badge variant="outline" className="text-[9px] bg-neutral-100 border-neutral-200 text-neutral-600 px-1 py-0 uppercase">Corporate Entity</Badge>
+                                              <Badge variant="outline" className="text-[9px] bg-neutral-100 border-neutral-200 text-neutral-600 px-1 py-0 uppercase">Business Entity</Badge>
                                             )}
                                           </h5>
                                           <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-neutral-500 font-mono">
@@ -675,9 +734,15 @@ export default function VerificationQueuePage() {
                             <div className="w-full flex items-center justify-between p-3.5 bg-neutral-50/50 border-b border-neutral-100">
                               <span className="font-bold text-sm text-neutral-800 flex items-center gap-2">
                                 <ShieldCheck className="h-4.5 w-4.5 text-blue-600" />
-                                Director Approval & Identity Evidence
-                                <Badge className="ml-1 bg-blue-100 text-blue-700 text-[10px] font-extrabold border-0">
-                                  {directors.length} Verified
+                                Director Approval &amp; Identity Evidence
+                                <Badge className={`ml-1 text-[10px] font-extrabold border-0 ${
+                                  directors.filter(d => d.verification_status === "verified").length > 0
+                                    ? "bg-emerald-100 text-emerald-700"
+                                    : directors.length > 0
+                                    ? "bg-amber-100 text-amber-700"
+                                    : "bg-blue-100 text-blue-700"
+                                }`}>
+                                  {directors.length} Record{directors.length !== 1 ? "s" : ""}
                                 </Badge>
                               </span>
                             </div>
@@ -689,7 +754,7 @@ export default function VerificationQueuePage() {
                                   Director approval exists, but director identity verification evidence was not found.
                                 </div>
                               )}
-                              
+
                               {directorsLoading ? (
                                 <div className="py-6 flex flex-col items-center justify-center gap-2 text-neutral-400 text-xs">
                                   <Loader className="h-5 w-5 animate-spin text-blue-600" />
@@ -701,115 +766,182 @@ export default function VerificationQueuePage() {
                                   <span>No director identity verification submitted for this account yet.</span>
                                 </div>
                               ) : (
-                                directors.map((dir) => (
-                                  <div key={dir.id} className="pt-3.5 first:pt-0 space-y-3">
-                                    <div className="flex items-start justify-between gap-3">
-                                      <div className="space-y-1">
-                                        <h5 className="font-semibold text-sm text-neutral-900 flex items-center gap-1.5">
-                                          {dir.director_name}
-                                          <span className="text-[10px] bg-neutral-100 text-neutral-600 px-1.5 py-0.5 rounded capitalize font-medium">
-                                            {dir.director_role?.replace(/_/g, " ")}
-                                          </span>
-                                        </h5>
-                                        <p className="text-xs text-neutral-400 font-mono">
-                                          BVN: {dir.masked_bvn || (dir.verification_status === "verified" ? "Verified" : "Missing")} · Provider: {dir.provider_name || "—"}
-                                        </p>
-                                        <p className="text-xs text-neutral-400 font-mono">
-                                          Selfie: {dir.selfie_url ? "Verified" : "Missing"} · Reference: {dir.verification_log_id || dir.id.split('-')[0]}
-                                        </p>
-                                        {dir.selfie_url && (
-                                          <button
-                                            type="button"
-                                            onClick={() => dir.selfie_url && handleViewDocument(dir.selfie_url)}
-                                            className="text-xs text-blue-600 hover:underline flex items-center gap-1 font-semibold"
-                                          >
-                                            View Selfie <ExternalLink className="h-3 w-3" />
-                                          </button>
-                                        )}
-                                      </div>
+                                directors.map((dir) => {
+                                  // Parse normalized_response for sandbox and BVN name data
+                                  const normResp = dir.normalized_response as Record<string, unknown> | null;
+                                  const sandboxOverride = normResp?.deraLedgerSandboxOverride as Record<string, unknown> | null;
+                                  const bvnData = normResp?.data as Record<string, unknown> | null;
+                                  const bvnFirstName = String(bvnData?.firstName || "").trim();
+                                  const bvnLastName = String(bvnData?.lastName || "").trim();
+                                  const bvnNameOnCard = String(bvnData?.nameOnCard || "").trim();
+                                  const bvnReturnedName = [bvnFirstName, bvnLastName].filter(Boolean).join(" ") || bvnNameOnCard || null;
+                                  const invitedName = String(dir.director_name || "").toUpperCase().trim();
+                                  const bvnNormalized = bvnReturnedName?.toUpperCase().trim() || "";
 
-                                      <div className="flex flex-col items-end gap-1.5">
-                                        <Badge
-                                          variant="outline"
-                                          className={`text-[10px] font-bold border-2 capitalize ${
-                                            dir.verification_status === "verified"
-                                              ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                                              : dir.verification_status === "failed"
-                                              ? "bg-red-50 text-red-700 border-red-200"
-                                              : "bg-amber-50 text-amber-700 border-amber-200"
-                                          }`}
-                                        >
-                                          {dir.verification_status?.replace(/_/g, " ")}
-                                        </Badge>
-                                        {dir.face_match_score !== null && (
-                                          <span className="text-[10px] text-neutral-400 font-mono">
-                                            Match Score: {dir.face_match_score}%
-                                          </span>
-                                        )}
-                                      </div>
-                                    </div>
+                                  // Check name match — compare invited director name tokens vs BVN returned tokens
+                                  const invitedTokens = invitedName.split(/\s+/).filter(Boolean);
+                                  const bvnTokens = bvnNormalized.split(/\s+/).filter(Boolean);
+                                  const hasNameOverlap = invitedTokens.length > 0 && bvnTokens.length > 0 &&
+                                    invitedTokens.some(t => bvnTokens.includes(t) && t.length > 2);
+                                  const nameMismatch = bvnReturnedName !== null && !hasNameOverlap;
 
-                                    {/* Action panel if manual review or failed/pending */}
-                                    {dir.verification_status !== "verified" && (
-                                      <div className="bg-neutral-50 rounded-lg p-2.5 border border-neutral-200/60 space-y-2">
-                                        <span className="text-[10px] font-bold text-neutral-500 uppercase tracking-wider block">
-                                          Manual Override Action
-                                        </span>
-                                        
-                                        <div className="flex gap-2">
-                                          <input
-                                            type="text"
-                                            placeholder="Reason or notes for manual override..."
-                                            value={directorNotes[dir.id] || ""}
-                                            onChange={(e) =>
-                                              setDirectorNotes({
-                                                ...directorNotes,
-                                                [dir.id]: e.target.value,
-                                              })
-                                            }
-                                            className="w-full text-xs rounded border border-neutral-300 px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-[#7B2FF7] bg-white text-neutral-800"
-                                          />
-                                          
-                                          <Button
-                                            type="button"
-                                            size="sm"
-                                            onClick={() =>
-                                              handleApproveDirector(dir.id, directorNotes[dir.id] || "")
-                                            }
-                                            className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs h-8"
+                                  // Selfie analysis
+                                  const providerMatch = sandboxOverride ? (sandboxOverride.providerMatch as boolean) : true;
+                                  const providerConfidence = sandboxOverride?.providerConfidenceLevel as number | null ?? dir.face_match_score;
+                                  const providerThreshold = sandboxOverride?.providerThreshold as number | null;
+                                  const selfieMatchBypassed = sandboxOverride?.selfieMatchBypassed as boolean ?? false;
+
+                                  // Find linked invitation
+                                  const linkedInvite = directorInvitations.find(inv => inv.id === dir.invitation_id) ||
+                                    directorInvitations.find(inv => inv.selected_director_name?.toUpperCase() === invitedName);
+
+                                  return (
+                                    <div key={dir.id} className="pt-3.5 first:pt-0 space-y-3">
+                                      {/* Header: invited director + status badge */}
+                                      <div className="flex items-start justify-between gap-3">
+                                        <div className="space-y-1">
+                                          <h5 className="font-semibold text-sm text-neutral-900 flex items-center gap-1.5">
+                                            {dir.director_name}
+                                            <span className="text-[10px] bg-neutral-100 text-neutral-600 px-1.5 py-0.5 rounded capitalize font-medium">
+                                              {dir.director_role?.replace(/_/g, " ")}
+                                            </span>
+                                          </h5>
+                                          {linkedInvite && (
+                                            <p className="text-[10px] text-neutral-400">
+                                              Invited via: {linkedInvite.director_email} · Invite status: <span className="capitalize">{linkedInvite.status}</span>
+                                            </p>
+                                          )}
+                                        </div>
+
+                                        <div className="flex flex-col items-end gap-1.5">
+                                          <Badge
+                                            variant="outline"
+                                            className={`text-[10px] font-bold border-2 capitalize ${
+                                              dir.verification_status === "verified" && !nameMismatch
+                                                ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                                : dir.verification_status === "failed"
+                                                ? "bg-red-50 text-red-700 border-red-200"
+                                                : nameMismatch
+                                                ? "bg-red-50 text-red-700 border-red-200"
+                                                : "bg-amber-50 text-amber-700 border-amber-200"
+                                            }`}
                                           >
-                                            Approve
-                                          </Button>
-                                          
-                                          <Button
-                                            type="button"
-                                            size="sm"
-                                            variant="destructive"
-                                            onClick={() =>
-                                              handleRejectDirector(dir.id, directorNotes[dir.id] || "")
-                                            }
-                                            className="text-white font-bold text-xs h-8"
-                                          >
-                                            Reject
-                                          </Button>
+                                            {nameMismatch ? "Name Mismatch" : dir.verification_status?.replace(/_/g, " ")}
+                                          </Badge>
+                                          {providerConfidence !== null && (
+                                            <span className="text-[10px] text-neutral-400 font-mono">
+                                              Confidence: {providerConfidence}%{providerThreshold ? ` / ${providerThreshold}% threshold` : ""}
+                                            </span>
+                                          )}
                                         </div>
                                       </div>
-                                    )}
 
-                                    {dir.admin_notes && (
-                                      <div className="bg-neutral-50 rounded-lg p-2.5 border border-dashed text-xs text-neutral-600 leading-relaxed font-mono">
-                                        <span className="font-bold text-neutral-800 block mb-0.5">Admin Audit Notes:</span>
-                                        {dir.admin_notes}
+                                      {/* Name Mismatch Warning */}
+                                      {nameMismatch && bvnReturnedName && (
+                                        <div className="rounded-lg bg-red-50 border border-red-200 p-3 text-xs text-red-800 flex items-start gap-2">
+                                          <ShieldAlert className="h-4 w-4 text-red-600 flex-shrink-0 mt-0.5" />
+                                          <div>
+                                            <p className="font-bold mb-1">Director Identity Name Mismatch</p>
+                                            <p>Invited director: <span className="font-semibold">{dir.director_name}</span></p>
+                                            <p>BVN returned name: <span className="font-semibold">{bvnReturnedName}{bvnNameOnCard && bvnNameOnCard !== bvnReturnedName ? ` / ${bvnNameOnCard}` : ""}</span></p>
+                                            <p className="mt-1 text-red-700">This director identity evidence does not match the invited director. Do not count as verified.</p>
+                                          </div>
+                                        </div>
+                                      )}
+
+                                      {/* Sandbox Override Warning */}
+                                      {selfieMatchBypassed && (
+                                        <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800 flex items-start gap-2">
+                                          <ShieldAlert className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                                          <div>
+                                            <p className="font-bold mb-1">Sandbox Override — Provider Selfie Threshold Not Met</p>
+                                            <p>Provider selfie match: <span className="font-semibold text-red-700">{providerMatch ? "Passed" : "Failed"}</span></p>
+                                            <p>Provider confidence: <span className="font-semibold">{providerConfidence}%</span> / threshold: <span className="font-semibold">{providerThreshold}%</span></p>
+                                            <p className="mt-1">Sandbox override accepted this verification. In production this would be <span className="font-bold">rejected or flagged for manual review</span>.</p>
+                                          </div>
+                                        </div>
+                                      )}
+
+                                      {/* BVN & Selfie Details */}
+                                      <div className="rounded-lg bg-neutral-50 border border-neutral-100 p-2.5 text-xs font-mono text-neutral-600 space-y-1">
+                                        <div className="flex flex-wrap gap-x-4 gap-y-0.5">
+                                          <span>BVN: {dir.masked_bvn || "—"}</span>
+                                          <span>Provider: {dir.provider_name || "—"}</span>
+                                          <span>Ref: {dir.verification_id || dir.id.split("-")[0]}</span>
+                                        </div>
+                                        {bvnReturnedName && (
+                                          <div className="flex gap-2">
+                                            <span className="text-neutral-400">BVN name returned:</span>
+                                            <span className={nameMismatch ? "text-red-600 font-semibold" : "text-neutral-800"}>{bvnReturnedName}{bvnNameOnCard && bvnNameOnCard !== bvnReturnedName ? ` / ${bvnNameOnCard}` : ""}</span>
+                                          </div>
+                                        )}
+                                        <div className="flex flex-wrap gap-x-4 gap-y-0.5">
+                                          <span>Selfie: {selfieMatchBypassed ? "Sandbox accepted" : dir.selfie_url ? "Submitted" : "Missing"}</span>
+                                          {dir.created_at && <span>Verified at: {new Date(dir.created_at).toLocaleString()}</span>}
+                                        </div>
                                       </div>
-                                    )}
-                                  </div>
-                                ))
+
+                                      {dir.selfie_url && (
+                                        <button
+                                          type="button"
+                                          onClick={() => dir.selfie_url && handleViewDocument(dir.selfie_url)}
+                                          className="text-xs text-blue-600 hover:underline flex items-center gap-1 font-semibold"
+                                        >
+                                          View Selfie <ExternalLink className="h-3 w-3" />
+                                        </button>
+                                      )}
+
+                                      {/* Action panel */}
+                                      {(dir.verification_status !== "verified" || nameMismatch) && (
+                                        <div className="bg-neutral-50 rounded-lg p-2.5 border border-neutral-200/60 space-y-2">
+                                          <span className="text-[10px] font-bold text-neutral-500 uppercase tracking-wider block">
+                                            Manual Override Action
+                                          </span>
+                                          <div className="flex gap-2">
+                                            <input
+                                              type="text"
+                                              placeholder="Reason or notes for manual override..."
+                                              value={directorNotes[dir.id] || ""}
+                                              onChange={(e) =>
+                                                setDirectorNotes({ ...directorNotes, [dir.id]: e.target.value })
+                                              }
+                                              className="w-full text-xs rounded border border-neutral-300 px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-[#7B2FF7] bg-white text-neutral-800"
+                                            />
+                                            <Button
+                                              type="button"
+                                              size="sm"
+                                              onClick={() => handleApproveDirector(dir.id, directorNotes[dir.id] || "")}
+                                              className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs h-8"
+                                            >
+                                              Approve
+                                            </Button>
+                                            <Button
+                                              type="button"
+                                              size="sm"
+                                              variant="destructive"
+                                              onClick={() => handleRejectDirector(dir.id, directorNotes[dir.id] || "")}
+                                              className="text-white font-bold text-xs h-8"
+                                            >
+                                              Reject
+                                            </Button>
+                                          </div>
+                                        </div>
+                                      )}
+
+                                      {dir.admin_notes && (
+                                        <div className="bg-neutral-50 rounded-lg p-2.5 border border-dashed text-xs text-neutral-600 leading-relaxed font-mono">
+                                          <span className="font-bold text-neutral-800 block mb-0.5">Admin Audit Notes:</span>
+                                          {dir.admin_notes}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })
                               )}
                             </div>
                           </div>
                         </div>
                       )}
-
                       {/* Review notes */}
                       <div className="space-y-1.5">
                         <Label className="text-sm font-medium">Review Notes (optional)</Label>

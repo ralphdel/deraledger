@@ -355,6 +355,7 @@ export async function verifyInvitationDirector(params: {
 
   const result = await verifyDirectorIdentity({
     merchantId: invite.merchant_id,
+    invitationId: invite.id,
     directorName: invite.selected_director_name,
     directorRole: role,
     bvn: params.bvn,

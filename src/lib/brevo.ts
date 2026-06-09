@@ -806,3 +806,116 @@ export async function sendHighFailureRateAlert(provider: string, failureRate: nu
     htmlContent,
   });
 }
+
+// ── Monthly Automated Report (v2.1 Sprint B-W2) ───────────────────────────────
+
+export interface MonthlyReportData {
+  businessName: string;
+  merchantEmail: string;
+  month: string;       // e.g. "May 2026"
+  analyticsUrl: string;
+
+  openCollection: number;
+  closedCollection: number;
+  totalInvoicedCollection: number;
+  totalCollected: number;
+  outstandingCollection: number;
+
+  openRecord: number;
+  closedRecord: number;
+  totalInvoicedRecord: number;
+  totalReceivedOffline: number;
+  outstandingRecord: number;
+
+  totalOutstanding: number;
+  newClientsThisMonth: number;
+
+  topClients: { name: string; outstanding: number }[];
+
+  aging0to30: number;
+  aging31to60: number;
+  aging60plus: number;
+}
+
+/**
+ * Monthly automated summary email sent to Individual + Corporate merchants
+ * on the 1st of each month via the /api/cron/monthly-reports endpoint.
+ */
+export async function sendMonthlyReportEmail(data: MonthlyReportData) {
+  const fmt = (n: number) => `₦${Number(n || 0).toLocaleString("en-NG")}`;
+
+  const topClientsHtml = data.topClients.length > 0
+    ? data.topClients.map((c, i) => `
+        <tr>
+          <td style="padding:6px 12px;color:#374151;border-bottom:1px solid #F3F4F6;">${i + 1}. ${c.name}</td>
+          <td style="padding:6px 12px;color:#DC2626;font-weight:bold;text-align:right;border-bottom:1px solid #F3F4F6;">${fmt(c.outstanding)}</td>
+        </tr>`).join("")
+    : `<tr><td colspan="2" style="padding:10px 12px;color:#9CA3AF;font-style:italic;">No outstanding client balances this month.</td></tr>`;
+
+  const htmlContent = `
+    <div style="font-family:Arial,sans-serif;max-width:620px;margin:0 auto;color:#111827;border:1px solid #E5E7EB;border-radius:8px;overflow:hidden;">
+      <div style="background-color:#4C1D95;padding:28px;text-align:center;">
+        <h1 style="color:white;margin:0;font-size:22px;">Your ${data.month} Summary</h1>
+        <p style="color:#C4B5FD;margin:6px 0 0 0;font-size:14px;">Deraledger Monthly Report — ${data.businessName}</p>
+      </div>
+      <div style="padding:32px;">
+        <p style="margin:0 0 24px 0;">Hello <strong>${data.businessName}</strong>,</p>
+        <p style="margin:0 0 24px 0;color:#4B5563;">Here's your full activity summary for <strong>${data.month}</strong>.</p>
+
+        <h3 style="margin:0 0 10px 0;color:#4C1D95;font-size:15px;border-bottom:2px solid #EDE9FE;padding-bottom:6px;">💳 Collection Invoices (Paystack)</h3>
+        <table style="width:100%;border-collapse:collapse;margin-bottom:24px;font-size:14px;">
+          <tr style="background-color:#F9FAFB;"><td style="padding:8px 12px;color:#6B7280;">Total Invoiced</td><td style="padding:8px 12px;font-weight:bold;text-align:right;">${fmt(data.totalInvoicedCollection)}</td></tr>
+          <tr><td style="padding:8px 12px;color:#6B7280;">Total Collected</td><td style="padding:8px 12px;font-weight:bold;color:#059669;text-align:right;">${fmt(data.totalCollected)}</td></tr>
+          <tr style="background-color:#F9FAFB;"><td style="padding:8px 12px;color:#6B7280;">Outstanding</td><td style="padding:8px 12px;font-weight:bold;color:#D97706;text-align:right;">${fmt(data.outstandingCollection)}</td></tr>
+          <tr><td style="padding:8px 12px;color:#6B7280;">Open / Closed</td><td style="padding:8px 12px;text-align:right;">${data.openCollection} open / ${data.closedCollection} closed</td></tr>
+        </table>
+
+        <h3 style="margin:0 0 10px 0;color:#1D4ED8;font-size:15px;border-bottom:2px solid #DBEAFE;padding-bottom:6px;">📋 Record Invoices (Offline)</h3>
+        <table style="width:100%;border-collapse:collapse;margin-bottom:24px;font-size:14px;">
+          <tr style="background-color:#F9FAFB;"><td style="padding:8px 12px;color:#6B7280;">Total Recorded</td><td style="padding:8px 12px;font-weight:bold;text-align:right;">${fmt(data.totalInvoicedRecord)}</td></tr>
+          <tr><td style="padding:8px 12px;color:#6B7280;">Total Received Offline</td><td style="padding:8px 12px;font-weight:bold;color:#059669;text-align:right;">${fmt(data.totalReceivedOffline)}</td></tr>
+          <tr style="background-color:#F9FAFB;"><td style="padding:8px 12px;color:#6B7280;">Outstanding</td><td style="padding:8px 12px;font-weight:bold;color:#D97706;text-align:right;">${fmt(data.outstandingRecord)}</td></tr>
+          <tr><td style="padding:8px 12px;color:#6B7280;">Open / Closed</td><td style="padding:8px 12px;text-align:right;">${data.openRecord} open / ${data.closedRecord} closed</td></tr>
+        </table>
+
+        <div style="background-color:#F5F3FF;border:1px solid #DDD6FE;border-radius:6px;padding:16px;margin-bottom:24px;">
+          <h3 style="margin:0 0 10px 0;color:#4C1D95;font-size:15px;">📊 Combined Total</h3>
+          <table style="width:100%;border-collapse:collapse;font-size:14px;">
+            <tr><td style="padding:4px 0;color:#6B7280;">All Invoices Outstanding</td><td style="padding:4px 0;font-weight:bold;color:#DC2626;text-align:right;">${fmt(data.totalOutstanding)}</td></tr>
+            <tr><td style="padding:4px 0;color:#6B7280;">New Clients This Month</td><td style="padding:4px 0;font-weight:bold;text-align:right;">${data.newClientsThisMonth}</td></tr>
+          </table>
+        </div>
+
+        <h3 style="margin:0 0 10px 0;color:#111827;font-size:15px;border-bottom:2px solid #E5E7EB;padding-bottom:6px;">🏆 Top 3 Clients Owing</h3>
+        <table style="width:100%;border-collapse:collapse;margin-bottom:24px;font-size:14px;">${topClientsHtml}</table>
+
+        <h3 style="margin:0 0 10px 0;color:#111827;font-size:15px;border-bottom:2px solid #E5E7EB;padding-bottom:6px;">⏱ Aging Snapshot</h3>
+        <table style="width:100%;border-collapse:collapse;margin-bottom:28px;font-size:14px;">
+          <tr style="background-color:#FFF7ED;"><td style="padding:8px 12px;color:#92400E;">0–30 days overdue</td><td style="padding:8px 12px;font-weight:bold;color:#D97706;text-align:right;">${fmt(data.aging0to30)}</td></tr>
+          <tr><td style="padding:8px 12px;color:#92400E;">31–60 days overdue</td><td style="padding:8px 12px;font-weight:bold;color:#EA580C;text-align:right;">${fmt(data.aging31to60)}</td></tr>
+          <tr style="background-color:#FEF2F2;"><td style="padding:8px 12px;color:#991B1B;">60+ days overdue</td><td style="padding:8px 12px;font-weight:bold;color:#DC2626;text-align:right;">${fmt(data.aging60plus)}</td></tr>
+        </table>
+
+        <div style="text-align:center;margin:20px 0 28px 0;">
+          <a href="${data.analyticsUrl}" style="background-color:#4C1D95;color:white;padding:14px 32px;text-decoration:none;border-radius:6px;font-weight:bold;font-size:16px;display:inline-block;">
+            View Full Report on Deraledger →
+          </a>
+        </div>
+        <p style="font-size:13px;color:#9CA3AF;text-align:center;">
+          You receive this because you have an active Deraledger account.<br>
+          To update email preferences, visit your account settings.
+        </p>
+      </div>
+      <div style="background-color:#F9FAFB;padding:16px;text-align:center;border-top:1px solid #E5E7EB;">
+        <p style="margin:0;font-size:12px;color:#9CA3AF;">Deraledger &mdash; Smart Invoicing &amp; Payment Tracking</p>
+      </div>
+    </div>
+  `;
+
+  return sendEmail({
+    sender: { name: "Deraledger Reports", email: ADMIN_EMAIL },
+    to: [{ email: data.merchantEmail }],
+    subject: `Your ${data.month} Summary — Deraledger`,
+    htmlContent,
+  });
+}

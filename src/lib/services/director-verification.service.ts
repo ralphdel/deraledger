@@ -115,6 +115,7 @@ function directorNameMatchesProfile(
 export async function verifyDirectorIdentity(params: {
   merchantId: string;
   businessVerificationId?: string;
+  invitationId?: string;
   directorName: string;
   directorRole: "director" | "shareholder" | "beneficial_owner" | "signatory" | "proprietor" | "partner" | "trustee";
   bvn: string;
@@ -259,10 +260,12 @@ export async function verifyDirectorIdentity(params: {
   }
 
   // 5. Perform Name Match Check for director.
-  // Sandbox providers may return synthetic identities, so do not escalate
-  // successful sandbox tests to manual review on name mismatch.
+  // Name matching is ALWAYS run, even in sandbox, because sandbox override only
+  // bypasses selfie confidence threshold — not identity name matching.
+  // If BVN returns John Doe but invited director is Peter Doe, that's a mismatch
+  // regardless of sandbox mode.
   let nameMatch = true;
-  if (!sandbox && result.success && result.returnedName) {
+  if (result.success && result.returnedName) {
     nameMatch = directorNameMatchesProfile(params.directorName, result.returnedName);
   }
 
@@ -284,6 +287,7 @@ export async function verifyDirectorIdentity(params: {
       .insert({
         merchant_id: params.merchantId,
         business_verification_id: params.businessVerificationId || null,
+        invitation_id: params.invitationId || null,
         director_name: params.directorName,
         director_role: params.directorRole,
         masked_bvn: maskBVN(params.bvn),
@@ -299,7 +303,9 @@ export async function verifyDirectorIdentity(params: {
         normalized_response: sanitizeResponse(result.rawResponse || {}),
         verification_cost: cost,
         manual_review_required: manualReview,
-        admin_notes: manualReview ? "Automatically flagged for review due to name mismatch or low confidence score." : null,
+        admin_notes: manualReview
+          ? `Automatically flagged for review. Name match: ${nameMatch ? "passed" : "FAILED — invited: "+ params.directorName + ", BVN returned: " + [result.returnedName?.firstName, result.returnedName?.lastName].filter(Boolean).join(" ")}.`
+          : null,
       })
       .select("id")
       .single();
@@ -309,6 +315,11 @@ export async function verifyDirectorIdentity(params: {
     }
 
     try {
+      const bvnFirstName = String(result.returnedName?.firstName || "").trim();
+      const bvnLastName = String(result.returnedName?.lastName || "").trim();
+      const returnedBvnName = [bvnFirstName, bvnLastName].filter(Boolean).join(" ") || null;
+      const nameMatchStatus = result.success ? (nameMatch ? "PASSED" : "FAILED") : null;
+
       await writeAuditLog(adminClient, {
         merchantId: params.merchantId,
         provider: providerKey,
@@ -319,6 +330,10 @@ export async function verifyDirectorIdentity(params: {
         cost: cost,
         sandbox: sandbox,
         result: result,
+        invitationId: params.invitationId || null,
+        invitedDirectorName: params.directorName || null,
+        returnedBvnName,
+        nameMatchStatus,
       });
     } catch (auditErr: any) {
       console.error("[DirectorService] Audit log write failed:", (auditErr as Error)?.message);
@@ -373,14 +388,24 @@ export async function getDirectorVerificationStatus(
 
 /**
  * Manually changes a director's review status (called by admin actions).
+ * Requires the authenticated admin's userId to be passed for audit traceability.
  */
 export async function updateDirectorManualStatus(params: {
   directorVerificationId: string;
   status: "verified" | "failed";
   adminNotes: string;
+  adminId: string;
 }): Promise<{ success: boolean; error?: string }> {
   try {
     const adminClient = getServiceClient();
+
+    // 1. Fetch current record for context before update
+    const { data: existing } = await adminClient
+      .from("business_director_verifications")
+      .select("director_name, director_role, merchant_id, verification_status, invitation_id")
+      .eq("id", params.directorVerificationId)
+      .maybeSingle();
+
     const { error } = await adminClient
       .from("business_director_verifications")
       .update({
@@ -392,6 +417,29 @@ export async function updateDirectorManualStatus(params: {
       .eq("id", params.directorVerificationId);
 
     if (error) return { success: false, error: error.message };
+
+    // 2. Write structured audit log to audit_logs — no BVN/selfie data ever logged here
+    if (existing) {
+      await adminClient.from("audit_logs").insert({
+        event_type: params.status === "verified"
+          ? "director_manual_approved"
+          : "director_manual_rejected",
+        actor_id: params.adminId,
+        actor_role: "super_admin",
+        target_id: params.directorVerificationId,
+        target_type: "director_verification",
+        metadata: {
+          merchant_id: existing.merchant_id,
+          director_name: existing.director_name,
+          director_role: existing.director_role,
+          invitation_id: existing.invitation_id ?? null,
+          previous_status: existing.verification_status,
+          new_status: params.status,
+          admin_notes: params.adminNotes,
+        },
+      });
+    }
+
     return { success: true };
   } catch (err: any) {
     return { success: false, error: err?.message };

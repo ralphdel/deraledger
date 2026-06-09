@@ -46,7 +46,16 @@ export async function GET(request: Request) {
     query = query.eq("normalized_status", status.toLowerCase());
   }
   if (verificationType) {
-    query = query.eq("verification_type", verificationType.toLowerCase());
+    const typeVal = verificationType.toLowerCase();
+    if (typeVal === "bvn_selfie") {
+      query = query.in("verification_type", ["bvn_selfie", "representative_bvn_selfie"]);
+    } else if (typeVal === "business") {
+      query = query.in("verification_type", ["business", "business_registry"]);
+    } else if (typeVal === "director") {
+      query = query.in("verification_type", ["director", "director_bvn_selfie"]);
+    } else {
+      query = query.eq("verification_type", typeVal);
+    }
   }
   if (from) {
     query = query.gte("created_at", from);

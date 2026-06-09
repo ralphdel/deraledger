@@ -13,7 +13,7 @@ interface VerificationLog {
   id: string;
   created_at: string;
   merchant_id: string;
-  verification_type: "bvn_selfie" | "business" | "director";
+  verification_type: "bvn_selfie" | "business" | "director" | "representative_bvn_selfie" | "business_registry" | "director_bvn_selfie";
   provider_name: string;
   masked_bvn: string | null;
   normalized_status: "verified" | "failed" | "pending" | "retrying" | "provider_down";
@@ -281,7 +281,11 @@ export default function VerificationLogsPage() {
                           </td>
                           <td className="p-3">
                             <Badge variant="outline" className="text-[10px] uppercase font-bold px-1.5">
-                              {log.verification_type === "bvn_selfie" ? "BVN + Selfie" : log.verification_type}
+                              {log.verification_type === "bvn_selfie" || log.verification_type === "representative_bvn_selfie"
+                                ? "BVN + Selfie"
+                                : log.verification_type === "business" || log.verification_type === "business_registry"
+                                ? "Business CAC"
+                                : "Director KYB"}
                             </Badge>
                           </td>
                           <td className="p-3 font-bold text-neutral-950">{log.provider_name}</td>

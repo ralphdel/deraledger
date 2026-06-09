@@ -1,13 +1,13 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { revalidatePath } from "next/cache";
 import { requirePermission } from "./rbac";
-import { sendTeamInviteEmail, sendPasswordResetEmail, sendInvoiceEmail, sendOnboardingWelcomeEmail } from "./brevo";
+import { sendTeamInviteEmail, sendInvoiceEmail, sendOnboardingWelcomeEmail } from "./brevo";
 import { getAppUrl } from "@/lib/server-utils";
 import { PaymentService } from "@/lib/payment";
-import { DojahProvider, extractDojahMatchScore } from "@/lib/kyc/dojah.provider";
 import { verifyMerchantIdentity, verifyMerchantBusiness } from "@/lib/services/verification.service";
 import {
   canCreateInvoice,
@@ -2342,7 +2342,6 @@ export async function adminUpdateKycDocumentStatusAction(
 
   if (current) {
     const merged = { ...current, [field]: status };
-    const plan = merged.subscription_plan || merged.merchant_tier || "starter";
     const anyRejected = [
       merged.bvn_status, merged.selfie_status, merged.cac_status, merged.utility_status
     ].some(s => s === "rejected");
@@ -3318,11 +3317,20 @@ export async function adminManualReviewDirectorAction(params: {
   status: "verified" | "failed";
   adminNotes: string;
 }) {
-  const guard = await requireSuperAdmin();
-  if (guard.error) return guard.error;
+  const supabase = await createClient();
+  const { data: { user }, error: userError } = await supabase.auth.getUser();
+  if (userError || !user) return { success: false, error: "Unauthorized: not authenticated." };
+
+  const isSuperAdmin =
+    user.user_metadata?.is_super_admin === true ||
+    user.app_metadata?.is_super_admin === true;
+  if (!isSuperAdmin) return { success: false, error: "Unauthorized: SuperAdmin access required." };
 
   const { updateDirectorManualStatus } = await import("@/lib/services/director-verification.service");
-  const result = await updateDirectorManualStatus(params);
+  const result = await updateDirectorManualStatus({
+    ...params,
+    adminId: user.id,
+  });
   return result;
 }
 

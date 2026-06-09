@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * DeraLedger — Resilient Verification Gateway Service
  *
@@ -26,7 +27,6 @@ import {
 import type {
   VerificationResult,
   BusinessVerificationResult,
-  VerificationProviderKey,
   NormalizedVerificationStatus,
   ProviderAdapter,
 } from "@/lib/kyc/types";
@@ -342,7 +342,7 @@ export async function verifyMerchantIdentity(params: {
   // 5. Try Primary Provider. Sandbox mode uses the provider sandbox API.
   let providerKey = await getActiveProviderKey();
   const primaryProviderKey = providerKey;
-  let provider = await getActiveProvider();
+  const provider = await getActiveProvider();
   let result: VerificationResult;
   let providerCallSucceeded = false;
 
@@ -432,6 +432,11 @@ export async function verifyMerchantIdentity(params: {
   }
 
   // 10. Write audit record to verification_logs
+  const bvnFirstName = String(result.returnedName?.firstName || "").trim();
+  const bvnLastName = String(result.returnedName?.lastName || "").trim();
+  const returnedBvnName = [bvnFirstName, bvnLastName].filter(Boolean).join(" ") || null;
+  const nameMatchStatus = result.errorCode === "NAME_MISMATCH" ? "FAILED" : (result.success ? "PASSED" : null);
+
   await writeAuditLog(adminClient, {
     merchantId: params.merchantId,
     provider: providerKey,
@@ -442,6 +447,8 @@ export async function verifyMerchantIdentity(params: {
     cost: sandbox ? 0 : providerKey === primaryProviderKey ? cost : await fetchProviderCost(adminClient, providerKey, "bvn_selfie"),
     sandbox,
     result,
+    returnedBvnName,
+    nameMatchStatus,
   });
 
   return { ...result, selfieSignedUrl };
@@ -522,7 +529,7 @@ export async function verifyMerchantBusiness(params: {
 
   // 3. Call Primary Provider. Sandbox mode uses the provider sandbox API.
   let providerKey = await getActiveProviderKey();
-  let provider = await getActiveProvider();
+  const provider = await getActiveProvider();
   let result: BusinessVerificationResult;
   let providerCallSucceeded = false;
 
@@ -842,15 +849,33 @@ export async function writeAuditLog(
     cost: number;
     sandbox: boolean;
     result: any;
+    invitationId?: string | null;
+    businessAffiliationId?: string | null;
+    invitedDirectorName?: string | null;
+    returnedBvnName?: string | null;
+    nameMatchStatus?: string | null;
   }
 ): Promise<string | null> {
   try {
     const attemptNum = await getNextAttemptNumber(adminClient, params.merchantId, params.type);
 
-    const { data, error } = await adminClient.from("verification_logs").insert({
+    const subjectMap: Record<string, string> = {
+      bvn_selfie: "representative",
+      business: "business",
+      director: "director",
+    };
+
+    const typeMap: Record<string, string> = {
+      bvn_selfie: "representative_bvn_selfie",
+      business: "business_registry",
+      director: "director_bvn_selfie",
+    };
+
+    const insertPayload: any = {
       merchant_id: params.merchantId,
       provider_name: params.provider.toUpperCase(),
-      verification_type: params.type,
+      verification_type: typeMap[params.type] || params.type,
+      verification_subject: subjectMap[params.type] || params.type,
       request_fingerprint: params.fingerprint,
       masked_bvn: params.maskedBvn,
       normalized_status: params.status,
@@ -865,7 +890,15 @@ export async function writeAuditLog(
       attempt_number: attemptNum,
       request_timestamp: new Date().toISOString(),
       response_timestamp: new Date().toISOString(),
-    }).select("id").single();
+    };
+
+    if (params.invitationId) insertPayload.invitation_id = params.invitationId;
+    if (params.businessAffiliationId) insertPayload.business_affiliation_id = params.businessAffiliationId;
+    if (params.invitedDirectorName) insertPayload.invited_director_name = params.invitedDirectorName;
+    if (params.returnedBvnName) insertPayload.returned_bvn_name = params.returnedBvnName;
+    if (params.nameMatchStatus) insertPayload.name_match_status = params.nameMatchStatus;
+
+    const { data, error } = await adminClient.from("verification_logs").insert(insertPayload).select("id").single();
     if (error) {
       throw new Error(error.message);
     }
@@ -990,12 +1023,35 @@ export function findRepresentativeInRoster(
   });
 }
 
-function sanitizeRawResponse(raw: Record<string, unknown>): Record<string, unknown> {
-  const sanitized = { ...raw };
-  const sensitiveKeys = ["bvn", "selfie_image", "image", "selfieBase64", "base64"];
-  for (const key of sensitiveKeys) {
-    if (key in sanitized) {
+function sanitizeRawResponse(raw: any): any {
+  if (raw === null || raw === undefined) return {};
+  if (typeof raw !== "object") return raw;
+
+  if (Array.isArray(raw)) {
+    return raw.map(item => sanitizeRawResponse(item));
+  }
+
+  const sanitized: Record<string, any> = {};
+  const sensitiveKeys = [
+    "bvn", "selfie_image", "image", "selfieBase64", "base64", 
+    "selfie_base64", "selfie", "photo", "face_image", "faceImage", 
+    "biometric", "livenessImage", "liveness_image", "document", "document_image"
+  ];
+
+  for (const key of Object.keys(raw)) {
+    const val = raw[key];
+    const isSensitive = sensitiveKeys.some(sk => key.toLowerCase().includes(sk.toLowerCase()));
+    const isBase64String = typeof val === "string" && (
+      val.startsWith("data:image/") || 
+      (val.length > 500 && !val.includes(" "))
+    );
+
+    if (isSensitive || isBase64String) {
       sanitized[key] = "[REDACTED]";
+    } else if (typeof val === "object") {
+      sanitized[key] = sanitizeRawResponse(val);
+    } else {
+      sanitized[key] = val;
     }
   }
   return sanitized;
