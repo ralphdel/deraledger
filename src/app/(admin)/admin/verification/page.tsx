@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
 import { useEffect, useState } from "react";
@@ -40,6 +41,8 @@ type DirectorVerificationRow = {
   verification_status?: string | null;
   face_match_score?: number | null;
   admin_notes?: string | null;
+  verification_log_id?: string | null;
+  verification_id?: string | null;
 };
 type RegistrySnapshotRow = {
   id: string;
@@ -324,7 +327,31 @@ export default function VerificationQueuePage() {
     </div>
   );
 
-  const renderMerchantList = (data: Merchant[]) => (
+  const renderMerchantList = (data: Merchant[]) => {
+    const extractKeyPersonnel = (snapshot: any) => {
+      if (!snapshot?.raw_response_encrypted) return snapshot?.directors_json || [];
+      const raw = snapshot.raw_response_encrypted;
+      let keyPersonnel = [];
+      if (raw?.data?.company?.keyPersonnel) keyPersonnel = raw.data.company.keyPersonnel;
+      else if (raw?.data?.keyPersonnel) keyPersonnel = raw.data.keyPersonnel;
+      else if (raw?.keyPersonnel) keyPersonnel = raw.keyPersonnel;
+      
+      if (!Array.isArray(keyPersonnel) || keyPersonnel.length === 0) {
+        return snapshot?.directors_json || [];
+      }
+      
+      return keyPersonnel.map((person: any) => {
+        const name = typeof person?.name === 'string' ? person.name.trim() : 'Unnamed director';
+        const designation = String(person?.designation || person?.role || 'DIRECTOR');
+        const status = person?.status || null;
+        const nationality = person?.countryOfResidence || person?.nationality || null;
+        const address = person?.address || null;
+        const isCorporate = person?.isCorporate === true || person?.isCorporate === "true";
+        return { name, designation, status, nationality, address, isCorporate };
+      });
+    };
+
+    return (
     <div className="divide-y divide-neutral-100">
       {data.map(m => {
         const status = getEffectiveStatus(m);
@@ -486,6 +513,10 @@ export default function VerificationQueuePage() {
                               <p className="text-xs text-amber-700">No director roster was returned in the saved snapshot.</p>
                             )}
                           </div>
+                        ) : selectedMerchant.cac_number ? (
+                          <div className="rounded-lg bg-white border border-dashed border-amber-200 p-3 text-xs text-amber-700 font-semibold">
+                            CAC number exists, but registry snapshot was not found. Re-run CAC lookup or repair snapshot link.
+                          </div>
                         ) : (
                           <div className="rounded-lg bg-white border border-dashed border-purple-100 p-3 text-xs text-neutral-500">
                             No saved registry snapshot yet. RC/CAC lookup must run before affiliation matching or director approval.
@@ -575,36 +606,97 @@ export default function VerificationQueuePage() {
                       </div>
 
                       {/* Business Directors & Shareholders Panel */}
+                      {/* Business Directors & Shareholders Panel */}
                       {(selectedMerchant.subscription_plan === "corporate" || selectedMerchant.merchant_tier === "corporate") && (
-                        <div className="border border-neutral-200 rounded-xl overflow-hidden bg-white shadow-sm">
-                          <button
-                            type="button"
-                            onClick={() => setDirectorsExpanded(!directorsExpanded)}
-                            className="w-full flex items-center justify-between p-3.5 bg-neutral-50/50 hover:bg-neutral-50 border-b border-neutral-100 transition-colors"
-                          >
-                            <span className="font-bold text-sm text-neutral-800 flex items-center gap-2">
-                              <User className="h-4.5 w-4.5 text-[#7B2FF7]" />
-                              CAC Business Directors & KYB Roster
-                              <Badge className="ml-1 bg-[#E9D5FF] text-[#6F2CFF] text-[10px] font-extrabold border-0">
-                                {directors.length} Listed
-                              </Badge>
-                            </span>
-                            {directorsExpanded ? (
-                              <ChevronUp className="h-4 w-4 text-neutral-400" />
-                            ) : (
-                              <ChevronDown className="h-4 w-4 text-neutral-400" />
-                            )}
-                          </button>
+                        <div className="space-y-4">
+                          <div className="border border-neutral-200 rounded-xl overflow-hidden bg-white shadow-sm">
+                            <button
+                              type="button"
+                              onClick={() => setDirectorsExpanded(!directorsExpanded)}
+                              className="w-full flex items-center justify-between p-3.5 bg-neutral-50/50 hover:bg-neutral-50 border-b border-neutral-100 transition-colors"
+                            >
+                              <span className="font-bold text-sm text-neutral-800 flex items-center gap-2">
+                                <User className="h-4.5 w-4.5 text-[#7B2FF7]" />
+                                CAC Business Directors & KYB Roster
+                                <Badge className="ml-1 bg-[#E9D5FF] text-[#6F2CFF] text-[10px] font-extrabold border-0">
+                                  {registrySnapshot ? extractKeyPersonnel(registrySnapshot).length : 0} Listed
+                                </Badge>
+                              </span>
+                              {directorsExpanded ? (
+                                <ChevronUp className="h-4 w-4 text-neutral-400" />
+                              ) : (
+                                <ChevronDown className="h-4 w-4 text-neutral-400" />
+                              )}
+                            </button>
 
-                          {directorsExpanded && (
+                            {directorsExpanded && (
+                              <div className="p-3.5 space-y-3.5 divide-y divide-neutral-100">
+                                {!registrySnapshot ? (
+                                  <div className="py-6 text-center text-xs text-neutral-400 flex items-center justify-center gap-2">
+                                    <Info className="h-4 w-4 text-neutral-300" />
+                                    <span>No registry snapshot available.</span>
+                                  </div>
+                                ) : extractKeyPersonnel(registrySnapshot).length === 0 ? (
+                                  <div className="py-6 text-center text-xs text-neutral-400 flex items-center justify-center gap-2">
+                                    <Info className="h-4 w-4 text-neutral-300" />
+                                    <span>No key personnel found in registry response.</span>
+                                  </div>
+                                ) : (
+                                  extractKeyPersonnel(registrySnapshot).map((person: any, idx: number) => (
+                                    <div key={idx} className="pt-3.5 first:pt-0 space-y-2">
+                                      <div className="flex items-start justify-between gap-3">
+                                        <div className="space-y-1">
+                                          <h5 className="font-semibold text-sm text-neutral-900 flex items-center gap-1.5">
+                                            {person.name}
+                                            {person.isCorporate && (
+                                              <Badge variant="outline" className="text-[9px] bg-neutral-100 border-neutral-200 text-neutral-600 px-1 py-0 uppercase">Corporate Entity</Badge>
+                                            )}
+                                          </h5>
+                                          <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-neutral-500 font-mono">
+                                            <span>Role: {String(person.designation || person.role || "Director").replace(/_/g, " ")}</span>
+                                            {person.nationality && <span>Nationality: {person.nationality}</span>}
+                                            {person.status && <span>Status: {person.status}</span>}
+                                          </div>
+                                          {person.address && (
+                                            <p className="text-xs text-neutral-400 max-w-sm truncate" title={person.address}>
+                                              {person.address}
+                                            </p>
+                                          )}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ))
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="border border-neutral-200 rounded-xl overflow-hidden bg-white shadow-sm">
+                            <div className="w-full flex items-center justify-between p-3.5 bg-neutral-50/50 border-b border-neutral-100">
+                              <span className="font-bold text-sm text-neutral-800 flex items-center gap-2">
+                                <ShieldCheck className="h-4.5 w-4.5 text-blue-600" />
+                                Director Approval & Identity Evidence
+                                <Badge className="ml-1 bg-blue-100 text-blue-700 text-[10px] font-extrabold border-0">
+                                  {directors.length} Verified
+                                </Badge>
+                              </span>
+                            </div>
+
                             <div className="p-3.5 space-y-3.5 divide-y divide-neutral-100">
+                              {selectedMerchant.business_affiliation_status === "director_approved" && directors.length === 0 && !directorsLoading && (
+                                <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 mb-3 text-xs text-amber-800 font-semibold flex items-start gap-2">
+                                  <ShieldAlert className="h-4 w-4 text-amber-600 flex-shrink-0" />
+                                  Director approval exists, but director identity verification evidence was not found.
+                                </div>
+                              )}
+                              
                               {directorsLoading ? (
                                 <div className="py-6 flex flex-col items-center justify-center gap-2 text-neutral-400 text-xs">
-                                  <Loader className="h-5 w-5 animate-spin text-[#7B2FF7]" />
+                                  <Loader className="h-5 w-5 animate-spin text-blue-600" />
                                   <span>Loading director KYC statuses...</span>
                                 </div>
                               ) : directors.length === 0 ? (
-                                <div className="py-6 text-center text-xs text-neutral-400 flex items-center justify-center gap-2">
+                                <div className="py-4 text-center text-xs text-neutral-400 flex items-center justify-center gap-2">
                                   <Info className="h-4 w-4 text-neutral-300" />
                                   <span>No director identity verification submitted for this account yet.</span>
                                 </div>
@@ -620,13 +712,16 @@ export default function VerificationQueuePage() {
                                           </span>
                                         </h5>
                                         <p className="text-xs text-neutral-400 font-mono">
-                                          BVN: {dir.masked_bvn || "—"} · Provider: {dir.provider_name || "—"}
+                                          BVN: {dir.masked_bvn || (dir.verification_status === "verified" ? "Verified" : "Missing")} · Provider: {dir.provider_name || "—"}
+                                        </p>
+                                        <p className="text-xs text-neutral-400 font-mono">
+                                          Selfie: {dir.selfie_url ? "Verified" : "Missing"} · Reference: {dir.verification_log_id || dir.id.split('-')[0]}
                                         </p>
                                         {dir.selfie_url && (
                                           <button
                                             type="button"
                                             onClick={() => dir.selfie_url && handleViewDocument(dir.selfie_url)}
-                                            className="text-xs text-[#7B2FF7] hover:underline flex items-center gap-1 font-semibold"
+                                            className="text-xs text-blue-600 hover:underline flex items-center gap-1 font-semibold"
                                           >
                                             View Selfie <ExternalLink className="h-3 w-3" />
                                           </button>
@@ -711,7 +806,7 @@ export default function VerificationQueuePage() {
                                 ))
                               )}
                             </div>
-                          )}
+                          </div>
                         </div>
                       )}
 
@@ -848,7 +943,7 @@ export default function VerificationQueuePage() {
       )}
     </div>
   );
-
+  };
 
   return (
     <div className="space-y-6">

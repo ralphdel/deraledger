@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * DeraLedger — Director KYB & Verification Service
  *
@@ -13,7 +14,8 @@ import {
   updateProviderHealth,
 } from "@/lib/kyc/index";
 import { PROVIDER_COSTS } from "@/lib/kyc/types";
-import type { VerificationResult, ProviderAdapter } from "@/lib/kyc/types";
+import type { VerificationResult } from "@/lib/kyc/types";
+import { writeAuditLog } from "./verification.service";
 
 function getServiceClient() {
   return createSupabaseClient(
@@ -304,6 +306,22 @@ export async function verifyDirectorIdentity(params: {
 
     if (dbErr) {
       console.error("[DirectorService] Database write error:", dbErr.message);
+    }
+
+    try {
+      await writeAuditLog(adminClient, {
+        merchantId: params.merchantId,
+        provider: providerKey,
+        type: "director",
+        fingerprint: `director_auth_${params.bvn}_${Date.now()}`,
+        maskedBvn: maskBVN(params.bvn),
+        status: finalStatus === "manual_review" ? "pending" : finalStatus,
+        cost: cost,
+        sandbox: sandbox,
+        result: result,
+      });
+    } catch (auditErr: any) {
+      console.error("[DirectorService] Audit log write failed:", (auditErr as Error)?.message);
     }
 
     return {

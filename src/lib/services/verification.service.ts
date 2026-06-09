@@ -830,7 +830,7 @@ async function executeProviderBVNWithFace(
 
 // ── Audit Log Utility ────────────────────────────────────────────────────────
 
-async function writeAuditLog(
+export async function writeAuditLog(
   adminClient: any,
   params: {
     merchantId: string;
