@@ -43,6 +43,7 @@ import {
   submitDojahKycAction,
   submitKycAction,
   verifyRcNumberAction,
+  requestManualReviewAction,
 } from "@/lib/actions";
 import {
   getLiveFeatureLockReasons,
@@ -439,6 +440,23 @@ export default function SettingsPage() {
       );
     } finally {
       setDirectorInviteSubmitting(false);
+    }
+  };
+
+  const handleManualReviewRequest = async () => {
+    if (!merchant) return;
+    setDirectorInviteMessage("Submitting manual review request...");
+    setDirectorInviteError(null);
+    try {
+      const res = await requestManualReviewAction(merchant.id);
+      if (res.success) {
+        setDirectorInviteMessage("Manual review requested.");
+        await refreshMerchant(merchant.id);
+      } else {
+        setDirectorInviteError(res.error || "Failed to request manual review");
+      }
+    } catch (err: any) {
+      setDirectorInviteError(err.message);
     }
   };
 
@@ -1377,6 +1395,21 @@ export default function SettingsPage() {
                             </p>
                           </div>
 
+                          {!verifiedIdentityComplete ? (
+                            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                              <p className="font-medium flex items-center gap-2">
+                                <Lock className="h-4 w-4" />
+                                {merchant?.relationship_claim === "representative_claim"
+                                  ? "Complete Representative Identity Verification first."
+                                  : "Complete Director/Owner Identity Verification first."}
+                              </p>
+                              <p className="mt-1 text-xs opacity-80">
+                                You must verify your BVN and take a live selfie before uploading business documents.
+                              </p>
+                            </div>
+                          ) : (
+                            <>
+
                           {requiresBusinessRegistration ? (
                             <div className="space-y-2">
                               <Label className="flex items-center gap-2 text-sm font-medium">
@@ -1480,6 +1513,8 @@ export default function SettingsPage() {
                               {kycSubmitting ? "Submitting..." : "Submit for Review"}
                             </Button>
                           </div>
+                          </>
+                          )}
                         </div>
                       ) : null}
                     </div>
@@ -1533,23 +1568,25 @@ export default function SettingsPage() {
                               </div>
                             </div>
                             <div className="mt-3 flex flex-wrap gap-2">
+                              {(directorAffiliation.match_score ?? 0) >= 60 ? (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  className="border-amber-300 text-amber-900 hover:bg-amber-100"
+                                  onClick={() => {
+                                    if (directorAffiliation.matched_registry_name) {
+                                      setOwnerName(directorAffiliation.matched_registry_name);
+                                    }
+                                  }}
+                                >
+                                  Use registry name
+                                </Button>
+                              ) : null}
                               <Button
                                 type="button"
                                 variant="outline"
                                 className="border-amber-300 text-amber-900 hover:bg-amber-100"
-                                onClick={() => {
-                                  if (directorAffiliation.matched_registry_name) {
-                                    setOwnerName(directorAffiliation.matched_registry_name);
-                                  }
-                                }}
-                              >
-                                Use registry name
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                className="border-amber-300 text-amber-900 hover:bg-amber-100"
-                                onClick={() => setDirectorInviteMessage("Manual review requested.")}
+                                onClick={handleManualReviewRequest}
                               >
                                 Request manual review
                               </Button>

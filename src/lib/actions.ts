@@ -3331,3 +3331,28 @@ export async function getActiveVerificationProviderKeyAction() {
   const key = await getActiveProviderKey();
   return { success: true, provider: key };
 }
+
+export async function requestManualReviewAction(merchantId: string) {
+  const supabase = await createClient();
+  const { data: { user }, error: userError } = await supabase.auth.getUser();
+  if (userError || !user) return { success: false, error: "Unauthorized." };
+
+  const adminClient = getServiceClient();
+
+  const updates = {
+    business_affiliation_status: "manual_review",
+    updated_at: new Date().toISOString(),
+  };
+
+  const { error } = await adminClient
+    .from("merchants")
+    .update(updates)
+    .eq("id", merchantId);
+
+  if (error) return { success: false, error: error.message };
+
+  await syncMerchantSetupStatus(adminClient, merchantId);
+  revalidatePath("/settings");
+
+  return { success: true };
+}
