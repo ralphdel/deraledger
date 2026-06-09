@@ -11,35 +11,39 @@ const supabase = createClient(
 async function run() {
   const merchantId = "bfd66cab-3de2-4493-ad6f-ffdd9289f376";
   
-  // 1. Merchant tier and plan
-  const { data: merchant } = await supabase
-    .from("merchants")
-    .select("subscription_plan, merchant_tier, business_registry_snapshot_id")
-    .eq("id", merchantId)
-    .single();
-  console.log("Merchant plan/tier:", merchant);
-
-  // 2. business_director_verifications full row
-  const { data: dirVer } = await supabase
-    .from("business_director_verifications")
-    .select("*")
-    .eq("merchant_id", merchantId);
-  console.log("\nbusiness_director_verifications row:", dirVer);
-
-  // 3. verification_logs with type = director
+  // 1. Fetch Verification Logs columns and raw response
   const { data: logs } = await supabase
     .from("verification_logs")
     .select("*")
-    .eq("merchant_id", merchantId)
-    .eq("verification_type", "director");
-  console.log("\nverification_logs (director):", logs);
+    .eq("merchant_id", merchantId);
+    
+  console.log("=== VERIFICATION LOGS ===");
+  logs?.forEach(l => {
+    console.log(`Log ID: ${l.id}, Type: ${l.verification_type}`);
+    console.log("Keys:", Object.keys(l));
+    console.log("provider:", l.provider, "provider_name:", l.provider_name);
+    console.log("raw_response keys:", l.raw_response ? Object.keys(l.raw_response) : null);
+    if (l.raw_response) {
+      console.log("raw_response excerpt:", JSON.stringify(l.raw_response).substring(0, 500));
+    }
+  });
 
-  // 4. director_invitations
-  const { data: invites } = await supabase
-    .from("director_invitations")
+  // 2. Fetch Business Director Verifications columns and responses
+  const { data: dirVerifications } = await supabase
+    .from("business_director_verifications")
     .select("*")
     .eq("merchant_id", merchantId);
-  console.log("\ndirector_invitations:", invites);
+
+  console.log("\n=== DIRECTOR VERIFICATIONS ===");
+  dirVerifications?.forEach(d => {
+    console.log(`Dir Verification ID: ${d.id}`);
+    console.log("Keys:", Object.keys(d));
+    console.log("director_name:", d.director_name, "invitation_id:", d.invitation_id);
+    console.log("normalized_response keys:", d.normalized_response ? Object.keys(d.normalized_response) : null);
+    if (d.normalized_response) {
+      console.log("normalized_response excerpt:", JSON.stringify(d.normalized_response).substring(0, 500));
+    }
+  });
 }
 
 run().catch(console.error);

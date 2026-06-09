@@ -418,6 +418,40 @@ export async function updateDirectorManualStatus(params: {
 
     if (error) return { success: false, error: error.message };
 
+    const invitationId = existing?.invitation_id;
+    let resolvedInviteId = invitationId;
+    if (!resolvedInviteId && existing?.director_name) {
+      const { data: invite } = await adminClient
+        .from("director_invitations")
+        .select("id")
+        .eq("merchant_id", existing.merchant_id)
+        .eq("selected_director_name", existing.director_name)
+        .maybeSingle();
+      if (invite) {
+        resolvedInviteId = invite.id;
+      }
+    }
+
+    if (resolvedInviteId) {
+      await adminClient
+        .from("director_verifications")
+        .update({
+          status: params.status,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("invitation_id", resolvedInviteId);
+
+      if (params.status === "verified") {
+        await adminClient
+          .from("director_invitations")
+          .update({
+            status: "verified",
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", resolvedInviteId);
+      }
+    }
+
     // 2. Write structured audit log to audit_logs — no BVN/selfie data ever logged here
     if (existing) {
       await adminClient.from("audit_logs").insert({

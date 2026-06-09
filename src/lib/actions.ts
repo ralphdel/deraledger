@@ -3364,3 +3364,127 @@ export async function requestManualReviewAction(merchantId: string) {
 
   return { success: true };
 }
+
+export async function adminGetVerificationDetailsAction(merchantId: string) {
+  const guard = await requireSuperAdmin();
+  if (guard.error) return { success: false, error: guard.error.error || "Unauthorized" };
+
+  const adminClient = getServiceClient();
+
+  const { data: merchant, error: mErr } = await adminClient
+    .from("merchants")
+    .select("id, business_registry_snapshot_id, workspace_id, cac_number")
+    .eq("id", merchantId)
+    .maybeSingle();
+
+  if (mErr || !merchant) {
+    return { success: false, error: mErr?.message || "Merchant not found" };
+  }
+
+  const [
+    affiliationsRes,
+    invitationsRes,
+    costsRes,
+    directorsRes,
+    logsRes
+  ] = await Promise.all([
+    adminClient.from("business_affiliations").select("*").eq("merchant_id", merchantId).order("created_at", { ascending: false }),
+    adminClient.from("director_invitations").select("*").eq("merchant_id", merchantId).order("created_at", { ascending: false }),
+    adminClient.from("verification_costs").select("*").eq("merchant_id", merchantId).order("created_at", { ascending: false }).limit(10),
+    adminClient.from("business_director_verifications").select("*").eq("merchant_id", merchantId).order("created_at", { ascending: false }),
+    adminClient.from("verification_logs").select("*").eq("merchant_id", merchantId).order("created_at", { ascending: false })
+  ]);
+
+  let resolvedSnapshot: any = null;
+  let snapshotSource = "none";
+
+  if (merchant.business_registry_snapshot_id) {
+    const { data: snap } = await adminClient
+      .from("business_registry_snapshots")
+      .select("*")
+      .eq("id", merchant.business_registry_snapshot_id)
+      .maybeSingle();
+    if (snap) {
+      resolvedSnapshot = snap;
+      snapshotSource = "snapshot";
+    }
+  }
+
+  if (!resolvedSnapshot) {
+    const { data: snap } = await adminClient
+      .from("business_registry_snapshots")
+      .select("*")
+      .eq("merchant_id", merchantId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (snap) {
+      resolvedSnapshot = snap;
+      snapshotSource = "snapshot";
+    }
+  }
+
+  if (!resolvedSnapshot && merchant.workspace_id) {
+    const { data: snap } = await adminClient
+      .from("business_registry_snapshots")
+      .select("*")
+      .eq("business_workspace_id", merchant.workspace_id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (snap) {
+      resolvedSnapshot = snap;
+      snapshotSource = "snapshot";
+    }
+  }
+
+  if (!resolvedSnapshot && merchant.cac_number) {
+    const { data: snap } = await adminClient
+      .from("business_registry_snapshots")
+      .select("*")
+      .eq("registration_number", merchant.cac_number)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (snap) {
+      resolvedSnapshot = snap;
+      snapshotSource = "snapshot";
+    }
+  }
+
+  if (!resolvedSnapshot && logsRes.data) {
+    const businessLog = logsRes.data.find(
+      (log: any) =>
+        (log.verification_type === "business" || log.verification_type === "business_registry") &&
+        log.raw_response
+    );
+    if (businessLog) {
+      const raw = businessLog.raw_response;
+      const data = raw?.data || raw;
+      const registeredName = data?.name || data?.company?.name || "";
+      const registrationNumber = data?.registrationNumber || data?.company?.registrationNumber || merchant.cac_number || "";
+      
+      resolvedSnapshot = {
+        id: businessLog.id,
+        provider_name: businessLog.provider_name,
+        registered_name: registeredName,
+        registration_number: registrationNumber,
+        directors_json: data?.keyPersonnel || data?.company?.keyPersonnel || data?.directors || [],
+        raw_response_encrypted: raw
+      };
+      snapshotSource = "raw_payload";
+    }
+  }
+
+  return {
+    success: true,
+    registrySnapshot: resolvedSnapshot,
+    snapshotSource,
+    directors: directorsRes.data || [],
+    businessAffiliations: affiliationsRes.data || [],
+    directorInvitations: invitationsRes.data || [],
+    verificationCosts: costsRes.data || [],
+    verificationLogs: logsRes.data || []
+  };
+}
+

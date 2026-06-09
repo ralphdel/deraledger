@@ -26,6 +26,8 @@ import {
   adminResetVerificationAction,
   adminRequestReuploadAction,
   adminGetKycDocumentUrlAction,
+  adminGetVerificationDetailsAction,
+  getActiveVerificationProviderKeyAction,
 } from "@/lib/actions";
 import type { Merchant } from "@/lib/types";
 
@@ -96,6 +98,9 @@ export default function VerificationQueuePage() {
   const [businessAffiliations, setBusinessAffiliations] = useState<BusinessAffiliationRow[]>([]);
   const [directorInvitations, setDirectorInvitations] = useState<DirectorInvitationRow[]>([]);
   const [verificationCosts, setVerificationCosts] = useState<VerificationCostRow[]>([]);
+  const [verificationLogs, setVerificationLogs] = useState<any[]>([]);
+  const [activeProvider, setActiveProvider] = useState<string>("youverify");
+  const [_snapshotSource, setSnapshotSource] = useState<string>("none");
 
   function loadMerchants() {
     const sb = createClient();
@@ -110,7 +115,13 @@ export default function VerificationQueuePage() {
 
   useEffect(() => {
     loadMerchants();
+    getActiveVerificationProviderKeyAction().then((res) => {
+      if (res.success && res.provider) {
+        setActiveProvider(res.provider);
+      }
+    });
   }, []);
+
 
   const refreshMerchant = (updates: Partial<Merchant>) => {
     if (!selectedMerchant) return;
@@ -246,7 +257,7 @@ export default function VerificationQueuePage() {
     setActionLoading(false);
   };
 
-  const openReview = (m: Merchant) => {
+  const openReview = async (m: Merchant) => {
     setSelectedMerchant(m);
     setReviewNotes(""); setActionReason(""); setActionMode("idle");
     setReuploadFields([]);
@@ -255,76 +266,35 @@ export default function VerificationQueuePage() {
     setBusinessAffiliations([]);
     setDirectorInvitations([]);
     setVerificationCosts([]);
+    setVerificationLogs([]);
+    setSnapshotSource("none");
 
     const plan = m.subscription_plan || m.merchant_tier || "starter";
     const isBusinessPlan = plan === "corporate" || plan === "business";
-    const sb = createClient();
-    if (isBusinessPlan) {
-      setDirectorsLoading(true);
-      sb.from("business_director_verifications")
-        .select("*")
-        .eq("merchant_id", m.id)
-        .order("created_at", { ascending: false })
-        .then(({ data }) => {
-          setDirectors(data || []);
-          setDirectorsLoading(false);
-        });
-    } else {
-      setDirectors([]);
-    }
 
-    // Snapshot lookup — 3-step fallback:
-    // 1. direct link via business_registry_snapshot_id
-    // 2. latest snapshot by merchant_id
-    // 3. snapshot linked via a director_invitation.registry_snapshot_id
-    const resolveSnapshot = async (): Promise<RegistrySnapshotRow | null> => {
-      // Step 1
-      if (m.business_registry_snapshot_id) {
-        const { data } = await sb
-          .from("business_registry_snapshots")
-          .select("*")
-          .eq("id", m.business_registry_snapshot_id)
-          .maybeSingle();
-        if (data) return data as RegistrySnapshotRow;
-      }
-      // Step 2
-      const { data: byMerchant } = await sb
-        .from("business_registry_snapshots")
-        .select("*")
-        .eq("merchant_id", m.id)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (byMerchant) return byMerchant as RegistrySnapshotRow;
-      return null;
-    };
-
-    Promise.all([
-      resolveSnapshot(),
-      sb.from("business_affiliations").select("*").eq("merchant_id", m.id).order("created_at", { ascending: false }),
-      sb.from("director_invitations").select("*").eq("merchant_id", m.id).order("created_at", { ascending: false }),
-      sb.from("verification_costs").select("*").eq("merchant_id", m.id).order("created_at", { ascending: false }).limit(10),
-    ]).then(async ([snapshotData, affiliationRes, invitationRes, costRes]) => {
-      let resolvedSnapshot = snapshotData;
-      // Step 3: fallback via director_invitations.registry_snapshot_id
-      if (!resolvedSnapshot && invitationRes.data) {
-        const snapshotId = invitationRes.data.find(
-          (inv: DirectorInvitationRow) => inv.registry_snapshot_id
-        )?.registry_snapshot_id;
-        if (snapshotId) {
-          const { data: invSnap } = await sb
-            .from("business_registry_snapshots")
-            .select("*")
-            .eq("id", snapshotId)
-            .maybeSingle();
-          if (invSnap) resolvedSnapshot = invSnap as RegistrySnapshotRow;
+    setDirectorsLoading(true);
+    try {
+      const res = await adminGetVerificationDetailsAction(m.id);
+      if (res.success) {
+        setRegistrySnapshot(res.registrySnapshot || null);
+        setSnapshotSource(res.snapshotSource || "none");
+        setBusinessAffiliations(res.businessAffiliations || []);
+        setDirectorInvitations(res.directorInvitations || []);
+        setVerificationCosts(res.verificationCosts || []);
+        setVerificationLogs(res.verificationLogs || []);
+        if (isBusinessPlan) {
+          setDirectors(res.directors || []);
+        } else {
+          setDirectors([]);
         }
+      } else {
+        setReviewError(res.error || "Failed to load verification details");
       }
-      setRegistrySnapshot(resolvedSnapshot || null);
-      setBusinessAffiliations(affiliationRes.data || []);
-      setDirectorInvitations(invitationRes.data || []);
-      setVerificationCosts(costRes.data || []);
-    });
+    } catch (e: any) {
+      setReviewError(e.message || "An error occurred loading verification details");
+    } finally {
+      setDirectorsLoading(false);
+    }
   };
 
   const handleApproveDirector = async (id: string, notes: string) => {
@@ -378,30 +348,83 @@ export default function VerificationQueuePage() {
       <h1 className="text-2xl font-bold text-neutral-900">Verification Queue</h1>
       <Card className="border shadow-none animate-pulse"><CardContent className="p-6"><div className="h-48 bg-neutral-100 rounded" /></CardContent></Card>
     </div>
-  );
-
-  const renderMerchantList = (data: Merchant[]) => {
+  );  const renderMerchantList = (data: Merchant[]) => {
     const extractKeyPersonnel = (snapshot: any) => {
-      if (!snapshot?.raw_response_encrypted) return snapshot?.directors_json || [];
-      const raw = snapshot.raw_response_encrypted;
-      let keyPersonnel = [];
-      if (raw?.data?.company?.keyPersonnel) keyPersonnel = raw.data.company.keyPersonnel;
-      else if (raw?.data?.keyPersonnel) keyPersonnel = raw.data.keyPersonnel;
-      else if (raw?.keyPersonnel) keyPersonnel = raw.keyPersonnel;
-      
-      if (!Array.isArray(keyPersonnel) || keyPersonnel.length === 0) {
-        return snapshot?.directors_json || [];
+      if (!snapshot) return [];
+
+      let roster: any[] = [];
+      if (Array.isArray(snapshot.directors_json) && snapshot.directors_json.length > 0) {
+        roster = snapshot.directors_json;
       }
-      
-      return keyPersonnel.map((person: any) => {
+
+      const rawCandidates: any[] = [];
+      const addCandidate = (c: any) => {
+        if (!c) return;
+        rawCandidates.push(c);
+        if (c.raw_provider_response) rawCandidates.push(c.raw_provider_response);
+        if (c.rawProviderResponse) rawCandidates.push(c.rawProviderResponse);
+        if (c.raw_response) rawCandidates.push(c.raw_response);
+        if (c.rawResponse) rawCandidates.push(c.rawResponse);
+        if (c.normalized_response_json) rawCandidates.push(c.normalized_response_json);
+        if (c.normalizedResponseJson) rawCandidates.push(c.normalizedResponseJson);
+        if (c.data) rawCandidates.push(c.data);
+      };
+      addCandidate(snapshot.raw_response_encrypted);
+      addCandidate(snapshot.raw_response);
+      addCandidate(snapshot.normalized_response_json);
+      addCandidate(snapshot.rawResponse);
+      addCandidate(snapshot.raw_provider_response);
+      addCandidate(snapshot.rawProviderResponse);
+
+      for (const raw of rawCandidates) {
+        if (!raw) continue;
+
+        const arrays = [
+          'keyPersonnel', 'directors', 'officers', 'shareholders', 'personnel', 'trustees',
+          'signatories', 'beneficialOwners', 'personsWithSignificantControl',
+          'beneficial_owners', 'persons_with_significant_control'
+        ];
+        for (const arrName of arrays) {
+          const pathVal1 = raw?.data?.company?.[arrName];
+          const pathVal2 = raw?.data?.[arrName];
+          const pathVal3 = raw?.[arrName];
+          if (Array.isArray(pathVal1) && pathVal1.length > 0) {
+            roster = [...roster, ...pathVal1];
+          }
+          if (Array.isArray(pathVal2) && pathVal2.length > 0) {
+            roster = [...roster, ...pathVal2];
+          }
+          if (Array.isArray(pathVal3) && pathVal3.length > 0) {
+            roster = [...roster, ...pathVal3];
+          }
+        }
+      }
+
+      if (roster.length === 0) {
+        return [];
+      }
+
+      const mapped = roster.map((person: any) => {
         const name = typeof person?.name === 'string' ? person.name.trim() : 'Unnamed director';
-        const designation = String(person?.designation || person?.role || 'DIRECTOR');
-        const status = person?.status || null;
+        const designation = String(person?.designation || person?.role || person?.roleDescription || 'DIRECTOR');
+        const status = person?.status || person?.companyStatus || null;
         const nationality = person?.countryOfResidence || person?.nationality || null;
         const address = person?.address || null;
-        const isCorporate = person?.isCorporate === true || person?.isCorporate === "true";
+        const isCorporate = person?.isCorporate === true || person?.isCorporate === "true" || !!person?.corporateName || false;
         return { name, designation, status, nationality, address, isCorporate };
       });
+
+      const seen = new Set<string>();
+      const deduped: any[] = [];
+      for (const item of mapped) {
+        const key = `${item.name.toUpperCase()}|${item.designation.toUpperCase()}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          deduped.push(item);
+        }
+      }
+
+      return deduped;
     };
 
     return (
@@ -537,7 +560,7 @@ export default function VerificationQueuePage() {
                               Attempts shown: {verificationCosts.length}
                             </p>
                             <p className="text-xs text-neutral-600">
-                              Total shown: NGN {verificationCosts.reduce((sum, item) => sum + Number(item.cost_amount || 0), 0).toLocaleString()}
+                              Total NGN: {verificationCosts.reduce((sum, item) => sum + Number(item.cost_amount || 0), 0).toLocaleString()}
                             </p>
                           </div>
                         </div>
@@ -547,7 +570,10 @@ export default function VerificationQueuePage() {
                             <div className="flex items-center justify-between gap-2">
                               <div>
                                 <p className="text-xs font-bold text-neutral-900">Saved business registry snapshot</p>
-                                <p className="text-[11px] text-neutral-500">
+                                <p className="text-[11px] text-emerald-600 font-semibold flex items-center gap-1">
+                                  <CheckCircle className="h-3 w-3" /> Registry snapshot saved from CAC verification.
+                                </p>
+                                <p className="text-[11px] text-neutral-500 mt-1">
                                   {registrySnapshot.registered_name || "-"} - {registrySnapshot.registration_number || "-"}
                                 </p>
                               </div>
@@ -615,56 +641,157 @@ export default function VerificationQueuePage() {
                         )}
                       </div>
 
-                      {/* Dojah block */}
-                      <div className="rounded-xl border border-blue-200 bg-blue-50 p-3">
-                        <div className="flex items-center justify-between gap-3 flex-wrap">
-                          <div>
-                            <p className="font-semibold text-blue-900 text-sm">Dojah BVN + Selfie Check</p>
-                            <p className="text-xs text-blue-600 mt-0.5">Ref: {selectedMerchant.dojah_reference || "Not submitted"}</p>
-                          </div>
-                          <Badge variant="outline" className="border-blue-200 bg-white text-blue-700 font-bold">
-                            Score: {selectedMerchant.dojah_match_score ?? "N/A"}%
-                          </Badge>
-                        </div>
-                      </div>
+                      {/* Representative Identity Section */}
+                      {(() => {
+                        const repLog = verificationLogs.find(
+                          (log) => log.verification_type === "bvn_selfie" || log.verification_type === "identity"
+                        );
+                        const repProviderRaw = repLog?.provider_name || (selectedMerchant as any).bvn_provider || "Unknown";
+                        const formattedRepProvider = repProviderRaw.charAt(0).toUpperCase() + repProviderRaw.slice(1).toLowerCase();
 
-                      {/* Documents */}
-                      <div className="space-y-2">
-                        <h4 className="font-semibold text-sm text-neutral-900">Documents</h4>
-                        <div className="space-y-2">
-                          {([
-                            { label: "CAC Number (Dojah Verified)", value: selectedMerchant.cac_number, field: "cac_status" as const, statusVal: selectedMerchant.cac_number ? "verified" : "unverified" },
-                            { label: "BVN", value: selectedMerchant.bvn, field: "bvn_status" as const, statusVal: selectedMerchant.bvn_status },
-                            { label: "Selfie", value: selectedMerchant.selfie_url ? "Submitted" : null, field: "selfie_status" as const, statusVal: selectedMerchant.selfie_status },
-                            { label: "CAC Document", value: selectedMerchant.cac_document_url, field: "cac_status" as const, isDoc: true, statusVal: selectedMerchant.cac_status },
-                            { label: "Utility Bill", value: selectedMerchant.utility_document_url, field: "utility_status" as const, isDoc: true, statusVal: selectedMerchant.utility_status },
-                          ]).map(({ label, value, field, isDoc, statusVal }) => (
-                            <div key={label} className="flex flex-wrap items-center justify-between gap-2 bg-neutral-50 border border-neutral-100 rounded-lg px-3 py-2">
-                              <div className="min-w-0">
-                                <p className="text-xs text-neutral-500">{label}</p>
-                                {isDoc && value ? (
-                                  <button onClick={() => handleViewDocument(value as string)} className="text-purp-600 hover:underline text-sm flex items-center gap-1 bg-transparent border-0 p-0 cursor-pointer">
-                                    View Document <ExternalLink className="h-3 w-3" />
-                                  </button>
-                                ) : (
-                                  <p className="font-medium text-sm truncate max-w-[180px]">{value as string || "—"}</p>
-                                )}
+                        const isActiveRepProvider = activeProvider.toLowerCase() === repProviderRaw.toLowerCase();
+                        const isHistoricalRepProvider = !isActiveRepProvider && repProviderRaw.toLowerCase() !== "unknown";
+
+                        const repBvnData = repLog?.raw_response?.data || repLog?.raw_response;
+                        const repBvnFirstName = String(repBvnData?.firstName || "").trim();
+                        const repBvnLastName = String(repBvnData?.lastName || "").trim();
+                        const repBvnNameOnCard = String(repBvnData?.nameOnCard || "").trim();
+                        const repBvnReturnedName = [repBvnFirstName, repBvnLastName].filter(Boolean).join(" ") || repBvnNameOnCard || null;
+
+                        const repSandboxOverride = repLog?.raw_response?.deraLedgerSandboxOverride as Record<string, unknown> | null;
+                        const repSelfieMatchBypassed = repSandboxOverride?.selfieMatchBypassed as boolean ?? false;
+                        // Use log match_score first, then sandbox override level, then merchant legacy field — never hardcode Dojah
+                        const repMatchScore: number | null = (
+                          repLog?.match_score ??
+                          (repSandboxOverride?.providerConfidenceLevel as number | null) ??
+                          (selectedMerchant as any).dojah_match_score ??
+                          repLog?.raw_response?.data?.confidence ??
+                          null
+                        );
+                        const repProviderConfidence = repMatchScore;
+                        const repProviderThreshold = repSandboxOverride?.providerThreshold as number | null;
+                        // Use log provider_reference first, then legacy dojah_reference
+                        const repProviderRef: string = (
+                          repLog?.provider_reference ||
+                          repLog?.verification_id ||
+                          (selectedMerchant as any).dojah_reference ||
+                          "Not submitted"
+                        );
+
+                        return (
+                          <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 space-y-2.5">
+                            <div className="flex items-center justify-between gap-3 flex-wrap">
+                              <div>
+                                <p className="text-[10px] uppercase font-bold text-blue-500 tracking-wider">Representative Identity Evidence</p>
+                                <p className="font-semibold text-blue-900 text-sm">{formattedRepProvider} BVN + Selfie Check</p>
+                                <p className="text-xs text-blue-600 mt-0.5">Ref: {repProviderRef}</p>
                               </div>
-                              <div className="flex items-center gap-2 flex-shrink-0">
-                                <Badge variant="outline" className={`text-xs capitalize border ${statusColor(statusVal || "unverified")}`}>
-                                  {statusVal || "unverified"}
+                              <div className="flex flex-col items-end gap-1">
+                                <Badge variant="outline" className="border-blue-200 bg-white text-blue-700 font-bold">
+                                  Score: {repMatchScore !== null && repMatchScore !== undefined ? `${repMatchScore}%` : "N/A"}
                                 </Badge>
-                                {statusVal === "pending" && (
-                                  <div className="flex gap-1">
-                                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-emerald-600 hover:bg-emerald-50" onClick={() => updateItemStatus(selectedMerchant, field, "verified")}><CheckCircle className="h-4 w-4" /></Button>
-                                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-red-600 hover:bg-red-50" onClick={() => updateItemStatus(selectedMerchant, field, "rejected")}><XCircle className="h-4 w-4" /></Button>
-                                  </div>
+                                {isHistoricalRepProvider && (
+                                  <Badge variant="outline" className="bg-amber-100 text-amber-800 border-amber-200 text-[9px] uppercase font-bold">
+                                    Historical {formattedRepProvider} Evidence
+                                  </Badge>
                                 )}
                               </div>
                             </div>
-                          ))}
-                        </div>
-                      </div>
+
+                            {/* Active provider notice */}
+                            <div className="text-[11px] text-blue-700 flex flex-col gap-1 border-t border-blue-100 pt-2">
+                              <div className="flex items-center gap-1.5">
+                                <Info className="h-3 w-3 flex-shrink-0" />
+                                <span>Current active provider: <span className="font-semibold capitalize">{activeProvider}</span></span>
+                              </div>
+                              <div>
+                                <span>Evidence provider: <span className="font-semibold capitalize">{formattedRepProvider}</span></span>
+                                {formattedRepProvider.toLowerCase() === "unknown" && (
+                                  <span className="text-red-600 font-bold ml-1">(Warning: Provider is Unknown!)</span>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Representative BVN Returned Name & Sandbox Override */}
+                            <div className="space-y-1.5 border-t border-blue-100 pt-2">
+                              {repBvnReturnedName && (
+                                <div className="text-xs text-blue-900 font-mono">
+                                  <span className="font-semibold">BVN Name:</span> {repBvnReturnedName}
+                                </div>
+                              )}
+                              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-blue-900 font-mono">
+                                <span>BVN: {selectedMerchant.bvn || "—"} ({selectedMerchant.bvn_status || "unverified"})</span>
+                                <span>Selfie: {selectedMerchant.selfie_url ? "Submitted" : "Missing"} ({selectedMerchant.selfie_status || "unverified"})</span>
+                              </div>
+                              {repSelfieMatchBypassed && (
+                                <div className="rounded bg-amber-50 border border-amber-200 p-2 text-[11px] text-amber-800 flex items-start gap-1.5">
+                                  <ShieldAlert className="h-3.5 w-3.5 text-amber-600 flex-shrink-0 mt-0.5" />
+                                  <div>
+                                    <p className="font-bold">Sandbox Override — Selfie Threshold Not Met</p>
+                                    <p>Confidence: {repProviderConfidence}% / Threshold: {repProviderThreshold}%</p>
+                                    <p className="mt-0.5">Sandbox override accepted this verification. In production this would be flagged.</p>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      {/* Documents */}
+                      {(() => {
+                        const cacLog = verificationLogs.find(
+                          (log) => log.verification_type === "business" || log.verification_type === "business_registry"
+                        );
+                        const cacProviderRaw = registrySnapshot?.provider_name || cacLog?.provider_name || (selectedMerchant as any).cac_provider || "Unknown";
+                        const formattedCacProvider = cacProviderRaw.charAt(0).toUpperCase() + cacProviderRaw.slice(1).toLowerCase();
+                        const isActiveCacProvider = activeProvider.toLowerCase() === cacProviderRaw.toLowerCase();
+                        const isHistoricalCacProvider = !isActiveCacProvider && cacProviderRaw.toLowerCase() !== "unknown";
+
+                        return (
+                          <div className="space-y-2">
+                            <h4 className="font-semibold text-sm text-neutral-900">Documents</h4>
+                            <div className="space-y-2">
+                              {([
+                                { 
+                                  label: `CAC Number (${formattedCacProvider} Verified)${isHistoricalCacProvider ? ` - Historical ${formattedCacProvider} evidence` : ""}${formattedCacProvider.toLowerCase() === "unknown" ? " ⚠ Warning: Unknown Provider" : ""}`, 
+                                  value: selectedMerchant.cac_number, 
+                                  field: "cac_status" as const, 
+                                  statusVal: selectedMerchant.cac_number ? "verified" : "unverified" 
+                                },
+                                { label: "BVN", value: selectedMerchant.bvn, field: "bvn_status" as const, statusVal: selectedMerchant.bvn_status },
+                                { label: "Selfie", value: selectedMerchant.selfie_url ? "Submitted" : null, field: "selfie_status" as const, statusVal: selectedMerchant.selfie_status },
+                                { label: "CAC Document", value: selectedMerchant.cac_document_url, field: "cac_status" as const, isDoc: true, statusVal: selectedMerchant.cac_status },
+                                { label: "Utility Bill", value: selectedMerchant.utility_document_url, field: "utility_status" as const, isDoc: true, statusVal: selectedMerchant.utility_status },
+                              ]).map(({ label, value, field, isDoc, statusVal }) => (
+                                <div key={label} className="flex flex-wrap items-center justify-between gap-2 bg-neutral-50 border border-neutral-100 rounded-lg px-3 py-2">
+                                  <div className="min-w-0">
+                                    <p className="text-xs text-neutral-500">{label}</p>
+                                    {isDoc && value ? (
+                                      <button onClick={() => handleViewDocument(value as string)} className="text-purp-600 hover:underline text-sm flex items-center gap-1 bg-transparent border-0 p-0 cursor-pointer">
+                                        View Document <ExternalLink className="h-3 w-3" />
+                                      </button>
+                                    ) : (
+                                      <p className="font-medium text-sm truncate max-w-[180px]">{value as string || "—"}</p>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center gap-2 flex-shrink-0">
+                                    <Badge variant="outline" className={`text-xs capitalize border ${statusColor(statusVal || "unverified")}`}>
+                                      {statusVal || "unverified"}
+                                    </Badge>
+                                    {statusVal === "pending" && (
+                                      <div className="flex gap-1">
+                                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-emerald-600 hover:bg-emerald-50" onClick={() => updateItemStatus(selectedMerchant, field, "verified")}><CheckCircle className="h-4 w-4" /></Button>
+                                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-red-600 hover:bg-red-50" onClick={() => updateItemStatus(selectedMerchant, field, "rejected")}><XCircle className="h-4 w-4" /></Button>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })()}
 
                       {/* Business Directors & KYB Panel */}
                       {(selectedMerchant.subscription_plan === "corporate" || selectedMerchant.merchant_tier === "corporate" || selectedMerchant.subscription_plan === "business" || selectedMerchant.merchant_tier === "business") && (
@@ -705,10 +832,12 @@ export default function VerificationQueuePage() {
                                     <div key={idx} className="pt-3.5 first:pt-0 space-y-2">
                                       <div className="flex items-start justify-between gap-3">
                                         <div className="space-y-1">
-                                          <h5 className="font-semibold text-sm text-neutral-900 flex items-center gap-1.5">
+                                          <h5 className="font-semibold text-sm text-neutral-900 flex items-center gap-1.5 font-sans">
                                             {person.name}
-                                            {person.isCorporate && (
-                                              <Badge variant="outline" className="text-[9px] bg-neutral-100 border-neutral-200 text-neutral-600 px-1 py-0 uppercase">Business Entity</Badge>
+                                            {person.isCorporate ? (
+                                              <Badge variant="outline" className="text-[9px] bg-neutral-100 border-neutral-200 text-neutral-600 px-1 py-0 uppercase">Corporate/Business Entity</Badge>
+                                            ) : (
+                                              <Badge variant="outline" className="text-[9px] bg-neutral-50 border-neutral-100 text-neutral-500 px-1 py-0 uppercase">Person</Badge>
                                             )}
                                           </h5>
                                           <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-neutral-500 font-mono">
@@ -718,7 +847,7 @@ export default function VerificationQueuePage() {
                                           </div>
                                           {person.address && (
                                             <p className="text-xs text-neutral-400 max-w-sm truncate" title={person.address}>
-                                              {person.address}
+                                              Address: {person.address}
                                             </p>
                                           )}
                                         </div>
@@ -730,26 +859,48 @@ export default function VerificationQueuePage() {
                             )}
                           </div>
 
-                          <div className="border border-neutral-200 rounded-xl overflow-hidden bg-white shadow-sm">
-                            <div className="w-full flex items-center justify-between p-3.5 bg-neutral-50/50 border-b border-neutral-100">
-                              <span className="font-bold text-sm text-neutral-800 flex items-center gap-2">
-                                <ShieldCheck className="h-4.5 w-4.5 text-blue-600" />
-                                Director Approval &amp; Identity Evidence
-                                <Badge className={`ml-1 text-[10px] font-extrabold border-0 ${
-                                  directors.filter(d => d.verification_status === "verified").length > 0
-                                    ? "bg-emerald-100 text-emerald-700"
-                                    : directors.length > 0
-                                    ? "bg-amber-100 text-amber-700"
-                                    : "bg-blue-100 text-blue-700"
-                                }`}>
-                                  {directors.length} Record{directors.length !== 1 ? "s" : ""}
-                                </Badge>
-                              </span>
+                          <div className="border border-neutral-200 rounded-xl overflow-hidden bg-white shadow-sm space-y-4 p-4">
+                            <span className="font-bold text-sm text-neutral-800 flex items-center gap-2 pb-2 border-b">
+                              <ShieldCheck className="h-4.5 w-4.5 text-blue-600" />
+                              Director Verification &amp; Approvals
+                            </span>
+
+                            {/* Section A: Director Approval Status */}
+                            <div className="space-y-2">
+                              <h5 className="font-bold text-xs uppercase text-neutral-500 tracking-wider">A. Director Approval Status</h5>
+                              {directorInvitations.length === 0 ? (
+                                <div className="text-xs text-neutral-500 bg-neutral-50 rounded p-2.5">
+                                  No director invitation sent or approval status found.
+                                </div>
+                              ) : (
+                                <div className="space-y-2">
+                                  {directorInvitations.map((invite) => (
+                                    <div key={invite.id} className="text-xs bg-neutral-50 border rounded-lg p-3 space-y-1.5">
+                                      <div className="flex items-center justify-between gap-2">
+                                        <span className="font-semibold text-neutral-800">{invite.selected_director_name}</span>
+                                        <Badge variant="outline" className={`text-[10px] capitalize font-bold ${
+                                          invite.status === "approved" || invite.status === "verified"
+                                            ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                            : invite.status === "sent" || invite.status === "opened"
+                                            ? "bg-blue-50 text-blue-700 border-blue-200"
+                                            : "bg-red-50 text-red-700 border-red-200"
+                                        }`}>
+                                          {invite.status}
+                                        </Badge>
+                                      </div>
+                                      <p className="text-neutral-500">Email: {invite.director_email}</p>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
                             </div>
 
-                            <div className="p-3.5 space-y-3.5 divide-y divide-neutral-100">
+                            {/* Section B: Director Identity Evidence */}
+                            <div className="space-y-2 pt-2 border-t">
+                              <h5 className="font-bold text-xs uppercase text-neutral-500 tracking-wider">B. Director Identity Evidence</h5>
+                              
                               {selectedMerchant.business_affiliation_status === "director_approved" && directors.length === 0 && !directorsLoading && (
-                                <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 mb-3 text-xs text-amber-800 font-semibold flex items-start gap-2">
+                                <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800 font-semibold flex items-start gap-2">
                                   <ShieldAlert className="h-4 w-4 text-amber-600 flex-shrink-0" />
                                   Director approval exists, but director identity verification evidence was not found.
                                 </div>
@@ -758,16 +909,15 @@ export default function VerificationQueuePage() {
                               {directorsLoading ? (
                                 <div className="py-6 flex flex-col items-center justify-center gap-2 text-neutral-400 text-xs">
                                   <Loader className="h-5 w-5 animate-spin text-blue-600" />
-                                  <span>Loading director KYC statuses...</span>
+                                  <span>Loading director identity evidence...</span>
                                 </div>
                               ) : directors.length === 0 ? (
-                                <div className="py-4 text-center text-xs text-neutral-400 flex items-center justify-center gap-2">
+                                <div className="py-4 text-center text-xs text-neutral-400 flex items-center justify-center gap-2 bg-neutral-50 rounded">
                                   <Info className="h-4 w-4 text-neutral-300" />
-                                  <span>No director identity verification submitted for this account yet.</span>
+                                  <span>No director identity verification evidence has been submitted yet.</span>
                                 </div>
                               ) : (
                                 directors.map((dir) => {
-                                  // Parse normalized_response for sandbox and BVN name data
                                   const normResp = dir.normalized_response as Record<string, unknown> | null;
                                   const sandboxOverride = normResp?.deraLedgerSandboxOverride as Record<string, unknown> | null;
                                   const bvnData = normResp?.data as Record<string, unknown> | null;
@@ -778,26 +928,28 @@ export default function VerificationQueuePage() {
                                   const invitedName = String(dir.director_name || "").toUpperCase().trim();
                                   const bvnNormalized = bvnReturnedName?.toUpperCase().trim() || "";
 
-                                  // Check name match — compare invited director name tokens vs BVN returned tokens
-                                  const invitedTokens = invitedName.split(/\s+/).filter(Boolean);
-                                  const bvnTokens = bvnNormalized.split(/\s+/).filter(Boolean);
-                                  const hasNameOverlap = invitedTokens.length > 0 && bvnTokens.length > 0 &&
-                                    invitedTokens.some(t => bvnTokens.includes(t) && t.length > 2);
-                                  const nameMismatch = bvnReturnedName !== null && !hasNameOverlap;
+                                  const invitedTokens = invitedName.split(/\s+/).filter(t => t.length > 2);
+                                  const bvnTokens = bvnNormalized.split(/\s+/).filter(t => t.length > 2);
+                                  const matchingTokens = invitedTokens.filter(t => bvnTokens.includes(t));
+                                  const requiredMatches = Math.min(2, invitedTokens.length);
+                                  const isNameMatched = matchingTokens.length >= requiredMatches;
+                                  const nameMismatch = bvnReturnedName !== null && !isNameMatched;
 
-                                  // Selfie analysis
                                   const providerMatch = sandboxOverride ? (sandboxOverride.providerMatch as boolean) : true;
                                   const providerConfidence = sandboxOverride?.providerConfidenceLevel as number | null ?? dir.face_match_score;
                                   const providerThreshold = sandboxOverride?.providerThreshold as number | null;
                                   const selfieMatchBypassed = sandboxOverride?.selfieMatchBypassed as boolean ?? false;
 
-                                  // Find linked invitation
                                   const linkedInvite = directorInvitations.find(inv => inv.id === dir.invitation_id) ||
                                     directorInvitations.find(inv => inv.selected_director_name?.toUpperCase() === invitedName);
 
+                                  const dirProviderRaw = dir.provider_name || "Unknown";
+                                  const formattedDirProvider = dirProviderRaw.charAt(0).toUpperCase() + dirProviderRaw.slice(1).toLowerCase();
+                                  const isActiveDirProvider = activeProvider.toLowerCase() === dirProviderRaw.toLowerCase();
+                                  const isHistoricalDirProvider = !isActiveDirProvider && dirProviderRaw.toLowerCase() !== "unknown";
+
                                   return (
-                                    <div key={dir.id} className="pt-3.5 first:pt-0 space-y-3">
-                                      {/* Header: invited director + status badge */}
+                                    <div key={dir.id} className="bg-neutral-50 border rounded-lg p-3 space-y-3">
                                       <div className="flex items-start justify-between gap-3">
                                         <div className="space-y-1">
                                           <h5 className="font-semibold text-sm text-neutral-900 flex items-center gap-1.5">
@@ -806,9 +958,13 @@ export default function VerificationQueuePage() {
                                               {dir.director_role?.replace(/_/g, " ")}
                                             </span>
                                           </h5>
-                                          {linkedInvite && (
+                                          {linkedInvite ? (
                                             <p className="text-[10px] text-neutral-400">
-                                              Invited via: {linkedInvite.director_email} · Invite status: <span className="capitalize">{linkedInvite.status}</span>
+                                              Linked to invite: {linkedInvite.director_email} ({linkedInvite.status})
+                                            </p>
+                                          ) : (
+                                            <p className="text-[10px] text-red-500 font-semibold">
+                                              ⚠ No linked invitation found for this director.
                                             </p>
                                           )}
                                         </div>
@@ -828,51 +984,48 @@ export default function VerificationQueuePage() {
                                           >
                                             {nameMismatch ? "Name Mismatch" : dir.verification_status?.replace(/_/g, " ")}
                                           </Badge>
-                                          {providerConfidence !== null && (
-                                            <span className="text-[10px] text-neutral-400 font-mono">
-                                              Confidence: {providerConfidence}%{providerThreshold ? ` / ${providerThreshold}% threshold` : ""}
-                                            </span>
-                                          )}
                                         </div>
                                       </div>
 
-                                      {/* Name Mismatch Warning */}
                                       {nameMismatch && bvnReturnedName && (
                                         <div className="rounded-lg bg-red-50 border border-red-200 p-3 text-xs text-red-800 flex items-start gap-2">
                                           <ShieldAlert className="h-4 w-4 text-red-600 flex-shrink-0 mt-0.5" />
                                           <div>
                                             <p className="font-bold mb-1">Director Identity Name Mismatch</p>
-                                            <p>Invited director: <span className="font-semibold">{dir.director_name}</span></p>
-                                            <p>BVN returned name: <span className="font-semibold">{bvnReturnedName}{bvnNameOnCard && bvnNameOnCard !== bvnReturnedName ? ` / ${bvnNameOnCard}` : ""}</span></p>
-                                            <p className="mt-1 text-red-700">This director identity evidence does not match the invited director. Do not count as verified.</p>
+                                            <p>Invited director: <span className="font-semibold text-neutral-900">{dir.director_name}</span></p>
+                                            <p>BVN returned name: <span className="font-semibold text-neutral-950">{bvnReturnedName}</span></p>
+                                            <p className="mt-1 text-red-700 font-medium">Director identity evidence found, but it does not match the invited director.</p>
                                           </div>
                                         </div>
                                       )}
 
-                                      {/* Sandbox Override Warning */}
                                       {selfieMatchBypassed && (
                                         <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800 flex items-start gap-2">
                                           <ShieldAlert className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
                                           <div>
-                                            <p className="font-bold mb-1">Sandbox Override — Provider Selfie Threshold Not Met</p>
-                                            <p>Provider selfie match: <span className="font-semibold text-red-700">{providerMatch ? "Passed" : "Failed"}</span></p>
-                                            <p>Provider confidence: <span className="font-semibold">{providerConfidence}%</span> / threshold: <span className="font-semibold">{providerThreshold}%</span></p>
-                                            <p className="mt-1">Sandbox override accepted this verification. In production this would be <span className="font-bold">rejected or flagged for manual review</span>.</p>
+                                            <p className="font-bold mb-1">Sandbox Override — Selfie Threshold Not Met</p>
+                                            <p>Match: <span className="font-semibold text-red-700">{providerMatch ? "Passed" : "Failed"}</span></p>
+                                            <p>Confidence: {providerConfidence}% / Threshold: {providerThreshold}%</p>
+                                            <p className="mt-1">Sandbox override accepted this verification. In production this would be rejected or flagged.</p>
                                           </div>
                                         </div>
                                       )}
 
-                                      {/* BVN & Selfie Details */}
-                                      <div className="rounded-lg bg-neutral-50 border border-neutral-100 p-2.5 text-xs font-mono text-neutral-600 space-y-1">
+                                      <div className="rounded-lg bg-white border border-neutral-100 p-2.5 text-xs font-mono text-neutral-600 space-y-1">
                                         <div className="flex flex-wrap gap-x-4 gap-y-0.5">
                                           <span>BVN: {dir.masked_bvn || "—"}</span>
-                                          <span>Provider: {dir.provider_name || "—"}</span>
+                                          <span>Provider: {formattedDirProvider} {dirProviderRaw.toLowerCase() === "unknown" && <span className="text-red-600 font-sans font-bold">(Warning: Provider is Unknown!)</span>}</span>
                                           <span>Ref: {dir.verification_id || dir.id.split("-")[0]}</span>
                                         </div>
+                                        {isHistoricalDirProvider && (
+                                          <div className="text-[10px] text-amber-700 font-sans font-semibold">
+                                            Historical {formattedDirProvider} evidence
+                                          </div>
+                                        )}
                                         {bvnReturnedName && (
                                           <div className="flex gap-2">
-                                            <span className="text-neutral-400">BVN name returned:</span>
-                                            <span className={nameMismatch ? "text-red-600 font-semibold" : "text-neutral-800"}>{bvnReturnedName}{bvnNameOnCard && bvnNameOnCard !== bvnReturnedName ? ` / ${bvnNameOnCard}` : ""}</span>
+                                            <span className="text-neutral-400 font-sans">BVN name returned:</span>
+                                            <span className={nameMismatch ? "text-red-600 font-semibold" : "text-neutral-800"}>{bvnReturnedName}</span>
                                           </div>
                                         )}
                                         <div className="flex flex-wrap gap-x-4 gap-y-0.5">
@@ -891,9 +1044,8 @@ export default function VerificationQueuePage() {
                                         </button>
                                       )}
 
-                                      {/* Action panel */}
                                       {(dir.verification_status !== "verified" || nameMismatch) && (
-                                        <div className="bg-neutral-50 rounded-lg p-2.5 border border-neutral-200/60 space-y-2">
+                                        <div className="bg-white rounded-lg p-2.5 border border-neutral-200 space-y-2">
                                           <span className="text-[10px] font-bold text-neutral-500 uppercase tracking-wider block">
                                             Manual Override Action
                                           </span>
@@ -929,7 +1081,7 @@ export default function VerificationQueuePage() {
                                       )}
 
                                       {dir.admin_notes && (
-                                        <div className="bg-neutral-50 rounded-lg p-2.5 border border-dashed text-xs text-neutral-600 leading-relaxed font-mono">
+                                        <div className="bg-white rounded-lg p-2.5 border border-dashed text-xs text-neutral-600 leading-relaxed font-mono">
                                           <span className="font-bold text-neutral-800 block mb-0.5">Admin Audit Notes:</span>
                                           {dir.admin_notes}
                                         </div>
