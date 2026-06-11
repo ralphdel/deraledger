@@ -2323,38 +2323,50 @@ export async function adminUpdateKycDocumentStatusAction(
   const guard = await requireSuperAdmin();
   if (guard.error) return guard.error;
   const adminClient = getServiceClient();
+  const now = new Date().toISOString();
+  const stepKeysByField: Record<typeof field, string[]> = {
+    bvn_status: ["bvn"],
+    selfie_status: ["selfie_liveness"],
+    cac_status: ["business_document", "business_documents", "valid_id_document"],
+    utility_status: ["utility_bill", "proof_of_address"],
+  };
+
+  const { data: current } = await adminClient
+    .from("merchants")
+    .select("bvn_status, selfie_status, cac_status, utility_status, subscription_plan, merchant_tier, verification_status, verification_step_state")
+    .eq("id", merchantId)
+    .single();
 
   const updates: Record<string, unknown> = {
     [field]: status,
-    kyc_reviewed_at: new Date().toISOString(),
+    kyc_reviewed_at: now,
   };
-
   if (notes) updates.kyc_notes = notes;
-
-  // After updating individual document status, recompute overall verification_status.
-  // IMPORTANT: Individual document review never auto-grants "verified" — only
-  // adminApproveVerificationAction does that. Documents land in pending_admin_review.
-  const { data: current } = await adminClient
-    .from("merchants")
-    .select("bvn_status, selfie_status, cac_status, utility_status, subscription_plan, merchant_tier, verification_status")
-    .eq("id", merchantId)
-    .single();
 
   if (current) {
     const merged = { ...current, [field]: status };
     const anyRejected = [
       merged.bvn_status, merged.selfie_status, merged.cac_status, merged.utility_status
     ].some(s => s === "rejected");
+    const verificationStepState = { ...(current.verification_step_state || {}) } as Record<string, any>;
+    for (const stepKey of stepKeysByField[field]) {
+      if (!verificationStepState[stepKey]) continue;
+      verificationStepState[stepKey] = {
+        ...verificationStepState[stepKey],
+        status,
+        reviewed_at: now,
+        verified_at: status === "verified" ? now : null,
+        rejection_reason: status === "rejected" ? notes?.trim() || "Rejected during admin review." : null,
+        admin_reset_status: "not_requested",
+      };
+    }
+    updates.verification_step_state = verificationStepState;
 
-    // Only change to rejected if any doc is rejected and we aren't already verified
-    // Don't auto-promote to verified — that's reserved for adminApproveVerificationAction
     if (anyRejected && current.verification_status !== "verified") {
       updates.verification_status = "rejected";
     } else if (!anyRejected && current.verification_status === "rejected") {
-      // Un-reject if no more rejections
       updates.verification_status = "pending_admin_review";
     }
-    // Otherwise leave verification_status as-is (pending_admin_review, etc.)
   }
 
   const { error } = await adminClient
@@ -2371,7 +2383,10 @@ export async function adminUpdateKycDocumentStatusAction(
     actor: "admin",
   });
 
+  await syncMerchantSetupStatus(adminClient, merchantId);
+  revalidatePath("/settings");
   revalidatePath("/admin/verification");
+  revalidatePath("/admin/merchants");
   return { success: true, updates };
 }
 
@@ -2418,9 +2433,11 @@ export async function adminApproveVerificationAction(merchantId: string, reviewN
 
   const plan = merchant.subscription_plan || merchant.merchant_tier || "starter";
   const verificationStepState = { ...(merchant.verification_step_state || {}) } as Record<string, any>;
+  const businessDocumentStep = verificationStepState.business_document || verificationStepState.business_documents || verificationStepState.valid_id_document || null;
+  const utilityDocumentStep = verificationStepState.utility_bill || verificationStepState.proof_of_address || null;
   let identityReviewOutcome: "matched" | "partial" | "mismatch" | "unknown" | null = null;
 
-  if (plan === "individual") {
+  if (plan !== "starter") {
     const { data: identityLog, error: identityError } = await adminClient
       .from("verification_logs")
       .select("id, created_at, verification_type, normalized_status, provider_name, provider_reference, verification_id, returned_bvn_name, raw_response")
@@ -2467,6 +2484,59 @@ export async function adminApproveVerificationAction(merchantId: string, reviewN
       rejection_reason: null,
       admin_reset_status: "not_requested",
     };
+  }
+
+  if (plan === "business" || plan === "corporate") {
+    if (businessDocumentStep?.status !== "verified" || utilityDocumentStep?.status !== "verified") {
+      return { success: false, error: "Business document approval is still incomplete." };
+    }
+  }
+
+  if (plan === "corporate") {
+    const [invitationsResult, directorsResult] = await Promise.all([
+      adminClient
+        .from("director_invitations")
+        .select("status")
+        .eq("merchant_id", merchantId),
+      adminClient
+        .from("business_director_verifications")
+        .select("director_name, verification_status, manual_review_required, normalized_response")
+        .eq("merchant_id", merchantId),
+    ]);
+
+    const invitations = invitationsResult.data || [];
+    const directors = directorsResult.data || [];
+    const hasDirectorApproval =
+      invitations.some((invite) => ["approved", "verified"].includes(String(invite.status || "").toLowerCase())) ||
+      merchant.business_affiliation_status === "director_approved";
+    const hasRejectedDirectorApproval = invitations.some((invite) =>
+      ["rejected", "declined", "expired", "failed"].includes(String(invite.status || "").toLowerCase())
+    );
+    const hasDirectorManualReview = directors.some((dir) => dir.manual_review_required);
+    const hasDirectorFailure = directors.some((dir) => dir.verification_status === "failed");
+    const hasDirectorSandboxWarning = directors.some((dir) => {
+      const sandboxOverride = (dir.normalized_response as Record<string, any> | null)?.deraLedgerSandboxOverride as Record<string, any> | null;
+      return sandboxOverride?.selfieMatchBypassed === true;
+    });
+    const hasDirectorNameMismatch = directors.some((dir) => {
+      const data = (dir.normalized_response as Record<string, any> | null)?.data as Record<string, any> | null;
+      const returnedName = String(data?.name || [data?.firstName, data?.lastName].filter(Boolean).join(" ")).trim().toUpperCase();
+      const invitedName = String(dir.director_name || "").trim().toUpperCase();
+      if (!returnedName || !invitedName) return false;
+      const invitedTokens = invitedName.split(/\s+/).filter((token) => token.length > 2);
+      const returnedTokens = returnedName.split(/\s+/).filter((token) => token.length > 2);
+      return invitedTokens.filter((token) => returnedTokens.includes(token)).length < Math.min(2, invitedTokens.length);
+    });
+
+    if (hasRejectedDirectorApproval || !hasDirectorApproval) {
+      return { success: false, error: "Director consent is still unresolved for this business flow." };
+    }
+    if (directors.length === 0) {
+      return { success: false, error: "Director identity evidence is still missing for this business flow." };
+    }
+    if (hasDirectorNameMismatch || hasDirectorManualReview || hasDirectorSandboxWarning || hasDirectorFailure) {
+      return { success: false, error: "Director identity evidence still requires manual review before final approval." };
+    }
   }
 
   const nextFields = setupStatusForMerchant({ ...merchant, verification_status: "verified", verification_step_state: verificationStepState });
@@ -2573,8 +2643,8 @@ export async function adminApproveIndividualIdentityReviewAction(merchantId: str
   }
 
   const plan = merchant.subscription_plan || merchant.merchant_tier || "starter";
-  if (plan !== "individual") {
-    return { success: false, error: "This identity review action is only available for Individual KYC." };
+  if (plan === "starter") {
+    return { success: false, error: "This identity review action is not available for the current plan." };
   }
 
   const { data: identityLog, error: identityError } = await adminClient
@@ -2651,7 +2721,7 @@ export async function adminApproveIndividualIdentityReviewAction(merchantId: str
 
   revalidatePath("/admin/verification");
   revalidatePath("/settings");
-  return { success: true, updates, message: "Identity review approved. Final admin approval is now available." };
+  return { success: true, updates, message: "Identity review approved. Final admin approval is now available once the remaining compliance steps are complete." };
 }
 
 /**
@@ -2843,16 +2913,42 @@ export async function adminRequestReuploadAction(
 
   const adminClient = getServiceClient();
   const now = new Date().toISOString();
+  const stepKeysByField: Record<(typeof fields)[number], string[]> = {
+    bvn_status: ["bvn"],
+    selfie_status: ["selfie_liveness"],
+    cac_status: ["business_document", "business_documents", "valid_id_document"],
+    utility_status: ["utility_bill", "proof_of_address"],
+  };
+  const { data: merchant } = await adminClient
+    .from("merchants")
+    .select("verification_step_state")
+    .eq("id", merchantId)
+    .maybeSingle();
   const targetedUpdates = fields.reduce<Record<string, "rejected">>((acc, field) => {
     acc[field] = "rejected";
     return acc;
   }, {});
+  const verificationStepState = { ...(merchant?.verification_step_state || {}) } as Record<string, any>;
+  for (const field of fields) {
+    for (const stepKey of stepKeysByField[field]) {
+      if (!verificationStepState[stepKey]) continue;
+      verificationStepState[stepKey] = {
+        ...verificationStepState[stepKey],
+        status: "rejected",
+        reviewed_at: now,
+        verified_at: null,
+        rejection_reason: reason.trim(),
+        admin_reset_status: "not_requested",
+      };
+    }
+  }
   const updates = {
     ...targetedUpdates,
     verification_status: "requires_reupload",
     setup_mode: true,
     live_features_enabled: false,
     onboarding_status: "pending_manual_review",
+    verification_step_state: verificationStepState,
     kyc_rejection_reason: reason.trim(),
     kyc_notes: `Additional verification information required: ${reason.trim()}`,
     kyc_reviewed_at: now,
@@ -2887,6 +2983,7 @@ export async function adminRequestReuploadAction(
 
   revalidatePath("/admin/verification");
   revalidatePath("/admin/merchants");
+  revalidatePath("/settings");
   return {
     success: true,
     updates,

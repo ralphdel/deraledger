@@ -520,6 +520,7 @@ export default function VerificationQueuePage() {
                     const planKey = selectedMerchant.subscription_plan || selectedMerchant.merchant_tier;
                     const planLabel = formatPlanLabel(planKey);
                     const isBusinessPlan = planKey === "corporate" || planKey === "business";
+                    const requiresDirectorFlow = planKey === "corporate";
                     const effectiveStatus = getEffectiveStatus(selectedMerchant);
                     const roster = extractKeyPersonnel(registrySnapshot);
                     const rosterCount = roster.length;
@@ -642,28 +643,9 @@ export default function VerificationQueuePage() {
                       repProviderUnknown
                     );
                     const repIdentityVerified = !repIdentityBlocked && !repIdentityPendingReview && selectedMerchant.bvn_status === "verified" && (selectedMerchant.selfie_status || "unverified") === "verified";
-                    const showIdentityManualReviewPanel = !isBusinessPlan && (repIdentityBlocked || repIdentityPendingReview);
-                    const approveDisabledReason = (() => {
-                      if (selectedMerchant.verification_status === "verified" && selectedMerchant.live_features_enabled) return "Already approved. Live features are active.";
-                      if (repIdentityBlocked) return "Approval blocked: identity name mismatch requires manual review or re-verification.";
-                      if (repNameReviewState === "partial" && !repIdentityReviewApproved) return "Approval blocked: approve the identity review before final merchant approval.";
-                      if (!isBusinessPlan && !repHasCurrentEvidence) return "Approval blocked: no current identity evidence is available for final review.";
-                      if (!isBusinessPlan && !repBvnReturnedName) return "Approval blocked: BVN returned name is missing from the latest identity evidence.";
-                      if (!isBusinessPlan && !repProviderConfirmed) return "Approval blocked: identity provider traceability is missing on the latest evidence.";
-                      if (!isBusinessPlan && repSelfieMatchBypassed) return "Approval blocked: the latest identity evidence still carries a sandbox selfie override warning.";
-                      if (!isBusinessPlan && repIdentityPendingReview) return "Approval blocked: identity evidence still needs review before final approval.";
-                      if (getEffectiveStatus(selectedMerchant) === "incomplete") return "Approval blocked: merchant profile details are incomplete.";
-                      if (selectedMerchant.subscription_plan === "corporate" && (selectedMerchant.cac_status !== "verified" || selectedMerchant.utility_status !== "verified")) return "Approval blocked: business verification documents are still incomplete.";
-                      return null;
-                    })();
-                    const isApproveDisabled =
-                      actionLoading ||
-                      repIdentityBlocked ||
-                      (!isBusinessPlan && repIdentityPendingReview) ||
-                      (selectedMerchant.verification_status === "verified" && selectedMerchant.live_features_enabled) ||
-                      getEffectiveStatus(selectedMerchant) === "incomplete" ||
-                      (selectedMerchant.subscription_plan === "corporate" && (selectedMerchant.cac_status !== "verified" || selectedMerchant.utility_status !== "verified"));
-
+                    const showIdentityManualReviewPanel = repIdentityBlocked || repIdentityPendingReview;
+                    const businessDocumentStep = (((selectedMerchant.verification_step_state as Record<string, any> | null)?.business_document || (selectedMerchant.verification_step_state as Record<string, any> | null)?.business_documents || (selectedMerchant.verification_step_state as Record<string, any> | null)?.valid_id_document || null) as Record<string, any> | null);
+                    const utilityDocumentStep = (((selectedMerchant.verification_step_state as Record<string, any> | null)?.utility_bill || (selectedMerchant.verification_step_state as Record<string, any> | null)?.proof_of_address || null) as Record<string, any> | null);
                     const cacLog = verificationLogs.find(
                       (log) => log.verification_type === "business" || log.verification_type === "business_registry"
                     );
@@ -711,6 +693,41 @@ export default function VerificationQueuePage() {
                     const directorInvitationStatuses = directorInvitations.map((invite) => String(invite.status || "").toLowerCase());
                     const hasRejectedDirectorApproval = directorInvitationStatuses.some((status) => ["rejected", "declined", "expired", "failed"].includes(status));
                     const hasPendingDirectorApproval = directorInvitationStatuses.some((status) => ["sent", "opened", "pending"].includes(status));
+                    const hasBusinessDocumentBlocker = isBusinessPlan && (
+                      businessDocumentStep?.status !== "verified" ||
+                      utilityDocumentStep?.status !== "verified"
+                    );
+                    const hasDirectorFlowBlocker = requiresDirectorFlow && (
+                      hasRejectedDirectorApproval ||
+                      !hasDirectorApproval ||
+                      directors.length === 0 ||
+                      hasDirectorNameMismatch ||
+                      hasDirectorManualReview ||
+                      hasDirectorSandboxWarning ||
+                      hasDirectorFailure
+                    );
+                    const approveDisabledReason = (() => {
+                      if (selectedMerchant.verification_status === "verified" && selectedMerchant.live_features_enabled) return "Already approved. Live features are active.";
+                      if (repIdentityBlocked) return "Approval blocked: identity name mismatch requires manual review or re-verification.";
+                      if (repNameReviewState === "partial" && !repIdentityReviewApproved) return "Approval blocked: approve the identity review before final merchant approval.";
+                      if (!repHasCurrentEvidence) return "Approval blocked: no current identity evidence is available for final review.";
+                      if (!repBvnReturnedName) return "Approval blocked: BVN returned name is missing from the latest identity evidence.";
+                      if (!repProviderConfirmed) return "Approval blocked: identity provider traceability is missing on the latest evidence.";
+                      if (repSelfieMatchBypassed) return "Approval blocked: the latest identity evidence still carries a sandbox selfie override warning.";
+                      if (repIdentityPendingReview) return "Approval blocked: identity evidence still needs review before final approval.";
+                      if (getEffectiveStatus(selectedMerchant) === "incomplete") return "Approval blocked: merchant profile details are incomplete.";
+                      if (hasBusinessDocumentBlocker) return "Approval blocked: business verification documents are still incomplete.";
+                      if (hasDirectorFlowBlocker) return "Approval blocked: director consent or director identity evidence is still unresolved.";
+                      return null;
+                    })();
+                    const isApproveDisabled =
+                      actionLoading ||
+                      repIdentityBlocked ||
+                      repIdentityPendingReview ||
+                      (selectedMerchant.verification_status === "verified" && selectedMerchant.live_features_enabled) ||
+                      getEffectiveStatus(selectedMerchant) === "incomplete" ||
+                      hasBusinessDocumentBlocker ||
+                      hasDirectorFlowBlocker;
 
                     const mainBlocker = (() => {
                       if (selectedMerchant.kyc_rejection_reason) return "Previous rejection reason needs reviewer attention.";
@@ -719,7 +736,9 @@ export default function VerificationQueuePage() {
                       if (repIdentityPendingReview) return "Identity evidence needs review before final approval.";
                       if (repIdentityResolvedByCompliance && effectiveStatus === "pending_admin_review") return "Identity review was approved by compliance. Final admin approval can now proceed.";
                       if (isBusinessPlan && hasMissingSnapshot) return "CAC snapshot is missing and business registration evidence needs repair.";
-                      if (isBusinessPlan && selectedMerchant.business_affiliation_status === "director_approved" && directors.length === 0 && !directorsLoading) return "Director approval exists without matching identity evidence.";
+                      if (requiresDirectorFlow && selectedMerchant.business_affiliation_status === "director_approved" && directors.length === 0 && !directorsLoading) return "Director approval exists without matching identity evidence.";
+                      if (hasBusinessDocumentBlocker) return "Business documents still need admin approval before final approval.";
+                      if (hasDirectorFlowBlocker) return "Director approval or director identity evidence is still unresolved.";
                       if (!selectedMerchant.live_features_enabled) return "Live features remain locked pending compliance completion.";
                       if (effectiveStatus === "pending_admin_review") return "Awaiting final admin decision.";
                       if (effectiveStatus === "pending") return "Submitted evidence still needs review.";
@@ -764,17 +783,17 @@ export default function VerificationQueuePage() {
                       },
                       {
                         label: "Director Approval",
-                        badge: !isBusinessPlan ? "not required" : hasRejectedDirectorApproval ? "rejected" : hasDirectorApproval ? "approved" : hasPendingDirectorApproval ? "pending" : "consent required",
-                        tone: !isBusinessPlan ? "neutral" : hasRejectedDirectorApproval ? "blocked" : hasDirectorApproval ? "verified" : hasPendingDirectorApproval ? "pending" : "attention",
-                        reason: !isBusinessPlan ? "Not required for this plan." : hasRejectedDirectorApproval ? "Director consent was rejected or expired." : hasDirectorApproval ? "Director consent was recorded. Identity evidence is reviewed separately." : hasPendingDirectorApproval ? "Invitation sent but consent is still pending." : "No director invitation or consent record found.",
-                        nextAction: !isBusinessPlan ? "No action" : hasDirectorApproval ? "Check identity evidence" : "Review consent status",
+                        badge: !requiresDirectorFlow ? "not required" : hasRejectedDirectorApproval ? "rejected" : hasDirectorApproval ? "approved" : hasPendingDirectorApproval ? "pending" : "consent required",
+                        tone: !requiresDirectorFlow ? "neutral" : hasRejectedDirectorApproval ? "blocked" : hasDirectorApproval ? "verified" : hasPendingDirectorApproval ? "pending" : "attention",
+                        reason: !requiresDirectorFlow ? "Not required for this flow." : hasRejectedDirectorApproval ? "Director consent was rejected or expired." : hasDirectorApproval ? "Director consent was recorded. Identity evidence is reviewed separately." : hasPendingDirectorApproval ? "Invitation sent but consent is still pending." : "No director invitation or consent record found.",
+                        nextAction: !requiresDirectorFlow ? "No action" : hasDirectorApproval ? "Check identity evidence" : "Review consent status",
                       },
                       {
                         label: "Director Identity Evidence",
-                        badge: !isBusinessPlan ? "not required" : directorsLoading ? "loading" : directors.length === 0 ? "missing" : hasDirectorNameMismatch ? "name mismatch" : hasDirectorManualReview ? "manual review" : hasDirectorSandboxWarning ? "sandbox warning" : hasDirectorFailure ? "rejected" : "verified",
-                        tone: !isBusinessPlan ? "neutral" : directorsLoading ? "info" : directors.length === 0 ? "attention" : hasDirectorNameMismatch || hasDirectorManualReview ? "blocked" : hasDirectorSandboxWarning ? "pending" : hasDirectorFailure ? "blocked" : "verified",
-                        reason: !isBusinessPlan ? "Not required for this plan." : directorsLoading ? "Loading identity evidence." : directors.length === 0 ? "No submitted director identity evidence." : hasDirectorNameMismatch ? "Submitted evidence contains a director name mismatch." : hasDirectorManualReview ? "Submitted evidence is flagged for manual review." : hasDirectorSandboxWarning ? "Submitted evidence includes a sandbox selfie override warning." : `${directors.length} evidence record(s) available.`,
-                        nextAction: !isBusinessPlan ? "No action" : directors.length === 0 ? "Check director evidence" : "Review mismatches and overrides",
+                        badge: !requiresDirectorFlow ? "not required" : directorsLoading ? "loading" : directors.length === 0 ? "missing" : hasDirectorNameMismatch ? "name mismatch" : hasDirectorManualReview ? "manual review" : hasDirectorSandboxWarning ? "sandbox warning" : hasDirectorFailure ? "rejected" : "verified",
+                        tone: !requiresDirectorFlow ? "neutral" : directorsLoading ? "info" : directors.length === 0 ? "attention" : hasDirectorNameMismatch || hasDirectorManualReview ? "blocked" : hasDirectorSandboxWarning ? "pending" : hasDirectorFailure ? "blocked" : "verified",
+                        reason: !requiresDirectorFlow ? "Not required for this flow." : directorsLoading ? "Loading identity evidence." : directors.length === 0 ? "No submitted director identity evidence." : hasDirectorNameMismatch ? "Submitted evidence contains a director name mismatch." : hasDirectorManualReview ? "Submitted evidence is flagged for manual review." : hasDirectorSandboxWarning ? "Submitted evidence includes a sandbox selfie override warning." : `${directors.length} evidence record(s) available.`,
+                        nextAction: !requiresDirectorFlow ? "No action" : directors.length === 0 ? "Check director evidence" : "Review mismatches and overrides",
                       },
                       {
                         label: "Documents",
@@ -785,10 +804,12 @@ export default function VerificationQueuePage() {
                       },
                       {
                         label: "Final Admin Review",
-                        badge: repIdentityBlocked || (isBusinessPlan && (hasDirectorNameMismatch || hasDirectorManualReview)) ? "blocked" : selectedMerchant.verification_status === "verified" && selectedMerchant.live_features_enabled ? "verified" : effectiveStatus === "pending_admin_review" || !selectedMerchant.live_features_enabled ? "pending" : effectiveStatus,
-                        tone: repIdentityBlocked || (isBusinessPlan && (hasDirectorNameMismatch || hasDirectorManualReview)) ? "blocked" : selectedMerchant.verification_status === "verified" && selectedMerchant.live_features_enabled ? "verified" : effectiveStatus === "pending_admin_review" || !selectedMerchant.live_features_enabled ? "info" : effectiveStatus === "requires_reupload" || effectiveStatus === "rejected" ? "blocked" : effectiveStatus === "incomplete" ? "attention" : "pending",
-                        reason: repIdentityBlocked || (isBusinessPlan && (hasDirectorNameMismatch || hasDirectorManualReview))
+                        badge: repIdentityBlocked || hasBusinessDocumentBlocker || hasDirectorFlowBlocker ? "blocked" : selectedMerchant.verification_status === "verified" && selectedMerchant.live_features_enabled ? "verified" : effectiveStatus === "pending_admin_review" || !selectedMerchant.live_features_enabled ? "pending" : effectiveStatus,
+                        tone: repIdentityBlocked || hasBusinessDocumentBlocker || hasDirectorFlowBlocker ? "blocked" : selectedMerchant.verification_status === "verified" && selectedMerchant.live_features_enabled ? "verified" : effectiveStatus === "pending_admin_review" || !selectedMerchant.live_features_enabled ? "info" : effectiveStatus === "requires_reupload" || effectiveStatus === "rejected" ? "blocked" : effectiveStatus === "incomplete" ? "attention" : "pending",
+                        reason: repIdentityBlocked || hasDirectorFlowBlocker
                           ? "Manual review is still required before final admin approval."
+                          : hasBusinessDocumentBlocker
+                            ? "Required business documents are still pending or unverified."
                           : repIdentityResolvedByCompliance && effectiveStatus === "pending_admin_review"
                             ? "Identity review was approved by compliance. Final merchant approval is now available."
                           : !selectedMerchant.live_features_enabled
@@ -1022,7 +1043,7 @@ export default function VerificationQueuePage() {
                           </div>
                         </section>
 
-                        <details className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm xl:order-6" open={repProviderUnknown || (isBusinessPlan && (formattedCacProvider.toLowerCase() === "unknown" || hasUnknownDirectorProvider))}>
+                        <details className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm xl:order-6" open={repProviderUnknown || (isBusinessPlan && (formattedCacProvider.toLowerCase() === "unknown" || (requiresDirectorFlow && hasUnknownDirectorProvider)))}>
                           <summary className="cursor-pointer list-none">
                             <span className="flex items-center justify-between gap-3">
                               <span>
@@ -1037,7 +1058,7 @@ export default function VerificationQueuePage() {
                               { label: "Current active provider", value: activeProvider, note: "System default", tone: "info" as const },
                               { label: isBusinessPlan ? "Representative evidence provider" : "Individual identity evidence provider", value: formattedRepProvider, note: repProviderUnknown ? "Unknown provider" : isHistoricalRepProvider ? "Historical evidence" : "Current evidence", tone: repProviderUnknown ? "blocked" as const : isHistoricalRepProvider ? "pending" as const : "neutral" as const },
                               { label: "CAC evidence provider", value: !isBusinessPlan ? "Not required" : formattedCacProvider, note: !isBusinessPlan ? "Not required for this plan" : formattedCacProvider.toLowerCase() === "unknown" ? "Unknown provider" : isHistoricalCacProvider ? "Historical evidence" : "Current evidence", tone: !isBusinessPlan ? "neutral" as const : formattedCacProvider.toLowerCase() === "unknown" ? "blocked" as const : isHistoricalCacProvider ? "pending" as const : "neutral" as const },
-                              { label: "Director identity evidence provider", value: !isBusinessPlan ? "Not required" : formattedDirectorProviders.length > 0 ? formattedDirectorProviders.join(", ") : "No evidence yet", note: !isBusinessPlan ? "Not required for this plan" : hasUnknownDirectorProvider ? "Unknown provider present" : hasHistoricalDirectorProvider ? "Historical evidence present" : "Current evidence", tone: !isBusinessPlan ? "neutral" as const : hasUnknownDirectorProvider ? "blocked" as const : hasHistoricalDirectorProvider ? "pending" as const : "neutral" as const },
+                              { label: "Director identity evidence provider", value: !requiresDirectorFlow ? "Not required" : formattedDirectorProviders.length > 0 ? formattedDirectorProviders.join(", ") : "No evidence yet", note: !requiresDirectorFlow ? "Not required for this flow" : hasUnknownDirectorProvider ? "Unknown provider present" : hasHistoricalDirectorProvider ? "Historical evidence present" : "Current evidence", tone: !requiresDirectorFlow ? "neutral" as const : hasUnknownDirectorProvider ? "blocked" as const : hasHistoricalDirectorProvider ? "pending" as const : "neutral" as const },
                             ].map((provider) => (
                               <div key={provider.label} className="rounded-xl border border-neutral-200 bg-neutral-50 p-3 min-w-0">
                                 <p className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">{provider.label}</p>
@@ -1258,7 +1279,7 @@ export default function VerificationQueuePage() {
                           </div>
                         </details>
 
-                        {isBusinessPlan && (
+                        {requiresDirectorFlow && (
                         <section className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm xl:order-5">
                             <div className="mb-3">
                               <h4 className="text-sm font-semibold text-neutral-900">Director Approval Status</h4>
@@ -1293,7 +1314,7 @@ export default function VerificationQueuePage() {
                           </section>
                         )}
 
-                        {isBusinessPlan && (
+                        {requiresDirectorFlow && (
                           <section className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm xl:order-4">
                             <div className="mb-3">
                               <h4 className="text-sm font-semibold text-neutral-900">Director Identity Evidence</h4>

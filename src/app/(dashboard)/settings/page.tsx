@@ -684,6 +684,17 @@ export default function SettingsPage() {
   const identityReviewStep = ((merchant?.verification_step_state as Record<string, unknown> | null)?.identity_review || null) as Record<string, unknown> | null;
   const identityReviewApproved = identityReviewStep?.status === "verified" && identityReviewStep?.classification === "partial_match_approved";
   const identityReviewResolved = merchant?.verification_status === "verified" && merchant?.live_features_enabled === true;
+  const businessDocumentStep = (((merchant?.verification_step_state as Record<string, unknown> | null)?.business_document || (merchant?.verification_step_state as Record<string, unknown> | null)?.business_documents || (merchant?.verification_step_state as Record<string, unknown> | null)?.valid_id_document || null) as Record<string, unknown> | null);
+  const utilityDocumentStep = (((merchant?.verification_step_state as Record<string, unknown> | null)?.utility_bill || (merchant?.verification_step_state as Record<string, unknown> | null)?.proof_of_address || null) as Record<string, unknown> | null);
+  const cacDocumentStatus = String(merchant?.cac_status || businessDocumentStep?.status || "unverified");
+  const utilityDocumentStatus = String(merchant?.utility_status || utilityDocumentStep?.status || "unverified");
+  const cacDocumentLocked = ["pending", "verified"].includes(cacDocumentStatus);
+  const utilityDocumentLocked = ["pending", "verified"].includes(utilityDocumentStatus);
+  const cacDocumentNeedsReupload = ["rejected", "requires_reupload"].includes(cacDocumentStatus);
+  const utilityDocumentNeedsReupload = ["rejected", "requires_reupload"].includes(utilityDocumentStatus);
+  const documentsLockedForReview =
+    (!requiresBusinessDocument || cacDocumentLocked) &&
+    (!requiresUtilityBill || utilityDocumentLocked);
   const identityVerifiedClean = verifiedIdentityComplete && identityNameReviewState === "matched";
   const verificationCompleteCopy = isCorporate
     ? merchant?.relationship_claim === "representative_claim"
@@ -957,7 +968,6 @@ export default function SettingsPage() {
       setKycError("This tier requires the supporting business document before submission.");
       return;
     }
-
     if (requiresUtilityBill && !utilityFile && !merchant.utility_document_url && isSubmittingDocuments) {
       setKycError("This tier requires proof of address or utility evidence before submission.");
       return;
@@ -1577,20 +1587,21 @@ export default function SettingsPage() {
                                   {requiresValidIdDocument && !requiresBusinessDocument
                                     ? "Business Registration Document"
                                     : "Business Registration Document"}
-                                  {statusBadge(merchant?.cac_status)}
+                                  {statusBadge(cacDocumentStatus)}
                                 </Label>
                                 <Input
                                   type="file"
                                   accept=".pdf,.png,.jpg,.jpeg"
                                   onChange={(event) => setCacFile(event.target.files?.[0] || null)}
-                                  disabled={!merchant?.cac_number}
+                                  disabled={!merchant?.cac_number || cacDocumentLocked}
                                   className="h-11 border-2 border-purp-200 bg-white file:mr-3 file:rounded-md file:border-0 file:bg-purp-100 file:px-3 file:py-1 file:text-sm file:font-medium file:text-purp-700"
                                 />
                                 {cacFile ? (
                                   <p className="text-xs text-neutral-500">Selected file: {cacFile.name}</p>
-                                ) : null}
-                                {merchant?.cac_document_url ? (
-                                  <p className="text-xs text-emerald-600">Existing document already uploaded.</p>
+                                ) : cacDocumentLocked ? (
+                                  <p className="text-xs text-emerald-600">{cacDocumentStatus === "verified" ? "Verified. Upload locked." : "Submitted for review. Upload locked until admin review is complete."}</p>
+                                ) : merchant?.cac_document_url ? (
+                                  <p className={`text-xs ${cacDocumentNeedsReupload ? "text-red-600" : "text-emerald-600"}`}>{cacDocumentNeedsReupload ? String(businessDocumentStep?.rejection_reason || merchant?.kyc_rejection_reason || "Reupload requested for this document.") : "Existing document already uploaded."}</p>
                                 ) : null}
                               </div>
                             ) : null}
@@ -1600,20 +1611,21 @@ export default function SettingsPage() {
                                 <Label className="flex items-center gap-2 text-sm font-medium">
                                   <Upload className="h-4 w-4 text-purp-700" />
                                   Proof of Business Address
-                                  {statusBadge(merchant?.utility_status)}
+                                  {statusBadge(utilityDocumentStatus)}
                                 </Label>
                                 <Input
                                   type="file"
                                   accept=".pdf,.png,.jpg,.jpeg"
                                   onChange={(event) => setUtilityFile(event.target.files?.[0] || null)}
-                                  disabled={!merchant?.cac_number && requiresBusinessRegistration}
+                                  disabled={(!merchant?.cac_number && requiresBusinessRegistration) || utilityDocumentLocked}
                                   className="h-11 border-2 border-purp-200 bg-white file:mr-3 file:rounded-md file:border-0 file:bg-purp-100 file:px-3 file:py-1 file:text-sm file:font-medium file:text-purp-700"
                                 />
                                 {utilityFile ? (
                                   <p className="text-xs text-neutral-500">Selected file: {utilityFile.name}</p>
-                                ) : null}
-                                {merchant?.utility_document_url ? (
-                                  <p className="text-xs text-emerald-600">Existing utility document already uploaded.</p>
+                                ) : utilityDocumentLocked ? (
+                                  <p className="text-xs text-emerald-600">{utilityDocumentStatus === "verified" ? "Verified. Upload locked." : "Submitted for review. Upload locked until admin review is complete."}</p>
+                                ) : merchant?.utility_document_url ? (
+                                  <p className={`text-xs ${utilityDocumentNeedsReupload ? "text-red-600" : "text-emerald-600"}`}>{utilityDocumentNeedsReupload ? String(utilityDocumentStep?.rejection_reason || merchant?.kyc_rejection_reason || "Reupload requested for this document.") : "Existing utility document already uploaded."}</p>
                                 ) : null}
                               </div>
                             ) : null}
@@ -1623,6 +1635,7 @@ export default function SettingsPage() {
                               onClick={handleKycSubmit}
                               disabled={
                                 kycSubmitting ||
+                                documentsLockedForReview ||
                                 (requiresBvn && bvnNumber.trim().length !== 11) ||
                                 (requiresSelfie &&
                                   !(merchant?.selfie_status === "verified" ||
@@ -1631,8 +1644,8 @@ export default function SettingsPage() {
                                     selfieFile ||
                                     merchant?.selfie_url)) ||
                                 (requiresBusinessRegistration && !merchant?.cac_number && cacNumber.trim().length < 5) ||
-                                (requiresBusinessDocument && !cacFile && !merchant?.cac_document_url) ||
-                                (requiresUtilityBill && !utilityFile && !merchant?.utility_document_url)
+                                (requiresBusinessDocument && !cacDocumentLocked && !cacFile && (!merchant?.cac_document_url || cacDocumentNeedsReupload)) ||
+                                (requiresUtilityBill && !utilityDocumentLocked && !utilityFile && (!merchant?.utility_document_url || utilityDocumentNeedsReupload))
                               }
                               className="bg-purp-900 text-white hover:bg-purp-800"
                             >
