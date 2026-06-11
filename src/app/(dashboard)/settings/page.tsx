@@ -681,6 +681,8 @@ export default function SettingsPage() {
     merchant?.bvn_status === "verified" && merchant?.selfie_status === "verified";
   const returnedBvnName = identityLog?.returned_bvn_name?.trim() || "";
   const identityNameReviewState = classifyDisplayedIdentityNameMatch(ownerName, returnedBvnName);
+  const identityReviewStep = ((merchant?.verification_step_state as Record<string, unknown> | null)?.identity_review || null) as Record<string, unknown> | null;
+  const identityReviewApproved = identityReviewStep?.status === "verified" && identityReviewStep?.classification === "partial_match_approved";
   const identityReviewResolved = merchant?.verification_status === "verified" && merchant?.live_features_enabled === true;
   const identityVerifiedClean = verifiedIdentityComplete && identityNameReviewState === "matched";
   const verificationCompleteCopy = isCorporate
@@ -1354,15 +1356,15 @@ export default function SettingsPage() {
                             </div>
                           </div>
                         </div>
-                      ) : verifiedIdentityComplete && identityReviewResolved && identityNameReviewState === "partial" ? (
+                      ) : verifiedIdentityComplete && identityNameReviewState === "partial" && (identityReviewApproved || identityReviewResolved) ? (
                         <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
                           <div className="flex items-start gap-3">
                             <CheckCircle className="mt-0.5 h-5 w-5 shrink-0 text-blue-600" />
                             <div className="space-y-2 text-sm text-blue-800">
-                              <p className="font-semibold">Identity review approved.</p>
+                              <p className="font-semibold">{identityReviewResolved ? "Identity verified after compliance review." : "Identity review approved by compliance."}</p>
                               <p>Submitted name: {ownerName || "Not available"}</p>
                               <p>BVN returned name: {returnedBvnName || "Not available"}</p>
-                              <p>Name match: Partial match approved after compliance review</p>
+                              <p>Name match: Partial match - approved by compliance</p>
                             </div>
                           </div>
                         </div>

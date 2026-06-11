@@ -22,6 +22,7 @@ import { createClient } from "@/lib/supabase/client";
 import {
   adminUpdateKycDocumentStatusAction,
   adminApproveVerificationAction,
+  adminApproveIndividualIdentityReviewAction,
   adminRejectVerificationAction,
   adminResetVerificationAction,
   adminRequestReuploadAction,
@@ -239,6 +240,21 @@ export default function VerificationQueuePage() {
       setActionSuccess(res.message || "Merchant approved.");
       setActionMode("idle");
     } else setReviewError(res.error || "Approval failed.");
+    setActionLoading(false);
+  };
+
+  const handleApproveIdentityReview = async () => {
+    if (!selectedMerchant) return;
+    setActionLoading(true); setReviewError(null);
+    const res = await adminApproveIndividualIdentityReviewAction(selectedMerchant.id, reviewNotes.trim());
+    if (res.success) {
+      const refreshed = await reloadSelectedMerchant(selectedMerchant.id);
+      if (!refreshed) {
+        refreshMerchant((res.updates || { verification_status: "pending_admin_review" }) as Partial<Merchant>);
+      }
+      setActionSuccess(res.message || "Identity review approved.");
+      setActionMode("idle");
+    } else setReviewError(res.error || "Identity review approval failed.");
     setActionLoading(false);
   };
 
@@ -582,12 +598,14 @@ export default function VerificationQueuePage() {
                       : !repProviderConfirmed && repProviderUsesActiveFallback
                         ? `Provider not stored on historical row - current active provider is ${formattedRepProvider}.`
                         : null;
+                    const repIdentityReviewStep = ((selectedMerchant.verification_step_state as Record<string, any> | null)?.identity_review || null) as Record<string, any> | null;
+                    const repIdentityReviewApproved = repIdentityReviewStep?.status === "verified" && repIdentityReviewStep?.classification === "partial_match_approved";
                     const repNameMatchStatus = !repBvnReturnedName
                       ? "Unknown / Not recorded"
                       : repNameReviewState === "mismatch" || ["mismatch", "manual_review", "failed", "name_mismatch"].includes(repStoredNameMatchStatus)
                         ? "Mismatch / Manual review required"
                         : repNameReviewState === "partial"
-                          ? "Partial match / Review required"
+                          ? repIdentityReviewApproved ? "Partial match - approved by compliance" : "Partial match / Review required"
                         : ["passed", "matched", "verified", "success"].includes(repStoredNameMatchStatus) || !repStoredNameMatchStatus
                           ? "Matched"
                           : "Unknown / Needs review";
@@ -615,7 +633,7 @@ export default function VerificationQueuePage() {
                     const repHasCurrentEvidence = !!repLog;
                     const repIdentityPendingReview = !repIdentityBlocked && (
                       !repHasCurrentEvidence ||
-                      repNameReviewState === "partial" ||
+                      (repNameReviewState === "partial" && !repIdentityReviewApproved) ||
                       repNameMatchStatus !== "Matched" ||
                       !repProviderConfirmed ||
                       !repBvnReturnedName ||
@@ -624,11 +642,10 @@ export default function VerificationQueuePage() {
                     );
                     const repIdentityVerified = !repIdentityBlocked && !repIdentityPendingReview && selectedMerchant.bvn_status === "verified" && (selectedMerchant.selfie_status || "unverified") === "verified";
                     const showIdentityManualReviewPanel = !isBusinessPlan && (repIdentityBlocked || repIdentityPendingReview);
-                    const partialMatchNeedsNotes = !isBusinessPlan && repNameReviewState === "partial" && reviewNotes.trim().length < 10;
                     const approveDisabledReason = (() => {
                       if (selectedMerchant.verification_status === "verified" && selectedMerchant.live_features_enabled) return "Already approved. Live features are active.";
                       if (repIdentityBlocked) return "Approval blocked: identity name mismatch requires manual review or re-verification.";
-                      if (partialMatchNeedsNotes) return "Approval blocked: partial name match requires compliance notes before final approval.";
+                      if (repNameReviewState === "partial" && !repIdentityReviewApproved) return "Approval blocked: approve the identity review before final merchant approval.";
                       if (!isBusinessPlan && !repHasCurrentEvidence) return "Approval blocked: no current identity evidence is available for final review.";
                       if (!isBusinessPlan && !repBvnReturnedName) return "Approval blocked: BVN returned name is missing from the latest identity evidence.";
                       if (!isBusinessPlan && !repProviderConfirmed) return "Approval blocked: identity provider traceability is missing on the latest evidence.";
@@ -641,8 +658,7 @@ export default function VerificationQueuePage() {
                     const isApproveDisabled =
                       actionLoading ||
                       repIdentityBlocked ||
-                      partialMatchNeedsNotes ||
-                      (!isBusinessPlan && repIdentityPendingReview && repNameReviewState !== "partial") ||
+                      (!isBusinessPlan && repIdentityPendingReview) ||
                       (selectedMerchant.verification_status === "verified" && selectedMerchant.live_features_enabled) ||
                       getEffectiveStatus(selectedMerchant) === "incomplete" ||
                       (selectedMerchant.subscription_plan === "corporate" && (selectedMerchant.cac_status !== "verified" || selectedMerchant.utility_status !== "verified"));
@@ -886,7 +902,7 @@ export default function VerificationQueuePage() {
                               <div className="rounded-xl border border-red-200 bg-red-50 p-4 space-y-3">
                                 <div>
                                   <h5 className="text-sm font-semibold text-red-900">Identity Manual Review Required</h5>
-                                  <p className="mt-1 text-xs text-red-800">{repNameReviewState === "partial" ? "The submitted name includes additional name details beyond the BVN returned name. Add compliance notes before final approval." : "The submitted name does not match the BVN returned name. Clean approval is blocked until this is resolved."}</p>
+                                  <p className="mt-1 text-xs text-red-800">{repNameReviewState === "partial" ? "The submitted name includes additional name details beyond the BVN returned name. Approve the identity review before final merchant approval." : "The submitted name does not match the BVN returned name. Clean approval is blocked until this is resolved."}</p>
                                 </div>
                                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 text-xs text-red-900">
                                   <p className="break-words whitespace-normal"><span className="font-semibold">Submitted name:</span> {repSubmittedName || "Not available"}</p>
@@ -899,8 +915,13 @@ export default function VerificationQueuePage() {
                                 {repSelfieMatchBypassed && (
                                   <p className="text-xs font-medium text-amber-800">Sandbox override warning: selfie confidence was below the provider threshold and requires manual review.</p>
                                 )}
-                                <p className="text-xs text-red-800">{repNameReviewState === "partial" ? "If compliance accepts this partial match, add review notes and use final approval. Otherwise ask the user to re-verify or correct the submitted legal name." : "Ask the user to re-verify with a BVN matching the submitted legal name, or update the submitted legal name if it is incorrect."}</p>
+                                <p className="text-xs text-red-800">{repNameReviewState === "partial" ? "If compliance accepts this partial match, enter review notes and approve the identity review first. Otherwise ask the user to re-verify or correct the submitted legal name." : "Ask the user to re-verify with a BVN matching the submitted legal name, or update the submitted legal name if it is incorrect."}</p>
                                 <div className="flex flex-wrap gap-2">
+                                  {repNameReviewState === "partial" && !repIdentityReviewApproved && (
+                                    <Button type="button" className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs h-9" disabled={actionLoading || reviewNotes.trim().length < 10} onClick={handleApproveIdentityReview}>
+                                      <CheckCircle className="h-3.5 w-3.5 mr-1" />Approve Identity Review
+                                    </Button>
+                                  )}
                                   <Button type="button" variant="outline" className="border-orange-300 text-orange-700 hover:bg-orange-50 text-xs h-9" onClick={() => { setActionMode("reupload"); setActionReason("Re-verify with a BVN matching your submitted legal name, or update your submitted legal name if it is incorrect."); setReuploadFields(["bvn_status", "selfie_status"]); }}>
                                     <UploadCloud className="h-3.5 w-3.5 mr-1" />Request correction / re-verification
                                   </Button>
@@ -908,7 +929,7 @@ export default function VerificationQueuePage() {
                                     <XCircle className="h-3.5 w-3.5 mr-1" />Reject identity verification
                                   </Button>
                                 </div>
-                                <p className="text-[11px] text-red-700">No individual identity manual-override action is available on this page yet. Use Reupload or Reject to resolve the mismatch safely.</p>
+                                {repNameReviewState === "partial" && !repIdentityReviewApproved && <p className="text-[11px] text-red-700">Compliance notes are required before approving this partial name match.</p>}
                               </div>
                             )}
 
@@ -1203,7 +1224,7 @@ export default function VerificationQueuePage() {
                                 <div className="rounded bg-amber-50 border border-amber-200 p-2 text-[11px] text-amber-800 flex items-start gap-1.5 font-sans">
                                   <ShieldAlert className="h-3.5 w-3.5 text-amber-600 flex-shrink-0 mt-0.5" />
                                   <div>
-                                    <p className="font-bold">{repNameReviewState === "partial" ? "Identity Partial Match" : "Representative Name Mismatch"}</p>
+                                    <p className="font-bold">{repNameReviewState === "partial" ? repIdentityReviewApproved ? "Identity Partial Match Approved" : "Identity Partial Match" : "Representative Name Mismatch"}</p>
                                     <p>Submitted name: {repSubmittedName || "Not available"}</p>
                                     <p>BVN returned name: {repBvnReturnedName || "Not available"}</p>
                                     <p>Name match: {repNameMatchStatus}</p>

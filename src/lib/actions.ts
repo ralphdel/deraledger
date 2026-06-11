@@ -2444,12 +2444,14 @@ export async function adminApproveVerificationAction(merchantId: string, reviewN
     ).trim();
     const providerName = String(identityLog.provider_name || identityLog.raw_response?.provider_name || identityLog.raw_response?.provider || "").trim();
     identityReviewOutcome = classifyAdminIdentityNameMatch(merchant.owner_name, returnedName);
+    const identityReviewStep = (verificationStepState.identity_review || {}) as Record<string, any>;
+    const identityReviewApproved = identityReviewStep.status === "verified" && identityReviewStep.classification === "partial_match_approved";
 
     if (!providerName) return { success: false, error: "Identity provider traceability is missing on the latest evidence." };
     if (!returnedName) return { success: false, error: "BVN returned name is missing on the latest evidence." };
     if (identityReviewOutcome === "mismatch") return { success: false, error: "Identity approval is blocked: the submitted name does not match the BVN returned name." };
-    if (identityReviewOutcome === "partial" && (!reviewNotes || reviewNotes.trim().length < 10)) {
-      return { success: false, error: "Add compliance notes before approving an identity partial match." };
+    if (identityReviewOutcome === "partial" && !identityReviewApproved) {
+      return { success: false, error: "Approve the identity review first before final merchant approval." };
     }
 
     verificationStepState.admin_review = {
@@ -2526,6 +2528,107 @@ export async function adminApproveVerificationAction(merchantId: string, reviewN
     updates,
     message: "Merchant approved and live payment features are active.",
   };
+}
+
+export async function adminApproveIndividualIdentityReviewAction(merchantId: string, adminNotes: string) {
+  const guard = await requireSuperAdmin();
+  if (guard.error) return guard.error;
+  if (!adminNotes || adminNotes.trim().length < 10) {
+    return { success: false, error: "Compliance notes are required to approve a partial name match." };
+  }
+
+  const adminClient = getServiceClient();
+  const now = new Date().toISOString();
+  const { data: merchant, error: merchantError } = await adminClient
+    .from("merchants")
+    .select("subscription_plan, merchant_tier, verification_status, owner_name, verification_step_state, live_features_enabled")
+    .eq("id", merchantId)
+    .single();
+
+  if (merchantError || !merchant) {
+    return { success: false, error: merchantError?.message || "Merchant not found." };
+  }
+
+  const plan = merchant.subscription_plan || merchant.merchant_tier || "starter";
+  if (plan !== "individual") {
+    return { success: false, error: "This identity review action is only available for Individual KYC." };
+  }
+
+  const { data: identityLog, error: identityError } = await adminClient
+    .from("verification_logs")
+    .select("id, verification_type, provider_name, provider_reference, verification_id, returned_bvn_name, raw_response")
+    .eq("merchant_id", merchantId)
+    .in("verification_type", ["representative_bvn_selfie", "individual_bvn_selfie", "bvn_selfie", "identity"])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (identityError || !identityLog) {
+    return { success: false, error: "Current identity evidence is missing. Ask the merchant to re-verify first." };
+  }
+
+  const returnedName = String(
+    identityLog.returned_bvn_name ||
+    identityLog.raw_response?.returnedName ||
+    identityLog.raw_response?.returned_name ||
+    identityLog.raw_response?.data?.returnedName ||
+    identityLog.raw_response?.data?.name ||
+    [identityLog.raw_response?.data?.firstName, identityLog.raw_response?.data?.lastName].filter(Boolean).join(" ")
+  ).trim();
+  const providerName = String(identityLog.provider_name || identityLog.raw_response?.provider_name || identityLog.raw_response?.provider || "").trim();
+  const reviewOutcome = classifyAdminIdentityNameMatch(merchant.owner_name, returnedName);
+
+  if (!providerName) return { success: false, error: "Identity provider traceability is missing on the latest evidence." };
+  if (!returnedName) return { success: false, error: "BVN returned name is missing on the latest evidence." };
+  if (reviewOutcome === "mismatch") return { success: false, error: "Hard name mismatch cannot be manually approved. Request correction or reject the verification." };
+  if (reviewOutcome !== "partial") return { success: false, error: "Identity review approval is only needed for partial name matches." };
+
+  const verificationStepState = { ...(merchant.verification_step_state || {}) } as Record<string, any>;
+  verificationStepState.identity_review = {
+    ...(verificationStepState.identity_review || {}),
+    requirement_key: "owner_or_director_kyc",
+    plan_tier: plan,
+    status: "verified",
+    classification: "partial_match_approved",
+    provider: providerName,
+    provider_reference: identityLog.provider_reference || identityLog.verification_id || identityLog.id,
+    submitted_name: merchant.owner_name,
+    returned_bvn_name: returnedName,
+    submitted_at: verificationStepState.identity_review?.submitted_at || now,
+    reviewed_at: now,
+    verified_at: now,
+    rejection_reason: null,
+    admin_notes: adminNotes.trim(),
+    admin_reset_status: "not_requested",
+  };
+
+  const updates = {
+    verification_step_state: verificationStepState,
+    verification_status: merchant.live_features_enabled ? merchant.verification_status : "pending_admin_review",
+    kyc_rejection_reason: null,
+    kyc_notes: adminNotes.trim(),
+    updated_at: now,
+  };
+
+  const { error: updateError } = await adminClient.from("merchants").update(updates).eq("id", merchantId);
+  if (updateError) return { success: false, error: updateError.message };
+
+  await syncMerchantSetupStatus(adminClient, merchantId);
+  await logAudit("individual_identity_manual_approved", merchantId, "merchant", {
+    actor: "admin",
+    previous_status: merchant.verification_status,
+    new_status: updates.verification_status,
+    submitted_name: merchant.owner_name,
+    returned_bvn_name: returnedName,
+    provider: providerName,
+    provider_reference: identityLog.provider_reference || identityLog.verification_id || identityLog.id,
+    admin_notes: adminNotes.trim(),
+    reason: "partial_name_match_accepted",
+  });
+
+  revalidatePath("/admin/verification");
+  revalidatePath("/settings");
+  return { success: true, updates, message: "Identity review approved. Final admin approval is now available." };
 }
 
 /**
