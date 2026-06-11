@@ -631,10 +631,11 @@ export default function VerificationQueuePage() {
                     const identitySectionLabel = isBusinessPlan ? "Representative Identity Evidence" : "Individual Identity Evidence";
                     const repIdentityBlocked = repNameReviewState === "mismatch";
                     const repHasCurrentEvidence = !!repLog;
+                    const repIdentityResolvedByCompliance = repNameReviewState === "partial" && repIdentityReviewApproved;
                     const repIdentityPendingReview = !repIdentityBlocked && (
                       !repHasCurrentEvidence ||
                       (repNameReviewState === "partial" && !repIdentityReviewApproved) ||
-                      repNameMatchStatus !== "Matched" ||
+                      (repNameMatchStatus !== "Matched" && !repIdentityResolvedByCompliance) ||
                       !repProviderConfirmed ||
                       !repBvnReturnedName ||
                       repSelfieMatchBypassed ||
@@ -716,6 +717,7 @@ export default function VerificationQueuePage() {
                       if (effectiveStatus === "incomplete") return "Merchant profile details are incomplete.";
                       if (repIdentityBlocked) return "Identity evidence requires manual review before final approval.";
                       if (repIdentityPendingReview) return "Identity evidence needs review before final approval.";
+                      if (repIdentityResolvedByCompliance && effectiveStatus === "pending_admin_review") return "Identity review was approved by compliance. Final admin approval can now proceed.";
                       if (isBusinessPlan && hasMissingSnapshot) return "CAC snapshot is missing and business registration evidence needs repair.";
                       if (isBusinessPlan && selectedMerchant.business_affiliation_status === "director_approved" && directors.length === 0 && !directorsLoading) return "Director approval exists without matching identity evidence.";
                       if (!selectedMerchant.live_features_enabled) return "Live features remain locked pending compliance completion.";
@@ -727,10 +729,12 @@ export default function VerificationQueuePage() {
                     const checklistItems = [
                       {
                         label: identityLabel,
-                        badge: repIdentityBlocked ? "manual review" : repIdentityPendingReview ? "pending review" : repIdentityVerified ? "verified" : selectedMerchant.bvn_status === "verified" || !!selectedMerchant.selfie_url ? "pending" : "attention",
-                        tone: repIdentityBlocked ? "blocked" : repIdentityPendingReview ? "pending" : repIdentityVerified ? "verified" : selectedMerchant.bvn_status === "verified" || !!selectedMerchant.selfie_url ? "pending" : "attention",
+                        badge: repIdentityBlocked ? "manual review" : repIdentityResolvedByCompliance ? "approved by compliance" : repIdentityPendingReview ? "pending review" : repIdentityVerified ? "verified" : selectedMerchant.bvn_status === "verified" || !!selectedMerchant.selfie_url ? "pending" : "attention",
+                        tone: repIdentityBlocked ? "blocked" : repIdentityResolvedByCompliance ? "verified" : repIdentityPendingReview ? "pending" : repIdentityVerified ? "verified" : selectedMerchant.bvn_status === "verified" || !!selectedMerchant.selfie_url ? "pending" : "attention",
                         reason: repIdentityBlocked
                           ? `Submitted name does not match BVN returned name (${repBvnReturnedName || "not recorded"}).`
+                          : repIdentityResolvedByCompliance
+                            ? "Partial name match was reviewed and approved by compliance. Final admin approval can proceed."
                           : repIdentityPendingReview
                             ? !repHasCurrentEvidence
                               ? "No current identity verification row is available."
@@ -742,7 +746,7 @@ export default function VerificationQueuePage() {
                                   ? "BVN returned name was not recorded on this row."
                                   : "Identity evidence still needs review before final approval."
                             : `BVN ${selectedMerchant.bvn_status || "unverified"} / selfie ${selectedMerchant.selfie_status || "unverified"}`,
-                        nextAction: repIdentityVerified ? "No action" : "Review identity evidence",
+                        nextAction: repIdentityResolvedByCompliance || repIdentityVerified ? "Use final approval" : "Review identity evidence",
                       },
                       {
                         label: "Business Registration",
@@ -785,6 +789,8 @@ export default function VerificationQueuePage() {
                         tone: repIdentityBlocked || (isBusinessPlan && (hasDirectorNameMismatch || hasDirectorManualReview)) ? "blocked" : selectedMerchant.verification_status === "verified" && selectedMerchant.live_features_enabled ? "verified" : effectiveStatus === "pending_admin_review" || !selectedMerchant.live_features_enabled ? "info" : effectiveStatus === "requires_reupload" || effectiveStatus === "rejected" ? "blocked" : effectiveStatus === "incomplete" ? "attention" : "pending",
                         reason: repIdentityBlocked || (isBusinessPlan && (hasDirectorNameMismatch || hasDirectorManualReview))
                           ? "Manual review is still required before final admin approval."
+                          : repIdentityResolvedByCompliance && effectiveStatus === "pending_admin_review"
+                            ? "Identity review was approved by compliance. Final merchant approval is now available."
                           : !selectedMerchant.live_features_enabled
                             ? "Live features are still locked until compliance review is complete."
                             : `Current queue state: ${effectiveStatus.replace(/_/g, " ")}.`,
