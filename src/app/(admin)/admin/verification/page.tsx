@@ -134,6 +134,16 @@ export default function VerificationQueuePage() {
     setMerchants(prev => prev.map(m => m.id === updated.id ? updated : m));
   };
 
+  const reloadSelectedMerchant = async (merchantId: string) => {
+    const sb = createClient();
+    const { data, error } = await sb.from("merchants").select("*").eq("id", merchantId).single();
+    if (error || !data) return false;
+    const freshMerchant = data as Merchant;
+    setSelectedMerchant(freshMerchant);
+    setMerchants((prev) => prev.map((merchant) => (merchant.id === freshMerchant.id ? freshMerchant : merchant)));
+    return true;
+  };
+
   const getEffectiveStatus = (m: Merchant | null): string => {
     if (!m) return "unverified";
     const tier = m.subscription_plan || m.merchant_tier || "starter";
@@ -222,7 +232,10 @@ export default function VerificationQueuePage() {
     setActionLoading(true); setReviewError(null);
     const res = await adminApproveVerificationAction(selectedMerchant.id, reviewNotes.trim() || undefined);
     if (res.success) {
-      refreshMerchant((res.updates || { verification_status: "verified" }) as Partial<Merchant>);
+      const refreshed = await reloadSelectedMerchant(selectedMerchant.id);
+      if (!refreshed) {
+        refreshMerchant((res.updates || { verification_status: "verified" }) as Partial<Merchant>);
+      }
       setActionSuccess(res.message || "Merchant approved.");
       setActionMode("idle");
     } else setReviewError(res.error || "Approval failed.");
@@ -613,6 +626,7 @@ export default function VerificationQueuePage() {
                     const showIdentityManualReviewPanel = !isBusinessPlan && (repIdentityBlocked || repIdentityPendingReview);
                     const partialMatchNeedsNotes = !isBusinessPlan && repNameReviewState === "partial" && reviewNotes.trim().length < 10;
                     const approveDisabledReason = (() => {
+                      if (selectedMerchant.verification_status === "verified" && selectedMerchant.live_features_enabled) return "Already approved. Live features are active.";
                       if (repIdentityBlocked) return "Approval blocked: identity name mismatch requires manual review or re-verification.";
                       if (partialMatchNeedsNotes) return "Approval blocked: partial name match requires compliance notes before final approval.";
                       if (!isBusinessPlan && !repHasCurrentEvidence) return "Approval blocked: no current identity evidence is available for final review.";
