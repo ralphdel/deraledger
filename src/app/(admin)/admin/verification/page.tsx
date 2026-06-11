@@ -578,7 +578,8 @@ export default function VerificationQueuePage() {
                           ? "Matched"
                           : "Unknown / Needs review";
                     const repSandboxOverride = repLog?.raw_response?.deraLedgerSandboxOverride as Record<string, unknown> | null;
-                    const repSelfieMatchBypassed = repSandboxOverride?.selfieMatchBypassed as boolean ?? false;
+                    const repSelfieMatchBypassedRaw = repSandboxOverride?.selfieMatchBypassed;
+                    const repSelfieMatchBypassed = repSelfieMatchBypassedRaw === true || repSelfieMatchBypassedRaw === "true";
                     const repMatchScore: number | null = (
                       repLog?.match_score ??
                       (repSandboxOverride?.providerConfidenceLevel as number | null) ??
@@ -597,11 +598,23 @@ export default function VerificationQueuePage() {
                     const identityLabel = isBusinessPlan ? "Representative Identity" : "Identity Verification";
                     const identitySectionLabel = isBusinessPlan ? "Representative Identity Evidence" : "Individual Identity Evidence";
                     const repIdentityBlocked = repNameMatchStatus === "Mismatch / Manual review required";
-                    const repIdentityPendingReview = !repIdentityBlocked && (repNameMatchStatus !== "Matched" || !repProviderConfirmed || repSelfieMatchBypassed || repProviderUnknown);
+                    const repHasCurrentEvidence = !!repLog;
+                    const repIdentityPendingReview = !repIdentityBlocked && (
+                      !repHasCurrentEvidence ||
+                      repNameMatchStatus !== "Matched" ||
+                      !repProviderConfirmed ||
+                      !repBvnReturnedName ||
+                      repSelfieMatchBypassed ||
+                      repProviderUnknown
+                    );
                     const repIdentityVerified = !repIdentityBlocked && !repIdentityPendingReview && selectedMerchant.bvn_status === "verified" && (selectedMerchant.selfie_status || "unverified") === "verified";
                     const showIdentityManualReviewPanel = !isBusinessPlan && (repIdentityBlocked || repIdentityPendingReview);
                     const approveDisabledReason = (() => {
                       if (repIdentityBlocked) return "Approval blocked: identity name mismatch requires manual review or re-verification.";
+                      if (!isBusinessPlan && !repHasCurrentEvidence) return "Approval blocked: no current identity evidence is available for final review.";
+                      if (!isBusinessPlan && !repBvnReturnedName) return "Approval blocked: BVN returned name is missing from the latest identity evidence.";
+                      if (!isBusinessPlan && !repProviderConfirmed) return "Approval blocked: identity provider traceability is missing on the latest evidence.";
+                      if (!isBusinessPlan && repSelfieMatchBypassed) return "Approval blocked: the latest identity evidence still carries a sandbox selfie override warning.";
                       if (!isBusinessPlan && repIdentityPendingReview) return "Approval blocked: identity evidence still needs review before final approval.";
                       if (selectedMerchant.verification_status === "verified" && !selectedMerchant.live_features_enabled) return "Approval blocked: stored verification status is verified, but live features remain locked pending compliance resolution.";
                       if (getEffectiveStatus(selectedMerchant) === "incomplete") return "Approval blocked: merchant profile details are incomplete.";
@@ -685,7 +698,9 @@ export default function VerificationQueuePage() {
                         reason: repIdentityBlocked
                           ? `Submitted name does not match BVN returned name (${repBvnReturnedName || "not recorded"}).`
                           : repIdentityPendingReview
-                            ? repProviderUnknown
+                            ? !repHasCurrentEvidence
+                              ? "No current identity verification row is available."
+                              : repProviderUnknown
                               ? "Provider traceability is missing for this identity evidence."
                               : !repProviderConfirmed && repProviderNote
                                 ? repProviderNote
