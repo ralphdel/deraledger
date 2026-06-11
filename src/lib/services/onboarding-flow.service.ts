@@ -326,7 +326,7 @@ export async function enterPaidSetupMode(
 export async function syncMerchantSetupStatus(adminClient: SupabaseClient, merchantId: string) {
   const { data: merchant } = await adminClient
     .from("merchants")
-    .select("subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, utility_status, business_affiliation_status, setup_mode, live_features_enabled")
+    .select("subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, utility_status, business_affiliation_status, setup_mode, live_features_enabled, settlement_account_number, settlement_bank_name, settlement_account_name, verification_step_state, email, is_super_admin")
     .eq("id", merchantId)
     .maybeSingle();
 
@@ -354,7 +354,7 @@ export async function syncMerchantSetupStatus(adminClient: SupabaseClient, merch
 export async function ensureWorkspaceForMerchant(adminClient: SupabaseClient, merchantId: string) {
   const { data: merchant } = await adminClient
     .from("merchants")
-    .select("id, user_id, business_name, trading_name, subscription_plan, merchant_tier, onboarding_status, setup_mode, live_features_enabled, bvn_status, selfie_status, cac_status, utility_status, business_affiliation_status, verification_status")
+    .select("id, user_id, business_name, trading_name, subscription_plan, merchant_tier, onboarding_status, setup_mode, live_features_enabled, bvn_status, selfie_status, cac_status, utility_status, business_affiliation_status, verification_status, settlement_account_number, settlement_bank_name, settlement_account_name, verification_step_state, email, is_super_admin")
     .eq("id", merchantId)
     .maybeSingle();
 

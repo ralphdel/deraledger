@@ -2511,6 +2511,28 @@ export async function adminApproveVerificationAction(merchantId: string, reviewN
       .eq("merchant_id", merchantId);
   }
 
+  const { data: persistedMerchant, error: persistedError } = await adminClient
+    .from("merchants")
+    .select("verification_status, setup_mode, live_features_enabled, onboarding_status, live_features_activated_at")
+    .eq("id", merchantId)
+    .single();
+
+  if (persistedError || !persistedMerchant) {
+    return { success: false, error: persistedError?.message || "Approval could not verify the persisted merchant state." };
+  }
+
+  if (
+    persistedMerchant.verification_status !== "verified" ||
+    persistedMerchant.setup_mode !== false ||
+    persistedMerchant.live_features_enabled !== true
+  ) {
+    return {
+      success: false,
+      error: "Final approval did not fully unlock the merchant. Live features remain locked.",
+      updates: persistedMerchant,
+    };
+  }
+
   await logAudit("admin_verification_approved", merchantId, "merchant", {
     actor: "admin",
     new_status: "verified",
@@ -2523,9 +2545,10 @@ export async function adminApproveVerificationAction(merchantId: string, reviewN
 
   revalidatePath("/admin/verification");
   revalidatePath("/admin/merchants");
+  revalidatePath("/settings");
   return {
     success: true,
-    updates,
+    updates: { ...updates, ...persistedMerchant },
     message: "Merchant approved and live payment features are active.",
   };
 }
