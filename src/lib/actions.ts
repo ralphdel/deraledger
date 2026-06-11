@@ -17,7 +17,7 @@ import {
   canCreateCustomRole,
   canAccessFeature,
 } from "@/lib/services/access-control";
-import { ensureWorkspaceForMerchant, setupStatusForMerchant, syncMerchantSetupStatus } from "@/lib/services/onboarding-flow.service";
+import { ensureWorkspaceForMerchant, getLiveFeatureLockReasons, setupStatusForMerchant, syncMerchantSetupStatus } from "@/lib/services/onboarding-flow.service";
 import { upsertProviderNeutralSettlementAccount } from "@/lib/services/settlement-ledger.service";
 
 // Service role client for admin-level operations
@@ -2381,14 +2381,34 @@ export async function adminUpdateKycDocumentStatusAction(
  * Approve: grants final verified status. Only reachable via manual admin review.
  * Unlocks: collection invoices, payment links, settlement workflows.
  */
-export async function adminApproveVerificationAction(merchantId: string) {
+function classifyAdminIdentityNameMatch(submittedName?: string | null, returnedName?: string | null) {
+  const tokenize = (value: string) =>
+    value.toLowerCase().replace(/[^a-z\s]/g, " ").split(/\s+/).filter(Boolean);
+  const matches = (left: string, right: string) => {
+    if (!left || !right) return false;
+    if (left === right) return true;
+    if (left.length < 4 || right.length < 4) return false;
+    return left.includes(right) || right.includes(left);
+  };
+  const submittedTokens = tokenize(String(submittedName || ""));
+  const returnedTokens = tokenize(String(returnedName || ""));
+  if (submittedTokens.length === 0 || returnedTokens.length === 0) return "unknown" as const;
+  const allReturnedPresent = returnedTokens.every((returnedToken) =>
+    submittedTokens.some((submittedToken) => matches(submittedToken, returnedToken))
+  );
+  if (!allReturnedPresent) return "mismatch" as const;
+  return submittedTokens.length > returnedTokens.length ? "partial" as const : "matched" as const;
+}
+
+export async function adminApproveVerificationAction(merchantId: string, reviewNotes?: string) {
   const guard = await requireSuperAdmin();
   if (guard.error) return guard.error;
   const adminClient = getServiceClient();
+  const now = new Date().toISOString();
 
   const { data: merchant, error: fetchError } = await adminClient
     .from("merchants")
-    .select("subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, business_affiliation_status")
+    .select("subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, business_affiliation_status, owner_name, email, settlement_account_number, settlement_bank_name, settlement_account_name, verification_step_state")
     .eq("id", merchantId)
     .single();
 
@@ -2397,17 +2417,74 @@ export async function adminApproveVerificationAction(merchantId: string) {
   }
 
   const plan = merchant.subscription_plan || merchant.merchant_tier || "starter";
-  const nextFields = setupStatusForMerchant({ ...merchant, verification_status: "verified" });
+  const verificationStepState = { ...(merchant.verification_step_state || {}) } as Record<string, any>;
+  let identityReviewOutcome: "matched" | "partial" | "mismatch" | "unknown" | null = null;
+
+  if (plan === "individual") {
+    const { data: identityLog, error: identityError } = await adminClient
+      .from("verification_logs")
+      .select("id, created_at, verification_type, normalized_status, provider_name, provider_reference, verification_id, returned_bvn_name, raw_response")
+      .eq("merchant_id", merchantId)
+      .in("verification_type", ["representative_bvn_selfie", "individual_bvn_selfie", "bvn_selfie", "identity"])
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (identityError || !identityLog) {
+      return { success: false, error: "Current identity evidence is missing. Ask the merchant to re-verify before approval." };
+    }
+
+    const returnedName = String(
+      identityLog.returned_bvn_name ||
+      identityLog.raw_response?.returnedName ||
+      identityLog.raw_response?.returned_name ||
+      identityLog.raw_response?.data?.returnedName ||
+      identityLog.raw_response?.data?.name ||
+      [identityLog.raw_response?.data?.firstName, identityLog.raw_response?.data?.lastName].filter(Boolean).join(" ")
+    ).trim();
+    const providerName = String(identityLog.provider_name || identityLog.raw_response?.provider_name || identityLog.raw_response?.provider || "").trim();
+    identityReviewOutcome = classifyAdminIdentityNameMatch(merchant.owner_name, returnedName);
+
+    if (!providerName) return { success: false, error: "Identity provider traceability is missing on the latest evidence." };
+    if (!returnedName) return { success: false, error: "BVN returned name is missing on the latest evidence." };
+    if (identityReviewOutcome === "mismatch") return { success: false, error: "Identity approval is blocked: the submitted name does not match the BVN returned name." };
+    if (identityReviewOutcome === "partial" && (!reviewNotes || reviewNotes.trim().length < 10)) {
+      return { success: false, error: "Add compliance notes before approving an identity partial match." };
+    }
+
+    verificationStepState.admin_review = {
+      ...(verificationStepState.admin_review || {}),
+      requirement_key: "admin_review",
+      plan_tier: plan,
+      status: "verified",
+      provider: "admin_review",
+      provider_reference: identityLog.provider_reference || identityLog.verification_id || identityLog.id,
+      submitted_at: verificationStepState.admin_review?.submitted_at || now,
+      verified_at: now,
+      reviewed_at: now,
+      rejection_reason: null,
+      admin_reset_status: "not_requested",
+    };
+  }
+
+  const nextFields = setupStatusForMerchant({ ...merchant, verification_status: "verified", verification_step_state: verificationStepState });
   const canActivateNow = nextFields.live_features_enabled === true;
-  const nextVerificationStatus = "verified";
+  if (!canActivateNow) {
+    return {
+      success: false,
+      error: `Approval is still blocked: ${getLiveFeatureLockReasons({ ...merchant, verification_status: "verified", verification_step_state: verificationStepState }).join(", ") || "remaining verification requirements are unresolved"}.`,
+    };
+  }
 
   const updates = {
     ...nextFields,
-    verification_status: nextVerificationStatus,
-    kyc_reviewed_at: new Date().toISOString(),
+    verification_status: "verified",
+    verification_step_state: verificationStepState,
+    kyc_reviewed_at: now,
     kyc_rejection_reason: null,
-    updated_at: new Date().toISOString(),
-    ...(canActivateNow ? { live_features_activated_at: new Date().toISOString() } : {}),
+    kyc_notes: reviewNotes?.trim() || null,
+    updated_at: now,
+    live_features_activated_at: now,
   };
 
   const { error } = await adminClient
@@ -2434,10 +2511,12 @@ export async function adminApproveVerificationAction(merchantId: string) {
 
   await logAudit("admin_verification_approved", merchantId, "merchant", {
     actor: "admin",
-    new_status: nextVerificationStatus,
+    new_status: "verified",
     plan,
-    live_features_enabled: canActivateNow,
+    live_features_enabled: true,
     onboarding_status: nextFields.onboarding_status,
+    identity_review_outcome: identityReviewOutcome,
+    review_notes: reviewNotes?.trim() || null,
   });
 
   revalidatePath("/admin/verification");
@@ -2445,9 +2524,7 @@ export async function adminApproveVerificationAction(merchantId: string) {
   return {
     success: true,
     updates,
-    message: canActivateNow
-      ? "Merchant approved and live payment features are active."
-      : "Review approved. Live payment features remain locked until the remaining verification requirement is completed.",
+    message: "Merchant approved and live payment features are active.",
   };
 }
 

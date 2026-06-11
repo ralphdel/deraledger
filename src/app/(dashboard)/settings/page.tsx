@@ -117,6 +117,25 @@ function formatPlanLabel(plan: string | null | undefined) {
   return plan.charAt(0).toUpperCase() + plan.slice(1);
 }
 
+function classifyDisplayedIdentityNameMatch(submittedName?: string | null, returnedName?: string | null) {
+  const tokenize = (value: string) =>
+    value.toLowerCase().replace(/[^a-z\s]/g, " ").split(/\s+/).filter(Boolean);
+  const matches = (left: string, right: string) => {
+    if (!left || !right) return false;
+    if (left === right) return true;
+    if (left.length < 4 || right.length < 4) return false;
+    return left.includes(right) || right.includes(left);
+  };
+  const submittedTokens = tokenize(String(submittedName || ""));
+  const returnedTokens = tokenize(String(returnedName || ""));
+  if (submittedTokens.length === 0 || returnedTokens.length === 0) return "unknown" as const;
+  const allReturnedPresent = returnedTokens.every((returnedToken) =>
+    submittedTokens.some((submittedToken) => matches(submittedToken, returnedToken))
+  );
+  if (!allReturnedPresent) return "mismatch" as const;
+  return submittedTokens.length > returnedTokens.length ? "partial" as const : "matched" as const;
+}
+
 function getPlanProgressTitle(isStarter: boolean, isCorporate: boolean, relationshipClaim?: string | null) {
   if (isStarter) return "Starter Plan";
   if (isCorporate && relationshipClaim === "representative_claim") {
@@ -661,12 +680,9 @@ export default function SettingsPage() {
   const verifiedIdentityComplete =
     merchant?.bvn_status === "verified" && merchant?.selfie_status === "verified";
   const returnedBvnName = identityLog?.returned_bvn_name?.trim() || "";
-  const normalizedSubmittedName = ownerName.trim().toLowerCase().replace(/[^a-z\s]/g, "");
-  const normalizedReturnedName = returnedBvnName.toLowerCase().replace(/[^a-z\s]/g, "");
-  const identityNameMismatch =
-    Boolean(returnedBvnName && ownerName.trim()) &&
-    normalizedSubmittedName !== normalizedReturnedName;
-  const identityVerifiedClean = verifiedIdentityComplete && !identityNameMismatch;
+  const identityNameReviewState = classifyDisplayedIdentityNameMatch(ownerName, returnedBvnName);
+  const identityReviewResolved = merchant?.verification_status === "verified" && merchant?.live_features_enabled === true;
+  const identityVerifiedClean = verifiedIdentityComplete && identityNameReviewState === "matched";
   const verificationCompleteCopy = isCorporate
     ? merchant?.relationship_claim === "representative_claim"
       ? "Representative identity verified."
@@ -1157,8 +1173,11 @@ export default function SettingsPage() {
           <div className="flex items-start gap-3">
             <CheckCircle className="mt-0.5 h-5 w-5 shrink-0" />
             <p>
-              Verification details submitted successfully. The completed steps are now locked and the
-              workspace remains in setup mode until final review is complete.
+              {identityNameReviewState === "partial"
+                ? "Identity verification submitted for review. Your submitted name includes additional name details not returned by the BVN record, so final review is required before live features can be enabled."
+                : identityNameReviewState === "mismatch"
+                  ? "Verification details submitted successfully. Your identity requires final review before live features can be enabled."
+                  : "Verification details submitted successfully. The completed steps are now locked and the workspace remains in setup mode until final review is complete."}
             </p>
           </div>
         </div>
@@ -1335,7 +1354,32 @@ export default function SettingsPage() {
                             </div>
                           </div>
                         </div>
-                      ) : verifiedIdentityComplete && identityNameMismatch ? (
+                      ) : verifiedIdentityComplete && identityReviewResolved && identityNameReviewState === "partial" ? (
+                        <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
+                          <div className="flex items-start gap-3">
+                            <CheckCircle className="mt-0.5 h-5 w-5 shrink-0 text-blue-600" />
+                            <div className="space-y-2 text-sm text-blue-800">
+                              <p className="font-semibold">Identity review approved.</p>
+                              <p>Submitted name: {ownerName || "Not available"}</p>
+                              <p>BVN returned name: {returnedBvnName || "Not available"}</p>
+                              <p>Name match: Partial match approved after compliance review</p>
+                            </div>
+                          </div>
+                        </div>
+                      ) : verifiedIdentityComplete && identityNameReviewState === "partial" ? (
+                        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                          <div className="flex items-start gap-3">
+                            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+                            <div className="space-y-2 text-sm text-amber-800">
+                              <p className="font-semibold">Identity verification submitted for review.</p>
+                              <p>Submitted name: {ownerName || "Not available"}</p>
+                              <p>BVN returned name: {returnedBvnName || "Not available"}</p>
+                              <p>Name match: Partial match / Review required</p>
+                              <p>Your submitted name includes additional name details not returned by the BVN record. Our team will review this.</p>
+                            </div>
+                          </div>
+                        </div>
+                      ) : verifiedIdentityComplete && identityNameReviewState === "mismatch" ? (
                         <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
                           <div className="flex items-start gap-3">
                             <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />

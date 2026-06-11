@@ -220,7 +220,7 @@ export default function VerificationQueuePage() {
   const handleApprove = async () => {
     if (!selectedMerchant) return;
     setActionLoading(true); setReviewError(null);
-    const res = await adminApproveVerificationAction(selectedMerchant.id);
+    const res = await adminApproveVerificationAction(selectedMerchant.id, reviewNotes.trim() || undefined);
     if (res.success) {
       refreshMerchant((res.updates || { verification_status: "verified" }) as Partial<Merchant>);
       setActionSuccess(res.message || "Merchant approved.");
@@ -551,17 +551,16 @@ export default function VerificationQueuePage() {
                       if (left.length < 4 || right.length < 4) return false;
                       return left.includes(right) || right.includes(left);
                     };
-                    const repNameMismatch = (() => {
-                      if (!repSubmittedName || !repBvnReturnedName) return false;
+                    const repNameReviewState = (() => {
+                      if (!repSubmittedName || !repBvnReturnedName) return "unknown" as const;
                       const submittedTokens = repTokens(repSubmittedName);
                       const returnedTokens = repTokens(repBvnReturnedName);
-                      const returnedSurname = returnedTokens[returnedTokens.length - 1] || "";
-                      if (!returnedSurname || !submittedTokens.some((token) => repMatches(token, returnedSurname))) return true;
-                      const returnedGivenNames = returnedTokens.slice(0, -1);
-                      if (returnedGivenNames.length === 0) return false;
-                      return !returnedGivenNames.some((returnedToken) =>
+                      if (submittedTokens.length === 0 || returnedTokens.length === 0) return "unknown" as const;
+                      const allReturnedPresent = returnedTokens.every((returnedToken) =>
                         submittedTokens.some((submittedToken) => repMatches(submittedToken, returnedToken))
                       );
+                      if (!allReturnedPresent) return "mismatch" as const;
+                      return submittedTokens.length > returnedTokens.length ? "partial" as const : "matched" as const;
                     })();
                     const repProviderUnknown = formattedRepProvider.toLowerCase() === "unknown";
                     const repProviderConfirmed = !!repStoredProvider;
@@ -572,8 +571,10 @@ export default function VerificationQueuePage() {
                         : null;
                     const repNameMatchStatus = !repBvnReturnedName
                       ? "Unknown / Not recorded"
-                      : repNameMismatch || ["mismatch", "manual_review", "failed", "name_mismatch"].includes(repStoredNameMatchStatus)
+                      : repNameReviewState === "mismatch" || ["mismatch", "manual_review", "failed", "name_mismatch"].includes(repStoredNameMatchStatus)
                         ? "Mismatch / Manual review required"
+                        : repNameReviewState === "partial"
+                          ? "Partial match / Review required"
                         : ["passed", "matched", "verified", "success"].includes(repStoredNameMatchStatus) || !repStoredNameMatchStatus
                           ? "Matched"
                           : "Unknown / Needs review";
@@ -597,10 +598,11 @@ export default function VerificationQueuePage() {
                     );
                     const identityLabel = isBusinessPlan ? "Representative Identity" : "Identity Verification";
                     const identitySectionLabel = isBusinessPlan ? "Representative Identity Evidence" : "Individual Identity Evidence";
-                    const repIdentityBlocked = repNameMatchStatus === "Mismatch / Manual review required";
+                    const repIdentityBlocked = repNameReviewState === "mismatch";
                     const repHasCurrentEvidence = !!repLog;
                     const repIdentityPendingReview = !repIdentityBlocked && (
                       !repHasCurrentEvidence ||
+                      repNameReviewState === "partial" ||
                       repNameMatchStatus !== "Matched" ||
                       !repProviderConfirmed ||
                       !repBvnReturnedName ||
@@ -609,14 +611,15 @@ export default function VerificationQueuePage() {
                     );
                     const repIdentityVerified = !repIdentityBlocked && !repIdentityPendingReview && selectedMerchant.bvn_status === "verified" && (selectedMerchant.selfie_status || "unverified") === "verified";
                     const showIdentityManualReviewPanel = !isBusinessPlan && (repIdentityBlocked || repIdentityPendingReview);
+                    const partialMatchNeedsNotes = !isBusinessPlan && repNameReviewState === "partial" && reviewNotes.trim().length < 10;
                     const approveDisabledReason = (() => {
                       if (repIdentityBlocked) return "Approval blocked: identity name mismatch requires manual review or re-verification.";
+                      if (partialMatchNeedsNotes) return "Approval blocked: partial name match requires compliance notes before final approval.";
                       if (!isBusinessPlan && !repHasCurrentEvidence) return "Approval blocked: no current identity evidence is available for final review.";
                       if (!isBusinessPlan && !repBvnReturnedName) return "Approval blocked: BVN returned name is missing from the latest identity evidence.";
                       if (!isBusinessPlan && !repProviderConfirmed) return "Approval blocked: identity provider traceability is missing on the latest evidence.";
                       if (!isBusinessPlan && repSelfieMatchBypassed) return "Approval blocked: the latest identity evidence still carries a sandbox selfie override warning.";
                       if (!isBusinessPlan && repIdentityPendingReview) return "Approval blocked: identity evidence still needs review before final approval.";
-                      if (selectedMerchant.verification_status === "verified" && !selectedMerchant.live_features_enabled) return "Approval blocked: stored verification status is verified, but live features remain locked pending compliance resolution.";
                       if (getEffectiveStatus(selectedMerchant) === "incomplete") return "Approval blocked: merchant profile details are incomplete.";
                       if (selectedMerchant.subscription_plan === "corporate" && (selectedMerchant.cac_status !== "verified" || selectedMerchant.utility_status !== "verified")) return "Approval blocked: business verification documents are still incomplete.";
                       return null;
@@ -624,8 +627,9 @@ export default function VerificationQueuePage() {
                     const isApproveDisabled =
                       actionLoading ||
                       repIdentityBlocked ||
-                      (!isBusinessPlan && repIdentityPendingReview) ||
-                      selectedMerchant.verification_status === "verified" ||
+                      partialMatchNeedsNotes ||
+                      (!isBusinessPlan && repIdentityPendingReview && repNameReviewState !== "partial") ||
+                      (selectedMerchant.verification_status === "verified" && selectedMerchant.live_features_enabled) ||
                       getEffectiveStatus(selectedMerchant) === "incomplete" ||
                       (selectedMerchant.subscription_plan === "corporate" && (selectedMerchant.cac_status !== "verified" || selectedMerchant.utility_status !== "verified"));
 
@@ -868,7 +872,7 @@ export default function VerificationQueuePage() {
                               <div className="rounded-xl border border-red-200 bg-red-50 p-4 space-y-3">
                                 <div>
                                   <h5 className="text-sm font-semibold text-red-900">Identity Manual Review Required</h5>
-                                  <p className="mt-1 text-xs text-red-800">The submitted name does not match the BVN returned name. Clean approval is blocked until this is resolved.</p>
+                                  <p className="mt-1 text-xs text-red-800">{repNameReviewState === "partial" ? "The submitted name includes additional name details beyond the BVN returned name. Add compliance notes before final approval." : "The submitted name does not match the BVN returned name. Clean approval is blocked until this is resolved."}</p>
                                 </div>
                                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 text-xs text-red-900">
                                   <p className="break-words whitespace-normal"><span className="font-semibold">Submitted name:</span> {repSubmittedName || "Not available"}</p>
@@ -881,7 +885,7 @@ export default function VerificationQueuePage() {
                                 {repSelfieMatchBypassed && (
                                   <p className="text-xs font-medium text-amber-800">Sandbox override warning: selfie confidence was below the provider threshold and requires manual review.</p>
                                 )}
-                                <p className="text-xs text-red-800">Ask the user to re-verify with a BVN matching the submitted legal name, or update the submitted legal name if it is incorrect.</p>
+                                <p className="text-xs text-red-800">{repNameReviewState === "partial" ? "If compliance accepts this partial match, add review notes and use final approval. Otherwise ask the user to re-verify or correct the submitted legal name." : "Ask the user to re-verify with a BVN matching the submitted legal name, or update the submitted legal name if it is incorrect."}</p>
                                 <div className="flex flex-wrap gap-2">
                                   <Button type="button" variant="outline" className="border-orange-300 text-orange-700 hover:bg-orange-50 text-xs h-9" onClick={() => { setActionMode("reupload"); setActionReason("Re-verify with a BVN matching your submitted legal name, or update your submitted legal name if it is incorrect."); setReuploadFields(["bvn_status", "selfie_status"]); }}>
                                     <UploadCloud className="h-3.5 w-3.5 mr-1" />Request correction / re-verification
@@ -1181,17 +1185,17 @@ export default function VerificationQueuePage() {
                             </div>
 
                             <div className="rounded-xl border border-blue-100 bg-white p-3 text-xs text-blue-900 font-mono space-y-2">
-                              {repNameMismatch && (
+                              {repNameReviewState === "mismatch" || repNameReviewState === "partial" ? (
                                 <div className="rounded bg-amber-50 border border-amber-200 p-2 text-[11px] text-amber-800 flex items-start gap-1.5 font-sans">
                                   <ShieldAlert className="h-3.5 w-3.5 text-amber-600 flex-shrink-0 mt-0.5" />
                                   <div>
-                                    <p className="font-bold">Representative Name Mismatch</p>
+                                    <p className="font-bold">{repNameReviewState === "partial" ? "Identity Partial Match" : "Representative Name Mismatch"}</p>
                                     <p>Submitted name: {repSubmittedName || "Not available"}</p>
                                     <p>BVN returned name: {repBvnReturnedName || "Not available"}</p>
                                     <p>Name match: {repNameMatchStatus}</p>
                                   </div>
                                 </div>
-                              )}
+                              ) : null}
                               <div className="break-words whitespace-normal"><span className="font-semibold">BVN returned name:</span> {repBvnReturnedName || "Not recorded"}</div>
                               <div className="break-words whitespace-normal"><span className="font-semibold">Submitted name:</span> {repSubmittedName || "Not available"}</div>
                               <div className="break-words whitespace-normal"><span className="font-semibold">Name match:</span> {repNameMatchStatus}</div>
