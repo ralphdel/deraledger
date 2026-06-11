@@ -288,15 +288,34 @@ export async function verifyMerchantIdentity(params: {
     // If cached success, return the stored provider result.
     if (cached.normalized_status === "verified") {
       const matchScore = Number(cached.match_score) || 95;
+      const cachedReturnedName = {
+        firstName: cached.raw_response?.entity?.first_name || cached.raw_response?.returnedName?.firstName || "Cached",
+        lastName: cached.raw_response?.entity?.last_name || cached.raw_response?.returnedName?.lastName || "Record",
+        middleName: cached.raw_response?.entity?.middle_name || cached.raw_response?.returnedName?.middleName,
+      };
+      if (params.ownerName) {
+        const nameMatchResult = performNameMatch(params.ownerName, cachedReturnedName);
+        if (!nameMatchResult.matches) {
+          return {
+            success: false,
+            bvnExists: true,
+            faceMatch: true,
+            matchScore,
+            returnedName: cachedReturnedName,
+            providerReference: cached.provider_reference || "CACHED_REFERENCE",
+            rawResponse: cached.raw_response || {},
+            errorCode: "NAME_MISMATCH",
+            error: `BVN name does not match your registered profile name. BVN name: ${nameMatchResult.bvnFullName}. Please update your profile name or use the correct BVN.`,
+            selfieSignedUrl: cached.raw_response?.selfieSignedUrl || undefined,
+          };
+        }
+      }
       return {
         success: true,
         bvnExists: true,
         faceMatch: true,
         matchScore,
-        returnedName: {
-          firstName: cached.raw_response?.entity?.first_name || cached.raw_response?.returnedName?.firstName || "Cached",
-          lastName: cached.raw_response?.entity?.last_name || cached.raw_response?.returnedName?.lastName || "Record",
-        },
+        returnedName: cachedReturnedName,
         providerReference: cached.provider_reference || "CACHED_REFERENCE",
         rawResponse: cached.raw_response || {},
         selfieSignedUrl: cached.raw_response?.selfieSignedUrl || undefined,
@@ -417,9 +436,9 @@ export async function verifyMerchantIdentity(params: {
   }
 
   // 9. Name Matching Check
-  // Sandbox providers often return fixed or synthetic identities, so we
-  // should not block successful test verifications on profile-name mismatch.
-  if (!sandbox && result.success && params.ownerName) {
+  // Sandbox may relax selfie confidence handling, but it must never bypass
+  // submitted-name vs BVN-returned-name mismatch.
+  if (result.success && params.ownerName) {
     const nameMatchResult = performNameMatch(params.ownerName, result.returnedName);
     if (!nameMatchResult.matches) {
       result = {

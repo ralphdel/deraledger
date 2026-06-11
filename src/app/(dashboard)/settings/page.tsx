@@ -96,6 +96,11 @@ type DirectorAffiliationRow = {
   status?: string | null;
 };
 
+type IdentityLogRow = {
+  returned_bvn_name?: string | null;
+  name_match_status?: string | null;
+};
+
 const BUSINESS_TYPE_OPTIONS = [
   { value: "sole_proprietorship", label: "Sole Proprietorship / Registered Business Name" },
   { value: "ltd", label: "Private Limited Company (LTD)" },
@@ -306,6 +311,7 @@ export default function SettingsPage() {
   const [rcError, setRcError] = useState<string | null>(null);
   const [kycSuccess, setKycSuccess] = useState(false);
   const [kycError, setKycError] = useState<string | null>(null);
+  const [identityLog, setIdentityLog] = useState<IdentityLogRow | null>(null);
 
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
@@ -363,6 +369,24 @@ export default function SettingsPage() {
     }
   }, []);
 
+  const loadIdentityLog = useCallback(async (merchantId: string) => {
+    try {
+      const supabase = createClient();
+      const { data } = await supabase
+        .from("verification_logs")
+        .select("returned_bvn_name, name_match_status")
+        .eq("merchant_id", merchantId)
+        .in("verification_type", ["representative_bvn_selfie", "bvn_selfie", "identity"])
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      setIdentityLog(data || null);
+    } catch (error) {
+      console.error("Failed to load identity log", error);
+      setIdentityLog(null);
+    }
+  }, []);
+
   const applyMerchantState = useCallback(async (nextMerchant: Merchant) => {
     setMerchant(nextMerchant);
     const tier = nextMerchant.subscription_plan || nextMerchant.merchant_tier || "starter";
@@ -392,14 +416,18 @@ export default function SettingsPage() {
       await Promise.all([
         loadDirectors(nextMerchant.id),
         loadDirectorApprovalContext(nextMerchant.id),
+        loadIdentityLog(nextMerchant.id),
       ]);
+    } else if (nextMerchant.id) {
+      await loadIdentityLog(nextMerchant.id);
     } else {
       setDirectors([]);
       setRegistrySnapshot(null);
       setDirectorInvitations([]);
       setDirectorAffiliation(null);
+      setIdentityLog(null);
     }
-  }, [loadDirectorApprovalContext, loadDirectors]);
+  }, [loadDirectorApprovalContext, loadDirectors, loadIdentityLog]);
 
   const refreshMerchant = useCallback(async (merchantId?: string) => {
     const freshMerchant = await getMerchant(merchantId);
@@ -456,8 +484,8 @@ export default function SettingsPage() {
       } else {
         setDirectorInviteError(res.error || "Failed to request manual review");
       }
-    } catch (err: any) {
-      setDirectorInviteError(err.message);
+    } catch (err: unknown) {
+      setDirectorInviteError(err instanceof Error ? err.message : "Failed to request manual review");
     }
   };
 
@@ -632,6 +660,13 @@ export default function SettingsPage() {
   const verifiedOwnerLabel = getOwnerDisplayLabel(isCorporate, merchant?.relationship_claim);
   const verifiedIdentityComplete =
     merchant?.bvn_status === "verified" && merchant?.selfie_status === "verified";
+  const returnedBvnName = identityLog?.returned_bvn_name?.trim() || "";
+  const normalizedSubmittedName = ownerName.trim().toLowerCase().replace(/[^a-z\s]/g, "");
+  const normalizedReturnedName = returnedBvnName.toLowerCase().replace(/[^a-z\s]/g, "");
+  const identityNameMismatch =
+    Boolean(returnedBvnName && ownerName.trim()) &&
+    normalizedSubmittedName !== normalizedReturnedName;
+  const identityVerifiedClean = verifiedIdentityComplete && !identityNameMismatch;
   const verificationCompleteCopy = isCorporate
     ? merchant?.relationship_claim === "representative_claim"
       ? "Representative identity verified."
@@ -1279,7 +1314,7 @@ export default function SettingsPage() {
                     }
                   >
                     <div className="space-y-4">
-                      {verifiedIdentityComplete ? (
+                      {identityVerifiedClean ? (
                         <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
                           <div className="flex items-start gap-3">
                             <CheckCircle className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
@@ -1292,11 +1327,24 @@ export default function SettingsPage() {
                                 <br />
                                 Selfie: Verified
                                 <br />
-                                {verifiedOwnerLabel}: {ownerName || "Not available"}
+                                {verifiedOwnerLabel}: {returnedBvnName || ownerName || "Not available"}
                               </p>
                               <p className="text-sm text-emerald-700">
                                 These details are now locked for safety. Contact support if anything needs to change.
                               </p>
+                            </div>
+                          </div>
+                        </div>
+                      ) : verifiedIdentityComplete && identityNameMismatch ? (
+                        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                          <div className="flex items-start gap-3">
+                            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+                            <div className="space-y-2 text-sm text-amber-800">
+                              <p className="font-semibold">Identity verification requires review.</p>
+                              <p>Submitted name: {ownerName || "Not available"}</p>
+                              <p>BVN returned name: {returnedBvnName || "Not available"}</p>
+                              <p>Name match: Mismatch / Manual review required</p>
+                              <p>The submitted name does not match the BVN record.</p>
                             </div>
                           </div>
                         </div>
