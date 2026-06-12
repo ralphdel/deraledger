@@ -647,12 +647,15 @@ export default function SettingsPage() {
         ),
     );
   const authorityApproved =
+    directorAffiliation?.status === "director_approved" ||
     merchant?.business_affiliation_status === "director_approved" ||
     merchant?.business_affiliation_status === "strong_match";
   const approvedDirectorInvite = directorInvitations.find((invite) => invite.status === "approved");
   const approvedDirectorName =
     approvedDirectorInvite?.selected_director_name ||
-    directors.find((director) => director.verification_status === "verified")?.director_name ||
+    (!merchant?.relationship_claim || merchant?.relationship_claim !== "representative_claim"
+      ? directorAffiliation?.matched_registry_name || identityLog?.returned_bvn_name?.trim() || ownerName || null
+      : directors.find((director) => director.verification_status === "verified")?.director_name) ||
     null;
   const needsDirectorApproval =
     isCorporate &&
@@ -1676,13 +1679,24 @@ export default function SettingsPage() {
                               <p className="text-sm font-semibold text-neutral-900">Authority status</p>
                               <p className="text-sm text-neutral-500">
                                 {authorityApproved
-                                  ? approvedDirectorName
-                                    ? `Approved by ${approvedDirectorName}. This section is now complete.`
-                                    : "Authority matched automatically from verified business records."
+                                  ? merchant?.relationship_claim === "representative_claim"
+                                    ? approvedDirectorName
+                                      ? `Approved by ${approvedDirectorName}. This section is now complete.`
+                                      : "Authority matched automatically from verified business records."
+                                    : "Director authority approved by compliance."
                                   : merchant?.relationship_claim === "representative_claim"
                                   ? "Director approval is still required before payment collection can start."
                                   : "Director match is still pending and cannot be assumed from identity alone."}
                               </p>
+                              {authorityApproved && merchant?.relationship_claim !== "representative_claim" ? (
+                                <div className="mt-2 space-y-1 text-xs text-neutral-600">
+                                  <p>Submitted owner/director name: {ownerName || "Not provided"}</p>
+                                  <p>Verified BVN returned name: {returnedBvnName || "Not recorded"}</p>
+                                  <p>Closest CAC registry match: {directorAffiliation?.matched_registry_name || closestRegistryDirector?.name || "Not available"}</p>
+                                  <p>Registry role: {closestRegistryDirector?.role || "Director"}</p>
+                                  {directorAffiliation?.match_reason ? <p>Review note: {directorAffiliation.match_reason}</p> : null}
+                                </div>
+                              ) : null}
                             </div>
                             {statusBadge(merchant?.business_affiliation_status)}
                           </div>
@@ -1976,6 +1990,10 @@ export default function SettingsPage() {
                                   {statusBadge(director.verification_status)}
                                 </div>
                               ))
+                            ) : authorityApproved && merchant?.relationship_claim !== "representative_claim" ? (
+                              <p className="text-sm text-neutral-500">
+                                Director-led authority was approved from the verified owner/director identity and CAC registry evidence.
+                              </p>
                             ) : (
                               <p className="text-sm text-neutral-500">
                                 No manual director verifications have been recorded yet.

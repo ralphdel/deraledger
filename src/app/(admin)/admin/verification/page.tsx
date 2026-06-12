@@ -735,6 +735,7 @@ export default function VerificationQueuePage() {
                     );
                     const approveDisabledReason = (() => {
                       if (selectedMerchant.verification_status === "verified" && selectedMerchant.live_features_enabled) return "Already approved. Live features are active.";
+                      if (selectedMerchant.verification_status === "verified" && !selectedMerchant.live_features_enabled && isBusinessPlan && !hasPayoutSetup) return "Already approved. Live features are locked until payout account setup is completed.";
                       if (repIdentityBlocked) return "Approval blocked: identity name mismatch requires manual review or re-verification.";
                       if (repNameReviewState === "partial" && !repIdentityReviewApproved) return "Approval blocked: approve the identity review before final merchant approval.";
                       if (!repHasCurrentEvidence) return "Approval blocked: no current identity evidence is available for final review.";
@@ -745,17 +746,15 @@ export default function VerificationQueuePage() {
                       if (getEffectiveStatus(selectedMerchant) === "incomplete") return "Approval blocked: merchant profile details are incomplete.";
                       if (hasBusinessDocumentBlocker) return "Approval blocked: business verification documents are still incomplete.";
                       if (hasDirectorFlowBlocker) return "Approval blocked: director consent or director identity evidence is still unresolved.";
-                      if (isBusinessPlan && !hasPayoutSetup) return "Approval blocked: payout account setup is still required before live activation.";
                       return null;
                     })();
                     const isApproveDisabled =
                       actionLoading ||
                       repIdentityBlocked ||
                       repIdentityPendingReview ||
-                      (selectedMerchant.verification_status === "verified" && selectedMerchant.live_features_enabled) ||
+                      selectedMerchant.verification_status === "verified" ||
                       getEffectiveStatus(selectedMerchant) === "incomplete" ||
                       hasBusinessDocumentBlocker ||
-                      (isBusinessPlan && !hasPayoutSetup) ||
                       hasDirectorFlowBlocker;
 
                     const mainBlocker = (() => {
@@ -768,7 +767,7 @@ export default function VerificationQueuePage() {
                       if (requiresDirectorFlow && selectedMerchant.business_affiliation_status === "director_approved" && directors.length === 0 && !directorsLoading) return "Director approval exists without matching identity evidence.";
                       if (hasBusinessDocumentBlocker) return "Business documents still need admin approval before final approval.";
                       if (hasDirectorFlowBlocker) return "Director approval or director identity evidence is still unresolved.";
-                      if (isBusinessPlan && !hasPayoutSetup) return "Payout account setup is still required before live activation.";
+                      if (selectedMerchant.verification_status === "verified" && !selectedMerchant.live_features_enabled && isBusinessPlan && !hasPayoutSetup) return "Business verified, live features locked until payout account setup is completed.";
                       if (!selectedMerchant.live_features_enabled) return "Live features remain locked pending compliance completion.";
                       if (effectiveStatus === "pending_admin_review") return "Awaiting final admin decision.";
                       if (effectiveStatus === "pending") return "Submitted evidence still needs review.";
@@ -841,14 +840,14 @@ export default function VerificationQueuePage() {
                       },
                       {
                         label: "Final Admin Review",
-                        badge: repIdentityBlocked || hasBusinessDocumentBlocker || hasDirectorFlowBlocker || (isBusinessPlan && !hasPayoutSetup) ? "blocked" : selectedMerchant.verification_status === "verified" && selectedMerchant.live_features_enabled ? "verified" : effectiveStatus === "pending_admin_review" || !selectedMerchant.live_features_enabled ? "pending" : effectiveStatus,
-                        tone: repIdentityBlocked || hasBusinessDocumentBlocker || hasDirectorFlowBlocker || (isBusinessPlan && !hasPayoutSetup) ? "blocked" : selectedMerchant.verification_status === "verified" && selectedMerchant.live_features_enabled ? "verified" : effectiveStatus === "pending_admin_review" || !selectedMerchant.live_features_enabled ? "info" : effectiveStatus === "requires_reupload" || effectiveStatus === "rejected" ? "blocked" : effectiveStatus === "incomplete" ? "attention" : "pending",
+                        badge: repIdentityBlocked || hasBusinessDocumentBlocker || hasDirectorFlowBlocker ? "blocked" : selectedMerchant.verification_status === "verified" ? "verified" : effectiveStatus === "pending_admin_review" || !selectedMerchant.live_features_enabled ? "pending" : effectiveStatus,
+                        tone: repIdentityBlocked || hasBusinessDocumentBlocker || hasDirectorFlowBlocker ? "blocked" : selectedMerchant.verification_status === "verified" ? "verified" : effectiveStatus === "pending_admin_review" || !selectedMerchant.live_features_enabled ? "info" : effectiveStatus === "requires_reupload" || effectiveStatus === "rejected" ? "blocked" : effectiveStatus === "incomplete" ? "attention" : "pending",
                         reason: repIdentityBlocked || hasDirectorFlowBlocker
                           ? "Manual review is still required before final admin approval."
                           : hasBusinessDocumentBlocker
                             ? "Required business documents are still pending or unverified."
-                          : isBusinessPlan && !hasPayoutSetup
-                            ? "Payout account setup is still required before live activation."
+                          : selectedMerchant.verification_status === "verified" && isBusinessPlan && !hasPayoutSetup
+                            ? "Business verified. Live features remain locked until payout account setup is completed."
                           : repIdentityResolvedByCompliance && effectiveStatus === "pending_admin_review"
                             ? "Identity review was approved by compliance. Final merchant approval is now available."
                           : !selectedMerchant.live_features_enabled

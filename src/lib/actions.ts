@@ -9,6 +9,7 @@ import { sendTeamInviteEmail, sendInvoiceEmail, sendOnboardingWelcomeEmail } fro
 import { getAppUrl } from "@/lib/server-utils";
 import { PaymentService } from "@/lib/payment";
 import { verifyMerchantIdentity, verifyMerchantBusiness } from "@/lib/services/verification.service";
+import { getIncompleteComplianceRequirements } from "@/lib/verification-requirements";
 import {
   canCreateInvoice,
   canCreateCollectionInvoice,
@@ -2428,7 +2429,7 @@ export async function adminApproveVerificationAction(merchantId: string, reviewN
 
   const { data: merchant, error: fetchError } = await adminClient
     .from("merchants")
-    .select("subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, business_affiliation_status, relationship_claim, owner_name, email, settlement_account_number, settlement_bank_name, settlement_account_name, verification_step_state")
+    .select("subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, business_affiliation_status, business_registry_snapshot_id, relationship_claim, owner_name, email, settlement_account_number, settlement_bank_name, settlement_account_name, verification_step_state")
     .eq("id", merchantId)
     .single();
 
@@ -2555,24 +2556,53 @@ export async function adminApproveVerificationAction(merchantId: string, reviewN
     }
   }
 
-  const nextFields = setupStatusForMerchant({ ...merchant, verification_status: "verified", verification_step_state: verificationStepState });
+  if (plan === "corporate" && merchant.relationship_claim !== "representative_claim" && merchant.business_registry_snapshot_id) {
+    const { data: latestAffiliation } = await adminClient
+      .from("business_affiliations")
+      .select("id, matched_registry_name, match_score, match_reason")
+      .eq("merchant_id", merchantId)
+      .eq("registry_snapshot_id", merchant.business_registry_snapshot_id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (latestAffiliation?.id) {
+      await adminClient
+        .from("business_affiliations")
+        .update({
+          status: "director_approved",
+          match_reason: reviewNotes?.trim() || latestAffiliation.match_reason || "Director-led authority approved by compliance.",
+        })
+        .eq("id", latestAffiliation.id);
+    }
+    merchant.business_affiliation_status = "director_approved";
+  }
+
+  const approvalPreview = { ...merchant, verification_status: "verified", verification_step_state: verificationStepState };
+  const complianceIncomplete = getIncompleteComplianceRequirements(approvalPreview);
+  const nextFields = setupStatusForMerchant(approvalPreview);
   const canActivateNow = nextFields.live_features_enabled === true;
-  if (!canActivateNow) {
+  const canApproveWithoutPayout =
+    (plan === "business" || plan === "corporate") &&
+    complianceIncomplete.length === 0 &&
+    !canActivateNow;
+  if (!canActivateNow && !canApproveWithoutPayout) {
     return {
       success: false,
-      error: `Approval is still blocked: ${getLiveFeatureLockReasons({ ...merchant, verification_status: "verified", verification_step_state: verificationStepState }).join(", ") || "remaining verification requirements are unresolved"}.`,
+      error: `Approval is still blocked: ${getLiveFeatureLockReasons(approvalPreview).join(", ") || "remaining verification requirements are unresolved"}.`,
     };
   }
 
   const updates = {
     ...nextFields,
     verification_status: "verified",
+    business_affiliation_status: merchant.business_affiliation_status,
     verification_step_state: verificationStepState,
     kyc_reviewed_at: now,
     kyc_rejection_reason: null,
     kyc_notes: reviewNotes?.trim() || null,
     updated_at: now,
-    live_features_activated_at: now,
+    ...(nextFields.live_features_enabled ? { live_features_activated_at: now } : {}),
   };
 
   const { error } = await adminClient
@@ -2636,7 +2666,9 @@ export async function adminApproveVerificationAction(merchantId: string, reviewN
   return {
     success: true,
     updates: { ...updates, ...persistedMerchant },
-    message: "Merchant approved and live payment features are active.",
+    message: canActivateNow
+      ? "Merchant approved and live payment features are active."
+      : "Business verified, live features locked until payout account setup is completed.",
   };
 }
 
@@ -2651,7 +2683,7 @@ export async function adminApproveIndividualIdentityReviewAction(merchantId: str
   const now = new Date().toISOString();
   const { data: merchant, error: merchantError } = await adminClient
     .from("merchants")
-    .select("subscription_plan, merchant_tier, verification_status, owner_name, verification_step_state, live_features_enabled")
+    .select("subscription_plan, merchant_tier, relationship_claim, business_registry_snapshot_id, business_affiliation_status, verification_status, owner_name, verification_step_state, live_features_enabled")
     .eq("id", merchantId)
     .single();
 
@@ -2714,6 +2746,7 @@ export async function adminApproveIndividualIdentityReviewAction(merchantId: str
 
   const updates = {
     verification_step_state: verificationStepState,
+    ...(plan === "corporate" && merchant.relationship_claim !== "representative_claim" ? { business_affiliation_status: "director_approved" } : {}),
     verification_status: merchant.live_features_enabled ? merchant.verification_status : "pending_admin_review",
     kyc_rejection_reason: null,
     kyc_notes: adminNotes.trim(),
@@ -2722,6 +2755,26 @@ export async function adminApproveIndividualIdentityReviewAction(merchantId: str
 
   const { error: updateError } = await adminClient.from("merchants").update(updates).eq("id", merchantId);
   if (updateError) return { success: false, error: updateError.message };
+
+  if (plan === "corporate" && merchant.relationship_claim !== "representative_claim" && merchant.business_registry_snapshot_id) {
+    const { data: latestAffiliation } = await adminClient
+      .from("business_affiliations")
+      .select("id, match_reason")
+      .eq("merchant_id", merchantId)
+      .eq("registry_snapshot_id", merchant.business_registry_snapshot_id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (latestAffiliation?.id) {
+      await adminClient
+        .from("business_affiliations")
+        .update({
+          status: "director_approved",
+          match_reason: adminNotes.trim() || latestAffiliation.match_reason || "Director-led authority approved by compliance.",
+        })
+        .eq("id", latestAffiliation.id);
+    }
+  }
 
   await syncMerchantSetupStatus(adminClient, merchantId);
   await logAudit("identity_manual_review_approved", merchantId, "merchant", {

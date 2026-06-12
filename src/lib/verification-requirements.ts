@@ -243,3 +243,13 @@ export function getIncompleteRequirements(merchant: RequirementAwareMerchant) {
     return completion !== "complete";
   });
 }
+
+export function getIncompleteComplianceRequirements(merchant: RequirementAwareMerchant) {
+  const planTier = merchant.subscription_plan || merchant.merchant_tier;
+  const normalizedPlan = normalizePlanTier(planTier);
+  return getIncompleteRequirements(merchant).filter((requirement) =>
+    normalizedPlan === "business" || normalizedPlan === "corporate"
+      ? requirement !== "settlement_account"
+      : true,
+  );
+}

@@ -4,6 +4,7 @@
 type SupabaseClient = any;
 
 import {
+  getIncompleteComplianceRequirements,
   getIncompleteRequirements,
   getVerificationRequirements,
   hasVerificationRequirement,
@@ -114,7 +115,7 @@ export function getLiveFeatureLockReasons(merchant: {
         reasons.push("Director approval");
         break;
       case "settlement_account":
-        reasons.push("Payout account setup");
+        reasons.push("Settlement/payout account setup required");
         break;
       case "valid_id_document":
         reasons.push("Additional identity document");
@@ -168,8 +169,15 @@ export function setupStatusForMerchant(merchant: {
     return { onboarding_status: "active", setup_mode: false, live_features_enabled: false };
   }
   const incomplete = getIncompleteRequirements(merchant);
+  const complianceIncomplete = getIncompleteComplianceRequirements(merchant);
   if (incomplete.length === 0) {
     return { onboarding_status: "active", setup_mode: false, live_features_enabled: true };
+  }
+  if (
+    complianceIncomplete.length === 0 &&
+    incomplete.every((requirement) => requirement === "settlement_account")
+  ) {
+    return { onboarding_status: "pending_payout_setup", setup_mode: true, live_features_enabled: false };
   }
 
   if (
