@@ -246,7 +246,11 @@ export default function SettlementSettingsPage() {
             <Label>Select Bank</Label>
             <Select
               value={selectedBankCode}
-              onValueChange={(v) => setSelectedBankCode(v ?? "")}
+              onValueChange={(v) => {
+                setSelectedBankCode(v ?? "");
+                setAccountName("");
+                setResolveError(null);
+              }}
               disabled={loadingBanks}
             >
               <SelectTrigger className="border-2 border-purp-200 bg-purp-50 h-11">

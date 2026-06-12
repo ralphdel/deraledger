@@ -10,6 +10,8 @@ import type {
 } from "../types";
 import crypto from "crypto";
 
+// Monnify account enquiry uses MONNIFY_BASE_URL; only switch to production
+// when the environment is intentionally updated.
 const MONNIFY_BASE = process.env.MONNIFY_BASE_URL || "https://sandbox.monnify.com";
 
 type MonnifyAuthResponse = {
@@ -17,6 +19,17 @@ type MonnifyAuthResponse = {
   responseBody?: {
     accessToken?: string;
   };
+};
+
+type MonnifyBank = {
+  name?: string;
+  code?: string;
+  bankCode?: string;
+};
+
+type MonnifyAccountValidation = {
+  accountName?: string;
+  accountNumber?: string;
 };
 
 export class MonnifyAdapter implements IPaymentProcessor {
@@ -173,19 +186,45 @@ export class MonnifyAdapter implements IPaymentProcessor {
   }
 
   async createSubaccount(_p: SubaccountParams): Promise<SubaccountResult> {
+    void _p;
     throw new Error("Monnify subaccount provisioning is not wired yet.");
   }
 
   async updateSubaccount(_code: string, _p: Partial<SubaccountParams>): Promise<SubaccountResult> {
+    void _code;
+    void _p;
     throw new Error("Monnify subaccount updates are not wired yet.");
   }
 
   async getBankList(): Promise<BankListItem[]> {
-    throw new Error("Monnify bank list is not wired yet.");
+    const banks = await this.authorizedGet<MonnifyBank[]>("/api/v1/banks");
+    return banks
+      .map((bank) => ({
+        name: String(bank.name || "").trim(),
+        code: String(bank.code || bank.bankCode || "").trim(),
+      }))
+      .filter((bank) => bank.name && bank.code);
   }
 
-  async resolveAccountNumber(_bankCode: string, _accountNumber: string): Promise<AccountResolutionResult> {
-    throw new Error("Monnify account resolution is not wired yet.");
+  async resolveAccountNumber(bankCode: string, accountNumber: string): Promise<AccountResolutionResult> {
+    if (!bankCode) throw new Error("Bank code is required.");
+    if (!/^\d{10}$/.test(accountNumber)) {
+      throw new Error("Account number must be exactly 10 digits.");
+    }
+
+    const params = new URLSearchParams({ accountNumber, bankCode });
+    const data = await this.authorizedGet<MonnifyAccountValidation>(
+      `/api/v1/disbursements/account/validate?${params.toString()}`
+    );
+
+    if (!data.accountName || !data.accountNumber) {
+      throw new Error("Monnify did not return a valid account name.");
+    }
+
+    return {
+      accountName: data.accountName,
+      accountNumber: data.accountNumber,
+    };
   }
 
   verifyWebhook(payload: unknown, signature: string): WebhookVerificationResult {

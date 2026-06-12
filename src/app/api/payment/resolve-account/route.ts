@@ -14,41 +14,36 @@ export async function GET(request: Request) {
       );
     }
 
-    // Bypass Paystack's strict test mode rate limits if using the standard test account
-    if (accountNumber === "0000000000") {
-      return NextResponse.json({
-        success: true,
-        data: {
-          accountName: "Paystack Test Account",
-          accountNumber: "0000000000",
-          bankId: parseInt(bankCode) || 1,
-        }
-      });
+    if (!/^\d{10}$/.test(accountNumber)) {
+      return NextResponse.json(
+        { success: false, error: "Account number must be exactly 10 digits." },
+        { status: 400 }
+      );
     }
 
-    let resolution;
     try {
-      resolution = await PaymentService.resolveAccountNumber(bankCode, accountNumber);
-    } catch (apiError: any) {
-      // In development or test mode, Paystack's account resolution might fail because it can't reach real banks.
-      // We mock the resolution to allow testing.
-      if (process.env.NODE_ENV !== "production") {
-        console.warn("Paystack account resolution failed, using mock data for development:", apiError.message);
-        resolution = {
-          accountName: "Test Merchant Account",
-          accountNumber: accountNumber,
-          bankId: parseInt(bankCode) || 1,
-        };
-      } else {
-        throw apiError;
-      }
+      const resolution = await PaymentService.resolveAccountNumber(bankCode, accountNumber, "monnify");
+      return NextResponse.json({ success: true, data: resolution });
+    } catch (error: unknown) {
+      const maskedAccount = `${accountNumber.slice(0, 2)}******${accountNumber.slice(-2)}`;
+      console.warn("Monnify account verification failed:", {
+        provider: "monnify",
+        bankCode,
+        accountNumber: maskedAccount,
+        message: error instanceof Error ? error.message : "Unknown error",
+      });
+      return NextResponse.json(
+        {
+          success: false,
+          error: "We could not verify this account. Please confirm the bank and account number.",
+        },
+        { status: 400 }
+      );
     }
-    
-    return NextResponse.json({ success: true, data: resolution });
-  } catch (error: any) {
-    console.error("Failed to resolve account:", error);
+  } catch (error: unknown) {
+    console.error("Failed to resolve Monnify account:", error);
     return NextResponse.json(
-      { success: false, error: error.message || "Failed to resolve account. Please check the account number and try again." },
+      { success: false, error: error instanceof Error ? error.message : "Failed to resolve account. Please check the account number and try again." },
       { status: 500 }
     );
   }
