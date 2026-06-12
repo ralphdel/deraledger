@@ -15,7 +15,7 @@ import { DeraLedgerLogo } from "@/components/ui/deraledger-logo";
 
 function Header() {
   return (
-    <header className="fixed top-0 left-0 right-0 z-50 border-b border-white/[0.04] bg-[#0B0615]/85 backdrop-blur-md">
+    <header className="fixed top-0 left-0 right-0 z-50 border-b border-white/8 bg-[#140C24]/80 backdrop-blur-md">
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
         
         {/* Logo */}
@@ -55,7 +55,7 @@ function Header() {
 
 export default function LandingPage() {
   return (
-    <div className="min-h-screen bg-[#0B0615] text-white selection:bg-[#6D28FF]/30 antialiased font-sans overflow-x-hidden w-full">
+    <div className="min-h-screen w-full overflow-x-hidden bg-[#140C24] text-white selection:bg-[#8A5CF6]/30 antialiased font-sans dark:bg-[#10081D]">
       <Header />
       
       <main className="pt-16 overflow-x-hidden w-full">

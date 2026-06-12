@@ -114,7 +114,6 @@ function isUpgradePlanId(value: string): value is UpgradePlanId {
 
 export default function UpgradePlanPage({ params }: UpgradePageProps) {
   const { plan } = use(params);
-  const [loading, setLoading] = useState(false);
   const [loadingMerchant, setLoadingMerchant] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [merchant, setMerchant] = useState<Merchant | null>(null);
@@ -124,6 +123,7 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
   const [businessType, setBusinessType] = useState("sole_proprietorship");
   const [relationshipClaim, setRelationshipClaim] = useState<"owner_affiliated_claim" | "representative_claim">("owner_affiliated_claim");
   const [verificationDisclosureAccepted, setVerificationDisclosureAccepted] = useState(false);
+  const router = useRouter();
 
   // NOTE: owner_name is NOT locked during any upgrade flow.
   // When upgrading (starter→individual, individual→corporate, starter→corporate),
@@ -154,7 +154,7 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
 
   if (!isUpgradePlanId(plan)) {
     return (
-      <div className="mx-auto max-w-3xl space-y-6 rounded-2xl border border-white/10 bg-[#12061F] p-8 text-white shadow-xl">
+      <div className="mx-auto max-w-3xl space-y-6 rounded-2xl border border-white/12 bg-[#140C24] p-8 text-white shadow-xl dark:bg-[#10081D]">
         <Link
           href="/settings"
           className="inline-flex items-center text-sm font-medium text-white/60 hover:text-white transition-colors"
@@ -176,8 +176,6 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
 
   const config = PLAN_CONFIG[plan];
   const Icon = config.icon;
-
-  const router = useRouter();
 
   const handleUpgrade = async () => {
     if (!ownerName.trim()) {
@@ -207,7 +205,7 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
   };
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 rounded-2xl border border-white/10 bg-[#12061F] p-8 md:p-10 text-white shadow-[0_0_40px_rgba(123,47,247,0.1)]">
+    <div className="mx-auto max-w-5xl space-y-6 rounded-2xl border border-white/12 bg-[#140C24] p-6 text-white shadow-[0_0_40px_rgba(123,47,247,0.08)] md:p-10 dark:bg-[#10081D]">
       <Link
         href="/settings"
         className="inline-flex items-center text-sm font-medium text-white/60 hover:text-white transition-colors"
@@ -224,7 +222,7 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
       </div>
 
       <div className="grid gap-8 lg:grid-cols-[0.95fr_1.05fr]">
-        <Card className="border border-[#7B2FF7] bg-[#3D0B66]/30 py-0 text-white shadow-[0_0_30px_rgba(123,47,247,0.15)] backdrop-blur-sm">
+        <Card className="border border-[#8A5CF6]/70 bg-white/8 py-0 text-white shadow-[0_0_24px_rgba(138,92,246,0.12)] backdrop-blur-sm">
           <CardHeader className="px-8 pb-0 pt-8">
             <div className="mb-6 flex h-12 w-12 items-center justify-center rounded-lg bg-white/10 text-[#B58CFF]">
               <Icon className="h-6 w-6" />
@@ -256,7 +254,7 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
         </Card>
 
         <div className="space-y-6">
-          <Card className="border border-[#7B2FF7]/30 bg-[#7B2FF7]/5 shadow-none backdrop-blur-sm">
+          <Card className="border border-[#8A5CF6]/35 bg-white/6 shadow-none backdrop-blur-sm">
             <CardHeader className="pb-4">
               <CardTitle className="flex items-center gap-2 text-base font-bold text-white">
                 <Shield className="h-5 w-5 text-[#B58CFF]" />

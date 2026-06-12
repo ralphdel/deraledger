@@ -175,9 +175,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   ];
 
   return (
-    <div className="flex min-h-screen bg-neutral-50 dark:bg-[#12061F] text-neutral-900 dark:text-white dark:selection:bg-[#7B2FF7]/30 transition-colors duration-300">
+    <div className="flex min-h-screen min-w-0 overflow-x-hidden bg-background text-foreground transition-colors duration-300 dark:selection:bg-[#7B2FF7]/30">
       {/* Sidebar - Desktop */}
-      <aside className="hidden lg:flex flex-col w-64 bg-purp-900 dark:bg-[#12061F] border-r border-purp-800 dark:border-white/5 fixed inset-y-0 z-30">
+      <aside className="fixed inset-y-0 z-30 hidden w-64 min-h-0 flex-col border-r border-purp-800 bg-purp-900 dark:border-white/5 dark:bg-[#140C24] lg:flex">
         <div className="p-6">
           <Link href="/" className="flex items-center gap-2 text-white">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-white shadow-sm">
@@ -187,7 +187,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </Link>
         </div>
 
-        <nav className="flex-1 px-3 space-y-1">
+        <nav className="min-h-0 flex-1 overflow-y-auto px-3 space-y-1 pb-4">
           {allNavItems.filter(item => !item.requiredPermission || (merchant && merchant.permissions && merchant.permissions[item.requiredPermission])).map((item) => {
             const isActive = pathname === item.href || (item.href !== "/dashboard" && pathname.startsWith(item.href));
             return (
@@ -221,7 +221,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       {sidebarOpen && (
         <div className="lg:hidden">
           <div className="fixed inset-0 bg-neutral-900/50 dark:bg-[#12061F]/80 backdrop-blur-sm z-40" onClick={() => setSidebarOpen(false)} />
-          <aside className="fixed inset-y-0 left-0 w-72 bg-purp-900 dark:bg-[#12061F] dark:border-r dark:border-white/5 z-50 animate-in slide-in-from-left duration-300">
+          <aside className="fixed inset-y-0 left-0 z-50 flex w-72 min-h-0 flex-col border-r border-purp-800 bg-purp-900 dark:border-white/5 dark:bg-[#140C24] animate-in slide-in-from-left duration-300">
             <div className="p-6 flex items-center justify-between">
               <Link href="/" className="flex items-center gap-2 text-white">
                 <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-white shadow-sm">
@@ -233,7 +233,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 <X className="h-6 w-6" />
               </button>
             </div>
-            <nav className="px-3 py-4 space-y-1">
+            <nav className="min-h-0 flex-1 overflow-y-auto px-3 py-4 space-y-1">
               {allNavItems.filter(item => !item.requiredPermission || (merchant && merchant.permissions && merchant.permissions[item.requiredPermission])).map((item) => {
                 const isActive = pathname === item.href;
                 return (
@@ -257,7 +257,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       )}
 
       {/* Main Content */}
-      <div className="flex-1 lg:ml-64 print:ml-0 flex flex-col min-h-screen">
+      <div className="flex min-h-screen min-w-0 flex-1 flex-col overflow-x-hidden lg:ml-64 print:ml-0">
         {/* Subscription Banner — show for active subs OR starter plan with no sub */}
         {subscription ? (
           <>
@@ -380,7 +380,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </header>
 
         {/* Page Content */}
-        <main className="flex-1 p-4 sm:p-6 lg:p-8">
+        <main className="min-w-0 flex-1 overflow-x-hidden p-4 sm:p-6 lg:p-8">
           {businessTypeMissing && pathname !== "/settings" ? (
             <div className="flex flex-col items-center justify-center min-h-[60vh] text-center max-w-md mx-auto">
               <div className="w-16 h-16 rounded-full flex items-center justify-center mb-6 bg-amber-100 text-amber-600 dark:bg-amber-500/10 dark:text-amber-400 dark:border dark:border-amber-500/20">

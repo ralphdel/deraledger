@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { ThemeProvider, themeInitScript } from "@/components/theme-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import "./globals.css";
 
@@ -15,9 +16,14 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="h-full antialiased font-sans overflow-x-hidden">
-      <body className="min-h-full flex flex-col overflow-x-hidden w-full bg-[#0B0615]">
-        <TooltipProvider>{children}</TooltipProvider>
+    <html lang="en" suppressHydrationWarning className="h-full overflow-x-hidden antialiased font-sans">
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+      </head>
+      <body className="min-h-full w-full overflow-x-hidden bg-background text-foreground transition-colors">
+        <ThemeProvider>
+          <TooltipProvider>{children}</TooltipProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

@@ -1,7 +1,7 @@
 "use client";
 
 import { Sun, Moon, Laptop } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useTheme } from "@/components/theme-provider";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -11,37 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 
 export function ThemeToggle() {
-  const [theme, setTheme] = useState<"light" | "dark" | "system">("system");
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    setMounted(true);
-    const savedTheme = localStorage.getItem("purp_theme") as "light" | "dark" | "system";
-    if (savedTheme) {
-      setTheme(savedTheme);
-      applyTheme(savedTheme);
-    }
-  }, []);
-
-  const applyTheme = (t: "light" | "dark" | "system") => {
-    const root = window.document.documentElement;
-    root.classList.remove("light", "dark");
-
-    if (t === "system") {
-      const systemTheme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-      root.classList.add(systemTheme);
-    } else {
-      root.classList.add(t);
-    }
-  };
-
-  const handleThemeChange = (t: "light" | "dark" | "system") => {
-    setTheme(t);
-    localStorage.setItem("purp_theme", t);
-    applyTheme(t);
-  };
-
-  if (!mounted) return null;
+  const { theme, setTheme } = useTheme();
 
   return (
     <DropdownMenu>
@@ -52,15 +22,15 @@ export function ThemeToggle() {
           <span className="sr-only">Toggle theme</span>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="border-2 border-purp-200">
-        <DropdownMenuItem onClick={() => handleThemeChange("light")}>
+        <DropdownMenuItem onClick={() => setTheme("light")}>
           <Sun className="mr-2 h-4 w-4" />
           <span>Light</span>
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => handleThemeChange("dark")}>
+        <DropdownMenuItem onClick={() => setTheme("dark")}>
           <Moon className="mr-2 h-4 w-4" />
           <span>Dark</span>
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => handleThemeChange("system")}>
+        <DropdownMenuItem onClick={() => setTheme("system")}>
           <Laptop className="mr-2 h-4 w-4" />
           <span>System</span>
         </DropdownMenuItem>

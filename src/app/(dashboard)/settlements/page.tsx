@@ -145,7 +145,7 @@ export default function MerchantSettlementsPage() {
 
   return (
     <PermissionGuard permission="view_settlements" merchant={merchant} featureLabel="Settlements">
-      <div className="space-y-6 max-w-6xl mx-auto">
+      <div className="mx-auto max-w-6xl min-w-0 overflow-x-hidden space-y-6">
         <div className="flex items-center justify-between flex-wrap gap-4">
           <div>
             <h1 className="text-2xl font-bold text-purp-900">Settlements</h1>
@@ -161,15 +161,15 @@ export default function MerchantSettlementsPage() {
           </Button>
         </div>
 
-        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 flex-wrap">
-          <div className="flex items-center gap-2">
+        <div className="flex flex-col gap-3">
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center">
             <CalendarDays className="h-4 w-4 text-neutral-500" />
             <span className="text-sm text-neutral-600 font-medium">From</span>
-            <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="w-[160px] border-2 bg-white" />
+            <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="w-full sm:w-[160px] border-2 bg-white" />
             <span className="text-sm text-neutral-600 font-medium">To</span>
-            <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="w-[160px] border-2 bg-white" />
+            <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="w-full sm:w-[160px] border-2 bg-white" />
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {(["today", "week", "month", "last_month"] as const).map((preset) => (
               <button
                 key={preset}

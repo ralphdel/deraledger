@@ -129,8 +129,8 @@ function BrandLink() {
 
 export default function OnboardingPage() {
   return (
-    <div className="min-h-screen bg-[#12061F] text-white selection:bg-[#7B2FF7]/30">
-      <header className="border-b border-white/5 bg-[#12061F]/80 backdrop-blur-md">
+    <div className="min-h-screen bg-[#140C24] text-white selection:bg-[#8A5CF6]/30 dark:bg-[#10081D]">
+      <header className="border-b border-white/8 bg-[#140C24]/80 backdrop-blur-md dark:bg-[#10081D]/85">
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
           <BrandLink />
           <Link href="/login" className="text-sm font-semibold text-white/80 hover:text-white">

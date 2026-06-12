@@ -13,11 +13,11 @@
   --font-heading: var(--font-sans);
 
   /* Purp Standard Colors */
-  --color-purp-900: #2D1B6B;
-  --color-purp-700: #7B2FBE;
-  --color-purp-200: #C4B5FD;
-  --color-purp-100: #EDE9FE;
-  --color-purp-50: #F8F7FF;
+  --color-purp-900: #4A2A8A;
+  --color-purp-700: #8A5CF6;
+  --color-purp-200: #DDD0FF;
+  --color-purp-100: #F1EBFF;
+  --color-purp-50: #FBF9FF;
   --color-neutral-900: #1E1B2E;
   --color-neutral-500: #6B7280;
   --color-success: #059669;
@@ -64,38 +64,56 @@
 }
 
 :root {
-  --background: #F8F7FF;
+  --background: #FCFBFF;
   --foreground: #1E1B2E;
   --card: #FFFFFF;
   --card-foreground: #1E1B2E;
   --popover: #FFFFFF;
   --popover-foreground: #1E1B2E;
-  --primary: #2D1B6B;
+  --primary: #5D35B8;
   --primary-foreground: #FFFFFF;
-  --secondary: #EDE9FE;
-  --secondary-foreground: #2D1B6B;
-  --muted: #F8F7FF;
+  --secondary: #F3EEFF;
+  --secondary-foreground: #4A2A8A;
+  --muted: #F8F5FF;
   --muted-foreground: #6B7280;
-  --accent: #7B2FBE;
+  --accent: #8A5CF6;
   --accent-foreground: #FFFFFF;
   --destructive: #DC2626;
-  --border: #C4B5FD;
-  --input: #EDE9FE;
-  --ring: #7B2FBE;
-  --chart-1: #2D1B6B;
-  --chart-2: #7B2FBE;
-  --chart-3: #C4B5FD;
+  --border: #DDD0FF;
+  --input: #F1EBFF;
+  --ring: #8A5CF6;
+  --chart-1: #4A2A8A;
+  --chart-2: #8A5CF6;
+  --chart-3: #DDD0FF;
   --chart-4: #059669;
   --chart-5: #D97706;
   --radius: 0.5rem;
-  --sidebar: #2D1B6B;
+  --sidebar: #4A2A8A;
   --sidebar-foreground: #FFFFFF;
-  --sidebar-primary: #7B2FBE;
+  --sidebar-primary: #8A5CF6;
   --sidebar-primary-foreground: #FFFFFF;
   --sidebar-accent: rgba(255, 255, 255, 0.1);
   --sidebar-accent-foreground: #FFFFFF;
   --sidebar-border: rgba(255, 255, 255, 0.15);
   --sidebar-ring: #7B2FBE;
+}
+
+.dark {
+  --background: #120A21;
+  --foreground: #F6F1FF;
+  --card: #1A112D;
+  --card-foreground: #F6F1FF;
+  --popover: #1A112D;
+  --popover-foreground: #F6F1FF;
+  --primary: #B497FF;
+  --secondary: #22163A;
+  --secondary-foreground: #F6F1FF;
+  --muted: #1A112D;
+  --muted-foreground: #CABFE3;
+  --accent: #9B74FF;
+  --border: #302046;
+  --input: #241837;
+  --ring: #9B74FF;
 }
 
 @layer base {

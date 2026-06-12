@@ -60,7 +60,7 @@ const plans = [
 
 export function PricingSection() {
   return (
-    <section className="bg-[#0B0615] py-20 md:py-28 border-t border-white/[0.06] relative overflow-hidden">
+    <section className="relative overflow-hidden border-t border-white/8 bg-[#140C24] py-20 md:py-28 dark:bg-[#10081D]">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 relative z-10">
         
         <div className="text-center max-w-3xl mx-auto mb-16">

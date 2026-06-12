@@ -326,18 +326,18 @@ export default function AdminAccountingPage() {
             <div className="flex flex-col sm:flex-row gap-2">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-400" />
-                <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search merchant/reference" className="pl-9 border-2 w-full sm:w-[260px]" />
+                <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search merchant/reference" className="w-full pl-9 border-2 sm:w-[260px]" />
               </div>
               <Select value={provider} onValueChange={(value) => value && setProvider(value)}>
-                <SelectTrigger className="border-2 w-full sm:w-[150px]"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="w-full border-2 sm:w-[150px]"><SelectValue /></SelectTrigger>
                 <SelectContent>{PROVIDERS.map((item) => <SelectItem key={item} value={item}>{label(item)}</SelectItem>)}</SelectContent>
               </Select>
               <Select value={status} onValueChange={(value) => value && setStatus(value)}>
-                <SelectTrigger className="border-2 w-full sm:w-[170px]"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="w-full border-2 sm:w-[170px]"><SelectValue /></SelectTrigger>
                 <SelectContent>{STATUS_OPTIONS.map((item) => <SelectItem key={item} value={item}>{label(item)}</SelectItem>)}</SelectContent>
               </Select>
               <Select value={merchantFilter} onValueChange={(value) => value && setMerchantFilter(value)}>
-                <SelectTrigger className="border-2 w-full sm:w-[210px]"><SelectValue placeholder="Merchant" /></SelectTrigger>
+                <SelectTrigger className="w-full border-2 sm:w-[210px]"><SelectValue placeholder="Merchant" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All merchants</SelectItem>
                   {merchantOptions.map(([key, name]) => <SelectItem key={key} value={key}>{name}</SelectItem>)}

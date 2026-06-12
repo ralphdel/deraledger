@@ -1076,7 +1076,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-7xl space-y-6">
+    <div className="mx-auto max-w-7xl min-w-0 overflow-x-hidden space-y-6">
       <div className="space-y-3">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div className="space-y-2">

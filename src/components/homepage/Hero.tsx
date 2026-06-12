@@ -177,10 +177,10 @@ export function Hero() {
       setActiveSlide((prev) => (prev + 1) % slides.length);
     }, 5000);
     return () => clearInterval(timer);
-  }, []);
+  }, [slides.length]);
 
   return (
-    <section className="relative overflow-hidden bg-[#0B0615] pt-24 pb-20 md:pt-32 md:pb-28">
+    <section className="relative overflow-hidden bg-[#140C24] pt-24 pb-20 md:pt-32 md:pb-28 dark:bg-[#10081D]">
       {/* Background Gradients */}
       <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 h-[600px] w-[900px] rounded-full bg-[#6D28FF]/10 blur-[130px] pointer-events-none" />
       <div className="absolute right-0 bottom-0 translate-x-1/4 translate-y-1/4 h-[500px] w-[500px] rounded-full bg-[#C4B5FD]/5 blur-[120px] pointer-events-none" />

@@ -59,9 +59,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   return (
-    <div className="flex-1 w-full flex bg-neutral-50">
+    <div className="flex w-full min-w-0 flex-1 overflow-x-hidden bg-background text-foreground transition-colors">
       {/* Sidebar - Desktop */}
-      <aside className="hidden lg:flex lg:w-64 bg-[#0B1020] flex-col fixed inset-y-0 z-30">
+      <aside className="fixed inset-y-0 z-30 hidden min-h-0 flex-col bg-[#141829] lg:flex lg:w-64">
         <div className="p-6">
           <Link href="/admin" className="flex items-center gap-2">
             <div className="w-9 h-9 bg-white rounded-lg flex items-center justify-center shadow-sm">
@@ -74,7 +74,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           </Link>
         </div>
 
-        <nav className="flex-1 px-4 space-y-1">
+        <nav className="min-h-0 flex-1 overflow-y-auto px-4 space-y-1 pb-4">
           {adminNavItems.map((item) => {
             const isActive = pathname === item.href || (item.href !== "/admin" && pathname.startsWith(item.href));
             return (
@@ -110,7 +110,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       {sidebarOpen && (
         <div className="lg:hidden fixed inset-0 z-40">
           <div className="fixed inset-0 bg-black/50" onClick={() => setSidebarOpen(false)} />
-          <aside className="fixed inset-y-0 left-0 w-64 bg-[#0B1020] flex flex-col z-50">
+          <aside className="fixed inset-y-0 left-0 z-50 flex w-64 min-h-0 flex-col bg-[#141829]">
             <div className="p-6 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <div className="w-9 h-9 bg-white rounded-lg flex items-center justify-center shadow-sm">
@@ -122,7 +122,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                 <X className="h-5 w-5" />
               </button>
             </div>
-            <nav className="flex-1 px-4 space-y-1">
+            <nav className="min-h-0 flex-1 overflow-y-auto px-4 space-y-1 pb-4">
               {adminNavItems.map((item) => {
                 const isActive = pathname === item.href || (item.href !== "/admin" && pathname.startsWith(item.href));
                 return (
