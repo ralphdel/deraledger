@@ -60,17 +60,17 @@ const plans = [
 
 export function PricingSection() {
   return (
-    <section className="relative overflow-hidden border-t border-white/8 bg-[#140C24] py-20 md:py-28 dark:bg-[#10081D]">
+    <section className="relative overflow-hidden border-t border-border bg-gradient-to-b from-[#FCFAFF] via-white to-[#F8F3FF] py-20 md:py-28 dark:from-[#1D132D] dark:via-[#241737] dark:to-[#181022]">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 relative z-10">
         
         <div className="text-center max-w-3xl mx-auto mb-16">
           <p className="text-xs font-bold uppercase tracking-widest text-[#A78BFA] mb-3">
             Simple, scalable pricing
           </p>
-          <h2 className="text-3xl md:text-5xl font-black text-white tracking-tight mb-6">
+          <h2 className="text-3xl md:text-5xl font-black text-foreground tracking-tight mb-6 dark:text-white">
             Scale your operations.
           </h2>
-          <p className="text-sm md:text-base text-white/60 leading-relaxed">
+          <p className="text-sm md:text-base text-muted-foreground leading-relaxed dark:text-white/72">
             Start tracking offline payments for free, or verify your identity to unlock complete online collection and automated reconciliation tools.
           </p>
         </div>
@@ -81,8 +81,8 @@ export function PricingSection() {
               key={plan.name}
               className={`relative flex flex-col rounded-2xl border transition-all duration-300 ${
                 plan.featured
-                  ? "border-[#6D28FF] bg-[#12061F]/60 shadow-[0_4px_30px_rgba(109,40,255,0.15)]"
-                  : "border-white/[0.06] bg-[#12061F]/30"
+                  ? "border-[#A78BFA] bg-card shadow-[0_10px_30px_rgba(167,139,250,0.14)] dark:bg-white/8"
+                  : "border-border bg-card dark:bg-white/6"
               } p-6 md:p-8 backdrop-blur-sm hover:border-[#A78BFA]/30`}
             >
               {plan.featured && (
@@ -95,21 +95,21 @@ export function PricingSection() {
                 <p className="text-[10px] font-bold uppercase tracking-wider text-[#A78BFA] mb-2">
                   {plan.verification}
                 </p>
-                <h3 className="text-xl font-bold text-white tracking-tight">{plan.name}</h3>
-                <p className="mt-2 text-xs text-white/50 leading-relaxed min-h-[40px]">
+                <h3 className="text-xl font-bold text-foreground tracking-tight dark:text-white">{plan.name}</h3>
+                <p className="mt-2 text-xs text-muted-foreground leading-relaxed min-h-[40px] dark:text-white/70">
                   {plan.bestFor}
                 </p>
               </div>
 
-              <div className="mb-6 pb-6 border-b border-white/[0.06]">
-                <div className="text-2xl md:text-3xl font-black text-white tracking-tight">{plan.price}</div>
+              <div className="mb-6 pb-6 border-b border-border">
+                <div className="text-2xl md:text-3xl font-black text-foreground tracking-tight dark:text-white">{plan.price}</div>
               </div>
 
               <ul className="mb-8 space-y-3.5 flex-1">
                 {plan.included.map((item) => (
                   <li key={item} className="flex items-start gap-3 text-xs leading-relaxed">
                     <CheckCircle2 className={`h-4 w-4 mt-0.5 flex-shrink-0 ${plan.featured ? "text-[#A78BFA]" : "text-[#6D28FF]"}`} />
-                    <span className="text-white/80">{item}</span>
+                    <span className="text-foreground/85 dark:text-white/82">{item}</span>
                   </li>
                 ))}
               </ul>
@@ -119,7 +119,7 @@ export function PricingSection() {
                   className={`w-full h-11 font-bold text-xs uppercase tracking-wider transition-all border-0 ${
                     plan.featured
                       ? "bg-[#6D28FF] text-white hover:bg-[#6D28FF]/90"
-                      : "bg-white/[0.06] text-white hover:bg-white/[0.12]"
+                      : "bg-accent text-accent-foreground hover:bg-accent/80 dark:bg-white/8 dark:text-white dark:hover:bg-white/12"
                   }`}
                 >
                   {plan.cta}

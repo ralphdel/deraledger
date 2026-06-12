@@ -16,6 +16,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 const plans = [
   {
@@ -122,32 +123,35 @@ function BrandLink() {
       <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#7B2FF7] text-sm font-bold text-white shadow-[0_0_10px_rgba(123,47,247,0.4)]">
         D
       </div>
-      <span className="text-xl font-bold text-white">DeraLedger</span>
+      <span className="text-xl font-bold text-foreground">DeraLedger</span>
     </Link>
   );
 }
 
 export default function OnboardingPage() {
   return (
-    <div className="min-h-screen bg-[#140C24] text-white selection:bg-[#8A5CF6]/30 dark:bg-[#10081D]">
-      <header className="border-b border-white/8 bg-[#140C24]/80 backdrop-blur-md dark:bg-[#10081D]/85">
+    <div className="min-h-screen bg-background text-foreground selection:bg-primary/20">
+      <header className="border-b border-border/70 bg-background/90 backdrop-blur-xl">
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
           <BrandLink />
-          <Link href="/login" className="text-sm font-semibold text-white/80 hover:text-white">
-            Sign in
-          </Link>
+          <div className="flex items-center gap-2">
+            <ThemeToggle className="text-muted-foreground hover:text-foreground hover:bg-accent" />
+            <Link href="/login" className="text-sm font-semibold text-muted-foreground hover:text-foreground">
+              Sign in
+            </Link>
+          </div>
         </div>
       </header>
 
       <main>
         <section className="mx-auto max-w-4xl px-4 pb-10 pt-12 text-center sm:px-6 md:pt-16">
-          <Badge className="mb-4 border-[#7B2FF7]/30 bg-[#7B2FF7]/10 text-[#B58CFF]">
+          <Badge className="mb-4 border-primary/20 bg-accent text-primary">
             Built for businesses that get paid in parts
           </Badge>
-          <h1 className="text-4xl font-bold leading-tight text-white md:text-5xl">
+          <h1 className="text-4xl font-bold leading-tight text-foreground md:text-5xl">
             Choose How You Want To Use DeraLedger
           </h1>
-          <p className="mx-auto mt-4 max-w-2xl text-lg leading-relaxed text-white/60">
+          <p className="mx-auto mt-4 max-w-2xl text-lg leading-relaxed text-muted-foreground">
             Start with simple balance tracking, or verify your business workflow to unlock online
             collections, payment links, team access, and stronger controls.
           </p>
@@ -158,12 +162,12 @@ export default function OnboardingPage() {
             {workflowNotes.map((note) => {
               const Icon = note.icon;
               return (
-                <div key={note.title} className="rounded-2xl border border-white/10 bg-white/5 p-6 backdrop-blur-sm">
+                <div key={note.title} className="rounded-2xl border border-border bg-card p-6 backdrop-blur-sm dark:bg-white/5">
                   <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-[#7B2FF7]/10 text-[#B58CFF]">
                     <Icon className="h-6 w-6" />
                   </div>
-                  <h2 className="text-xl font-bold text-white">{note.title}</h2>
-                  <p className="mt-2 text-sm leading-relaxed text-white/60">{note.description}</p>
+                  <h2 className="text-xl font-bold text-foreground dark:text-white">{note.title}</h2>
+                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground dark:text-white/70">{note.description}</p>
                 </div>
               );
             })}
@@ -179,8 +183,8 @@ export default function OnboardingPage() {
                   key={plan.id}
                   className={`relative flex flex-col rounded-2xl border shadow-none ${
                     plan.highlight
-                      ? "border-[#7B2FF7] bg-[#3D0B66]/30 shadow-[0_0_30px_rgba(123,47,247,0.15)]"
-                      : "border-white/10 bg-white/5"
+                      ? "border-[#A78BFA] bg-card shadow-[0_0_30px_rgba(167,139,250,0.12)] dark:bg-white/8"
+                      : "border-border bg-card dark:bg-white/5"
                   } backdrop-blur-sm`}
                 >
                   {plan.badge && (
@@ -192,7 +196,7 @@ export default function OnboardingPage() {
                   <CardHeader className="px-8 pb-0 pt-10">
                     <div
                       className={`mb-4 flex h-12 w-12 items-center justify-center rounded-lg ${
-                        plan.highlight ? "bg-white/10 text-white" : "bg-[#7B2FF7]/10 text-[#B58CFF]"
+                        plan.highlight ? "bg-accent text-primary dark:bg-white/10 dark:text-white" : "bg-[#7B2FF7]/10 text-[#B58CFF]"
                       }`}
                     >
                       <Icon className="h-6 w-6" />
@@ -202,16 +206,16 @@ export default function OnboardingPage() {
                     >
                       {plan.verification}
                     </p>
-                    <h2 className="text-2xl font-bold text-white">
+                    <h2 className="text-2xl font-bold text-foreground dark:text-white">
                       {plan.name}
                     </h2>
-                    <p className="mt-2 text-sm text-white/60 h-10">
+                    <p className="mt-2 h-10 text-sm text-muted-foreground dark:text-white/70">
                       {plan.bestFor}
                     </p>
-                    <div className="pt-2 text-3xl font-bold text-white">
+                    <div className="pt-2 text-3xl font-bold text-foreground dark:text-white">
                       {plan.price}
                       {plan.priceNote && (
-                        <span className="ml-1 text-sm font-medium text-white/60">
+                        <span className="ml-1 text-sm font-medium text-muted-foreground dark:text-white/70">
                           {plan.priceNote}
                         </span>
                       )}
@@ -220,7 +224,7 @@ export default function OnboardingPage() {
 
                   <CardContent className="flex flex-1 flex-col px-8 pb-8 pt-6">
                     <div className="flex-1">
-                      <p className="text-sm font-bold text-white mb-4">
+                      <p className="mb-4 text-sm font-bold text-foreground dark:text-white">
                         Included
                       </p>
                       <ul className="space-y-4">
@@ -231,19 +235,19 @@ export default function OnboardingPage() {
                                 plan.highlight ? "text-[#B58CFF]" : "text-[#7B2FF7]"
                               }`}
                             />
-                            <span className="text-white/80">{item}</span>
+                            <span className="text-foreground dark:text-white/82">{item}</span>
                           </li>
                         ))}
                       </ul>
 
                       {plan.locked.length > 0 && (
                         <>
-                          <p className="mt-6 mb-3 text-sm font-bold text-white/60">
+                          <p className="mt-6 mb-3 text-sm font-bold text-muted-foreground dark:text-white/70">
                             Unlock later
                           </p>
                           <ul className="space-y-2">
                             {plan.locked.map((item) => (
-                              <li key={item} className="text-sm text-white/40">
+                              <li key={item} className="text-sm text-muted-foreground dark:text-white/55">
                                 {item}
                               </li>
                             ))}
@@ -252,7 +256,7 @@ export default function OnboardingPage() {
                       )}
                     </div>
 
-                    <p className="mt-6 mb-6 text-sm text-white/50">
+                    <p className="mt-6 mb-6 text-sm text-muted-foreground dark:text-white/65">
                       {plan.footer}
                     </p>
                     <Link href={plan.href} className="mt-auto block w-full">
@@ -260,7 +264,7 @@ export default function OnboardingPage() {
                         className={`h-12 w-full font-semibold transition-all ${
                           plan.highlight
                             ? "bg-[#7B2FF7] text-white hover:bg-[#B58CFF] hover:text-[#12061F] border-0"
-                            : "bg-white/10 text-white hover:bg-white/20 border-0"
+                            : "bg-accent text-accent-foreground hover:bg-accent/80 border-0 dark:bg-white/10 dark:text-white dark:hover:bg-white/20"
                         }`}
                       >
                         {plan.cta}
@@ -275,21 +279,21 @@ export default function OnboardingPage() {
         </section>
 
         <section className="mx-auto max-w-5xl px-4 pb-16 sm:px-6">
-          <div className="rounded-2xl border border-[#7B2FF7]/30 bg-[#7B2FF7]/5 p-8 text-center md:p-10 backdrop-blur-sm shadow-[0_0_20px_rgba(123,47,247,0.05)]">
+          <div className="rounded-2xl border border-border bg-muted p-8 text-center md:p-10 backdrop-blur-sm shadow-[0_0_20px_rgba(123,47,247,0.05)] dark:bg-white/5">
             <div className="mx-auto mb-6 flex h-14 w-14 items-center justify-center rounded-xl bg-[#7B2FF7]/20 text-[#B58CFF]">
               <ShieldCheck className="h-7 w-7" />
             </div>
-            <h2 className="text-3xl font-bold text-white">Verification follows the workflow.</h2>
-            <p className="mx-auto mt-4 max-w-2xl text-base leading-relaxed text-white/60">
+            <h2 className="text-3xl font-bold text-foreground dark:text-white">Verification follows the workflow.</h2>
+            <p className="mx-auto mt-4 max-w-2xl text-base leading-relaxed text-muted-foreground dark:text-white/70">
               Starter opens immediately. Individual collections require identity verification. Business
               workspaces use business and authority checks for higher trust and unlimited collections.
             </p>
-            <div className="mt-8 flex flex-wrap justify-center gap-4 text-sm font-semibold text-white">
-              <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-5 py-2.5 backdrop-blur-sm">
+            <div className="mt-8 flex flex-wrap justify-center gap-4 text-sm font-semibold text-foreground dark:text-white">
+              <span className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-5 py-2.5 backdrop-blur-sm dark:bg-white/5">
                 <Users className="h-4 w-4 text-[#B58CFF]" />
                 Simple team access
               </span>
-              <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-5 py-2.5 backdrop-blur-sm">
+              <span className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-5 py-2.5 backdrop-blur-sm dark:bg-white/5">
                 <ShieldCheck className="h-4 w-4 text-[#B58CFF]" />
                 Secure online payments
               </span>
@@ -298,10 +302,10 @@ export default function OnboardingPage() {
         </section>
       </main>
 
-      <footer className="border-t border-white/5 bg-[#12061F] px-4 py-10 text-center text-sm text-white/50">
+      <footer className="border-t border-border bg-muted px-4 py-10 text-center text-sm text-muted-foreground dark:bg-[#181022] dark:text-white/60">
         <p>
           Already have an account?{" "}
-          <Link href="/login" className="font-semibold text-white hover:text-[#B58CFF] transition-colors">
+          <Link href="/login" className="font-semibold text-foreground hover:text-[#B58CFF] transition-colors dark:text-white">
             Sign in
           </Link>
         </p>

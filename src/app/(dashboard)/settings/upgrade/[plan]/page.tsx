@@ -154,18 +154,18 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
 
   if (!isUpgradePlanId(plan)) {
     return (
-      <div className="mx-auto max-w-3xl space-y-6 rounded-2xl border border-white/12 bg-[#140C24] p-8 text-white shadow-xl dark:bg-[#10081D]">
+      <div className="mx-auto max-w-3xl space-y-6 rounded-2xl border border-border bg-background p-8 text-foreground shadow-xl dark:bg-[#10081D] dark:text-white">
         <Link
           href="/settings"
-          className="inline-flex items-center text-sm font-medium text-white/60 hover:text-white transition-colors"
+          className="inline-flex items-center text-sm font-medium text-muted-foreground hover:text-foreground transition-colors dark:hover:text-white"
         >
           <ArrowLeft className="mr-1 h-4 w-4" />
           Back to Settings
         </Link>
-        <Card className="border-0 bg-white/5 backdrop-blur-sm shadow-none">
+        <Card className="border-0 bg-card backdrop-blur-sm shadow-none dark:bg-white/5">
           <CardContent className="p-8 text-center">
-            <h1 className="text-2xl font-bold text-white">Upgrade plan not found</h1>
-            <p className="mt-2 text-sm text-white/60">
+            <h1 className="text-2xl font-bold text-foreground dark:text-white">Upgrade plan not found</h1>
+            <p className="mt-2 text-sm text-muted-foreground dark:text-white/70">
               Choose Individual / Collections or Business to continue.
             </p>
           </CardContent>
@@ -205,48 +205,48 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
   };
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 rounded-2xl border border-white/12 bg-[#140C24] p-6 text-white shadow-[0_0_40px_rgba(123,47,247,0.08)] md:p-10 dark:bg-[#10081D]">
+    <div className="mx-auto max-w-5xl space-y-6 rounded-2xl border border-border bg-background p-6 text-foreground shadow-[0_0_40px_rgba(123,47,247,0.07)] md:p-10 dark:bg-[#20112F]">
       <Link
         href="/settings"
-        className="inline-flex items-center text-sm font-medium text-white/60 hover:text-white transition-colors"
+        className="inline-flex items-center text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
       >
         <ArrowLeft className="mr-1 h-4 w-4" />
         Back to Settings
       </Link>
 
       <div>
-        <h1 className="text-3xl font-bold text-white">Upgrade to {config.label}</h1>
-        <p className="mt-2 text-sm text-white/60">
+        <h1 className="text-3xl font-bold text-foreground dark:text-white">Upgrade to {config.label}</h1>
+        <p className="mt-2 text-sm text-muted-foreground dark:text-white/72">
           Review the workflow, collection access, and verification requirements before subscribing.
         </p>
       </div>
 
       <div className="grid gap-8 lg:grid-cols-[0.95fr_1.05fr]">
-        <Card className="border border-[#8A5CF6]/70 bg-white/8 py-0 text-white shadow-[0_0_24px_rgba(138,92,246,0.12)] backdrop-blur-sm">
+        <Card className="border border-[#CDBBFF]/70 bg-card py-0 text-card-foreground shadow-[0_0_24px_rgba(205,187,255,0.11)] backdrop-blur-sm dark:bg-white/8">
           <CardHeader className="px-8 pb-0 pt-8">
-            <div className="mb-6 flex h-12 w-12 items-center justify-center rounded-lg bg-white/10 text-[#B58CFF]">
+            <div className="mb-6 flex h-12 w-12 items-center justify-center rounded-lg bg-accent text-[#B58CFF] dark:bg-white/10">
               <Icon className="h-6 w-6" />
             </div>
             <p className="text-xs font-semibold uppercase tracking-wide text-[#B58CFF]">
               {config.verification}
             </p>
-            <CardTitle className="mt-1 text-3xl font-bold text-white">{config.label}</CardTitle>
-            <p className="mt-2 text-sm leading-relaxed text-white/80">{config.workflow}</p>
+            <CardTitle className="mt-1 text-3xl font-bold text-foreground dark:text-white">{config.label}</CardTitle>
+            <p className="mt-2 text-sm leading-relaxed text-muted-foreground dark:text-white/78">{config.workflow}</p>
             <div className="pt-5">
-              <span className="text-4xl font-bold text-white">{config.price}</span>
-              <span className="ml-1 text-sm text-white/60">{config.interval}</span>
+              <span className="text-4xl font-bold text-foreground dark:text-white">{config.price}</span>
+              <span className="ml-1 text-sm text-muted-foreground dark:text-white/70">{config.interval}</span>
             </div>
           </CardHeader>
           <CardContent className="px-8 pb-8 pt-6">
-            <div className="rounded-xl border border-white/10 bg-[#12061F]/50 p-4 text-sm font-semibold text-white/80">
+            <div className="rounded-xl border border-border bg-muted p-4 text-sm font-semibold text-foreground dark:text-white/85">
               {config.collectionLimit}
             </div>
-            <h2 className="mt-8 text-sm font-bold text-white">Included</h2>
+            <h2 className="mt-8 text-sm font-bold text-foreground dark:text-white">Included</h2>
             <ul className="mt-4 space-y-4">
               {config.features.map((feature) => (
                 <li key={feature} className="flex items-start gap-3 text-sm">
                   <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[#B58CFF]" />
-                  <span className="text-white/80">{feature}</span>
+                  <span className="text-foreground dark:text-white/82">{feature}</span>
                 </li>
               ))}
             </ul>
@@ -254,20 +254,20 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
         </Card>
 
         <div className="space-y-6">
-          <Card className="border border-[#8A5CF6]/35 bg-white/6 shadow-none backdrop-blur-sm">
+          <Card className="border border-[#CDBBFF]/40 bg-card shadow-none backdrop-blur-sm dark:bg-white/5">
             <CardHeader className="pb-4">
-              <CardTitle className="flex items-center gap-2 text-base font-bold text-white">
+              <CardTitle className="flex items-center gap-2 text-base font-bold text-foreground dark:text-white">
                 <Shield className="h-5 w-5 text-[#B58CFF]" />
                 Verification Requirements
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="mb-4 text-sm leading-relaxed text-white/60">
+              <p className="mb-4 text-sm leading-relaxed text-muted-foreground dark:text-white/70">
                 Payment collection is activated after the required checks for this workflow.
               </p>
               <ul className="space-y-3">
                 {config.requirements.map((requirement) => (
-                  <li key={requirement} className="flex items-start gap-3 text-sm text-white/80">
+                  <li key={requirement} className="flex items-start gap-3 text-sm text-foreground dark:text-white/82">
                     <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#B58CFF]" />
                     <span>{requirement}</span>
                   </li>
@@ -276,10 +276,10 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
             </CardContent>
           </Card>
 
-          <Card className="border border-white/10 bg-white/5 backdrop-blur-sm shadow-none">
+          <Card className="border border-border bg-card backdrop-blur-sm shadow-none dark:bg-white/5">
             <CardContent className="space-y-5 p-8">
               {loadingMerchant ? (
-                <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-[#12061F]/50 p-5 text-sm text-white/80">
+                <div className="flex items-center gap-3 rounded-xl border border-border bg-muted p-5 text-sm text-foreground dark:bg-[#12061F]/50 dark:text-white/82">
                   <Loader2 className="h-4 w-4 animate-spin text-[#B58CFF]" />
                   Loading workspace details...
                 </div>

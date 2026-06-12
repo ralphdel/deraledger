@@ -180,7 +180,7 @@ function maskAccountNumber(value: string | null | undefined) {
 function statusBadge(status: string | null | undefined) {
   if (!status || status === "unverified" || status === "not_started") {
     return (
-      <Badge variant="outline" className="border-neutral-200 bg-neutral-50 text-neutral-600">
+      <Badge variant="outline" className="border-border bg-muted text-muted-foreground">
         Not started
       </Badge>
     );
@@ -193,7 +193,7 @@ function statusBadge(status: string | null | undefined) {
     status === "director_approved"
   ) {
     return (
-      <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
+      <Badge variant="outline" className="border-emerald-500/30 bg-emerald-500/12 text-emerald-700 dark:text-emerald-300">
         <CheckCircle className="mr-1 h-3 w-3" />
         {formatStatusLabel(status)}
       </Badge>
@@ -202,7 +202,7 @@ function statusBadge(status: string | null | undefined) {
 
   if (status.includes("pending") || status === "manual_review" || status === "partial_match") {
     return (
-      <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">
+      <Badge variant="outline" className="border-amber-500/30 bg-amber-500/12 text-amber-700 dark:text-amber-300">
         <Clock className="mr-1 h-3 w-3" />
         {formatStatusLabel(status)}
       </Badge>
@@ -211,7 +211,7 @@ function statusBadge(status: string | null | undefined) {
 
   if (status === "rejected" || status === "requires_reupload" || status === "restricted") {
     return (
-      <Badge variant="outline" className="border-red-200 bg-red-50 text-red-700">
+      <Badge variant="outline" className="border-red-500/30 bg-red-500/12 text-red-700 dark:text-red-300">
         <AlertTriangle className="mr-1 h-3 w-3" />
         {formatStatusLabel(status)}
       </Badge>
@@ -241,8 +241,8 @@ function SectionCard({
       <CardHeader className="gap-3 pb-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div className="space-y-1.5">
-            <CardTitle className="text-base font-bold text-purp-900">{title}</CardTitle>
-            <p className="text-sm leading-6 text-neutral-500">{description}</p>
+            <CardTitle className="text-base font-bold text-foreground">{title}</CardTitle>
+            <p className="text-sm leading-6 text-muted-foreground">{description}</p>
           </div>
           {action ? <div className="shrink-0">{action}</div> : null}
         </div>
@@ -262,7 +262,7 @@ function ChecklistRow({
   status: "complete" | "pending" | "locked" | "rejected";
 }) {
   return (
-    <div className="flex items-start gap-3 rounded-xl border border-neutral-200 bg-white p-4">
+    <div className="flex items-start gap-3 rounded-xl border border-border bg-card p-4">
       {status === "complete" ? (
         <CheckCircle className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
       ) : status === "rejected" ? (
@@ -270,11 +270,11 @@ function ChecklistRow({
       ) : status === "pending" ? (
         <Clock className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
       ) : (
-        <Lock className="mt-0.5 h-5 w-5 shrink-0 text-neutral-400" />
+        <Lock className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
       )}
       <div className="space-y-1">
         <div className="flex flex-wrap items-center gap-2">
-          <p className="text-sm font-semibold text-neutral-900">{title}</p>
+          <p className="text-sm font-semibold text-foreground">{title}</p>
           <Badge
             variant="outline"
             className={
@@ -284,7 +284,7 @@ function ChecklistRow({
                 ? "border-red-200 bg-red-50 text-red-700"
                 : status === "pending"
                 ? "border-amber-200 bg-amber-50 text-amber-700"
-                : "border-neutral-200 bg-neutral-50 text-neutral-600"
+                : "border-border bg-muted text-muted-foreground"
             }
           >
             {status === "complete"
@@ -296,7 +296,7 @@ function ChecklistRow({
               : "Locked"}
           </Badge>
         </div>
-        <p className="text-sm leading-6 text-neutral-500">{description}</p>
+        <p className="text-sm leading-6 text-muted-foreground">{description}</p>
       </div>
     </div>
   );
@@ -1063,8 +1063,8 @@ export default function SettingsPage() {
     return (
       <div className="mx-auto max-w-6xl space-y-6">
         <div>
-          <h1 className="text-2xl font-bold text-purp-900">Settings</h1>
-          <p className="mt-1 text-sm text-neutral-500">Loading your workspace settings...</p>
+          <h1 className="text-2xl font-bold text-foreground">Settings</h1>
+          <p className="mt-1 text-sm text-muted-foreground">Loading your workspace settings...</p>
         </div>
         <Card className="border-2 border-purp-200 shadow-none">
           <CardContent className="p-6">
@@ -1080,8 +1080,8 @@ export default function SettingsPage() {
       <div className="space-y-3">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div className="space-y-2">
-            <h1 className="text-2xl font-bold text-purp-900">Settings</h1>
-            <p className="max-w-3xl text-sm leading-6 text-neutral-500">
+            <h1 className="text-2xl font-bold text-foreground">Settings</h1>
+            <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
               Manage verification, profile data, payout account setup, billing, and business controls
               without mixing unrelated actions into one long form.
             </p>
@@ -1196,7 +1196,7 @@ export default function SettingsPage() {
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
         <div className="overflow-x-auto pb-2">
-          <TabsList className="inline-flex min-w-max justify-start gap-2 rounded-2xl border border-purp-200 bg-white p-2">
+          <TabsList className="inline-flex min-w-max justify-start gap-2 rounded-2xl border border-border bg-card p-2">
             <TabsTrigger value="verification">Account Status & Verification</TabsTrigger>
             <TabsTrigger value="profile">Business Profile</TabsTrigger>
             <TabsTrigger value="settlement">Settlement Account</TabsTrigger>

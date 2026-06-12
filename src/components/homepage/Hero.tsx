@@ -27,8 +27,8 @@ function FloatingWorkspace({ activeSlide }: { activeSlide: number }) {
         <div 
           className={`absolute top-4 left-4 w-[240px] rounded-xl border p-4 shadow-xl backdrop-blur-md transition-all duration-700 ${
             activeSlide === 0 
-              ? "border-[#6D28FF] bg-[#12061F]/90 scale-105 opacity-100 z-20 shadow-[0_4px_25px_rgba(109,40,255,0.25)]" 
-              : "border-white/[0.04] bg-[#12061F]/30 scale-95 opacity-30 z-10"
+              ? "border-[#A78BFA] bg-[#342047]/78 scale-105 opacity-100 z-20 shadow-[0_4px_25px_rgba(167,139,250,0.18)]" 
+              : "border-[#DDD0FF] bg-[#2F1C42]/88 scale-95 opacity-80 z-10 dark:border-white/10 dark:bg-white/10 dark:opacity-45"
           } animate-[float_6s_ease-in-out_infinite]`}
         >
           <div className="flex items-center gap-3">
@@ -36,7 +36,7 @@ function FloatingWorkspace({ activeSlide }: { activeSlide: number }) {
               <FileText className="h-4 w-4 text-[#A78BFA]" />
             </div>
             <div className="flex-1">
-              <p className="text-[10px] font-semibold text-white/40 uppercase tracking-wider">Invoice Generated</p>
+              <p className="text-[10px] font-semibold text-white/65 uppercase tracking-wider">Invoice Generated</p>
               <p className="text-xs font-bold text-white mt-0.5">INV-2041</p>
             </div>
           </div>
@@ -52,8 +52,8 @@ function FloatingWorkspace({ activeSlide }: { activeSlide: number }) {
         <div 
           className={`absolute top-16 right-4 w-[260px] rounded-xl border p-4 shadow-xl backdrop-blur-md transition-all duration-700 ${
             activeSlide === 1 
-              ? "border-emerald-500 bg-[#12061F]/90 scale-105 opacity-100 z-20 shadow-[0_4px_25px_rgba(16,185,129,0.2)]" 
-              : "border-white/[0.04] bg-[#12061F]/30 scale-95 opacity-30 z-10"
+              ? "border-emerald-400 bg-[#342047]/78 scale-105 opacity-100 z-20 shadow-[0_4px_25px_rgba(16,185,129,0.16)]" 
+              : "border-[#DDD0FF] bg-[#2F1C42]/88 scale-95 opacity-80 z-10 dark:border-white/10 dark:bg-white/10 dark:opacity-45"
           } animate-[float_7s_ease-in-out_1s_infinite]`}
         >
           <div className="flex items-start gap-3">
@@ -75,8 +75,8 @@ function FloatingWorkspace({ activeSlide }: { activeSlide: number }) {
         <div 
           className={`absolute bottom-32 left-4 w-[250px] rounded-xl border p-4 shadow-xl backdrop-blur-md transition-all duration-700 ${
             activeSlide === 1 
-              ? "border-amber-500 bg-[#12061F]/95 scale-105 opacity-100 z-20 shadow-[0_4px_25px_rgba(245,158,11,0.2)]" 
-              : "border-white/[0.04] bg-[#12061F]/30 scale-95 opacity-30 z-10"
+              ? "border-amber-400 bg-[#342047]/80 scale-105 opacity-100 z-20 shadow-[0_4px_25px_rgba(245,158,11,0.16)]" 
+              : "border-[#DDD0FF] bg-[#2F1C42]/88 scale-95 opacity-80 z-10 dark:border-white/10 dark:bg-white/10 dark:opacity-45"
           } animate-[float_5s_ease-in-out_2s_infinite]`}
         >
           <div className="flex items-center gap-3 mb-2">
@@ -93,8 +93,8 @@ function FloatingWorkspace({ activeSlide }: { activeSlide: number }) {
         <div 
           className={`absolute bottom-12 right-12 w-[220px] rounded-xl border p-4 shadow-xl backdrop-blur-md transition-all duration-700 ${
             activeSlide === 2 
-              ? "border-[#6D28FF] bg-[#12061F]/95 scale-105 opacity-100 z-20 shadow-[0_4px_25px_rgba(109,40,255,0.25)]" 
-              : "border-white/[0.04] bg-[#12061F]/30 scale-95 opacity-30 z-10"
+              ? "border-[#A78BFA] bg-[#342047]/80 scale-105 opacity-100 z-20 shadow-[0_4px_25px_rgba(167,139,250,0.18)]" 
+              : "border-[#DDD0FF] bg-[#2F1C42]/88 scale-95 opacity-80 z-10 dark:border-white/10 dark:bg-white/10 dark:opacity-45"
           } animate-[float_8s_ease-in-out_0.5s_infinite]`}
         >
           <div className="flex items-center justify-between border-b border-white/[0.06] pb-2 mb-2">
@@ -121,8 +121,8 @@ function FloatingWorkspace({ activeSlide }: { activeSlide: number }) {
         <div 
           className={`absolute top-[40%] left-[30%] -translate-x-1/2 w-[230px] rounded-xl border p-4 shadow-2xl backdrop-blur-md transition-all duration-700 ${
             activeSlide === 0 || activeSlide === 2 
-              ? "border-[#C4B5FD] bg-[#0B0615]/95 scale-105 opacity-100 z-20 shadow-[0_10px_35px_rgba(196,181,253,0.15)]" 
-              : "border-white/[0.04] bg-[#0B0615]/30 scale-95 opacity-30 z-10"
+              ? "border-[#DDD0FF] bg-[#2F1C42]/82 scale-105 opacity-100 z-20 shadow-[0_10px_35px_rgba(221,208,255,0.14)]" 
+              : "border-[#DDD0FF] bg-[#2F1C42]/88 scale-95 opacity-80 z-10 dark:border-white/10 dark:bg-white/10 dark:opacity-45"
           } animate-[float_9s_ease-in-out_1.5s_infinite]`}
         >
           <div className="flex items-center justify-between mb-3">
@@ -180,10 +180,10 @@ export function Hero() {
   }, [slides.length]);
 
   return (
-    <section className="relative overflow-hidden bg-[#140C24] pt-24 pb-20 md:pt-32 md:pb-28 dark:bg-[#10081D]">
+    <section className="relative overflow-hidden bg-gradient-to-b from-white via-[#F7F1FF] to-white pt-24 pb-20 text-foreground md:pt-32 md:pb-28 dark:from-[#20112F] dark:via-[#26173A] dark:to-[#181022] dark:text-white">
       {/* Background Gradients */}
-      <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 h-[600px] w-[900px] rounded-full bg-[#6D28FF]/10 blur-[130px] pointer-events-none" />
-      <div className="absolute right-0 bottom-0 translate-x-1/4 translate-y-1/4 h-[500px] w-[500px] rounded-full bg-[#C4B5FD]/5 blur-[120px] pointer-events-none" />
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 h-[600px] w-[900px] rounded-full bg-[#A78BFA]/14 blur-[130px] pointer-events-none" />
+      <div className="absolute right-0 bottom-0 translate-x-1/4 translate-y-1/4 h-[500px] w-[500px] rounded-full bg-[#DDD0FF]/10 blur-[120px] pointer-events-none" />
 
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 relative z-10">
         <div className="grid gap-12 lg:grid-cols-[1.15fr_0.85fr] lg:gap-8 items-center">
@@ -202,16 +202,16 @@ export function Hero() {
                       : "absolute inset-0 opacity-0 translate-y-6 pointer-events-none"
                   }`}
                 >
-                  <div className="inline-flex items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.03] px-3.5 py-1.5 mb-6 backdrop-blur-md">
+                  <div className="inline-flex items-center gap-2 rounded-full border border-border bg-card/80 px-3.5 py-1.5 mb-6 backdrop-blur-md dark:border-white/10 dark:bg-white/5">
                     <Sparkles className="h-3.5 w-3.5 text-[#A78BFA]" />
-                    <span className="text-[10px] font-bold text-white/80 tracking-wide uppercase">{slide.eyebrow}</span>
+                    <span className="text-[10px] font-bold text-primary tracking-wide uppercase dark:text-[#DDD0FF]">{slide.eyebrow}</span>
                   </div>
                   
-                  <h1 className="text-3xl font-black leading-[1.1] tracking-tight text-white sm:text-4xl lg:text-[46px] xl:text-[54px]">
+                  <h1 className="text-3xl font-black leading-[1.1] tracking-tight text-foreground sm:text-4xl lg:text-[46px] xl:text-[54px] dark:text-white">
                     {slide.headline}
                   </h1>
                   
-                  <p className="mt-4 text-sm md:text-base leading-relaxed text-white/60 max-w-2xl mx-auto lg:mx-0">
+                  <p className="mt-4 text-sm md:text-base leading-relaxed text-muted-foreground max-w-2xl mx-auto lg:mx-0 dark:text-white/72">
                     {slide.description}
                   </p>
                 </div>
@@ -226,7 +226,7 @@ export function Hero() {
                 </Button>
               </Link>
               <a href="#workflow" className="w-full sm:w-auto">
-                <Button variant="outline" className="h-12 w-full sm:w-auto border-white/[0.12] bg-white/[0.02] px-8 text-base font-bold text-white hover:bg-white/[0.06] hover:text-white backdrop-blur-sm transition-all">
+                <Button variant="outline" className="h-12 w-full sm:w-auto border-border bg-card/90 px-8 text-base font-bold text-foreground hover:bg-accent hover:text-foreground backdrop-blur-sm transition-all dark:border-white/12 dark:bg-white/5 dark:text-white dark:hover:bg-white/10">
                   See Live Demo
                   <ChevronRight className="ml-1 h-4 w-4" />
                 </Button>
@@ -244,14 +244,14 @@ export function Hero() {
                   >
                     <span 
                       className={`text-[9px] font-bold uppercase tracking-widest transition-colors duration-300 ${
-                        idx === activeSlide ? "text-[#A78BFA]" : "text-white/30 group-hover:text-white/60"
+                        idx === activeSlide ? "text-[#A78BFA]" : "text-muted-foreground group-hover:text-foreground dark:text-white/35 dark:group-hover:text-white/70"
                       }`}
                     >
                       {idx === 0 ? "Invoicing" : idx === 1 ? "Collections" : "Team Control"}
                     </span>
                     <div 
                       className={`h-[3px] rounded-full mt-1.5 transition-all duration-500 ${
-                        idx === activeSlide ? "w-12 bg-[#6D28FF]" : "w-3 bg-white/10 group-hover:w-6"
+                        idx === activeSlide ? "w-12 bg-[#6D28FF]" : "w-3 bg-border group-hover:w-6 dark:bg-white/12"
                       }`}
                     />
                   </button>

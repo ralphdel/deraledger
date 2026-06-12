@@ -12,10 +12,11 @@ import { Footer } from "@/components/homepage/Footer";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { DeraLedgerLogo } from "@/components/ui/deraledger-logo";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 function Header() {
   return (
-    <header className="fixed top-0 left-0 right-0 z-50 border-b border-white/8 bg-[#140C24]/80 backdrop-blur-md">
+    <header className="fixed top-0 left-0 right-0 z-50 border-b border-border/70 bg-background/90 backdrop-blur-xl">
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
         
         {/* Logo */}
@@ -23,26 +24,27 @@ function Header() {
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-white shadow-[0_0_10px_rgba(255,255,255,0.1)]">
             <DeraLedgerLogo className="h-5 w-5" />
           </div>
-          <span className="text-base font-bold text-white tracking-tight">DeraLedger</span>
+          <span className="text-base font-bold text-foreground tracking-tight">DeraLedger</span>
         </Link>
 
         {/* Desktop Nav */}
         <nav className="hidden md:flex items-center gap-8">
-          <a href="#workflow" className="text-xs font-bold uppercase tracking-wider text-white/60 hover:text-white transition-colors">How it works</a>
-          <a href="#features" className="text-xs font-bold uppercase tracking-wider text-white/60 hover:text-white transition-colors">Features</a>
-          <a href="#pricing" className="text-xs font-bold uppercase tracking-wider text-white/60 hover:text-white transition-colors">Pricing</a>
-          <Link href="/dispute-resolution" className="text-xs font-bold uppercase tracking-wider text-white/60 hover:text-[#A78BFA] transition-colors">Disputes</Link>
+          <a href="#workflow" className="text-xs font-bold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors">How it works</a>
+          <a href="#features" className="text-xs font-bold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors">Features</a>
+          <a href="#pricing" className="text-xs font-bold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors">Pricing</a>
+          <Link href="/dispute-resolution" className="text-xs font-bold uppercase tracking-wider text-muted-foreground hover:text-primary transition-colors">Disputes</Link>
         </nav>
 
         {/* Auth Actions */}
         <div className="flex items-center gap-3">
+          <ThemeToggle className="text-muted-foreground hover:text-foreground hover:bg-accent" />
           <Link href="/login" className="hidden sm:block">
-            <Button variant="ghost" className="h-9 px-4 text-xs font-bold uppercase tracking-wider text-white/80 hover:text-white hover:bg-white/5">
+            <Button variant="ghost" className="h-9 px-4 text-xs font-bold uppercase tracking-wider text-foreground hover:bg-accent">
               Log in
             </Button>
           </Link>
           <Link href="/onboarding">
-            <Button className="h-9 px-4 text-xs font-bold uppercase tracking-wider bg-white text-[#0B0615] hover:bg-gray-200 shadow-[0_0_10px_rgba(255,255,255,0.15)] border-0">
+            <Button className="h-9 px-4 text-xs font-bold uppercase tracking-wider shadow-[0_8px_24px_rgba(105,65,198,0.18)] border-0">
               Get Started
             </Button>
           </Link>
@@ -55,7 +57,7 @@ function Header() {
 
 export default function LandingPage() {
   return (
-    <div className="min-h-screen w-full overflow-x-hidden bg-[#140C24] text-white selection:bg-[#8A5CF6]/30 antialiased font-sans dark:bg-[#10081D]">
+    <div className="min-h-screen w-full overflow-x-hidden bg-background text-foreground selection:bg-primary/20 antialiased font-sans">
       <Header />
       
       <main className="pt-16 overflow-x-hidden w-full">
