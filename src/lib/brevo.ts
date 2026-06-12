@@ -4,7 +4,7 @@ import { getAppUrl } from "@/lib/server-utils";
 const BREVO_API_URL = "https://api.brevo.com/v3/smtp/email";
 const ADMIN_EMAIL = "ralphdel14@yahoo.com"; // Verified sender email on Brevo
 
-async function sendEmail(payload: any) {
+async function sendEmail(payload: Record<string, unknown>) {
   const apiKey = process.env.BREVO_API_KEY;
   if (!apiKey) {
     console.warn("BREVO_API_KEY is not set. Email not sent.");
@@ -22,15 +22,15 @@ async function sendEmail(payload: any) {
     });
 
     if (!response.ok) {
-      const err = await response.json();
+      const err = (await response.json()) as { message?: string };
       console.error("Brevo Error:", err);
-      return { success: false, error: err.message };
+      return { success: false, error: err.message ?? "Request failed" };
     }
 
     return { success: true };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Brevo Request Failed:", error);
-    return { success: false, error: error.message };
+    return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
   }
 }
 
@@ -178,7 +178,7 @@ export async function sendInvoiceReminderEmail(
   payLink: string
 ) {
   let subject = "";
-  let greeting = `Hello ${clientName},`;
+  const greeting = `Hello ${clientName},`;
   let message = "";
   let color = "#4C1D95"; // Default Purple
 
@@ -336,6 +336,47 @@ export async function sendPaymentReceiptEmail(
  * Welcome email sent after subscription payment is confirmed.
  * Contains a magic link to /onboarding/set-password.
  */
+export async function sendMerchantPaymentReceivedEmail(params: {
+  toEmail: string;
+  businessName: string;
+  invoiceNumber: string;
+  amountPaid: string;
+  provider: string;
+  paymentMethod: string;
+  paidAt: string;
+  reference: string;
+  customerName?: string | null;
+  customerEmail?: string | null;
+  invoiceUrl?: string | null;
+}) {
+  const subject = "Payment received on DeraLedger";
+  const htmlContent = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; background-color: #f9fafb; padding: 20px; border-radius: 8px;">
+      <div style="background-color: white; padding: 30px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+        <h2 style="color: #111827; margin-top: 0;">Payment received</h2>
+        <p style="color: #4B5563; font-size: 16px;">${params.businessName} has received <strong>${params.amountPaid}</strong> on DeraLedger.</p>
+        <div style="background-color: #F3F4F6; padding: 16px; border-radius: 6px; margin: 24px 0;">
+          <p style="margin: 4px 0; color: #374151;"><strong>Invoice:</strong> ${params.invoiceNumber}</p>
+          <p style="margin: 4px 0; color: #374151;"><strong>Reference:</strong> ${params.reference}</p>
+          <p style="margin: 4px 0; color: #374151;"><strong>Provider:</strong> ${params.provider}</p>
+          <p style="margin: 4px 0; color: #374151;"><strong>Payment method:</strong> ${params.paymentMethod}</p>
+          <p style="margin: 4px 0; color: #374151;"><strong>Paid at:</strong> ${params.paidAt}</p>
+          ${params.customerName ? `<p style="margin: 4px 0; color: #374151;"><strong>Customer:</strong> ${params.customerName}</p>` : ""}
+          ${params.customerEmail ? `<p style="margin: 4px 0; color: #374151;"><strong>Customer email:</strong> ${params.customerEmail}</p>` : ""}
+        </div>
+        ${params.invoiceUrl ? `<a href="${params.invoiceUrl}" style="display: inline-block; background-color: #4C1D95; color: white; text-decoration: none; padding: 12px 24px; border-radius: 6px; font-weight: bold;">View payment details</a>` : ""}
+      </div>
+    </div>
+  `;
+
+  return sendEmail({
+    sender: { name: "DeraLedger Payments", email: ADMIN_EMAIL },
+    to: [{ email: params.toEmail }],
+    subject,
+    htmlContent,
+  });
+}
+
 export async function sendOnboardingWelcomeEmail(
   toEmail: string,
   businessName: string,
@@ -463,9 +504,9 @@ export async function sendSubscriptionExpiringEmail(
 ) {
   const appUrl = getAppUrl();
   const settingsLink = `${appUrl}/settings/billing`;
-  const amount = planType === "individual" ? "₦5,000" : "₦20,000";
   const formattedDate = new Date(expiryDate).toLocaleDateString("en-NG", { year: 'numeric', month: 'long', day: 'numeric' });
   const isUrgent = daysRemaining <= 3;
+  const amount = planType === "individual" ? "₦5,000" : "₦20,000";
 
   const htmlContent = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #111827; border: 1px solid #E5E7EB; border-radius: 8px; overflow: hidden;">
@@ -556,7 +597,6 @@ export async function sendSubscriptionExpiredEmail(
 ) {
   const appUrl = getAppUrl();
   const settingsLink = `${appUrl}/settings/billing`;
-  const amount = planType === "individual" ? "₦5,000" : "₦20,000";
 
   const htmlContent = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #111827; border: 1px solid #E5E7EB; border-radius: 8px; overflow: hidden;">

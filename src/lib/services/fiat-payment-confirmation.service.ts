@@ -902,6 +902,19 @@ async function confirmInvoicePayment(
     console.error("Failed to send invoice receipt:", error);
   }
 
+  try {
+    await sendMerchantPaymentNotification(supabase, {
+      merchantId: String(invoice.merchant_id),
+      invoiceId,
+      paymentAmount,
+      provider,
+      paymentMethod,
+      reference,
+    });
+  } catch (error) {
+    console.error("Failed to send merchant payment notification:", error);
+  }
+
   return { received: true, processed: true };
 }
 
@@ -1016,4 +1029,39 @@ export async function sendInvoiceReceipt(
     `${getAppUrl()}/pay/${invoiceId}`,
     totalDeposit > 0 ? formatNaira(totalDeposit) : undefined
   );
+}
+
+export async function sendMerchantPaymentNotification(
+  supabase: SupabaseClient,
+  input: { merchantId: string; invoiceId: string; paymentAmount: number; provider: string; paymentMethod: string; reference: string }
+) {
+  const [{ data: merchant }, { data: invoice }] = await Promise.all([
+    supabase.from("merchants").select("email, business_name, user_id").eq("id", input.merchantId).maybeSingle(),
+    supabase.from("invoices").select("invoice_number, clients(full_name, email)").eq("id", input.invoiceId).maybeSingle(),
+  ]);
+  let recipientEmail = merchant?.email?.trim() || "";
+  if (!recipientEmail && merchant?.user_id) {
+    const { data: users } = await supabase.auth.admin.listUsers();
+    recipientEmail = users?.users.find((user) => user.id === merchant.user_id)?.email?.trim() || "";
+  }
+  if (!recipientEmail) {
+    console.warn("Merchant payment email skipped: missing recipient", { merchantId: input.merchantId, invoiceId: input.invoiceId, provider: input.provider, reference: input.reference });
+    return;
+  }
+
+  const client = Array.isArray(invoice?.clients) ? invoice.clients[0] : invoice?.clients;
+  const [{ sendMerchantPaymentReceivedEmail }, { formatNaira }] = await Promise.all([import("@/lib/brevo"), import("@/lib/calculations")]);
+  await sendMerchantPaymentReceivedEmail({
+    toEmail: recipientEmail,
+    businessName: merchant?.business_name || "DeraLedger Merchant",
+    invoiceNumber: String(invoice?.invoice_number || input.invoiceId),
+    amountPaid: formatNaira(input.paymentAmount),
+    provider: input.provider.toUpperCase(),
+    paymentMethod: input.paymentMethod.replace(/_/g, " "),
+    paidAt: new Date().toLocaleString("en-NG", { dateStyle: "medium", timeStyle: "short" }),
+    reference: input.reference,
+    customerName: client?.full_name || null,
+    customerEmail: client?.email || null,
+    invoiceUrl: `${getAppUrl()}/invoices/${input.invoiceId}`,
+  });
 }

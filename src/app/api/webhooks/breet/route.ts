@@ -4,6 +4,7 @@ import { PaymentService } from "@/lib/payment";
 import {
   processSuccessfulFiatPayment,
   sendInvoiceReceipt,
+  sendMerchantPaymentNotification,
 } from "@/lib/services/fiat-payment-confirmation.service";
 import {
   buildBreetWebhookIdempotencyKey,
@@ -1048,6 +1049,18 @@ async function handleInvoiceWebhook(input: {
       );
     } catch (error) {
       console.error("Failed to send Breet invoice receipt:", error);
+    }
+    try {
+      await sendMerchantPaymentNotification(supabase, {
+        merchantId: String(session.merchant_id),
+        invoiceId: String(session.invoice_id),
+        paymentAmount: accounting.selectedInvoiceAmount,
+        provider: "breet",
+        paymentMethod: "crypto",
+        reference: providerReference || txHash || String(session.reference || session.id),
+      });
+    } catch (error) {
+      console.error("Failed to send Breet merchant payment notification:", error);
     }
   }
 
