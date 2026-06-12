@@ -347,7 +347,29 @@ export async function enterPaidSetupMode(
   }
 }
 
-export async function syncMerchantSetupStatus(adminClient: SupabaseClient, merchantId: string) {
+export async function syncMerchantSetupStatus(
+  adminClient: SupabaseClient,
+  merchantId: string,
+  merchantOverride?: Partial<{
+    subscription_plan: string | null;
+    merchant_tier: string | null;
+    relationship_claim: string | null;
+    verification_status: string | null;
+    bvn_status: string | null;
+    selfie_status: string | null;
+    cac_status: string | null;
+    utility_status: string | null;
+    business_affiliation_status: string | null;
+    setup_mode: boolean | null;
+    live_features_enabled: boolean | null;
+    settlement_account_number: string | null;
+    settlement_bank_name: string | null;
+    settlement_account_name: string | null;
+    verification_step_state: Record<string, unknown> | null;
+    email: string | null;
+    is_super_admin: boolean | null;
+  }>,
+) {
   const { data: merchant } = await adminClient
     .from("merchants")
     .select("subscription_plan, merchant_tier, relationship_claim, verification_status, bvn_status, selfie_status, cac_status, utility_status, business_affiliation_status, setup_mode, live_features_enabled, settlement_account_number, settlement_bank_name, settlement_account_name, verification_step_state, email, is_super_admin")
@@ -355,7 +377,8 @@ export async function syncMerchantSetupStatus(adminClient: SupabaseClient, merch
     .maybeSingle();
 
   if (!merchant) return;
-  const fields = setupStatusForMerchant(merchant);
+  const effectiveMerchant = merchantOverride ? { ...merchant, ...merchantOverride } : merchant;
+  const fields = setupStatusForMerchant(effectiveMerchant);
   await adminClient.from("merchants").update({
     ...fields,
     ...(fields.live_features_enabled ? {
@@ -373,6 +396,8 @@ export async function syncMerchantSetupStatus(adminClient: SupabaseClient, merch
       updated_at: new Date().toISOString(),
     })
     .eq("merchant_id", merchantId);
+
+  return fields;
 }
 
 export async function ensureWorkspaceForMerchant(adminClient: SupabaseClient, merchantId: string) {

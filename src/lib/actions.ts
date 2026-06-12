@@ -1676,7 +1676,12 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
 
     if (dbErr) throw dbErr;
 
-    await syncMerchantSetupStatus(adminClient, merchantId);
+    await syncMerchantSetupStatus(adminClient, merchantId, {
+      settlement_bank_name: data.bankName,
+      settlement_account_number: data.accountNumber,
+      settlement_account_name: data.accountName,
+      verification_status: "verified",
+    });
 
     await upsertProviderNeutralSettlementAccount(adminClient, {
       merchantId,

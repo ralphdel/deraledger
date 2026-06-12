@@ -182,11 +182,11 @@ export default function VerificationQueuePage() {
   const reloadSelectedMerchant = async (merchantId: string) => {
     const sb = createClient();
     const { data, error } = await sb.from("merchants").select("*").eq("id", merchantId).single();
-    if (error || !data) return false;
+    if (error || !data) return null;
     const freshMerchant = data as Merchant;
     setSelectedMerchant(freshMerchant);
     setMerchants((prev) => prev.map((merchant) => (merchant.id === freshMerchant.id ? freshMerchant : merchant)));
-    return true;
+    return freshMerchant;
   };
 
   const getEffectiveStatus = (m: Merchant | null): string => {
@@ -356,12 +356,14 @@ export default function VerificationQueuePage() {
     setVerificationLogs([]);
     setSnapshotSource("none");
 
-    const plan = m.subscription_plan || m.merchant_tier || "starter";
+    const freshMerchant = await reloadSelectedMerchant(m.id);
+    const merchantForReview = freshMerchant || m;
+    const plan = merchantForReview.subscription_plan || merchantForReview.merchant_tier || "starter";
     const isBusinessPlan = plan === "corporate" || plan === "business";
 
     setDirectorsLoading(true);
     try {
-      const res = await adminGetVerificationDetailsAction(m.id);
+      const res = await adminGetVerificationDetailsAction(merchantForReview.id);
       if (res.success) {
         setRegistrySnapshot(res.registrySnapshot || null);
         setSnapshotSource(res.snapshotSource || "none");
