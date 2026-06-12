@@ -46,6 +46,7 @@ export type VerificationStepState = Partial<
 export type RequirementAwareMerchant = {
   subscription_plan?: string | null;
   merchant_tier?: string | null;
+  relationship_claim?: string | null;
   verification_status?: string | null;
   bvn_status?: string | null;
   selfie_status?: string | null;
@@ -202,8 +203,17 @@ export function getRequirementCompletion(
         ? "complete"
         : "pending";
     case "director_or_representative_flow":
+      return merchant.relationship_claim === "representative_claim"
+        ? completionFromStatus(merchant.business_affiliation_status)
+        : "complete";
     case "director_kyc":
-      return completionFromStatus(merchant.business_affiliation_status);
+      return merchant.relationship_claim === "representative_claim"
+        ? completionFromStatus(
+            merchant.business_affiliation_status === "director_approved"
+              ? "verified"
+              : merchant.business_affiliation_status,
+          )
+        : "complete";
     case "settlement_account":
       return merchant.settlement_account_number &&
         merchant.settlement_bank_name &&

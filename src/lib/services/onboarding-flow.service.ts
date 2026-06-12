@@ -36,6 +36,7 @@ export function requiresVerificationDisclosure(plan: string | null | undefined):
 export function isLiveFeatureEnabled(merchant: {
   subscription_plan?: string | null;
   merchant_tier?: string | null;
+  relationship_claim?: string | null;
   verification_status?: string | null;
   bvn_status?: string | null;
   selfie_status?: string | null;
@@ -64,6 +65,7 @@ export function isLiveFeatureEnabled(merchant: {
 export function getLiveFeatureLockReasons(merchant: {
   subscription_plan?: string | null;
   merchant_tier?: string | null;
+  relationship_claim?: string | null;
   verification_status?: string | null;
   bvn_status?: string | null;
   selfie_status?: string | null;
@@ -126,14 +128,16 @@ export function getLiveFeatureLockReasons(merchant: {
     }
   }
 
-  if (reasons.length === 0 && merchant.setup_mode === true) reasons.push("Setup mode release");
-  if (reasons.length === 0 && merchant.live_features_enabled !== true) reasons.push("Live payment feature activation");
-  return reasons;
+  const uniqueReasons = Array.from(new Set(reasons));
+  if (uniqueReasons.length === 0 && merchant.setup_mode === true) uniqueReasons.push("Setup mode release");
+  if (uniqueReasons.length === 0 && merchant.live_features_enabled !== true) uniqueReasons.push("Live payment feature activation");
+  return uniqueReasons;
 }
 
 export function setupStatusForMerchant(merchant: {
   subscription_plan?: string | null;
   merchant_tier?: string | null;
+  relationship_claim?: string | null;
   verification_status?: string | null;
   bvn_status?: string | null;
   selfie_status?: string | null;
@@ -198,8 +202,11 @@ export function setupStatusForMerchant(merchant: {
   }
 
   if (
-    hasVerificationRequirement(plan, "director_or_representative_flow") ||
-    hasVerificationRequirement(plan, "director_kyc")
+    merchant.relationship_claim === "representative_claim" &&
+    (
+      hasVerificationRequirement(plan, "director_or_representative_flow") ||
+      hasVerificationRequirement(plan, "director_kyc")
+    )
   ) {
     const affiliation = merchant.business_affiliation_status || "not_started";
     if (affiliation === "no_match" || affiliation === "rejected" || affiliation === "not_started") {
@@ -335,7 +342,7 @@ export async function enterPaidSetupMode(
 export async function syncMerchantSetupStatus(adminClient: SupabaseClient, merchantId: string) {
   const { data: merchant } = await adminClient
     .from("merchants")
-    .select("subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, utility_status, business_affiliation_status, setup_mode, live_features_enabled, settlement_account_number, settlement_bank_name, settlement_account_name, verification_step_state, email, is_super_admin")
+    .select("subscription_plan, merchant_tier, relationship_claim, verification_status, bvn_status, selfie_status, cac_status, utility_status, business_affiliation_status, setup_mode, live_features_enabled, settlement_account_number, settlement_bank_name, settlement_account_name, verification_step_state, email, is_super_admin")
     .eq("id", merchantId)
     .maybeSingle();
 
@@ -363,7 +370,7 @@ export async function syncMerchantSetupStatus(adminClient: SupabaseClient, merch
 export async function ensureWorkspaceForMerchant(adminClient: SupabaseClient, merchantId: string) {
   const { data: merchant } = await adminClient
     .from("merchants")
-    .select("id, user_id, business_name, trading_name, subscription_plan, merchant_tier, onboarding_status, setup_mode, live_features_enabled, bvn_status, selfie_status, cac_status, utility_status, business_affiliation_status, verification_status, settlement_account_number, settlement_bank_name, settlement_account_name, verification_step_state, email, is_super_admin")
+    .select("id, user_id, business_name, trading_name, subscription_plan, merchant_tier, relationship_claim, onboarding_status, setup_mode, live_features_enabled, bvn_status, selfie_status, cac_status, utility_status, business_affiliation_status, verification_status, settlement_account_number, settlement_bank_name, settlement_account_name, verification_step_state, email, is_super_admin")
     .eq("id", merchantId)
     .maybeSingle();
 

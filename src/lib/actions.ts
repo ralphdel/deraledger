@@ -2632,6 +2632,7 @@ export async function adminApproveVerificationAction(merchantId: string, reviewN
   revalidatePath("/admin/verification");
   revalidatePath("/admin/merchants");
   revalidatePath("/settings");
+
   return {
     success: true,
     updates: { ...updates, ...persistedMerchant },
@@ -3650,6 +3651,11 @@ export async function adminManualReviewDirectorAction(params: {
     ...params,
     adminId: user.id,
   });
+  if (result.success) {
+    revalidatePath("/settings");
+    revalidatePath("/admin/verification");
+    revalidatePath("/admin/merchants");
+  }
   return result;
 }
 
@@ -3795,11 +3801,32 @@ export async function adminGetVerificationDetailsAction(merchantId: string) {
     }
   }
 
+  let directorRows = directorsRes.data || [];
+  if (directorRows.length === 0) {
+    const invitationIds = (invitationsRes.data || []).map((invite: any) => invite.id).filter(Boolean);
+    const directorNames = Array.from(new Set((invitationsRes.data || []).map((invite: any) => String(invite.selected_director_name || "").trim()).filter(Boolean)));
+    const [byInvitationRes, byNameRes] = await Promise.all([
+      invitationIds.length
+        ? adminClient.from("business_director_verifications").select("*").in("invitation_id", invitationIds).order("created_at", { ascending: false })
+        : Promise.resolve({ data: [], error: null }),
+      directorNames.length
+        ? adminClient.from("business_director_verifications").select("*").in("director_name", directorNames).order("created_at", { ascending: false })
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+    directorRows = Array.from(
+      new Map(
+        [...(byInvitationRes.data || []), ...(byNameRes.data || [])]
+          .filter((row: any) => !row.merchant_id || row.merchant_id === merchantId)
+          .map((row: any) => [row.id, row]),
+      ).values(),
+    );
+  }
+
   return {
     success: true,
     registrySnapshot: resolvedSnapshot,
     snapshotSource,
-    directors: directorsRes.data || [],
+    directors: directorRows,
     businessAffiliations: affiliationsRes.data || [],
     directorInvitations: invitationsRes.data || [],
     verificationCosts: costsRes.data || [],
