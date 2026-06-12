@@ -1676,6 +1676,8 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
 
     if (dbErr) throw dbErr;
 
+    await syncMerchantSetupStatus(adminClient, merchantId);
+
     await upsertProviderNeutralSettlementAccount(adminClient, {
       merchantId,
       bankName: data.bankName,
@@ -1699,9 +1701,18 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
       metadata: { bank: data.bankName, account_number: data.accountNumber },
     }]);
 
+    const { data: refreshedMerchant } = await adminClient
+      .from("merchants")
+      .select("settlement_bank_code, settlement_bank_name, settlement_account_number, settlement_account_name, subaccount_verified, setup_mode, live_features_enabled, onboarding_status, live_features_activated_at, verification_status")
+      .eq("id", merchantId)
+      .maybeSingle();
+
+    revalidatePath("/settings");
     revalidatePath("/settings/settlement");
     revalidatePath("/settings/settlement-accounts");
-    return { success: true, data: subaccount };
+    revalidatePath("/admin/verification");
+    revalidatePath("/admin/merchants");
+    return { success: true, data: subaccount, merchant: refreshedMerchant || null };
 
   } catch (error: any) {
     console.error("setupSettlementAccountAction:", error);

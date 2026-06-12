@@ -93,7 +93,7 @@ export default function SettlementSettingsPage() {
           } else {
             setResolveError(data.error || "Could not verify this account number.");
           }
-        } catch (err) {
+        } catch {
           setResolveError("An error occurred during account verification.");
         } finally {
           setResolving(false);
@@ -103,7 +103,7 @@ export default function SettlementSettingsPage() {
       const timeoutId = setTimeout(resolveAccount, 1000); // debounce
       return () => clearTimeout(timeoutId);
     }
-  }, [selectedBankCode, accountNumber, merchant]);
+  }, [selectedBankCode, accountNumber, merchant, isEditing]);
 
   const handleSave = async () => {
     if (!merchant) return;
@@ -130,11 +130,16 @@ export default function SettlementSettingsPage() {
       // Update local merchant state
       setMerchant({
         ...merchant,
-        settlement_bank_code: selectedBankCode,
-        settlement_bank_name: bankName,
-        settlement_account_number: accountNumber,
-        settlement_account_name: accountName,
-        subaccount_verified: true,
+        settlement_bank_code: result.merchant?.settlement_bank_code || selectedBankCode,
+        settlement_bank_name: result.merchant?.settlement_bank_name || bankName,
+        settlement_account_number: result.merchant?.settlement_account_number || accountNumber,
+        settlement_account_name: result.merchant?.settlement_account_name || accountName,
+        subaccount_verified: result.merchant?.subaccount_verified ?? true,
+        setup_mode: result.merchant?.setup_mode ?? merchant.setup_mode,
+        live_features_enabled: result.merchant?.live_features_enabled ?? merchant.live_features_enabled,
+        onboarding_status: result.merchant?.onboarding_status ?? merchant.onboarding_status,
+        live_features_activated_at: result.merchant?.live_features_activated_at ?? merchant.live_features_activated_at,
+        verification_status: result.merchant?.verification_status || merchant.verification_status,
       });
       setIsEditing(false);
     } else {
