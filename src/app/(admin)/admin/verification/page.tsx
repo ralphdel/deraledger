@@ -733,6 +733,15 @@ export default function VerificationQueuePage() {
                       hasDirectorManualReview ||
                       hasDirectorFailure
                     );
+                    const payoutOnlyLiveLock =
+                      isBusinessPlan &&
+                      !hasPayoutSetup &&
+                      !repIdentityBlocked &&
+                      !repIdentityPendingReview &&
+                      !hasBusinessDocumentBlocker &&
+                      !hasDirectorFlowBlocker &&
+                      getEffectiveStatus(selectedMerchant) !== "incomplete" &&
+                      selectedMerchant.verification_status !== "verified";
                     const approveDisabledReason = (() => {
                       if (selectedMerchant.verification_status === "verified" && selectedMerchant.live_features_enabled) return "Already approved. Live features are active.";
                       if (selectedMerchant.verification_status === "verified" && !selectedMerchant.live_features_enabled && isBusinessPlan && !hasPayoutSetup) return "Already approved. Live features are locked until payout account setup is completed.";
@@ -746,6 +755,7 @@ export default function VerificationQueuePage() {
                       if (getEffectiveStatus(selectedMerchant) === "incomplete") return "Approval blocked: merchant profile details are incomplete.";
                       if (hasBusinessDocumentBlocker) return "Approval blocked: business verification documents are still incomplete.";
                       if (hasDirectorFlowBlocker) return "Approval blocked: director consent or director identity evidence is still unresolved.";
+                      if (payoutOnlyLiveLock) return null;
                       return null;
                     })();
                     const isApproveDisabled =
@@ -767,6 +777,7 @@ export default function VerificationQueuePage() {
                       if (requiresDirectorFlow && selectedMerchant.business_affiliation_status === "director_approved" && directors.length === 0 && !directorsLoading) return "Director approval exists without matching identity evidence.";
                       if (hasBusinessDocumentBlocker) return "Business documents still need admin approval before final approval.";
                       if (hasDirectorFlowBlocker) return "Director approval or director identity evidence is still unresolved.";
+                      if (payoutOnlyLiveLock) return "KYB review can be approved. Live features will remain locked until payout account setup is completed.";
                       if (selectedMerchant.verification_status === "verified" && !selectedMerchant.live_features_enabled && isBusinessPlan && !hasPayoutSetup) return "Business verified, live features locked until payout account setup is completed.";
                       if (!selectedMerchant.live_features_enabled) return "Live features remain locked pending compliance completion.";
                       if (effectiveStatus === "pending_admin_review") return "Awaiting final admin decision.";
@@ -836,7 +847,7 @@ export default function VerificationQueuePage() {
                         badge: !isBusinessPlan ? "not required" : hasPayoutSetup ? "verified" : "pending",
                         tone: !isBusinessPlan ? "neutral" : hasPayoutSetup ? "verified" : "attention",
                         reason: !isBusinessPlan ? "Not required for this plan." : hasPayoutSetup ? "Settlement account details are available for live activation." : "Settlement account details are still required before live activation.",
-                        nextAction: !isBusinessPlan ? "No action" : hasPayoutSetup ? "Ready for final review" : "Complete payout setup",
+                        nextAction: !isBusinessPlan ? "No action" : hasPayoutSetup ? "Ready for live activation" : payoutOnlyLiveLock ? "Can be completed after KYB approval" : "Complete payout setup",
                       },
                       {
                         label: "Final Admin Review",
@@ -846,6 +857,8 @@ export default function VerificationQueuePage() {
                           ? "Manual review is still required before final admin approval."
                           : hasBusinessDocumentBlocker
                             ? "Required business documents are still pending or unverified."
+                          : payoutOnlyLiveLock
+                            ? "KYB review can be approved. Live features will remain locked until payout account setup is completed."
                           : selectedMerchant.verification_status === "verified" && isBusinessPlan && !hasPayoutSetup
                             ? "Business verified. Live features remain locked until payout account setup is completed."
                           : repIdentityResolvedByCompliance && effectiveStatus === "pending_admin_review"
@@ -853,7 +866,7 @@ export default function VerificationQueuePage() {
                           : !selectedMerchant.live_features_enabled
                             ? "Live features are still locked until compliance review is complete."
                             : `Current queue state: ${effectiveStatus.replace(/_/g, " ")}.`,
-                        nextAction: selectedMerchant.verification_status === "verified" && selectedMerchant.live_features_enabled ? "No action" : "Use admin decision controls",
+                        nextAction: selectedMerchant.verification_status === "verified" && selectedMerchant.live_features_enabled ? "No action" : payoutOnlyLiveLock ? "Use final approval" : "Use admin decision controls",
                       },
                     ];
 
