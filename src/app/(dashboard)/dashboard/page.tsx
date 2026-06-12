@@ -138,8 +138,6 @@ export default function DashboardPage() {
   const effectiveTier = merchant?.subscription_plan || merchant?.merchant_tier || "starter";
   const isStarter = effectiveTier === "starter";
   const limitExceeded = isStarter || (merchant?.monthly_collection_limit ? monthlyCollected >= merchant.monthly_collection_limit : false);
-  const needsProfileUpdate = merchant && (merchant.platform_version === undefined || merchant.platform_version === null || merchant.platform_version < 1);
-
   return (
     <div className="space-y-6">
       {limitExceeded && (
@@ -161,33 +159,6 @@ export default function DashboardPage() {
           Here&apos;s your financial overview.
         </p>
       </div>
-
-      {/* Platform Update Banner */}
-      {needsProfileUpdate && (
-        <Card className="border-2 border-blue-300 bg-blue-50/50 shadow-none">
-          <CardContent className="p-4 sm:p-5">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-              <div className="flex items-start gap-3">
-                <div className="w-10 h-10 bg-blue-100 border-2 border-blue-200 rounded-lg flex items-center justify-center flex-shrink-0">
-                  <AlertTriangle className="h-5 w-5 text-blue-600" />
-                </div>
-                <div>
-                  <p className="font-semibold text-sm text-blue-900">Profile Update Required</p>
-                  <p className="text-xs text-blue-700 mt-0.5">
-                    We&apos;ve updated Deraledger! Please go to Settings to update your Trading Name{effectiveTier !== "starter" ? " and Owner's Name" : ""} for a smoother experience.
-                  </p>
-                </div>
-              </div>
-              <Link href="/settings">
-                <Button size="sm" className="bg-blue-600 hover:bg-blue-700 text-white font-semibold whitespace-nowrap">
-                  Go to Settings
-                  <ArrowUpRight className="ml-1 h-3.5 w-3.5" />
-                </Button>
-              </Link>
-            </div>
-          </CardContent>
-        </Card>
-      )}
 
       {/* Verification Banner */}
       {merchant && (merchant.setup_mode === true || merchant.live_features_enabled === false || merchant.verification_status !== "verified") && merchant.subscription_plan !== "starter" && (

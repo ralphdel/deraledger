@@ -148,9 +148,8 @@ export default function VerificationQueuePage() {
   const getEffectiveStatus = (m: Merchant | null): string => {
     if (!m) return "unverified";
     const tier = m.subscription_plan || m.merchant_tier || "starter";
-    const hasConfirmed = (m.platform_version ?? 0) >= 1;
     if (tier !== "starter" && !m.owner_name) return "incomplete";
-    if (tier === "corporate" && (!m.business_name || !hasConfirmed)) return "incomplete";
+    if (tier === "corporate" && !m.business_name) return "incomplete";
     if (tier !== "starter" && (!m.business_street || !m.business_city || !m.business_state || !m.business_country || !m.phone)) return "incomplete";
     if (tier !== "starter" && m.bvn_status === "verified" && (m.selfie_status || "unverified") !== "verified") return "pending";
     return m.verification_status;
@@ -218,7 +217,7 @@ export default function VerificationQueuePage() {
   const reuploadOptions: Array<{ field: ReuploadField; label: string; description: string }> = [
     { field: "bvn_status", label: "BVN", description: "Identity number or BVN name needs correction." },
     { field: "selfie_status", label: "Selfie", description: "Face image is unclear or failed matching." },
-    { field: "cac_status", label: "CAC / RC", description: "Business registry document or lookup needs correction." },
+    { field: "cac_status", label: "CAC document", description: "Uploaded CAC document needs correction or resubmission." },
     { field: "utility_status", label: "Address proof", description: "Utility bill or business address evidence needs correction." },
   ];
 
@@ -520,7 +519,8 @@ export default function VerificationQueuePage() {
                     const planKey = selectedMerchant.subscription_plan || selectedMerchant.merchant_tier;
                     const planLabel = formatPlanLabel(planKey);
                     const isBusinessPlan = planKey === "corporate" || planKey === "business";
-                    const requiresDirectorFlow = planKey === "corporate";
+                    const isRepresentativeFlow = selectedMerchant.relationship_claim === "representative_claim";
+                    const requiresDirectorFlow = planKey === "corporate" && isRepresentativeFlow;
                     const effectiveStatus = getEffectiveStatus(selectedMerchant);
                     const roster = extractKeyPersonnel(registrySnapshot);
                     const rosterCount = roster.length;
@@ -601,6 +601,7 @@ export default function VerificationQueuePage() {
                         : null;
                     const repIdentityReviewStep = ((selectedMerchant.verification_step_state as Record<string, any> | null)?.identity_review || null) as Record<string, any> | null;
                     const repIdentityReviewApproved = repIdentityReviewStep?.status === "verified" && repIdentityReviewStep?.classification === "partial_match_approved";
+                    const businessRegistrationStep = ((selectedMerchant.verification_step_state as Record<string, any> | null)?.business_registration_check || null) as Record<string, any> | null;
                     const repNameMatchStatus = !repBvnReturnedName
                       ? "Unknown / Not recorded"
                       : repNameReviewState === "mismatch" || ["mismatch", "manual_review", "failed", "name_mismatch"].includes(repStoredNameMatchStatus)
@@ -628,8 +629,8 @@ export default function VerificationQueuePage() {
                       (selectedMerchant as any).dojah_reference ||
                       "Not submitted"
                     );
-                    const identityLabel = isBusinessPlan ? "Representative Identity" : "Identity Verification";
-                    const identitySectionLabel = isBusinessPlan ? "Representative Identity Evidence" : "Individual Identity Evidence";
+                    const identityLabel = isBusinessPlan ? (isRepresentativeFlow ? "Representative Identity" : "Owner/Director Identity") : "Identity Verification";
+                    const identitySectionLabel = isBusinessPlan ? (isRepresentativeFlow ? "Representative Identity Evidence" : "Owner/Director Identity Evidence") : "Individual Identity Evidence";
                     const repIdentityBlocked = repNameReviewState === "mismatch";
                     const repHasCurrentEvidence = !!repLog;
                     const repIdentityResolvedByCompliance = repNameReviewState === "partial" && repIdentityReviewApproved;
@@ -644,6 +645,7 @@ export default function VerificationQueuePage() {
                     );
                     const repIdentityVerified = !repIdentityBlocked && !repIdentityPendingReview && selectedMerchant.bvn_status === "verified" && (selectedMerchant.selfie_status || "unverified") === "verified";
                     const showIdentityManualReviewPanel = repIdentityBlocked || repIdentityPendingReview;
+                    const businessRegistrationStatus = String(businessRegistrationStep?.status || selectedMerchant.cac_status || "unverified");
                     const businessDocumentStep = (((selectedMerchant.verification_step_state as Record<string, any> | null)?.business_document || (selectedMerchant.verification_step_state as Record<string, any> | null)?.business_documents || (selectedMerchant.verification_step_state as Record<string, any> | null)?.valid_id_document || null) as Record<string, any> | null);
                     const utilityDocumentStep = (((selectedMerchant.verification_step_state as Record<string, any> | null)?.utility_bill || (selectedMerchant.verification_step_state as Record<string, any> | null)?.proof_of_address || null) as Record<string, any> | null);
                     const cacLog = verificationLogs.find(
@@ -685,8 +687,8 @@ export default function VerificationQueuePage() {
                     });
 
                     const documentItems = [
-                      { label: "CAC Document", value: selectedMerchant.cac_document_url, field: "cac_status" as const, statusVal: selectedMerchant.cac_status },
-                      { label: "Utility Bill / Proof of Business Address", value: selectedMerchant.utility_document_url, field: "utility_status" as const, statusVal: selectedMerchant.utility_status },
+                      { label: "CAC Document", value: selectedMerchant.cac_document_url, field: "cac_status" as const, statusVal: businessDocumentStep?.status || (selectedMerchant.cac_document_url ? "pending" : "unverified") },
+                      { label: "Utility Bill / Proof of Business Address", value: selectedMerchant.utility_document_url, field: "utility_status" as const, statusVal: utilityDocumentStep?.status || (selectedMerchant.utility_document_url ? (selectedMerchant.utility_status || "pending") : "unverified") },
                     ];
                     const availableDocumentCount = documentItems.filter((item) => item.value).length;
                     const allDocumentsVerified = availableDocumentCount === documentItems.length && documentItems.every((item) => item.statusVal === "verified");
@@ -1081,7 +1083,7 @@ export default function VerificationQueuePage() {
                           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                             {[
                               { label: "CAC / RC number", value: selectedMerchant.cac_number || "-", tone: selectedMerchant.cac_number ? "neutral" as const : "attention" as const },
-                              { label: "CAC verification status", value: selectedMerchant.cac_status || "unverified", tone: selectedMerchant.cac_status === "verified" ? "verified" as const : selectedMerchant.cac_status === "pending" ? "pending" as const : "attention" as const },
+                              { label: "CAC verification status", value: businessRegistrationStatus, tone: businessRegistrationStatus === "verified" ? "verified" as const : businessRegistrationStatus === "pending" ? "pending" as const : "attention" as const },
                               { label: "Provider", value: formattedCacProvider, tone: formattedCacProvider.toLowerCase() === "unknown" ? "blocked" as const : isHistoricalCacProvider ? "pending" as const : "neutral" as const },
                               { label: "Provider reference", value: cacProviderRef, tone: cacProviderRef === "Not submitted" ? "attention" as const : "neutral" as const },
                             ].map((item) => (

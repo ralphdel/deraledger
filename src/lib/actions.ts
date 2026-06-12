@@ -2202,7 +2202,6 @@ export async function submitDojahKycAction(params: {
       const filename = `${params.merchantId}/CAC-${Date.now()}-${params.cacDocumentName}`;
       await adminClient.storage.from("kyc-documents").upload(filename, buffer, { contentType: getMimeType(params.cacDocumentName), upsert: true });
       updates.cac_document_url = filename;
-      updates.cac_status = "pending";
       stepState.business_document = {
         requirement_key: "business_document",
         plan_tier: plan,
@@ -2324,6 +2323,7 @@ export async function adminUpdateKycDocumentStatusAction(
   if (guard.error) return guard.error;
   const adminClient = getServiceClient();
   const now = new Date().toISOString();
+  const writesSharedCacStatus = field !== "cac_status";
   const stepKeysByField: Record<typeof field, string[]> = {
     bvn_status: ["bvn"],
     selfie_status: ["selfie_liveness"],
@@ -2338,15 +2338,20 @@ export async function adminUpdateKycDocumentStatusAction(
     .single();
 
   const updates: Record<string, unknown> = {
-    [field]: status,
     kyc_reviewed_at: now,
   };
+  if (writesSharedCacStatus) {
+    updates[field] = status;
+  }
   if (notes) updates.kyc_notes = notes;
 
   if (current) {
-    const merged = { ...current, [field]: status };
+    const merged = { ...current, ...(writesSharedCacStatus ? { [field]: status } : {}) };
     const anyRejected = [
-      merged.bvn_status, merged.selfie_status, merged.cac_status, merged.utility_status
+      field === "bvn_status" ? status : merged.bvn_status,
+      field === "selfie_status" ? status : merged.selfie_status,
+      field === "cac_status" ? status : merged.cac_status,
+      field === "utility_status" ? status : merged.utility_status,
     ].some(s => s === "rejected");
     const verificationStepState = { ...(current.verification_step_state || {}) } as Record<string, any>;
     for (const stepKey of stepKeysByField[field]) {
@@ -2423,7 +2428,7 @@ export async function adminApproveVerificationAction(merchantId: string, reviewN
 
   const { data: merchant, error: fetchError } = await adminClient
     .from("merchants")
-    .select("subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, business_affiliation_status, owner_name, email, settlement_account_number, settlement_bank_name, settlement_account_name, verification_step_state")
+    .select("subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, business_affiliation_status, relationship_claim, owner_name, email, settlement_account_number, settlement_bank_name, settlement_account_name, verification_step_state")
     .eq("id", merchantId)
     .single();
 
@@ -2492,7 +2497,7 @@ export async function adminApproveVerificationAction(merchantId: string, reviewN
     }
   }
 
-  if (plan === "corporate") {
+  if (plan === "corporate" && merchant.relationship_claim === "representative_claim") {
     const [invitationsResult, directorsResult] = await Promise.all([
       adminClient
         .from("director_invitations")
@@ -2926,7 +2931,9 @@ export async function adminRequestReuploadAction(
     .eq("id", merchantId)
     .maybeSingle();
   const targetedUpdates = fields.reduce<Record<string, "rejected">>((acc, field) => {
-    acc[field] = "rejected";
+    if (field !== "cac_status") {
+      acc[field] = "rejected";
+    }
     return acc;
   }, {});
   const verificationStepState = { ...(merchant?.verification_step_state || {}) } as Record<string, any>;

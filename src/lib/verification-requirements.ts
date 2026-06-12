@@ -50,7 +50,9 @@ export type RequirementAwareMerchant = {
   bvn_status?: string | null;
   selfie_status?: string | null;
   cac_status?: string | null;
+  cac_document_url?: string | null;
   utility_status?: string | null;
+  utility_document_url?: string | null;
   business_affiliation_status?: string | null;
   live_features_enabled?: boolean | null;
   setup_mode?: boolean | null;
@@ -183,10 +185,18 @@ export function getRequirementCompletion(
       return completionFromStatus(merchant.cac_status);
     case "business_document":
     case "business_documents":
-      return completionFromStatus(merchant.cac_status);
+      return storedStep?.status
+        ? completionFromStatus(storedStep.status)
+        : merchant.cac_document_url
+          ? "pending"
+          : "pending";
     case "utility_bill":
     case "proof_of_address":
-      return completionFromStatus(merchant.utility_status);
+      return storedStep?.status
+        ? completionFromStatus(storedStep.status)
+        : merchant.utility_document_url
+          ? completionFromStatus(merchant.utility_status)
+          : "pending";
     case "owner_or_director_kyc":
       return merchant.bvn_status === "verified" && merchant.selfie_status === "verified"
         ? "complete"

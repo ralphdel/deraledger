@@ -409,13 +409,7 @@ export default function SettingsPage() {
   const applyMerchantState = useCallback(async (nextMerchant: Merchant) => {
     setMerchant(nextMerchant);
     const tier = nextMerchant.subscription_plan || nextMerchant.merchant_tier || "starter";
-    const hasConfirmed = (nextMerchant.platform_version ?? 0) >= CURRENT_PLATFORM_VERSION;
-
-    if (tier === "corporate" && !hasConfirmed) {
-      setBusinessName("");
-    } else {
-      setBusinessName(nextMerchant.business_name || "");
-    }
+    setBusinessName(nextMerchant.business_name || "");
 
     setTradingName(nextMerchant.trading_name || nextMerchant.business_name || "");
     setOwnerName(nextMerchant.owner_name || "");
@@ -684,10 +678,12 @@ export default function SettingsPage() {
   const identityReviewStep = ((merchant?.verification_step_state as Record<string, unknown> | null)?.identity_review || null) as Record<string, unknown> | null;
   const identityReviewApproved = identityReviewStep?.status === "verified" && identityReviewStep?.classification === "partial_match_approved";
   const identityReviewResolved = merchant?.verification_status === "verified" && merchant?.live_features_enabled === true;
+  const businessRegistrationStep = ((merchant?.verification_step_state as Record<string, unknown> | null)?.business_registration_check || null) as Record<string, unknown> | null;
   const businessDocumentStep = (((merchant?.verification_step_state as Record<string, unknown> | null)?.business_document || (merchant?.verification_step_state as Record<string, unknown> | null)?.business_documents || (merchant?.verification_step_state as Record<string, unknown> | null)?.valid_id_document || null) as Record<string, unknown> | null);
   const utilityDocumentStep = (((merchant?.verification_step_state as Record<string, unknown> | null)?.utility_bill || (merchant?.verification_step_state as Record<string, unknown> | null)?.proof_of_address || null) as Record<string, unknown> | null);
-  const cacDocumentStatus = String(merchant?.cac_status || businessDocumentStep?.status || "unverified");
-  const utilityDocumentStatus = String(merchant?.utility_status || utilityDocumentStep?.status || "unverified");
+  const businessRegistrationStatus = String(businessRegistrationStep?.status || merchant?.cac_status || "unverified");
+  const cacDocumentStatus = String(businessDocumentStep?.status || (merchant?.cac_document_url ? "pending" : "unverified"));
+  const utilityDocumentStatus = String(utilityDocumentStep?.status || (merchant?.utility_document_url ? (merchant?.utility_status || "pending") : "unverified"));
   const cacDocumentLocked = ["pending", "verified"].includes(cacDocumentStatus);
   const utilityDocumentLocked = ["pending", "verified"].includes(utilityDocumentStatus);
   const cacDocumentNeedsReupload = ["rejected", "requires_reupload"].includes(cacDocumentStatus);
@@ -1547,10 +1543,10 @@ export default function SettingsPage() {
 
                           {requiresBusinessRegistration ? (
                             <div className="space-y-2">
-                              <Label className="flex items-center gap-2 text-sm font-medium">
-                                <FileCheck className="h-4 w-4 text-purp-700" />
-                                Business Registration Number
-                                {statusBadge(merchant?.cac_status)}
+                                <Label className="flex items-center gap-2 text-sm font-medium">
+                                  <FileCheck className="h-4 w-4 text-purp-700" />
+                                  Business Registration Number
+                                {statusBadge(businessRegistrationStatus)}
                               </Label>
                               <div className="flex flex-col gap-3 sm:flex-row">
                                 <Input

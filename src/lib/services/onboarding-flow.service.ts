@@ -156,6 +156,10 @@ export function setupStatusForMerchant(merchant: {
   }
   const plan = merchant.subscription_plan || merchant.merchant_tier || "starter";
   const requirements = getVerificationRequirements(plan);
+  const verificationStepState = (merchant.verification_step_state || {}) as Record<string, unknown>;
+  const businessRegistrationStep = verificationStepState.business_registration_check as { status?: string | null } | null;
+  const businessDocumentStep = (verificationStepState.business_document || verificationStepState.business_documents || verificationStepState.valid_id_document || null) as { status?: string | null } | null;
+  const utilityDocumentStep = (verificationStepState.utility_bill || verificationStepState.proof_of_address || null) as { status?: string | null } | null;
   if (requirements.includes("no_payment_collection")) {
     return { onboarding_status: "active", setup_mode: false, live_features_enabled: false };
   }
@@ -173,7 +177,7 @@ export function setupStatusForMerchant(merchant: {
 
   if (
     hasVerificationRequirement(plan, "business_registration_check") &&
-    merchant.cac_status !== "verified"
+    businessRegistrationStep?.status !== "verified"
   ) {
     return { onboarding_status: "pending_kyb", setup_mode: true, live_features_enabled: false };
   }
@@ -183,7 +187,12 @@ export function setupStatusForMerchant(merchant: {
       hasVerificationRequirement(plan, "business_documents") ||
       hasVerificationRequirement(plan, "utility_bill") ||
       hasVerificationRequirement(plan, "proof_of_address")) &&
-    merchant.utility_status !== "verified"
+    (
+      ((hasVerificationRequirement(plan, "business_document") || hasVerificationRequirement(plan, "business_documents")) &&
+        businessDocumentStep?.status !== "verified") ||
+      ((hasVerificationRequirement(plan, "utility_bill") || hasVerificationRequirement(plan, "proof_of_address")) &&
+        utilityDocumentStep?.status !== "verified")
+    )
   ) {
     return { onboarding_status: "pending_kyb", setup_mode: true, live_features_enabled: false };
   }

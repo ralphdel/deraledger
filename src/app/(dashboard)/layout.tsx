@@ -32,18 +32,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { getMerchant, getActiveSubscription, getNotifications, type AppNotification } from "@/lib/data";
-import { getPlatformUpdateStateAction, recordPlatformUpdateLogoutAction } from "@/lib/actions";
 import { logoutUser } from "@/app/(auth)/actions";
 import { cn } from "@/lib/utils";
 import type { Merchant, Subscription } from "@/lib/types";
 import { SubscriptionBanner } from "@/components/subscription-banner";
 import { SubscriptionExpiryModal } from "@/components/subscription-expiry-modal";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { PlatformUpdateModal } from "@/components/platform-update-modal";
 import { DeraLedgerLogo } from "@/components/ui/deraledger-logo";
 import { PermissionGuard } from "@/components/PermissionGuard";
-
-const SAFE_SUPERADMIN_EMAIL = "ralphdel14@yahoo.com";
 
 interface NavItem {
   href: string;
@@ -143,22 +139,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           }
         }
 
-        if (user.email?.toLowerCase() !== SAFE_SUPERADMIN_EMAIL) {
-          const updateState = await getPlatformUpdateStateAction();
-          const currentVersion = updateState.success ? (updateState.currentVersion ?? 1) : 1;
-          const forceLogout = updateState.success ? (updateState.forceLogoutOnUpdate ?? false) : false;
-          const acknowledgedVersion = m.last_acknowledged_version ?? 0;
-          const logoutVersion = m.last_update_logout_version ?? 0;
-
-          if (forceLogout && acknowledgedVersion < currentVersion && logoutVersion < currentVersion) {
-            const recorded = await recordPlatformUpdateLogoutAction(m.id, currentVersion);
-            if (recorded.success) {
-              await logoutUser();
-              window.location.href = "/login?reason=platform_update";
-              return;
-            }
-          }
-        }
       }
 
       setMerchant(m);
@@ -360,8 +340,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                       <div className="w-12 h-12 rounded-full bg-purp-50 dark:bg-white/5 border-2 border-purp-100 dark:border-white/10 flex items-center justify-center mb-3">
                         <Bell className="h-5 w-5 text-purp-400 dark:text-[#B58CFF]" />
                       </div>
-                      <p className="text-purp-900 dark:text-white font-bold text-sm">You're all caught up!</p>
-                      <p className="text-neutral-500 dark:text-white/50 text-xs mt-1 max-w-[200px]">We'll notify you when new payments arrive or when actions are needed.</p>
+                      <p className="text-purp-900 dark:text-white font-bold text-sm">You&apos;re all caught up!</p>
+                      <p className="text-neutral-500 dark:text-white/50 text-xs mt-1 max-w-[200px]">We&apos;ll notify you when new payments arrive or when actions are needed.</p>
                     </div>
                   )}
                 </div>
@@ -501,7 +481,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           )}
         </main>
       </div>
-      <PlatformUpdateModal />
     </div>
   );
 }
