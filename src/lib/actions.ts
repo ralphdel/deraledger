@@ -20,6 +20,7 @@ import {
 } from "@/lib/services/access-control";
 import { ensureWorkspaceForMerchant, getLiveFeatureLockReasons, setupStatusForMerchant, syncMerchantSetupStatus } from "@/lib/services/onboarding-flow.service";
 import { upsertProviderNeutralSettlementAccount } from "@/lib/services/settlement-ledger.service";
+import { getPaymentEnvironmentForMerchantEmail, listAvailablePaymentMethods, type PaymentProvider } from "@/lib/services/payment-routing.service";
 
 // Service role client for admin-level operations
 function getServiceClient() {
@@ -1621,17 +1622,44 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
   if (mErr || !m) return { success: false, error: "Unauthorized" };
 
   try {
+    const paymentEnvironment = getPaymentEnvironmentForMerchantEmail(data.email);
+    const availableMethods = await listAvailablePaymentMethods("invoice_payment", paymentEnvironment);
+    const fiatProviders = [...new Set(
+      availableMethods
+        .filter((method) => method.method !== "crypto" && method.provider !== "breet")
+        .map((method) => method.provider)
+    )];
+
+    if (fiatProviders.length !== 1) {
+      return { success: false, error: "Unable to determine a single active fiat collection provider for settlement provisioning." };
+    }
+
+    const activeProvider = fiatProviders[0] as Exclude<PaymentProvider, "breet">;
+    const existingProviderCode =
+      activeProvider === "paystack"
+        ? m.payment_subaccount_code
+        : (
+            await adminClient
+              .from("merchant_provider_settlement_accounts")
+              .select("provider_subaccount_code")
+              .eq("merchant_id", merchantId)
+              .eq("provider_name", activeProvider)
+              .eq("environment", paymentEnvironment)
+              .in("status", ["connected", "active"])
+              .maybeSingle()
+          ).data?.provider_subaccount_code || null;
+
     let subaccount;
     
     try {
-      if (m.payment_subaccount_code) {
+      if (existingProviderCode) {
         // Update existing
-        subaccount = await PaymentService.updateSubaccount(m.payment_subaccount_code, {
+        subaccount = await PaymentService.updateSubaccount(existingProviderCode, {
           businessName: data.businessName,
           bankCode: data.bankCode,
           accountNumber: data.accountNumber,
           percentageCharge: 1.5,
-        });
+        }, activeProvider);
       } else {
         // Create new subaccount via PaymentService
         subaccount = await PaymentService.createSubaccount({
@@ -1641,12 +1669,12 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
           percentageCharge: 1.5,
           primaryContactEmail: data.email,
           primaryContactName: data.accountName,
-        });
+        }, activeProvider);
       }
     } catch (apiError: any) {
       // In development, Paystack rejects fake/mock bank details.
       // Generate a mock subaccount so the full flow can be tested locally.
-      if (process.env.NODE_ENV !== "production") {
+      if (process.env.NODE_ENV !== "production" && activeProvider === "paystack") {
         console.warn("Paystack subaccount API failed, using mock for development:", apiError.message);
         subaccount = {
           subaccountCode: `MOCK_SUB_${merchantId.slice(0, 8)}`,
@@ -1669,7 +1697,8 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
       settlement_bank_code: data.bankCode,
       settlement_account_number: data.accountNumber,
       settlement_account_name: data.accountName,
-      payment_subaccount_code: subaccount.subaccountCode,
+      payment_provider: activeProvider,
+      payment_subaccount_code: activeProvider === "paystack" ? subaccount.subaccountCode : null,
       subaccount_verified: true,
       settlement_activated_at: new Date().toISOString(),
     }).eq("id", merchantId);
@@ -1689,9 +1718,12 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
       bankCode: data.bankCode,
       accountNumber: data.accountNumber,
       accountName: data.accountName,
-      paystackSubaccountCode: subaccount.subaccountCode,
+      providerName: activeProvider,
+      providerSubaccountCode: subaccount.subaccountCode,
+      providerAccountReference: subaccount.subaccountCode,
+      environment: paymentEnvironment,
       rawProviderResponse: {
-        source: "paystack_subaccount_setup",
+        source: `${activeProvider}_subaccount_setup`,
         subaccount,
       },
     });

@@ -187,13 +187,17 @@ export class MonnifyAdapter implements IPaymentProcessor {
 
   async createSubaccount(_p: SubaccountParams): Promise<SubaccountResult> {
     void _p;
-    throw new Error("Monnify subaccount provisioning is not wired yet.");
+    throw new Error(
+      "Monnify Sub Accounts are not enabled for this environment. Please contact Monnify support/account manager to enable Transaction Splitting/Sub Accounts before using Monnify for merchant collections."
+    );
   }
 
   async updateSubaccount(_code: string, _p: Partial<SubaccountParams>): Promise<SubaccountResult> {
     void _code;
     void _p;
-    throw new Error("Monnify subaccount updates are not wired yet.");
+    throw new Error(
+      "Monnify Sub Accounts are not enabled for this environment. Please contact Monnify support/account manager to enable Transaction Splitting/Sub Accounts before using Monnify for merchant collections."
+    );
   }
 
   async getBankList(): Promise<BankListItem[]> {

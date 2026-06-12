@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
-import { Search, Download, Filter, FileText, ArrowRightLeft, TrendingUp, Lock, ArrowRight } from "lucide-react";
+import { useState, useEffect, useMemo, useCallback } from "react";
+import { Search, Download, FileText, ArrowRightLeft, TrendingUp, Lock, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Select,
   SelectContent,
@@ -65,42 +65,43 @@ export default function AccountingReportPage() {
       setClients(clientData);
       setTransactions(txData as TransactionWithInvoice[]);
       setManualPayments(manualData as ManualPaymentWithInvoice[]);
-      if (m) setMerchant(m as any);
+      if (m) setMerchant(m);
       setLoading(false);
     });
   }, []);
 
-  const dateInRange = (value: string | null | undefined) => {
+  const dateInRange = useCallback((value: string | null | undefined) => {
     if (!value) return false;
     const itemDate = new Date(value);
     const isAfterFrom = dateFrom ? itemDate >= new Date(dateFrom + "T00:00:00") : true;
     const isBeforeTo = dateTo ? itemDate <= new Date(dateTo + "T23:59:59") : true;
     return isAfterFrom && isBeforeTo;
-  };
+  }, [dateFrom, dateTo]);
 
-  const invoiceMatchesFilters = (inv: InvoiceWithClient | null | undefined) => {
+  const invoiceMatchesFilters = useCallback((inv: InvoiceWithClient | null | undefined) => {
     if (!inv) return false;
     const matchesType = typeFilter === "all" || inv.invoice_type === typeFilter;
     const matchesClient = clientIdFilter === "all" || inv.client_id === clientIdFilter;
     return matchesType && matchesClient;
-  };
+  }, [clientIdFilter, typeFilter]);
 
-  const filteredInvoices = useMemo(() => {
+  const invoicesInRange = useMemo(() => {
     return invoices.filter((inv) => {
       return dateInRange(inv.created_at) && invoiceMatchesFilters(inv);
     });
-  }, [invoices, dateFrom, dateTo, typeFilter, clientIdFilter]);
+  }, [invoices, dateInRange, invoiceMatchesFilters]);
 
-  const paymentsByInvoice = useMemo(() => {
-    const map = new Map<string, number>();
-    transactions.filter((tx) => tx.status === "success").forEach((tx) => {
-      map.set(tx.invoice_id, (map.get(tx.invoice_id) || 0) + Number(tx.amount_paid || 0));
+  const successfulTransactionsInRange = useMemo(() => {
+    return transactions.filter((tx) => {
+      return tx.status === "success" && dateInRange(tx.created_at) && invoiceMatchesFilters(tx.invoices);
     });
-    manualPayments.forEach((payment) => {
-      map.set(payment.invoice_id, (map.get(payment.invoice_id) || 0) + Number(payment.amount || 0));
+  }, [transactions, dateInRange, invoiceMatchesFilters]);
+
+  const manualPaymentsInRange = useMemo(() => {
+    return manualPayments.filter((payment) => {
+      return dateInRange(payment.date_received || payment.created_at) && invoiceMatchesFilters(payment.invoices);
     });
-    return map;
-  }, [transactions, manualPayments]);
+  }, [manualPayments, dateInRange, invoiceMatchesFilters]);
 
   const getInvoiceMetrics = (inv: InvoiceWithClient) => {
     const recordedPaid = Number(inv.amount_paid || 0);
@@ -123,7 +124,8 @@ export default function AccountingReportPage() {
       totalOutstanding: number;
     }>();
 
-    const ensureClient = (inv: InvoiceWithClient) => {
+    const ensureClient = (inv: InvoiceWithClient | null | undefined) => {
+      if (!inv?.client_id) return null;
       const clientId = inv.client_id;
       if (!map.has(clientId)) {
         map.set(clientId, {
@@ -138,18 +140,38 @@ export default function AccountingReportPage() {
       return map.get(clientId)!;
     };
 
-    filteredInvoices.forEach((inv) => {
+    invoicesInRange.forEach((inv) => {
       ensureClient(inv);
     });
 
-    filteredInvoices.forEach((inv) => {
+    successfulTransactionsInRange.forEach((tx) => {
+      ensureClient(tx.invoices);
+    });
+
+    manualPaymentsInRange.forEach((payment) => {
+      ensureClient(payment.invoices);
+    });
+
+    invoicesInRange.forEach((inv) => {
       const clientStat = ensureClient(inv);
+      if (!clientStat) return;
       const metrics = getInvoiceMetrics(inv);
 
       clientStat.invoiceCount += 1;
       clientStat.totalRaised += metrics.grandTotal;
-      clientStat.totalPaid += metrics.paid;
       clientStat.totalOutstanding += metrics.outstanding;
+    });
+
+    successfulTransactionsInRange.forEach((tx) => {
+      const clientStat = ensureClient(tx.invoices);
+      if (!clientStat) return;
+      clientStat.totalPaid += Number(tx.amount_paid || 0);
+    });
+
+    manualPaymentsInRange.forEach((payment) => {
+      const clientStat = ensureClient(payment.invoices);
+      if (!clientStat) return;
+      clientStat.totalPaid += Number(payment.amount || 0);
     });
 
     // Apply search filter to aggregated table
@@ -160,7 +182,7 @@ export default function AccountingReportPage() {
     }
 
     return result.sort((a, b) => (b.totalRaised + b.totalPaid) - (a.totalRaised + a.totalPaid));
-  }, [filteredInvoices, paymentsByInvoice, searchQuery]);
+  }, [invoicesInRange, successfulTransactionsInRange, manualPaymentsInRange, searchQuery]);
 
   const totals = useMemo(() => {
     return aggregatedData.reduce((acc, curr) => ({

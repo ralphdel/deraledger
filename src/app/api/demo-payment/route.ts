@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { PaymentService } from "@/lib/payment";
 import { getPaymentEnvironmentForMerchantEmail, resolvePaymentRoute, type PaymentMethod } from "@/lib/services/payment-routing.service";
 import { isLiveFeatureEnabled } from "@/lib/services/onboarding-flow.service";
+import { isProviderSettlementReady } from "@/lib/services/settlement-ledger.service";
 import { getAppUrl } from "@/lib/server-utils";
 
 const supabase = createClient(
@@ -60,12 +61,31 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Merchant not found" }, { status: 404 });
     }
 
-    if (!isLiveFeatureEnabled(merchant) || !merchant.payment_subaccount_code) {
+    if (!isLiveFeatureEnabled(merchant)) {
       return NextResponse.json({ error: "Merchant is not verified or has no settlement account set up" }, { status: 403 });
     }
 
     const selectedMethod = (paymentMethod || "card") as PaymentMethod;
     const paymentEnvironment = getPaymentEnvironmentForMerchantEmail(merchant.email);
+    const route = await resolvePaymentRoute(
+      "invoice_payment",
+      selectedMethod,
+      paymentEnvironment
+    );
+
+    const providerReady = await isProviderSettlementReady(supabase, {
+      merchantId: invoice.merchant_id,
+      provider: route.provider,
+      environment: paymentEnvironment,
+    });
+
+    if (!providerReady) {
+      const message =
+        route.provider === "monnify"
+          ? "Merchant Monnify settlement is not fully configured yet. Please contact support."
+          : "Merchant is not verified or has no settlement account set up";
+      return NextResponse.json({ error: message }, { status: 403 });
+    }
 
     // Calculate k-factor and total charge
     const kFactor = grandTotal > 0 ? cappedPayment / grandTotal : 0;
@@ -103,12 +123,6 @@ export async function POST(request: Request) {
       return NextResponse.json(cryptoResult);
     }
 
-    const route = await resolvePaymentRoute(
-      "invoice_payment",
-      selectedMethod,
-      paymentEnvironment
-    );
-
     const metadata = {
       type: "invoice_payment",
       invoice_id: invoice.id,
@@ -130,7 +144,7 @@ export async function POST(request: Request) {
       email: invoice.clients?.email || "customer@deraledger.app",
       amountKobo: chargeAmountKobo,
       reference,
-      subaccountCode: merchant.payment_subaccount_code,
+      subaccountCode: route.provider === "paystack" ? merchant.payment_subaccount_code : undefined,
       callbackUrl: callback.toString(),
       bearer: "account",
       paymentMethod: selectedMethod,

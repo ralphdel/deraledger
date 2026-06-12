@@ -1,5 +1,6 @@
 "use client";
 
+import { useSyncExternalStore } from "react";
 import { Sun, Moon, Laptop } from "lucide-react";
 import { useTheme } from "@/components/theme-provider";
 import {
@@ -13,13 +14,24 @@ import { cn } from "@/lib/utils";
 
 export function ThemeToggle({ className }: { className?: string }) {
   const { theme, setTheme } = useTheme();
+  const mounted = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false,
+  );
+
+  const icon = !mounted
+    ? <Laptop className="h-5 w-5" />
+    : theme === "light"
+      ? <Sun className="h-5 w-5" />
+      : theme === "dark"
+        ? <Moon className="h-5 w-5" />
+        : <Laptop className="h-5 w-5" />;
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger render={<Button variant="ghost" size="icon" className={cn("h-9 w-9 text-neutral-500 hover:text-purp-700 hover:bg-purp-50 transition-colors", className)} />}>
-          {theme === "light" && <Sun className="h-5 w-5" />}
-          {theme === "dark" && <Moon className="h-5 w-5" />}
-          {theme === "system" && <Laptop className="h-5 w-5" />}
+          {icon}
           <span className="sr-only">Toggle theme</span>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="border-2 border-purp-200">

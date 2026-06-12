@@ -21,7 +21,10 @@ type SettlementAccountInput = {
   bankCode?: string | null;
   accountNumber: string;
   accountName: string;
-  paystackSubaccountCode?: string | null;
+  providerName?: PaymentProvider | null;
+  providerSubaccountCode?: string | null;
+  providerAccountReference?: string | null;
+  providerSplitReference?: string | null;
   environment?: PaymentEnvironment;
   rawProviderResponse?: Record<string, unknown> | null;
 };
@@ -145,10 +148,11 @@ export async function upsertProviderNeutralSettlementAccount(
       {
         merchant_id: input.merchantId,
         settlement_account_id: account.id,
-        provider_name: "paystack",
-        provider_account_reference: input.paystackSubaccountCode,
-        provider_subaccount_code: input.paystackSubaccountCode,
-        status: input.paystackSubaccountCode ? "connected" : "pending",
+        provider_name: input.providerName || "paystack",
+        provider_account_reference: input.providerAccountReference || input.providerSubaccountCode || null,
+        provider_subaccount_code: input.providerSubaccountCode || null,
+        provider_split_reference: input.providerSplitReference || null,
+        status: input.providerSubaccountCode ? "connected" : "pending",
         environment,
         raw_provider_response: input.rawProviderResponse || { source: "settlement_settings" },
         last_sync_at: new Date().toISOString(),
@@ -156,26 +160,6 @@ export async function upsertProviderNeutralSettlementAccount(
       { onConflict: "settlement_account_id,provider_name,environment" }
     )
     .throwOnError();
-
-  if (environment === "sandbox") {
-    await supabase
-      .from("merchant_provider_settlement_accounts")
-      .upsert(
-        {
-          merchant_id: input.merchantId,
-          settlement_account_id: account.id,
-          provider_name: "monnify",
-          status: "connected",
-          environment,
-          raw_provider_response: {
-            source: "settlement_settings",
-            note: "sandbox settlement mapping placeholder; live provider sync still required",
-          },
-          last_sync_at: new Date().toISOString(),
-        },
-        { onConflict: "settlement_account_id,provider_name,environment" }
-      );
-  }
 
   return account.id as string;
 }
@@ -259,7 +243,7 @@ export async function isProviderSettlementReady(
 
   const { data: mapping, error: mappingError } = await supabase
     .from("merchant_provider_settlement_accounts")
-    .select("id, status, provider_account_reference, raw_provider_response")
+    .select("id, status, provider_account_reference, provider_subaccount_code, raw_provider_response")
     .eq("settlement_account_id", account.id)
     .eq("provider_name", input.provider)
     .eq("environment", input.environment)
@@ -272,6 +256,11 @@ export async function isProviderSettlementReady(
   }
 
   if (mapping) {
+    if (input.provider === "monnify") {
+      const source = String((mapping.raw_provider_response as Record<string, unknown> | null)?.source || "");
+      return Boolean(mapping.provider_subaccount_code && source === "monnify_subaccount_setup");
+    }
+
     if (input.provider !== "breet" || !input.requireCryptoMapping) {
       return true;
     }
