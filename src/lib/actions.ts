@@ -2629,7 +2629,7 @@ export async function adminApproveVerificationAction(merchantId: string, reviewN
 
   const { data: persistedMerchant, error: persistedError } = await adminClient
     .from("merchants")
-    .select("verification_status, setup_mode, live_features_enabled, onboarding_status, live_features_activated_at")
+    .select("verification_status, setup_mode, live_features_enabled, onboarding_status, live_features_activated_at, settlement_account_number, settlement_bank_name, settlement_account_name, subscription_plan, merchant_tier, relationship_claim, bvn_status, selfie_status, cac_status, business_affiliation_status, verification_step_state, email, is_super_admin")
     .eq("id", merchantId)
     .single();
 
@@ -2637,10 +2637,19 @@ export async function adminApproveVerificationAction(merchantId: string, reviewN
     return { success: false, error: persistedError?.message || "Approval could not verify the persisted merchant state." };
   }
 
+  const persistedLockReasons = getLiveFeatureLockReasons(persistedMerchant);
+  const payoutOnlyLock =
+    persistedMerchant.verification_status === "verified" &&
+    persistedMerchant.live_features_enabled !== true &&
+    persistedLockReasons.length > 0 &&
+    persistedLockReasons.every((reason) => reason === "Settlement/payout account setup required");
+
   if (
     persistedMerchant.verification_status !== "verified" ||
-    persistedMerchant.setup_mode !== false ||
-    persistedMerchant.live_features_enabled !== true
+    (!payoutOnlyLock && (
+      persistedMerchant.setup_mode !== false ||
+      persistedMerchant.live_features_enabled !== true
+    ))
   ) {
     return {
       success: false,
@@ -2653,7 +2662,7 @@ export async function adminApproveVerificationAction(merchantId: string, reviewN
     actor: "admin",
     new_status: "verified",
     plan,
-    live_features_enabled: true,
+    live_features_enabled: persistedMerchant.live_features_enabled === true,
     onboarding_status: nextFields.onboarding_status,
     identity_review_outcome: identityReviewOutcome,
     review_notes: reviewNotes?.trim() || null,
@@ -2666,7 +2675,7 @@ export async function adminApproveVerificationAction(merchantId: string, reviewN
   return {
     success: true,
     updates: { ...updates, ...persistedMerchant },
-    message: canActivateNow
+    message: persistedMerchant.live_features_enabled === true
       ? "Merchant approved and live payment features are active."
       : "Business verified, live features locked until payout account setup is completed.",
   };
