@@ -82,6 +82,50 @@ type VerificationCostRow = {
   cost_amount?: number | string | null;
 };
 
+function getDirectorIdentityDisplayState(dir: DirectorVerificationRow) {
+  const normResp = dir.normalized_response as Record<string, unknown> | null;
+  const sandboxOverride = normResp?.deraLedgerSandboxOverride as Record<string, unknown> | null;
+  const bvnData = normResp?.data as Record<string, unknown> | null;
+  const bvnFirstName = String(bvnData?.firstName || "").trim();
+  const bvnLastName = String(bvnData?.lastName || "").trim();
+  const bvnNameOnCard = String(bvnData?.nameOnCard || bvnData?.name || "").trim();
+  const bvnReturnedName = [bvnFirstName, bvnLastName].filter(Boolean).join(" ") || bvnNameOnCard || null;
+  const invitedName = String(dir.director_name || "").toUpperCase().trim();
+  const bvnNormalized = bvnReturnedName?.toUpperCase().trim() || "";
+  const invitedTokens = invitedName.split(/\s+/).filter((token) => token.length > 2);
+  const bvnTokens = bvnNormalized.split(/\s+/).filter((token) => token.length > 2);
+  const matchingTokens = invitedTokens.filter((token) => bvnTokens.includes(token));
+  const requiredMatches = Math.min(2, invitedTokens.length);
+  const nameMismatch = bvnReturnedName !== null && matchingTokens.length < requiredMatches;
+  const providerMatch = sandboxOverride ? (sandboxOverride.providerMatch as boolean | undefined) ?? true : true;
+  const providerConfidence = (sandboxOverride?.providerConfidenceLevel as number | null) ?? dir.face_match_score ?? null;
+  const providerThreshold = sandboxOverride?.providerThreshold as number | null;
+  const selfieMatchBypassed = (sandboxOverride?.selfieMatchBypassed as boolean | undefined) ?? false;
+  const belowThreshold = providerConfidence !== null && providerThreshold !== null && providerConfidence < providerThreshold;
+  const reviewApproved =
+    !nameMismatch &&
+    dir.verification_status === "verified" &&
+    !dir.manual_review_required &&
+    !!dir.admin_notes?.trim() &&
+    (selfieMatchBypassed || belowThreshold || providerMatch === false);
+  const reviewRequired =
+    !nameMismatch &&
+    !reviewApproved &&
+    (dir.manual_review_required === true || dir.verification_status === "manual_review" || selfieMatchBypassed || belowThreshold || providerMatch === false);
+
+  return {
+    invitedName,
+    bvnReturnedName,
+    nameMismatch,
+    providerMatch,
+    providerConfidence,
+    providerThreshold,
+    selfieMatchBypassed,
+    reviewApproved,
+    reviewRequired,
+  };
+}
+
 export default function VerificationQueuePage() {
   const [merchants, setMerchants] = useState<Merchant[]>([]);
   const [loading, setLoading] = useState(true);
@@ -662,29 +706,11 @@ export default function VerificationQueuePage() {
                     const hasUnknownDirectorProvider = directorProviderNames.some((provider) => provider.toLowerCase() === "unknown");
                     const hasHistoricalDirectorProvider = directorProviderNames.some((provider) => provider.toLowerCase() !== "unknown" && provider.toLowerCase() !== activeProvider.toLowerCase());
                     const hasDirectorApproval = directorInvitations.some((invite) => ["approved", "verified"].includes(String(invite.status || "").toLowerCase())) || selectedMerchant.business_affiliation_status === "director_approved";
-                    const hasDirectorManualReview = directors.some((dir) => dir.manual_review_required);
+                    const directorIdentityStates = directors.map(getDirectorIdentityDisplayState);
+                    const hasDirectorManualReview = directorIdentityStates.some((dir) => dir.reviewRequired);
                     const hasDirectorFailure = directors.some((dir) => dir.verification_status === "failed");
-                    const hasDirectorSandboxWarning = directors.some((dir) => {
-                      const normResp = dir.normalized_response as Record<string, unknown> | null;
-                      const sandboxOverride = normResp?.deraLedgerSandboxOverride as Record<string, unknown> | null;
-                      return (sandboxOverride?.selfieMatchBypassed as boolean | undefined) ?? false;
-                    });
-                    const hasDirectorNameMismatch = directors.some((dir) => {
-                      const normResp = dir.normalized_response as Record<string, unknown> | null;
-                      const bvnData = normResp?.data as Record<string, unknown> | null;
-                      const bvnFirstName = String(bvnData?.firstName || "").trim();
-                      const bvnLastName = String(bvnData?.lastName || "").trim();
-                      const bvnNameOnCard = String(bvnData?.nameOnCard || "").trim();
-                      const bvnReturnedName = [bvnFirstName, bvnLastName].filter(Boolean).join(" ") || bvnNameOnCard || null;
-                      const invitedName = String(dir.director_name || "").toUpperCase().trim();
-                      const bvnNormalized = bvnReturnedName?.toUpperCase().trim() || "";
-                      const invitedTokens = invitedName.split(/\s+/).filter((token) => token.length > 2);
-                      const bvnTokens = bvnNormalized.split(/\s+/).filter((token) => token.length > 2);
-                      const matchingTokens = invitedTokens.filter((token) => bvnTokens.includes(token));
-                      const requiredMatches = Math.min(2, invitedTokens.length);
-                      const isNameMatched = matchingTokens.length >= requiredMatches;
-                      return bvnReturnedName !== null && !isNameMatched;
-                    });
+                    const hasDirectorReviewApproved = directorIdentityStates.some((dir) => dir.reviewApproved);
+                    const hasDirectorNameMismatch = directorIdentityStates.some((dir) => dir.nameMismatch);
 
                     const documentItems = [
                       { label: "CAC Document", value: selectedMerchant.cac_document_url, field: "cac_status" as const, statusVal: businessDocumentStep?.status || (selectedMerchant.cac_document_url ? "pending" : "unverified") },
@@ -705,7 +731,6 @@ export default function VerificationQueuePage() {
                       directors.length === 0 ||
                       hasDirectorNameMismatch ||
                       hasDirectorManualReview ||
-                      hasDirectorSandboxWarning ||
                       hasDirectorFailure
                     );
                     const approveDisabledReason = (() => {
@@ -792,9 +817,9 @@ export default function VerificationQueuePage() {
                       },
                       {
                         label: "Director Identity Evidence",
-                        badge: !requiresDirectorFlow ? "not required" : directorsLoading ? "loading" : directors.length === 0 ? "missing" : hasDirectorNameMismatch ? "name mismatch" : hasDirectorManualReview ? "manual review" : hasDirectorSandboxWarning ? "sandbox warning" : hasDirectorFailure ? "rejected" : "verified",
-                        tone: !requiresDirectorFlow ? "neutral" : directorsLoading ? "info" : directors.length === 0 ? "attention" : hasDirectorNameMismatch || hasDirectorManualReview ? "blocked" : hasDirectorSandboxWarning ? "pending" : hasDirectorFailure ? "blocked" : "verified",
-                        reason: !requiresDirectorFlow ? "Not required for this flow." : directorsLoading ? "Loading identity evidence." : directors.length === 0 ? "No submitted director identity evidence." : hasDirectorNameMismatch ? "Submitted evidence contains a director name mismatch." : hasDirectorManualReview ? "Submitted evidence is flagged for manual review." : hasDirectorSandboxWarning ? "Submitted evidence includes a sandbox selfie override warning." : `${directors.length} evidence record(s) available.`,
+                        badge: !requiresDirectorFlow ? "not required" : directorsLoading ? "loading" : directors.length === 0 ? "missing" : hasDirectorNameMismatch ? "name mismatch" : hasDirectorManualReview ? "manual review" : hasDirectorFailure ? "rejected" : hasDirectorReviewApproved ? "approved by compliance" : "verified",
+                        tone: !requiresDirectorFlow ? "neutral" : directorsLoading ? "info" : directors.length === 0 ? "attention" : hasDirectorNameMismatch || hasDirectorManualReview || hasDirectorFailure ? "blocked" : hasDirectorReviewApproved ? "verified" : "verified",
+                        reason: !requiresDirectorFlow ? "Not required for this flow." : directorsLoading ? "Loading identity evidence." : directors.length === 0 ? "No submitted director identity evidence." : hasDirectorNameMismatch ? "Submitted evidence contains a director name mismatch." : hasDirectorManualReview ? "Submitted evidence still requires compliance review." : hasDirectorFailure ? "Director identity evidence failed verification." : hasDirectorReviewApproved ? "Sandbox selfie override was reviewed and approved by compliance." : `${directors.length} evidence record(s) available.`,
                         nextAction: !requiresDirectorFlow ? "No action" : directors.length === 0 ? "Check director evidence" : "Review mismatches and overrides",
                       },
                       {
@@ -1334,29 +1359,23 @@ export default function VerificationQueuePage() {
                             ) : (
                               <div className="space-y-3">
                                 {directors.map((dir) => {
-                                  const normResp = dir.normalized_response as Record<string, unknown> | null;
-                                  const sandboxOverride = normResp?.deraLedgerSandboxOverride as Record<string, unknown> | null;
-                                  const bvnData = normResp?.data as Record<string, unknown> | null;
-                                  const bvnFirstName = String(bvnData?.firstName || "").trim();
-                                  const bvnLastName = String(bvnData?.lastName || "").trim();
-                                  const bvnNameOnCard = String(bvnData?.nameOnCard || "").trim();
-                                  const bvnReturnedName = [bvnFirstName, bvnLastName].filter(Boolean).join(" ") || bvnNameOnCard || null;
-                                  const invitedName = String(dir.director_name || "").toUpperCase().trim();
-                                  const bvnNormalized = bvnReturnedName?.toUpperCase().trim() || "";
-                                  const invitedTokens = invitedName.split(/\s+/).filter(t => t.length > 2);
-                                  const bvnTokens = bvnNormalized.split(/\s+/).filter(t => t.length > 2);
-                                  const matchingTokens = invitedTokens.filter(t => bvnTokens.includes(t));
-                                  const requiredMatches = Math.min(2, invitedTokens.length);
-                                  const isNameMatched = matchingTokens.length >= requiredMatches;
-                                  const nameMismatch = bvnReturnedName !== null && !isNameMatched;
-                                  const providerMatch = sandboxOverride ? (sandboxOverride.providerMatch as boolean) : true;
-                                  const providerConfidence = sandboxOverride?.providerConfidenceLevel as number | null ?? dir.face_match_score;
-                                  const providerThreshold = sandboxOverride?.providerThreshold as number | null;
-                                  const selfieMatchBypassed = sandboxOverride?.selfieMatchBypassed as boolean ?? false;
+                                  const {
+                                    invitedName,
+                                    bvnReturnedName,
+                                    nameMismatch,
+                                    providerMatch,
+                                    providerConfidence,
+                                    providerThreshold,
+                                    selfieMatchBypassed,
+                                    reviewApproved,
+                                    reviewRequired,
+                                  } = getDirectorIdentityDisplayState(dir);
                                   const linkedInvite = directorInvitations.find(inv => inv.id === dir.invitation_id) || directorInvitations.find(inv => inv.selected_director_name?.toUpperCase() === invitedName);
                                   const dirProviderRaw = dir.provider_name || "Unknown";
                                   const formattedDirProvider = dirProviderRaw.charAt(0).toUpperCase() + dirProviderRaw.slice(1).toLowerCase();
                                   const isHistoricalDirProvider = activeProvider.toLowerCase() !== dirProviderRaw.toLowerCase() && dirProviderRaw.toLowerCase() !== "unknown";
+                                  const canApproveDirectorReview = reviewRequired && !nameMismatch && (directorNotes[dir.id] || "").trim().length > 0;
+                                  const showDirectorActionPanel = reviewRequired || dir.verification_status === "failed" || nameMismatch;
 
                                   return (
                                     <div key={dir.id} className="bg-neutral-50 border border-neutral-200 rounded-xl p-3 space-y-3 min-w-0">
@@ -1374,8 +1393,8 @@ export default function VerificationQueuePage() {
                                         </div>
 
                                         <div className="flex flex-wrap items-center gap-2">
-                                          <Badge variant="outline" className={`text-[10px] font-bold border-2 capitalize ${dir.verification_status === "verified" && !nameMismatch ? "bg-emerald-50 text-emerald-700 border-emerald-200" : dir.verification_status === "failed" ? "bg-red-50 text-red-700 border-red-200" : nameMismatch ? "bg-red-50 text-red-700 border-red-200" : "bg-amber-50 text-amber-700 border-amber-200"}`}>{nameMismatch ? "Name Mismatch" : dir.verification_status?.replace(/_/g, " ")}</Badge>
-                                          {dir.manual_review_required && <Badge variant="outline" className="text-[10px] border-amber-200 bg-amber-50 text-amber-800">Manual review required</Badge>}
+                                          <Badge variant="outline" className={`text-[10px] font-bold border-2 capitalize ${nameMismatch || dir.verification_status === "failed" ? "bg-red-50 text-red-700 border-red-200" : reviewApproved ? "bg-sky-50 text-sky-700 border-sky-200" : reviewRequired ? "bg-amber-50 text-amber-700 border-amber-200" : "bg-emerald-50 text-emerald-700 border-emerald-200"}`}>{nameMismatch ? "Name mismatch" : dir.verification_status === "failed" ? "Failed" : reviewApproved ? "Approved by compliance" : reviewRequired ? "Director identity review required" : "Verified"}</Badge>
+                                          {reviewRequired && <Badge variant="outline" className="text-[10px] border-amber-200 bg-amber-50 text-amber-800">Manual review required</Badge>}
                                         </div>
                                       </div>
 
@@ -1391,12 +1410,12 @@ export default function VerificationQueuePage() {
                                         </div>
                                       )}
 
-                                      {dir.manual_review_required && (
+                                      {reviewRequired && !nameMismatch && (
                                         <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800 flex items-start gap-2">
                                           <ShieldAlert className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
                                           <div>
-                                            <p className="font-bold mb-1">Manual Review Required</p>
-                                            <p>This director evidence already carries a manual-review-required flag and should be checked carefully before any override.</p>
+                                            <p className="font-bold mb-1">Director Identity Review Required</p>
+                                            <p>This director evidence needs compliance review before final approval can proceed.</p>
                                           </div>
                                         </div>
                                       )}
@@ -1405,10 +1424,10 @@ export default function VerificationQueuePage() {
                                         <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800 flex items-start gap-2">
                                           <ShieldAlert className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
                                           <div>
-                                            <p className="font-bold mb-1">Sandbox Override - Selfie Threshold Not Met</p>
+                                            <p className="font-bold mb-1">{reviewApproved ? "Sandbox Override Reviewed by Compliance" : "Sandbox Override - Selfie Threshold Not Met"}</p>
                                             <p>Match: <span className="font-semibold text-red-700">{providerMatch ? "Passed" : "Failed"}</span></p>
                                             <p>Confidence: {providerConfidence}% / Threshold: {providerThreshold}%</p>
-                                            <p className="mt-1">Sandbox override accepted this verification. In production this would be rejected or flagged.</p>
+                                            <p className="mt-1">{reviewApproved ? "Sandbox override evidence remains visible as historical context after compliance approval." : "Sandbox override accepted this test verification. Compliance review is required before final approval."}</p>
                                           </div>
                                         </div>
                                       )}
@@ -1432,19 +1451,21 @@ export default function VerificationQueuePage() {
                                         </button>
                                       )}
 
-                                      {(dir.verification_status !== "verified" || nameMismatch) && (
+                                      {showDirectorActionPanel && (
                                         <div className="bg-white rounded-lg p-3 border border-neutral-200 space-y-2">
-                                          <span className="text-[10px] font-bold text-neutral-500 uppercase tracking-wider block">Manual Override Action</span>
+                                          <span className="text-[10px] font-bold text-neutral-500 uppercase tracking-wider block">{reviewRequired ? "Director Identity Review Action" : "Manual Override Action"}</span>
                                           <div className="flex flex-col gap-2 sm:flex-row">
                                             <input
                                               type="text"
-                                              placeholder="Reason or notes for manual override..."
+                                              placeholder={reviewRequired ? "Compliance notes required before approval..." : "Reason or notes for manual override..."}
                                               value={directorNotes[dir.id] || ""}
                                               onChange={(e) => setDirectorNotes({ ...directorNotes, [dir.id]: e.target.value })}
                                               className="w-full text-xs rounded border border-neutral-300 px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-[#7B2FF7] bg-white text-neutral-800"
                                             />
                                             <div className="flex flex-wrap gap-2">
-                                              <Button type="button" size="sm" onClick={() => handleApproveDirector(dir.id, directorNotes[dir.id] || "")} className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs h-8">Approve</Button>
+                                              {reviewRequired && !nameMismatch && (
+                                                <Button type="button" size="sm" disabled={!canApproveDirectorReview} onClick={() => handleApproveDirector(dir.id, directorNotes[dir.id] || "")} className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs h-8 disabled:opacity-60">Approve Director Identity Review</Button>
+                                              )}
                                               <Button type="button" size="sm" variant="destructive" onClick={() => handleRejectDirector(dir.id, directorNotes[dir.id] || "")} className="text-white font-bold text-xs h-8">Reject</Button>
                                             </div>
                                           </div>

@@ -2505,7 +2505,7 @@ export async function adminApproveVerificationAction(merchantId: string, reviewN
         .eq("merchant_id", merchantId),
       adminClient
         .from("business_director_verifications")
-        .select("director_name, verification_status, manual_review_required, normalized_response")
+        .select("director_name, verification_status, manual_review_required, admin_notes, normalized_response")
         .eq("merchant_id", merchantId),
     ]);
 
@@ -2521,7 +2521,18 @@ export async function adminApproveVerificationAction(merchantId: string, reviewN
     const hasDirectorFailure = directors.some((dir) => dir.verification_status === "failed");
     const hasDirectorSandboxWarning = directors.some((dir) => {
       const sandboxOverride = (dir.normalized_response as Record<string, any> | null)?.deraLedgerSandboxOverride as Record<string, any> | null;
-      return sandboxOverride?.selfieMatchBypassed === true;
+      const providerConfidence = (sandboxOverride?.providerConfidenceLevel as number | null) ?? null;
+      const providerThreshold = sandboxOverride?.providerThreshold as number | null;
+      const reviewApproved =
+        dir.verification_status === "verified" &&
+        !dir.manual_review_required &&
+        !!String(dir.admin_notes || "").trim() &&
+        (sandboxOverride?.selfieMatchBypassed === true || sandboxOverride?.providerMatch === false || (providerConfidence !== null && providerThreshold !== null && providerConfidence < providerThreshold));
+      return !reviewApproved && (
+        sandboxOverride?.selfieMatchBypassed === true ||
+        sandboxOverride?.providerMatch === false ||
+        (providerConfidence !== null && providerThreshold !== null && providerConfidence < providerThreshold)
+      );
     });
     const hasDirectorNameMismatch = directors.some((dir) => {
       const data = (dir.normalized_response as Record<string, any> | null)?.data as Record<string, any> | null;

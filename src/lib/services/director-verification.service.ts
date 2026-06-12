@@ -402,7 +402,7 @@ export async function updateDirectorManualStatus(params: {
     // 1. Fetch current record for context before update
     const { data: existing } = await adminClient
       .from("business_director_verifications")
-      .select("director_name, director_role, merchant_id, verification_status, invitation_id")
+      .select("director_name, director_role, merchant_id, verification_status, invitation_id, verification_id, face_match_score, normalized_response")
       .eq("id", params.directorVerificationId)
       .maybeSingle();
 
@@ -454,6 +454,9 @@ export async function updateDirectorManualStatus(params: {
 
     // 2. Write structured audit log to audit_logs — no BVN/selfie data ever logged here
     if (existing) {
+      const sandboxOverride = (existing.normalized_response as Record<string, unknown> | null)?.deraLedgerSandboxOverride as Record<string, unknown> | null;
+      const rawData = (existing.normalized_response as Record<string, unknown> | null)?.data as Record<string, unknown> | null;
+      const returnedBvnName = String(rawData?.name || [rawData?.firstName, rawData?.lastName].filter(Boolean).join(" ")).trim() || null;
       await adminClient.from("audit_logs").insert({
         event_type: params.status === "verified"
           ? "director_manual_approved"
@@ -470,6 +473,12 @@ export async function updateDirectorManualStatus(params: {
           previous_status: existing.verification_status,
           new_status: params.status,
           admin_notes: params.adminNotes,
+          provider_reference: existing.verification_id ?? null,
+          returned_bvn_name: returnedBvnName,
+          provider_confidence: sandboxOverride?.providerConfidenceLevel ?? existing.face_match_score ?? null,
+          provider_threshold: sandboxOverride?.providerThreshold ?? null,
+          provider_match: sandboxOverride?.providerMatch ?? null,
+          review_reason: sandboxOverride?.selfieMatchBypassed === true ? "sandbox_selfie_override_accepted_after_review" : null,
         },
       });
     }
