@@ -2707,8 +2707,9 @@ export async function adminApproveIndividualIdentityReviewAction(merchantId: str
   if (updateError) return { success: false, error: updateError.message };
 
   await syncMerchantSetupStatus(adminClient, merchantId);
-  await logAudit("individual_identity_manual_approved", merchantId, "merchant", {
+  await logAudit("identity_manual_review_approved", merchantId, "merchant", {
     actor: "admin",
+    plan,
     previous_status: merchant.verification_status,
     new_status: updates.verification_status,
     submitted_name: merchant.owner_name,
