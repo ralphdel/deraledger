@@ -27,6 +27,7 @@ import { PermissionGuard } from "@/components/PermissionGuard";
 type SettlementRow = {
   id: string;
   created_at: string;
+  expected_settlement_date?: string | null;
   provider_name: string;
   payment_method: string | null;
   gross_amount: number | null;
@@ -34,6 +35,8 @@ type SettlementRow = {
   expected_settlement: number | null;
   actual_settlement: number | null;
   settlement_status: string;
+  settlement_display_status?: string | null;
+  settlement_display_amount?: number | null;
   settlement_mode?: string | null;
   settlement_owner?: string | null;
   provider_settlement_batch_id?: string | null;
@@ -104,9 +107,9 @@ export default function MerchantSettlementsPage() {
     totalCollected: visibleRows.reduce((sum, row) => sum + Number(row.gross_amount || 0), 0),
     totalProviderFees: visibleRows.reduce((sum, row) => sum + Number(row.provider_fee || 0), 0),
     expectedSettlement: visibleRows.reduce((sum, row) => sum + Number(row.expected_settlement || 0), 0),
-    settledAmount: visibleRows.reduce((sum, row) => sum + Number(row.actual_settlement || 0), 0),
+    settledAmount: visibleRows.reduce((sum, row) => sum + Number(row.settlement_display_amount || 0), 0),
     pendingSettlement: visibleRows
-      .filter((row) => ["pending", "processing", "manual_review"].includes(row.settlement_status))
+      .filter((row) => isPendingSettlementStatus(row.settlement_display_status || row.settlement_status))
       .reduce((sum, row) => sum + Number(row.expected_settlement || 0), 0),
   }), [visibleRows]);
 
@@ -228,8 +231,8 @@ export default function MerchantSettlementsPage() {
                       </TableCell>
                       <TableCell className="text-sm">{maskAccount(row.merchant_settlement_accounts)}</TableCell>
                       <TableCell>
-                        <StatusBadge status={row.settlement_status} />
-                        {row.settlement_status === "manual_review" && <p className="text-xs text-amber-700 mt-1">Settlement is under review.</p>}
+                        <StatusBadge status={row.settlement_display_status || row.settlement_status} />
+                        {(row.settlement_display_status || row.settlement_status) === "manual_review" && <p className="text-xs text-amber-700 mt-1">Settlement is under review.</p>}
                         {row.provider_settlement_batches?.settled_at && (
                           <p className="text-xs text-emerald-700 mt-1">
                             Settled {new Date(row.provider_settlement_batches.settled_at).toLocaleDateString("en-NG")}
@@ -239,7 +242,7 @@ export default function MerchantSettlementsPage() {
                       <TableCell className="text-right font-medium">{formatNaira(Number(row.gross_amount || 0))}</TableCell>
                       <TableCell className="text-right font-medium">{formatNaira(Number(row.provider_fee || 0))}</TableCell>
                       <TableCell className="text-right font-medium">{row.expected_settlement === null || row.expected_settlement === undefined ? "Under review" : formatNaira(Number(row.expected_settlement))}</TableCell>
-                      <TableCell className="text-right font-medium">{row.actual_settlement === null || row.actual_settlement === undefined ? "-" : formatNaira(Number(row.actual_settlement))}</TableCell>
+                      <TableCell className="text-right font-medium">{row.settlement_display_amount === null || row.settlement_display_amount === undefined ? "-" : formatNaira(Number(row.settlement_display_amount))}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -294,8 +297,13 @@ function labelPaymentMethod(method?: string | null) {
 
 function getSettlementActivityDate(row: SettlementRow) {
   return new Date(
-    row.payment_records?.paid_at ||
+    row.provider_settlement_batches?.settled_at ||
     row.settled_at ||
+    row.expected_settlement_date ||
     row.created_at
   ).getTime();
+}
+
+function isPendingSettlementStatus(status: string) {
+  return ["pending", "processing", "manual_review", "settlement_pending"].includes(status.toLowerCase());
 }

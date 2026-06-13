@@ -8,12 +8,19 @@ export const dynamic = "force-dynamic";
 type SettlementAccountRow = Record<string, unknown> & {
   settlement_account_id?: string | null;
   provider_settlement_account_id?: string | null;
+  settlement_account_snapshot?: Record<string, unknown> | null;
+  settlement_bank_name?: string | null;
+  settlement_account_name?: string | null;
+  settlement_account_number_masked?: string | null;
+  expected_settlement_date?: string | null;
   merchant_settlement_accounts?: Record<string, unknown> | null;
   merchant_provider_settlement_accounts?: Record<string, unknown> | null;
   provider_settlement_batches?: Record<string, unknown> | null;
   settlement_status?: string | null;
+  settlement_display_status?: string | null;
   expected_settlement?: number | null;
   actual_settlement?: number | null;
+  settlement_display_amount?: number | null;
   gross_amount?: number | null;
   provider_fee?: number | null;
   platform_fee?: number | null;
@@ -32,7 +39,7 @@ export async function GET() {
     .select(`
       *,
       payment_records(*),
-      merchant_settlement_accounts(bank_name,account_number,account_name,currency),
+      merchant_settlement_accounts(id,bank_name,account_number,account_name,currency),
       merchant_provider_settlement_accounts(provider_name,status,environment),
       provider_settlement_batches(provider_batch_reference,actual_settlement_total,settlement_status,settled_at,provider_reported_settled_at)
     `)
@@ -46,7 +53,7 @@ export async function GET() {
       .select(`
         *,
         payment_records(*),
-        merchant_settlement_accounts(bank_name,account_number,account_name,currency),
+        merchant_settlement_accounts(id,bank_name,account_number,account_name,currency),
         merchant_provider_settlement_accounts(provider_name,status,environment)
       `)
       .eq("merchant_id", merchantId)
@@ -61,13 +68,14 @@ export async function GET() {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  let rows = data || [];
+  let rows = filterMerchantReceivableRows(data || []);
 
   if (rows.length === 0) {
     rows = await loadTransactionFallbackRows(supabase, merchantId);
   }
 
   rows = await hydrateMissingSettlementAccounts(supabase, merchantId, rows);
+  rows = rows.map(normalizeMerchantSettlementDisplay);
 
   return NextResponse.json({
     rows,
@@ -76,12 +84,12 @@ export async function GET() {
       totalProviderFees: rows.reduce((sum, row) => sum + Number(row.provider_fee || 0), 0),
       totalPlatformFees: rows.reduce((sum, row) => sum + Number(row.platform_fee || 0), 0),
       expectedSettlement: rows.reduce((sum, row) => sum + Number(row.expected_settlement || 0), 0),
-      settledAmount: rows.reduce((sum, row) => sum + Number(row.actual_settlement || 0), 0),
+      settledAmount: rows.reduce((sum, row) => sum + Number(row.settlement_display_amount || 0), 0),
       pendingSettlement: rows
-        .filter((row) => ["pending", "processing", "manual_review"].includes(row.settlement_status))
+        .filter((row) => isPendingSettlementStatus(row.settlement_display_status || row.settlement_status || ""))
         .reduce((sum, row) => sum + Number(row.expected_settlement || 0), 0),
       failedSettlement: rows
-        .filter((row) => ["failed", "disputed"].includes(row.settlement_status))
+        .filter((row) => ["failed", "disputed", "cancelled"].includes(String(row.settlement_display_status || row.settlement_status || "").toLowerCase()))
         .reduce((sum, row) => sum + Number(row.expected_settlement || 0), 0),
     },
   });
@@ -152,8 +160,11 @@ async function hydrateMissingSettlementAccounts(
     provider_settlement_batches: normalizeEmbeddedRow(row.provider_settlement_batches) as Record<string, unknown> | null,
   }));
 
-  if (normalizedRows.every((row) => row.merchant_settlement_accounts)) {
-    return normalizedRows;
+  if (normalizedRows.every((row) => resolveDisplayedSettlementAccount(row))) {
+    return normalizedRows.map((row) => ({
+      ...row,
+      merchant_settlement_accounts: resolveDisplayedSettlementAccount(row),
+    }));
   }
 
   const accountById = new Map<string, Record<string, unknown>>();
@@ -242,7 +253,7 @@ async function hydrateMissingSettlementAccounts(
   return normalizedRows.map((row) => ({
     ...row,
     merchant_settlement_accounts:
-      row.merchant_settlement_accounts ||
+      resolveDisplayedSettlementAccount(row) ||
       (row.settlement_account_id ? accountById.get(String(row.settlement_account_id)) : null) ||
       hydratedAccount,
   }));
@@ -285,7 +296,9 @@ async function loadTransactionFallbackRows(
     return [];
   }
 
-  return transactions.map((transaction) => {
+  return transactions
+    .filter((transaction) => transaction.invoice_id)
+    .map((transaction) => {
     const grossAmount = Number(transaction.amount_paid || 0);
     const providerFee = Number(transaction.paystack_fee || 0);
     const expectedSettlement =
@@ -331,7 +344,7 @@ async function loadTransactionFallbackRows(
       merchant_provider_settlement_accounts: null,
       provider_settlement_batches: null,
     };
-  });
+    });
 }
 
 function inferProviderName(transaction: Record<string, unknown>) {
@@ -351,4 +364,80 @@ function inferProviderName(transaction: Record<string, unknown>) {
 function normalizeEmbeddedRow(value: unknown) {
   if (Array.isArray(value)) return value[0] || null;
   return value || null;
+}
+
+function filterMerchantReceivableRows(rows: SettlementAccountRow[]) {
+  return rows.filter((row) => {
+    const paymentRecord = normalizeEmbeddedRow(row.payment_records) as Record<string, unknown> | null;
+    const purpose = String(paymentRecord?.payment_purpose || "").toLowerCase();
+    const recipientType = String(row.settlement_recipient_type || "").toLowerCase();
+    const hasInvoiceId = Boolean(paymentRecord?.invoice_id);
+
+    if (recipientType === "platform") return false;
+    if (["plan_subscription", "plan_upgrade", "plan_renewal", "subscription", "upgrade", "renewal", "plan_payment", "platform_billing"].includes(purpose)) {
+      return false;
+    }
+    if (recipientType === "merchant") return true;
+    if (!recipientType) return purpose === "invoice_payment" && hasInvoiceId;
+    return false;
+  });
+}
+
+function resolveDisplayedSettlementAccount(row: SettlementAccountRow) {
+  const snapshot = normalizeEmbeddedRow(row.settlement_account_snapshot) as Record<string, unknown> | null;
+  if (
+    snapshot ||
+    row.settlement_bank_name ||
+    row.settlement_account_name ||
+    row.settlement_account_number_masked
+  ) {
+    return {
+      bank_name: stringValue(row.settlement_bank_name) || stringValue(snapshot?.bank_name) || "Settlement bank",
+      account_number:
+        stringValue(row.settlement_account_number_masked) ||
+        stringValue(snapshot?.account_number_masked) ||
+        stringValue(snapshot?.account_number),
+      account_name: stringValue(row.settlement_account_name) || stringValue(snapshot?.account_name) || "Settlement account",
+      currency: stringValue(snapshot?.currency) || "NGN",
+    };
+  }
+
+  return row.merchant_settlement_accounts || null;
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function normalizeMerchantSettlementDisplay(row: SettlementAccountRow) {
+  const batch = normalizeEmbeddedRow(row.provider_settlement_batches) as Record<string, unknown> | null;
+  const rawStatus = String(row.settlement_status || "").toLowerCase();
+  const batchStatus = String(batch?.settlement_status || "").toLowerCase();
+  const hasCompletedSignal =
+    ["completed", "settled", "successful", "success"].includes(batchStatus) ||
+    ["completed", "settled", "successful", "success"].includes(rawStatus) ||
+    Boolean(batch?.settled_at || batch?.provider_reported_settled_at || row.settled_at);
+
+  const settlement_display_status = hasCompletedSignal
+    ? "completed"
+    : rawStatus === "settlement_pending"
+      ? "settlement_pending"
+      : rawStatus || "processing";
+
+  const settlement_display_amount =
+    row.actual_settlement !== null && row.actual_settlement !== undefined
+      ? Number(row.actual_settlement)
+      : settlement_display_status === "completed" && row.expected_settlement !== null && row.expected_settlement !== undefined
+        ? Number(row.expected_settlement)
+        : null;
+
+  return {
+    ...row,
+    settlement_display_status,
+    settlement_display_amount,
+  };
+}
+
+function isPendingSettlementStatus(status: string) {
+  return ["pending", "processing", "manual_review", "settlement_pending"].includes(status.toLowerCase());
 }
