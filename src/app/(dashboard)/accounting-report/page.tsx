@@ -85,7 +85,11 @@ export default function AccountingReportPage() {
     return matchesType && matchesClient;
   }, [clientIdFilter, typeFilter]);
 
-  const invoicesInRange = useMemo(() => {
+  const invoiceLookup = useMemo(() => {
+    return new Map(invoices.map((inv) => [inv.id, inv]));
+  }, [invoices]);
+
+  const createdInvoicesInRange = useMemo(() => {
     return invoices.filter((inv) => {
       return dateInRange(inv.created_at) && invoiceMatchesFilters(inv);
     });
@@ -93,15 +97,37 @@ export default function AccountingReportPage() {
 
   const successfulTransactionsInRange = useMemo(() => {
     return transactions.filter((tx) => {
-      return tx.status === "success" && dateInRange(tx.created_at) && invoiceMatchesFilters(tx.invoices);
+      const linkedInvoice = tx.invoices || (tx.invoice_id ? invoiceLookup.get(tx.invoice_id) : null);
+      return tx.status === "success" && dateInRange(tx.created_at) && invoiceMatchesFilters(linkedInvoice);
     });
-  }, [transactions, dateInRange, invoiceMatchesFilters]);
+  }, [transactions, dateInRange, invoiceLookup, invoiceMatchesFilters]);
 
   const manualPaymentsInRange = useMemo(() => {
     return manualPayments.filter((payment) => {
-      return dateInRange(payment.date_received || payment.created_at) && invoiceMatchesFilters(payment.invoices);
+      const linkedInvoice = payment.invoices || (payment.invoice_id ? invoiceLookup.get(payment.invoice_id) : null);
+      return dateInRange(payment.date_received || payment.created_at) && invoiceMatchesFilters(linkedInvoice);
     });
-  }, [manualPayments, dateInRange, invoiceMatchesFilters]);
+  }, [manualPayments, dateInRange, invoiceLookup, invoiceMatchesFilters]);
+
+  const relatedInvoices = useMemo(() => {
+    const reportInvoiceMap = new Map<string, InvoiceWithClient>();
+
+    createdInvoicesInRange.forEach((inv) => {
+      reportInvoiceMap.set(inv.id, inv);
+    });
+
+    successfulTransactionsInRange.forEach((tx) => {
+      const linkedInvoice = tx.invoices || (tx.invoice_id ? invoiceLookup.get(tx.invoice_id) : null);
+      if (linkedInvoice) reportInvoiceMap.set(linkedInvoice.id, linkedInvoice);
+    });
+
+    manualPaymentsInRange.forEach((payment) => {
+      const linkedInvoice = payment.invoices || (payment.invoice_id ? invoiceLookup.get(payment.invoice_id) : null);
+      if (linkedInvoice) reportInvoiceMap.set(linkedInvoice.id, linkedInvoice);
+    });
+
+    return Array.from(reportInvoiceMap.values());
+  }, [createdInvoicesInRange, successfulTransactionsInRange, manualPaymentsInRange, invoiceLookup]);
 
   const getInvoiceMetrics = (inv: InvoiceWithClient) => {
     const recordedPaid = Number(inv.amount_paid || 0);
@@ -121,26 +147,28 @@ export default function AccountingReportPage() {
       invoiceCount: number;
       totalRaised: number;
       totalPaid: number;
+      totalPaidToDate: number;
       totalOutstanding: number;
     }>();
 
     const ensureClient = (inv: InvoiceWithClient | null | undefined) => {
-      if (!inv?.client_id) return null;
-      const clientId = inv.client_id;
+      if (!inv) return null;
+      const clientId = inv.client_id || "deleted-client";
       if (!map.has(clientId)) {
         map.set(clientId, {
-          clientName: inv.clients?.full_name || "Unknown Client",
+          clientName: inv.clients?.full_name || "[Deleted Client]",
           email: inv.clients?.email || "",
           invoiceCount: 0,
           totalRaised: 0,
           totalPaid: 0,
+          totalPaidToDate: 0,
           totalOutstanding: 0,
         });
       }
       return map.get(clientId)!;
     };
 
-    invoicesInRange.forEach((inv) => {
+    relatedInvoices.forEach((inv) => {
       ensureClient(inv);
     });
 
@@ -152,13 +180,14 @@ export default function AccountingReportPage() {
       ensureClient(payment.invoices);
     });
 
-    invoicesInRange.forEach((inv) => {
+    relatedInvoices.forEach((inv) => {
       const clientStat = ensureClient(inv);
       if (!clientStat) return;
       const metrics = getInvoiceMetrics(inv);
 
       clientStat.invoiceCount += 1;
       clientStat.totalRaised += metrics.grandTotal;
+      clientStat.totalPaidToDate += metrics.paid;
       clientStat.totalOutstanding += metrics.outstanding;
     });
 
@@ -182,21 +211,22 @@ export default function AccountingReportPage() {
     }
 
     return result.sort((a, b) => (b.totalRaised + b.totalPaid) - (a.totalRaised + a.totalPaid));
-  }, [invoicesInRange, successfulTransactionsInRange, manualPaymentsInRange, searchQuery]);
+  }, [relatedInvoices, successfulTransactionsInRange, manualPaymentsInRange, searchQuery]);
 
   const totals = useMemo(() => {
     return aggregatedData.reduce((acc, curr) => ({
       invoices: acc.invoices + curr.invoiceCount,
       raised: acc.raised + curr.totalRaised,
       paid: acc.paid + curr.totalPaid,
+      paidToDate: acc.paidToDate + curr.totalPaidToDate,
       outstanding: acc.outstanding + curr.totalOutstanding,
-    }), { invoices: 0, raised: 0, paid: 0, outstanding: 0 });
+    }), { invoices: 0, raised: 0, paid: 0, paidToDate: 0, outstanding: 0 });
   }, [aggregatedData]);
 
   const handleExportCsv = () => {
     if (aggregatedData.length === 0) return;
 
-    const headers = ["Client Name", "Email", "Invoices Raised", "Total Amount (NGN)", "Amount Paid (NGN)", "Outstanding (NGN)"];
+    const headers = ["Client Name", "Email", "Related Invoices", "Related Invoice Value (NGN)", "Payments in Period (NGN)", "Paid to Date (NGN)", "Current Outstanding (NGN)"];
     
     const rows = aggregatedData.map(row => [
       `"${row.clientName.replace(/"/g, '""')}"`,
@@ -204,6 +234,7 @@ export default function AccountingReportPage() {
       row.invoiceCount,
       row.totalRaised.toFixed(2),
       row.totalPaid.toFixed(2),
+      row.totalPaidToDate.toFixed(2),
       row.totalOutstanding.toFixed(2)
     ]);
 
@@ -214,6 +245,7 @@ export default function AccountingReportPage() {
       totals.invoices,
       totals.raised.toFixed(2),
       totals.paid.toFixed(2),
+      totals.paidToDate.toFixed(2),
       totals.outstanding.toFixed(2)
     ]);
 
@@ -281,7 +313,7 @@ export default function AccountingReportPage() {
         <div>
           <h1 className="text-2xl font-bold text-purp-900 dark:text-white">Accounting Report</h1>
           <p className="text-neutral-500 dark:text-white/60 text-sm mt-1">
-            Analyze revenue, outstanding balances, and client performance
+            Compare invoice and payment activity for the selected period
           </p>
         </div>
         <Button onClick={handleExportCsv} className="bg-purp-900 hover:bg-purp-700 dark:bg-[#7B2FF7] dark:hover:bg-[#7B2FF7]/80 text-white font-semibold self-start sm:self-auto">
@@ -339,39 +371,62 @@ export default function AccountingReportPage() {
               </Select>
             </div>
           </div>
+          <p className="mt-4 text-xs text-neutral-500 dark:text-white/60">
+            Payments in Period are grouped by payment date. Related Invoice Value and Current Outstanding are based on the related invoices. Current Outstanding is the balance today, so it may be zero if an invoice was fully paid outside the selected period.
+          </p>
         </CardContent>
       </Card>
 
       {/* Summary Cards */}
-      <div className="grid sm:grid-cols-3 gap-4">
+      <div className="grid sm:grid-cols-2 xl:grid-cols-5 gap-4">
         <Card className="border-2 border-purp-200 dark:border-white/10 shadow-none dark:bg-[#1A0B2E]">
           <CardContent className="p-6">
             <div className="flex items-center gap-3 text-purp-600 dark:text-[#B58CFF] mb-2">
               <FileText className="h-5 w-5" />
-              <h3 className="font-semibold">Total Raised</h3>
+              <h3 className="font-semibold">Related Invoices</h3>
+            </div>
+            <p className="text-2xl font-bold text-purp-900 dark:text-white">{totals.invoices}</p>
+            <p className="text-sm text-neutral-500 dark:text-white/60 mt-1">Invoices created or paid within this date range</p>
+          </CardContent>
+        </Card>
+        <Card className="border-2 border-purp-200 dark:border-white/10 shadow-none dark:bg-[#1A0B2E]">
+          <CardContent className="p-6">
+            <div className="flex items-center gap-3 text-purp-600 dark:text-[#B58CFF] mb-2">
+              <FileText className="h-5 w-5" />
+              <h3 className="font-semibold">Related Invoice Value</h3>
             </div>
             <p className="text-2xl font-bold text-purp-900 dark:text-white">{formatNaira(totals.raised)}</p>
-            <p className="text-sm text-neutral-500 dark:text-white/60 mt-1">From {totals.invoices} invoice(s)</p>
+            <p className="text-sm text-neutral-500 dark:text-white/60 mt-1">Distinct related invoices counted once</p>
           </CardContent>
         </Card>
         <Card className="border-2 border-emerald-200 dark:border-emerald-500/20 shadow-none bg-emerald-50/50 dark:bg-[#1A0B2E]">
           <CardContent className="p-6">
             <div className="flex items-center gap-3 text-emerald-600 dark:text-emerald-400 mb-2">
               <TrendingUp className="h-5 w-5" />
-              <h3 className="font-semibold">Amount Paid</h3>
+              <h3 className="font-semibold">Payments in Period</h3>
             </div>
             <p className="text-2xl font-bold text-emerald-900 dark:text-emerald-50">{formatNaira(totals.paid)}</p>
-            <p className="text-sm text-emerald-600/80 dark:text-emerald-400/80 mt-1">Successfully collected</p>
+            <p className="text-sm text-emerald-600/80 dark:text-emerald-400/80 mt-1">Successful payments received in this date range</p>
+          </CardContent>
+        </Card>
+        <Card className="border-2 border-sky-200 dark:border-sky-500/20 shadow-none bg-sky-50/50 dark:bg-[#1A0B2E]">
+          <CardContent className="p-6">
+            <div className="flex items-center gap-3 text-sky-600 dark:text-sky-400 mb-2">
+              <TrendingUp className="h-5 w-5" />
+              <h3 className="font-semibold">Paid to Date</h3>
+            </div>
+            <p className="text-2xl font-bold text-sky-900 dark:text-sky-50">{formatNaira(totals.paidToDate)}</p>
+            <p className="text-sm text-sky-700/80 dark:text-sky-400/80 mt-1">Total paid on these related invoices across all time</p>
           </CardContent>
         </Card>
         <Card className="border-2 border-amber-200 dark:border-amber-500/20 shadow-none bg-amber-50/50 dark:bg-[#1A0B2E]">
           <CardContent className="p-6">
             <div className="flex items-center gap-3 text-amber-600 dark:text-amber-400 mb-2">
               <ArrowRightLeft className="h-5 w-5" />
-              <h3 className="font-semibold">Outstanding</h3>
+              <h3 className="font-semibold">Current Outstanding</h3>
             </div>
             <p className="text-2xl font-bold text-amber-900 dark:text-amber-50">{formatNaira(totals.outstanding)}</p>
-            <p className="text-sm text-amber-700/80 dark:text-amber-400/80 mt-1">Pending payment</p>
+            <p className="text-sm text-amber-700/80 dark:text-amber-400/80 mt-1">Current unpaid balance on these related invoices</p>
           </CardContent>
         </Card>
       </div>
@@ -395,10 +450,11 @@ export default function AccountingReportPage() {
             <TableHeader>
               <TableRow className="bg-purp-50 dark:bg-white/5 border-b-2 border-purp-200 dark:border-white/10 hover:bg-purp-50 dark:hover:bg-white/5">
                 <TableHead className="font-bold text-purp-900 dark:text-white text-xs uppercase tracking-wider">Client</TableHead>
-                <TableHead className="font-bold text-purp-900 dark:text-white text-xs uppercase tracking-wider text-center">Invoices</TableHead>
-                <TableHead className="font-bold text-purp-900 dark:text-white text-xs uppercase tracking-wider text-right">Total Raised</TableHead>
-                <TableHead className="font-bold text-purp-900 dark:text-white text-xs uppercase tracking-wider text-right">Paid</TableHead>
-                <TableHead className="font-bold text-purp-900 dark:text-white text-xs uppercase tracking-wider text-right">Outstanding</TableHead>
+                <TableHead className="font-bold text-purp-900 dark:text-white text-xs uppercase tracking-wider text-center">Related Invoices</TableHead>
+                <TableHead className="font-bold text-purp-900 dark:text-white text-xs uppercase tracking-wider text-right">Related Invoice Value</TableHead>
+                <TableHead className="font-bold text-purp-900 dark:text-white text-xs uppercase tracking-wider text-right">Payments in Period</TableHead>
+                <TableHead className="font-bold text-purp-900 dark:text-white text-xs uppercase tracking-wider text-right">Paid to Date</TableHead>
+                <TableHead className="font-bold text-purp-900 dark:text-white text-xs uppercase tracking-wider text-right">Current Outstanding</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -411,13 +467,14 @@ export default function AccountingReportPage() {
                   <TableCell className="text-center font-medium text-neutral-600 dark:text-white/80">{row.invoiceCount}</TableCell>
                   <TableCell className="text-right font-medium dark:text-white/90">{formatNaira(row.totalRaised)}</TableCell>
                   <TableCell className="text-right font-semibold text-emerald-600 dark:text-emerald-400">{formatNaira(row.totalPaid)}</TableCell>
+                  <TableCell className="text-right font-semibold text-sky-600 dark:text-sky-400">{formatNaira(row.totalPaidToDate)}</TableCell>
                   <TableCell className="text-right font-semibold text-amber-600 dark:text-amber-400">{formatNaira(row.totalOutstanding)}</TableCell>
                 </TableRow>
               ))}
               {aggregatedData.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={5} className="h-32 text-center text-neutral-500 dark:text-white/50">
-                    No transactions found for the selected filters.
+                  <TableCell colSpan={6} className="h-32 text-center text-neutral-500 dark:text-white/50">
+                    No invoice or payment activity found for the selected filters.
                   </TableCell>
                 </TableRow>
               )}
