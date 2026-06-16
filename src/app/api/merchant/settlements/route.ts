@@ -1,9 +1,15 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
+import { createClient as createSupabaseClient, type SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
 import { normalizeMerchantFacingPaymentMethod } from "@/lib/services/breet-crypto.service";
 
 export const dynamic = "force-dynamic";
+
+const serviceSupabase = createSupabaseClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
 
 type SettlementAccountRow = Record<string, unknown> & {
   settlement_account_id?: string | null;
@@ -27,14 +33,14 @@ type SettlementAccountRow = Record<string, unknown> & {
 };
 
 export async function GET() {
-  const supabase = await createClient();
-  const merchantId = await resolveCurrentMerchantId(supabase);
+  const authSupabase = await createClient();
+  const merchantId = await resolveCurrentMerchantId(authSupabase);
 
   if (!merchantId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  let { data, error } = await supabase
+  let { data, error } = await serviceSupabase
     .from("settlement_records")
     .select(`
       *,
@@ -48,7 +54,7 @@ export async function GET() {
     .limit(100);
 
   if (error) {
-    const fallback = await supabase
+    const fallback = await serviceSupabase
       .from("settlement_records")
       .select(`
         *,
@@ -71,10 +77,10 @@ export async function GET() {
   let rows = filterMerchantReceivableRows(data || []);
 
   if (rows.length === 0) {
-    rows = await loadTransactionFallbackRows(supabase, merchantId);
+    rows = await loadTransactionFallbackRows(serviceSupabase, merchantId);
   }
 
-  rows = await hydrateMissingSettlementAccounts(supabase, merchantId, rows);
+  rows = await hydrateMissingSettlementAccounts(serviceSupabase, merchantId, rows);
   rows = rows.map(normalizeMerchantSettlementDisplay);
 
   return NextResponse.json({
@@ -146,7 +152,7 @@ async function resolveCurrentMerchantId(supabase: Awaited<ReturnType<typeof crea
 }
 
 async function hydrateMissingSettlementAccounts(
-  supabase: Awaited<ReturnType<typeof createClient>>,
+  supabase: SupabaseClient,
   merchantId: string,
   rows: SettlementAccountRow[]
 ) {
@@ -260,7 +266,7 @@ async function hydrateMissingSettlementAccounts(
 }
 
 async function loadLegacySettlementAccount(
-  supabase: Awaited<ReturnType<typeof createClient>>,
+  supabase: SupabaseClient,
   merchantId: string
 ) {
   const { data: merchant } = await supabase
@@ -280,7 +286,7 @@ async function loadLegacySettlementAccount(
 }
 
 async function loadTransactionFallbackRows(
-  supabase: Awaited<ReturnType<typeof createClient>>,
+  supabase: SupabaseClient,
   merchantId: string
 ) {
   const { data: transactions, error } = await supabase

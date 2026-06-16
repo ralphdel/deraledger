@@ -250,6 +250,19 @@ function extractSettlementSnapshot(session: Record<string, unknown>) {
   };
 }
 
+function resolveProviderSettlementTimestamp(payload: WebhookPayload) {
+  const settledAtCandidate =
+    stringValue(payload.updatedAt) ||
+    stringValue(payload.createdAt) ||
+    stringValue(payload.completedAt) ||
+    stringValue(payload.settledAt);
+
+  if (!settledAtCandidate) return new Date().toISOString();
+
+  const parsed = new Date(settledAtCandidate);
+  return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
+}
+
 async function readSettings(keys: string[]) {
   const { data } = await supabase
     .from("platform_settings")
@@ -1094,6 +1107,8 @@ async function handleInvoiceWebhook(input: {
         amount_paid: accounting.selectedInvoiceAmount,
         currency: "NGN",
         payment_status: "successful",
+        processing_status: "completed",
+        reconciliation_status: "invoice_credited",
         customer_email: stringValue(asRecord(session.metadata).client_email) || null,
         raw_provider_payload: accountingPayload,
         paid_at: new Date().toISOString(),
@@ -1105,6 +1120,7 @@ async function handleInvoiceWebhook(input: {
 
   if (!paymentRecordResult.error && paymentRecordResult.data?.id) {
     const settlementSnapshot = extractSettlementSnapshot(session);
+    const settledAt = resolveProviderSettlementTimestamp(payload);
     await supabase.from("settlement_records").upsert(
       {
         payment_record_id: paymentRecordResult.data.id,
@@ -1129,9 +1145,11 @@ async function handleInvoiceWebhook(input: {
         settlement_mode: settlementMode,
         settlement_owner: "provider",
         payout_action_required: false,
+        settled_at: settledAt,
         provider_settlement_reference: providerReference || txHash || String(session.reference || session.id),
         provider_fee_source: "breet_payload",
         expected_settlement_source: "breet_trade_completed",
+        reconciliation_notes: "breet trade completed",
         settlement_account_snapshot: settlementSnapshot.snapshot,
         settlement_bank_name: settlementSnapshot.bankName,
         settlement_account_name: settlementSnapshot.accountName,
@@ -1404,6 +1422,7 @@ async function handlePlanWebhook(input: {
 
   if (merchantId && !paymentRecord.error && paymentRecord.data?.id) {
     const settlementSnapshot = extractSettlementSnapshot(session);
+    const settledAt = resolveProviderSettlementTimestamp(payload);
     await supabase.from("settlement_records").upsert(
       {
         payment_record_id: paymentRecord.data.id,
@@ -1427,9 +1446,11 @@ async function handlePlanWebhook(input: {
         settlement_mode: settlementMode,
         settlement_owner: "provider",
         payout_action_required: false,
+        settled_at: settledAt,
         provider_settlement_reference: providerReference || session.provider_reference || session.internal_reference,
         provider_fee_source: "breet_payload",
         expected_settlement_source: "breet_trade_completed",
+        reconciliation_notes: "breet trade completed",
         settlement_account_snapshot: settlementSnapshot.snapshot,
         settlement_bank_name: settlementSnapshot.bankName,
         settlement_account_name: settlementSnapshot.accountName,
