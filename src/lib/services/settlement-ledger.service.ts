@@ -29,6 +29,8 @@ type SettlementAccountInput = {
   rawProviderResponse?: Record<string, unknown> | null;
 };
 
+export const MONNIFY_SUBACCOUNT_SETUP_SOURCE = "monnify_subaccount_setup";
+
 type TransactionRow = {
   id: string;
   invoice_id: string | null;
@@ -258,7 +260,7 @@ export async function isProviderSettlementReady(
   if (mapping) {
     if (input.provider === "monnify") {
       const source = String((mapping.raw_provider_response as Record<string, unknown> | null)?.source || "");
-      return Boolean(mapping.provider_subaccount_code && source === "monnify_subaccount_setup");
+      return Boolean(mapping.provider_subaccount_code && source === MONNIFY_SUBACCOUNT_SETUP_SOURCE);
     }
 
     if (input.provider !== "breet" || !input.requireCryptoMapping) {
@@ -281,6 +283,60 @@ export async function isProviderSettlementReady(
   }
 
   return await hasLegacySettlementReadiness(supabase, input.merchantId, input.provider);
+}
+
+export async function getProviderSettlementMapping(
+  supabase: SupabaseClient,
+  input: {
+    merchantId: string;
+    provider: SettlementProvider;
+    environment: PaymentEnvironment;
+  }
+) {
+  const { data: account, error: accountError } = await supabase
+    .from("merchant_settlement_accounts")
+    .select("id, bank_name, bank_code, account_number, account_name, verification_status, status")
+    .eq("merchant_id", input.merchantId)
+    .eq("is_default", true)
+    .eq("status", "active")
+    .maybeSingle();
+
+  if (accountError || !account) {
+    return {
+      account: null,
+      mapping: null,
+      ready: false,
+    };
+  }
+
+  const { data: mapping, error: mappingError } = await supabase
+    .from("merchant_provider_settlement_accounts")
+    .select("id, provider_name, provider_account_reference, provider_subaccount_code, provider_split_reference, status, environment, raw_provider_response")
+    .eq("settlement_account_id", account.id)
+    .eq("provider_name", input.provider)
+    .eq("environment", input.environment)
+    .in("status", ["connected", "active"])
+    .maybeSingle();
+
+  if (mappingError) {
+    console.error("Provider settlement mapping lookup failed:", mappingError.message);
+    return {
+      account,
+      mapping: null,
+      ready: false,
+    };
+  }
+
+  const source = String((mapping?.raw_provider_response as Record<string, unknown> | null)?.source || "");
+  const ready = input.provider === "monnify"
+    ? Boolean(mapping?.provider_subaccount_code && source === MONNIFY_SUBACCOUNT_SETUP_SOURCE)
+    : Boolean(mapping);
+
+  return {
+    account,
+    mapping: mapping || null,
+    ready,
+  };
 }
 
 export async function upsertSettlementLedgerForTransaction(

@@ -3,7 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { PaymentService } from "@/lib/payment";
 import { getPaymentEnvironmentForMerchantEmail, resolvePaymentRoute, type PaymentMethod } from "@/lib/services/payment-routing.service";
 import { isLiveFeatureEnabled } from "@/lib/services/onboarding-flow.service";
-import { isProviderSettlementReady } from "@/lib/services/settlement-ledger.service";
+import { getProviderSettlementMapping, isProviderSettlementReady } from "@/lib/services/settlement-ledger.service";
 import { getAppUrl } from "@/lib/server-utils";
 
 const supabase = createClient(
@@ -53,7 +53,7 @@ export async function POST(request: Request) {
     // Fetch the merchant to get the subaccount code
     const { data: merchant, error: merchantError } = await supabase
       .from("merchants")
-      .select("email, payment_subaccount_code, subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, utility_status, business_affiliation_status, live_features_enabled, setup_mode")
+      .select("id, email, payment_subaccount_code, subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, utility_status, business_affiliation_status, live_features_enabled, setup_mode")
       .eq("id", invoice.merchant_id)
       .single();
 
@@ -82,9 +82,31 @@ export async function POST(request: Request) {
     if (!providerReady) {
       const message =
         route.provider === "monnify"
-          ? "Merchant Monnify settlement is not fully configured yet. Please contact support."
+          ? "Monnify settlement account is not ready. Please complete settlement setup before collecting payments through Monnify."
           : "Merchant is not verified or has no settlement account set up";
       return NextResponse.json({ error: message }, { status: 403 });
+    }
+
+    const monnifySettlement =
+      route.provider === "monnify"
+        ? await getProviderSettlementMapping(supabase, {
+            merchantId: merchant.id,
+            provider: "monnify",
+            environment: paymentEnvironment,
+          })
+        : null;
+
+    if (
+      route.provider === "monnify" &&
+      (!monnifySettlement?.ready || !monnifySettlement.mapping?.provider_subaccount_code)
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Monnify settlement account is not ready. Please complete settlement setup before collecting payments through Monnify.",
+        },
+        { status: 403 }
+      );
     }
 
     // Calculate k-factor and total charge
@@ -145,6 +167,16 @@ export async function POST(request: Request) {
       amountKobo: chargeAmountKobo,
       reference,
       subaccountCode: route.provider === "paystack" ? merchant.payment_subaccount_code : undefined,
+      incomeSplitConfig:
+        route.provider === "monnify" && monnifySettlement?.mapping?.provider_subaccount_code
+          ? [
+              {
+                subAccountCode: monnifySettlement.mapping.provider_subaccount_code,
+                splitPercentage: 100,
+                feePercentage: 100,
+              },
+            ]
+          : undefined,
       callbackUrl: callback.toString(),
       bearer: "account",
       paymentMethod: selectedMethod,

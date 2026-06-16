@@ -32,6 +32,17 @@ type MonnifyAccountValidation = {
   accountNumber?: string;
 };
 
+type MonnifySubaccountResponse = {
+  subAccountCode?: string;
+  accountNumber?: string;
+  accountName?: string;
+  bankCode?: string;
+  bankName?: string;
+  currencyCode?: string;
+  defaultSplitPercentage?: number;
+  email?: string;
+};
+
 export class MonnifyAdapter implements IPaymentProcessor {
   constructor(
     private readonly apiKey: string,
@@ -59,7 +70,7 @@ export class MonnifyAdapter implements IPaymentProcessor {
     return accessToken;
   }
 
-  private async authorizedRequest<T>(path: string, body?: Record<string, unknown>) {
+  private async authorizedRequest<T>(path: string, body?: unknown) {
     const accessToken = await this.getAccessToken();
     const response = await fetch(`${MONNIFY_BASE}${path}`, {
       method: "POST",
@@ -108,6 +119,20 @@ export class MonnifyAdapter implements IPaymentProcessor {
 
   async initializeTransaction(p: TransactionParams): Promise<TransactionResult> {
     const redirectUrl = normalizeMonnifyRedirectUrl(p.callbackUrl);
+    const paymentPurpose = String(p.metadata.payment_purpose || p.metadata.type || "").toLowerCase();
+    const requiresMerchantSplit = MONNIFY_MERCHANT_COLLECTION_PURPOSES.has(paymentPurpose);
+    const forbidsMerchantSplit = MONNIFY_PLATFORM_PAYMENT_PURPOSES.has(paymentPurpose);
+
+    if (requiresMerchantSplit && (!p.incomeSplitConfig || p.incomeSplitConfig.length === 0)) {
+      throw new Error(
+        "Monnify settlement account is not ready. Please complete settlement setup before collecting payments through Monnify."
+      );
+    }
+
+    if (forbidsMerchantSplit && p.incomeSplitConfig && p.incomeSplitConfig.length > 0) {
+      throw new Error("Monnify platform payments must not include merchant income split configuration.");
+    }
+
     const body: Record<string, unknown> = {
       amount: p.amountKobo / 100,
       customerName: String(p.metadata.business_name || p.metadata.trading_name || p.email),
@@ -120,6 +145,10 @@ export class MonnifyAdapter implements IPaymentProcessor {
       paymentMethods: [p.paymentMethod === "bank_transfer" ? "ACCOUNT_TRANSFER" : p.paymentMethod === "ussd" ? "USSD" : "CARD"],
       metaData: p.metadata,
     };
+
+    if (p.incomeSplitConfig && p.incomeSplitConfig.length > 0) {
+      body.incomeSplitConfig = p.incomeSplitConfig;
+    }
 
     const data = await this.authorizedRequest<{
       checkoutUrl?: string;
@@ -185,19 +214,78 @@ export class MonnifyAdapter implements IPaymentProcessor {
     };
   }
 
-  async createSubaccount(_p: SubaccountParams): Promise<SubaccountResult> {
-    void _p;
-    throw new Error(
-      "Monnify Sub Accounts are not enabled for this environment. Please contact Monnify support/account manager to enable Transaction Splitting/Sub Accounts before using Monnify for merchant collections."
+  async createSubaccount(p: SubaccountParams): Promise<SubaccountResult> {
+    const email = String(p.primaryContactEmail || "").trim();
+    if (!email) {
+      throw new Error("Monnify subaccount setup requires a contact email.");
+    }
+
+    const body = [
+      {
+        bankCode: p.bankCode,
+        accountNumber: p.accountNumber,
+        accountName: p.accountName || p.primaryContactName || p.businessName,
+        currencyCode: p.currencyCode || "NGN",
+        email,
+        defaultSplitPercentage: p.defaultSplitPercentage ?? 100,
+      },
+    ];
+
+    const response = await this.authorizedRequest<MonnifySubaccountResponse[] | MonnifySubaccountResponse>(
+      "/api/v1/sub-accounts",
+      body
     );
+    const data = Array.isArray(response) ? response[0] : response;
+
+    if (!data?.subAccountCode) {
+      throw new Error("Monnify did not return a sub account code.");
+    }
+
+    return {
+      subaccountCode: data.subAccountCode,
+      businessName: p.businessName,
+      accountNumber: data.accountNumber || p.accountNumber,
+      accountName: data.accountName || p.accountName || p.primaryContactName || p.businessName,
+      settlementBank: data.bankName || data.bankCode || p.bankCode,
+      providerReference: data.subAccountCode,
+      raw: data as Record<string, unknown>,
+    };
   }
 
-  async updateSubaccount(_code: string, _p: Partial<SubaccountParams>): Promise<SubaccountResult> {
-    void _code;
-    void _p;
-    throw new Error(
-      "Monnify Sub Accounts are not enabled for this environment. Please contact Monnify support/account manager to enable Transaction Splitting/Sub Accounts before using Monnify for merchant collections."
+  async updateSubaccount(code: string, p: Partial<SubaccountParams>): Promise<SubaccountResult> {
+    if (!code) {
+      throw new Error("Monnify subaccount code is required.");
+    }
+
+    const payload: Record<string, unknown> = {
+      bankCode: p.bankCode,
+      accountNumber: p.accountNumber,
+      accountName: p.accountName || p.primaryContactName || p.businessName,
+      currencyCode: p.currencyCode || "NGN",
+      email: p.primaryContactEmail,
+      defaultSplitPercentage: p.defaultSplitPercentage ?? 100,
+    };
+
+    Object.keys(payload).forEach((key) => {
+      if (payload[key] === undefined || payload[key] === null || payload[key] === "") {
+        delete payload[key];
+      }
+    });
+
+    const data = await this.authorizedRequest<MonnifySubaccountResponse>(
+      `/api/v1/sub-accounts/${encodeURIComponent(code)}`,
+      payload
     );
+
+    return {
+      subaccountCode: data.subAccountCode || code,
+      businessName: p.businessName || p.primaryContactName || "Monnify Settlement Account",
+      accountNumber: data.accountNumber || p.accountNumber || "",
+      accountName: data.accountName || p.accountName || p.primaryContactName || undefined,
+      settlementBank: data.bankName || data.bankCode || p.bankCode || "",
+      providerReference: data.subAccountCode || code,
+      raw: data as Record<string, unknown>,
+    };
   }
 
   async getBankList(): Promise<BankListItem[]> {
@@ -263,6 +351,26 @@ export class MonnifyAdapter implements IPaymentProcessor {
     }
   }
 }
+
+const MONNIFY_MERCHANT_COLLECTION_PURPOSES = new Set([
+  "invoice_payment",
+  "customer_invoice",
+  "merchant_collection",
+  "payment_link",
+]);
+
+const MONNIFY_PLATFORM_PAYMENT_PURPOSES = new Set([
+  "plan_subscription",
+  "plan_upgrade",
+  "plan_renewal",
+  "subscription",
+  "subscription_renewal",
+  "subscription_upgrade",
+  "upgrade_payment",
+  "renewal_payment",
+  "platform_billing",
+  "account_setup",
+]);
 
 function normalizeMonnifyRedirectUrl(callbackUrl: string) {
   try {

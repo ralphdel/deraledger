@@ -11,6 +11,12 @@ export interface TransactionParams {
   paymentMethod?: "card" | "bank_transfer" | "ussd" | "crypto";
   subaccountCode?: string; // ACCT_xxx — for Collection Invoice splits
   bearer?: "account" | "subaccount"; // Who bears Paystack fee
+  incomeSplitConfig?: Array<{
+    subAccountCode: string;
+    feePercentage?: number;
+    splitPercentage?: number;
+    splitAmount?: number;
+  }>;
 }
 
 export interface TransactionResult {
@@ -27,6 +33,9 @@ export interface SubaccountParams {
   settlementSchedule?: "auto" | "weekly" | "monthly" | "manual";
   primaryContactEmail?: string;
   primaryContactName?: string;
+  accountName?: string;
+  currencyCode?: string;
+  defaultSplitPercentage?: number;
 }
 
 export interface SubaccountResult {
@@ -34,6 +43,9 @@ export interface SubaccountResult {
   businessName: string;
   accountNumber: string;
   settlementBank: string;
+  accountName?: string;
+  providerReference?: string;
+  raw?: Record<string, unknown>;
 }
 
 export interface BankListItem {

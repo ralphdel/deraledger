@@ -1622,84 +1622,185 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
   if (mErr || !m) return { success: false, error: "Unauthorized" };
 
   try {
+    let verifiedAccountName = data.accountName;
+    try {
+      const resolution = await PaymentService.resolveAccountNumber(data.bankCode, data.accountNumber, "monnify");
+      verifiedAccountName = resolution.accountName || data.accountName;
+    } catch {
+      return {
+        success: false,
+        error: "We could not verify this settlement account with Monnify. Please confirm the bank and account number.",
+      };
+    }
+
     const paymentEnvironment = getPaymentEnvironmentForMerchantEmail(data.email);
     const availableMethods = await listAvailablePaymentMethods("invoice_payment", paymentEnvironment);
     const fiatProviders = [...new Set(
       availableMethods
         .filter((method) => method.method !== "crypto" && method.provider !== "breet")
         .map((method) => method.provider)
-    )];
+    )] as Exclude<PaymentProvider, "breet">[];
 
-    if (fiatProviders.length !== 1) {
-      return { success: false, error: "Unable to determine a single active fiat collection provider for settlement provisioning." };
+    if (fiatProviders.length === 0) {
+      return { success: false, error: "No active fiat collection provider is configured for settlement provisioning." };
     }
 
-    const activeProvider = fiatProviders[0] as Exclude<PaymentProvider, "breet">;
-    const existingProviderCode =
-      activeProvider === "paystack"
-        ? m.payment_subaccount_code
-        : (
-            await adminClient
-              .from("merchant_provider_settlement_accounts")
-              .select("provider_subaccount_code")
-              .eq("merchant_id", merchantId)
-              .eq("provider_name", activeProvider)
-              .eq("environment", paymentEnvironment)
-              .in("status", ["connected", "active"])
-              .maybeSingle()
-          ).data?.provider_subaccount_code || null;
+    const { data: existingMappings, error: mappingsError } = await adminClient
+      .from("merchant_provider_settlement_accounts")
+      .select("provider_name, provider_subaccount_code, provider_account_reference, raw_provider_response")
+      .eq("merchant_id", merchantId)
+      .eq("environment", paymentEnvironment)
+      .in("provider_name", fiatProviders);
 
-    let subaccount;
-    
-    try {
-      if (existingProviderCode) {
-        // Update existing
-        subaccount = await PaymentService.updateSubaccount(existingProviderCode, {
-          businessName: data.businessName,
-          bankCode: data.bankCode,
-          accountNumber: data.accountNumber,
-          percentageCharge: 1.5,
-        }, activeProvider);
-      } else {
-        // Create new subaccount via PaymentService
-        subaccount = await PaymentService.createSubaccount({
-          businessName: data.businessName,
-          bankCode: data.bankCode,
-          accountNumber: data.accountNumber,
-          percentageCharge: 1.5,
-          primaryContactEmail: data.email,
-          primaryContactName: data.accountName,
-        }, activeProvider);
+    if (mappingsError) {
+      throw mappingsError;
+    }
+
+    const mappingByProvider = new Map(
+      (existingMappings || []).map((row) => [row.provider_name as Exclude<PaymentProvider, "breet">, row])
+    );
+
+    const provisionedProviders: Array<{
+      provider: Exclude<PaymentProvider, "breet">;
+      subaccountCode: string;
+    }> = [];
+
+    for (const provider of fiatProviders) {
+      const existingMapping = mappingByProvider.get(provider);
+      const existingProviderCode =
+        provider === "paystack"
+          ? m.payment_subaccount_code
+          : (existingMapping?.provider_subaccount_code as string | null | undefined) || null;
+      const existingPayload = (existingMapping?.raw_provider_response as Record<string, unknown> | null | undefined) || null;
+      const existingAccountNumber = String(
+        (existingPayload?.subaccount as Record<string, unknown> | undefined)?.accountNumber || ""
+      ).trim();
+      const existingBankCode = String(
+        (existingPayload?.subaccount as Record<string, unknown> | undefined)?.settlementBank ||
+        (existingPayload?.subaccount as Record<string, unknown> | undefined)?.bankCode ||
+        ""
+      ).trim();
+
+      let subaccount;
+
+      try {
+        if (
+          provider === "monnify" &&
+          existingProviderCode &&
+          existingAccountNumber === data.accountNumber &&
+          (!existingBankCode || existingBankCode === data.bankCode)
+        ) {
+          subaccount = {
+            subaccountCode: existingProviderCode,
+            businessName: data.businessName,
+            accountNumber: data.accountNumber,
+            settlementBank: data.bankCode,
+            accountName: data.accountName,
+            providerReference: existingProviderCode,
+            raw: existingPayload,
+          };
+        } else if (existingProviderCode && provider === "paystack") {
+          subaccount = await PaymentService.updateSubaccount(existingProviderCode, {
+            businessName: data.businessName,
+            bankCode: data.bankCode,
+            accountNumber: data.accountNumber,
+            percentageCharge: 1.5,
+            accountName: verifiedAccountName,
+            primaryContactEmail: data.email,
+            primaryContactName: verifiedAccountName,
+          }, provider);
+        } else {
+          subaccount = await PaymentService.createSubaccount({
+            businessName: data.businessName,
+            bankCode: data.bankCode,
+            accountNumber: data.accountNumber,
+            percentageCharge: provider === "monnify" ? 0 : 1.5,
+            primaryContactEmail: data.email,
+            primaryContactName: verifiedAccountName,
+            accountName: verifiedAccountName,
+            currencyCode: "NGN",
+            defaultSplitPercentage: provider === "monnify" ? 100 : undefined,
+          }, provider);
+        }
+      } catch (apiError: any) {
+        if (process.env.NODE_ENV !== "production" && provider === "paystack") {
+          console.warn("Paystack subaccount API failed, using mock for development:", apiError.message);
+          subaccount = {
+            subaccountCode: `MOCK_SUB_${merchantId.slice(0, 8)}`,
+            businessName: data.businessName,
+            accountNumber: data.accountNumber,
+            settlementBank: data.bankCode,
+            accountName: verifiedAccountName,
+            providerReference: `MOCK_SUB_${merchantId.slice(0, 8)}`,
+            raw: { source: "mock_paystack_subaccount" },
+          };
+        } else {
+          if (provider === "monnify") {
+            await upsertProviderNeutralSettlementAccount(adminClient, {
+              merchantId,
+              bankName: data.bankName,
+              bankCode: data.bankCode,
+              accountNumber: data.accountNumber,
+              accountName: verifiedAccountName,
+              providerName: "monnify",
+              providerSubaccountCode: null,
+              providerAccountReference: null,
+              environment: paymentEnvironment,
+              rawProviderResponse: {
+                source: "monnify_subaccount_setup_failed",
+                note: "Monnify subaccount creation failed: provider-side error. Retry after Monnify support confirms fix.",
+                lastError: apiError?.message || "Unknown Monnify provider error",
+                failedAt: new Date().toISOString(),
+              },
+            });
+          }
+          throw apiError;
+        }
       }
-    } catch (apiError: any) {
-      // In development, Paystack rejects fake/mock bank details.
-      // Generate a mock subaccount so the full flow can be tested locally.
-      if (process.env.NODE_ENV !== "production" && activeProvider === "paystack") {
-        console.warn("Paystack subaccount API failed, using mock for development:", apiError.message);
-        subaccount = {
-          subaccountCode: `MOCK_SUB_${merchantId.slice(0, 8)}`,
-          businessName: data.businessName,
-          accountNumber: data.accountNumber,
-          settlementBank: data.bankCode,
-        };
-      } else {
-        throw apiError;
+
+      if (!subaccount || !subaccount.subaccountCode) {
+        return { success: false, error: `Failed to create or update ${provider} settlement account mapping.` };
       }
+
+      provisionedProviders.push({
+        provider,
+        subaccountCode: subaccount.subaccountCode,
+      });
+
+      await upsertProviderNeutralSettlementAccount(adminClient, {
+        merchantId,
+        bankName: data.bankName,
+        bankCode: data.bankCode,
+        accountNumber: data.accountNumber,
+        accountName: verifiedAccountName,
+        providerName: provider,
+        providerSubaccountCode: subaccount.subaccountCode,
+        providerAccountReference: subaccount.providerReference || subaccount.subaccountCode,
+        environment: paymentEnvironment,
+        rawProviderResponse: {
+          source: `${provider}_subaccount_setup`,
+          subaccount,
+        },
+      });
     }
 
-    if (!subaccount || !subaccount.subaccountCode) {
-      return { success: false, error: "Failed to create or update subaccount. Missing code in response." };
-    }
+    const paystackSubaccountCode =
+      provisionedProviders.find((entry) => entry.provider === "paystack")?.subaccountCode ||
+      m.payment_subaccount_code ||
+      null;
+    const primaryLegacyProvider = provisionedProviders.some((entry) => entry.provider === "paystack")
+      ? "paystack"
+      : provisionedProviders[0]?.provider || "monnify";
 
     // 3. Update DB
     const { error: dbErr } = await adminClient.from("merchants").update({
       settlement_bank_name: data.bankName,
       settlement_bank_code: data.bankCode,
       settlement_account_number: data.accountNumber,
-      settlement_account_name: data.accountName,
-      payment_provider: activeProvider,
-      payment_subaccount_code: activeProvider === "paystack" ? subaccount.subaccountCode : null,
-      subaccount_verified: true,
+      settlement_account_name: verifiedAccountName,
+      payment_provider: primaryLegacyProvider,
+      payment_subaccount_code: paystackSubaccountCode,
+      subaccount_verified: provisionedProviders.length > 0,
       settlement_activated_at: new Date().toISOString(),
     }).eq("id", merchantId);
 
@@ -1708,24 +1809,8 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
     await syncMerchantSetupStatus(adminClient, merchantId, {
       settlement_bank_name: data.bankName,
       settlement_account_number: data.accountNumber,
-      settlement_account_name: data.accountName,
+      settlement_account_name: verifiedAccountName,
       verification_status: "verified",
-    });
-
-    await upsertProviderNeutralSettlementAccount(adminClient, {
-      merchantId,
-      bankName: data.bankName,
-      bankCode: data.bankCode,
-      accountNumber: data.accountNumber,
-      accountName: data.accountName,
-      providerName: activeProvider,
-      providerSubaccountCode: subaccount.subaccountCode,
-      providerAccountReference: subaccount.subaccountCode,
-      environment: paymentEnvironment,
-      rawProviderResponse: {
-        source: `${activeProvider}_subaccount_setup`,
-        subaccount,
-      },
     });
 
     // Log to audit
@@ -1735,7 +1820,11 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
       actor_role: "merchant",
       target_id: merchantId,
       target_type: "merchant",
-      metadata: { bank: data.bankName, account_number: data.accountNumber },
+      metadata: {
+        bank: data.bankName,
+        account_number: data.accountNumber,
+        providers: provisionedProviders.map((entry) => entry.provider),
+      },
     }]);
 
     const { data: refreshedMerchant } = await adminClient
@@ -1749,7 +1838,11 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
     revalidatePath("/settings/settlement-accounts");
     revalidatePath("/admin/verification");
     revalidatePath("/admin/merchants");
-    return { success: true, data: subaccount, merchant: refreshedMerchant || null };
+    return {
+      success: true,
+      data: provisionedProviders,
+      merchant: refreshedMerchant || null,
+    };
 
   } catch (error: any) {
     console.error("setupSettlementAccountAction:", error);
