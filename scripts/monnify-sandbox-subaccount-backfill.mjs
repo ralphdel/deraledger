@@ -20,6 +20,7 @@ if (!MONNIFY_API_KEY || !MONNIFY_SECRET_KEY) {
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 const APPLY = process.argv.includes("--apply");
 const MONNIFY_SOURCE = "monnify_subaccount_setup";
+const OPAY_UNAVAILABLE_REASON = "opay_beneficiary_unavailable";
 
 async function getAccessToken() {
   const basic = Buffer.from(`${MONNIFY_API_KEY}:${MONNIFY_SECRET_KEY}`).toString("base64");
@@ -73,6 +74,14 @@ async function createMonnifySubaccount(token, record) {
     providerSubaccountCode: row.subAccountCode,
     providerAccountReference: row.subAccountCode,
     rawProviderResponse: {
+      status: "connected",
+      reason_code: null,
+      merchant_message: null,
+      admin_note: null,
+      recommended_action: null,
+      retryable: false,
+      last_checked_at: new Date().toISOString(),
+      last_success_at: new Date().toISOString(),
       source: MONNIFY_SOURCE,
       subaccount: row,
       request: {
@@ -111,6 +120,51 @@ function maskAccountNumber(value) {
   const digits = String(value || "");
   if (digits.length <= 4) return digits;
   return `${"*".repeat(Math.max(0, digits.length - 4))}${digits.slice(-4)}`;
+}
+
+function classifyMonnifyFailure(error) {
+  const message = error instanceof Error ? error.message : "Unknown error";
+  const lowered = String(message).toLowerCase();
+
+  if (lowered.includes("beneficiary not available")) {
+    return {
+      classification: OPAY_UNAVAILABLE_REASON,
+      status: "temporarily_unavailable",
+      reason_code: OPAY_UNAVAILABLE_REASON,
+      merchant_message:
+        "OPay is temporarily unavailable for Monnify subaccount setup. Please add another bank account for Monnify collections or use another available provider while this is being resolved.",
+      admin_note:
+        "Monnify confirmed intermittent 'Beneficiary not available' errors from OPay/PAYCOM. Retry after Monnify confirms bank issue is resolved.",
+      recommended_action: "Retry Monnify subaccount setup after Monnify confirms OPay/PAYCOM recovery.",
+      retryable: true,
+    };
+  }
+
+  if (lowered.includes("invalid account")) {
+    return {
+      classification: "invalid_account_details",
+      status: "requires_action",
+      reason_code: "invalid_account_details",
+      merchant_message:
+        "Monnify could not verify this bank account. Please confirm the account details or add another bank account for Monnify collections.",
+      admin_note:
+        "Monnify rejected the submitted account details during subaccount setup. Verify bank code, account number, and account name before retrying.",
+      recommended_action: "Verify the settlement account details, then retry Monnify subaccount setup.",
+      retryable: true,
+    };
+  }
+
+  return {
+    classification: "generic_provider_error",
+    status: "degraded",
+    reason_code: "generic_provider_error",
+    merchant_message:
+      "Monnify subaccount setup is temporarily unavailable for this bank account. Please try again later or use another available provider.",
+    admin_note:
+      "Monnify subaccount creation failed with a provider-side error. Retry after Monnify support confirms the issue is resolved.",
+    recommended_action: "Retry Monnify subaccount setup after checking provider status.",
+    retryable: true,
+  };
 }
 
 function summarize(record) {
@@ -187,8 +241,8 @@ async function run() {
     mode: APPLY ? "apply" : "dry-run",
     totals: {
       eligible: summaryRows.length,
-      alreadyConnected: alreadyConnected.length,
-      missingMonnifySubaccount: missing.length,
+      already_connected: alreadyConnected.length,
+      missing_monnify_subaccount: missing.length,
       skipped: skipped.length,
     },
     rows: summaryRows,
@@ -236,9 +290,12 @@ async function run() {
       results.push({
         settlement_account_id: row.id,
         merchant_id: row.merchant_id,
+        classification: "created",
         provider_subaccount_code: created.providerSubaccountCode,
       });
     } catch (error) {
+      const failure = classifyMonnifyFailure(error);
+      const failedAt = new Date().toISOString();
       await supabase
         .from("merchant_provider_settlement_accounts")
         .upsert(
@@ -248,15 +305,21 @@ async function run() {
             provider_name: "monnify",
             provider_account_reference: null,
             provider_subaccount_code: null,
-            status: "pending",
+            status: failure.status,
             environment: "sandbox",
             raw_provider_response: {
               source: "monnify_subaccount_setup_failed",
-              note: "Monnify subaccount creation failed: provider-side error. Retry after Monnify support confirms fix.",
+              status: failure.status,
+              reason_code: failure.reason_code,
+              merchant_message: failure.merchant_message,
+              admin_note: failure.admin_note,
+              recommended_action: failure.recommended_action,
+              retryable: failure.retryable,
               lastError: error instanceof Error ? error.message : "Unknown error",
-              failedAt: new Date().toISOString(),
+              last_checked_at: failedAt,
+              last_failure_at: failedAt,
             },
-            last_sync_at: new Date().toISOString(),
+            last_sync_at: failedAt,
           },
           { onConflict: "settlement_account_id,provider_name,environment" }
         );
@@ -264,6 +327,7 @@ async function run() {
       failures.push({
         settlement_account_id: row.id,
         merchant_id: row.merchant_id,
+        classification: failure.classification,
         reason: error instanceof Error ? error.message : "Unknown error",
       });
     }

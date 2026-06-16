@@ -13,7 +13,7 @@ import {
   normalizeMerchantFacingPaymentMethod,
 } from "@/lib/services/breet-crypto.service";
 
-type SettlementProvider = PaymentProvider | "future_provider";
+export type SettlementProvider = PaymentProvider | "future_provider";
 
 type SettlementAccountInput = {
   merchantId: string;
@@ -30,6 +30,41 @@ type SettlementAccountInput = {
 };
 
 export const MONNIFY_SUBACCOUNT_SETUP_SOURCE = "monnify_subaccount_setup";
+
+export type ProviderReadinessStatus =
+  | "connected"
+  | "pending"
+  | "degraded"
+  | "temporarily_unavailable"
+  | "requires_action"
+  | "failed"
+  | "disabled";
+
+export type ProviderReadiness = {
+  provider_name: string;
+  environment: PaymentEnvironment;
+  status: ProviderReadinessStatus;
+  reason_code: string | null;
+  merchant_message: string | null;
+  admin_note: string | null;
+  last_checked_at: string | null;
+  last_success_at: string | null;
+  last_failure_at: string | null;
+  retryable: boolean;
+  recommended_action: string | null;
+  ready: boolean;
+};
+
+type ProviderMappingRow = {
+  provider_name?: string | null;
+  provider_account_reference?: string | null;
+  provider_subaccount_code?: string | null;
+  provider_split_reference?: string | null;
+  status?: string | null;
+  environment?: PaymentEnvironment | string | null;
+  raw_provider_response?: Record<string, unknown> | null;
+  last_sync_at?: string | null;
+};
 
 type TransactionRow = {
   id: string;
@@ -49,6 +84,16 @@ type TransactionRow = {
 };
 
 const SETTLEMENT_TABLE_MISSING_CODES = new Set(["42P01", "42703"]);
+const READY_PROVIDER_STATUSES = new Set<ProviderReadinessStatus>(["connected"]);
+const PROVIDER_STATUS_VALUES = new Set<ProviderReadinessStatus>([
+  "connected",
+  "pending",
+  "degraded",
+  "temporarily_unavailable",
+  "requires_action",
+  "failed",
+  "disabled",
+]);
 
 export function getSettlementEnvironment(email?: string | null): PaymentEnvironment {
   const superAdminEmail = (process.env.SUPERADMIN_SANDBOX_EMAIL || "ralphdel14@yahoo.com").toLowerCase();
@@ -144,6 +189,37 @@ export async function upsertProviderNeutralSettlementAccount(
       .in("id", otherDefaults.map((row: { id: string }) => row.id));
   }
 
+  const { data: existingMapping } = await supabase
+    .from("merchant_provider_settlement_accounts")
+    .select("provider_account_reference, provider_subaccount_code, provider_split_reference, status, raw_provider_response")
+    .eq("settlement_account_id", account.id)
+    .eq("provider_name", input.providerName || "paystack")
+    .eq("environment", environment)
+    .maybeSingle();
+
+  const mergedRawProviderResponse = {
+    ...((existingMapping?.raw_provider_response as Record<string, unknown> | null | undefined) || {}),
+    ...(input.rawProviderResponse || {}),
+  };
+  const mergedProviderSubaccountCode =
+    input.providerSubaccountCode ||
+    (typeof existingMapping?.provider_subaccount_code === "string" ? existingMapping.provider_subaccount_code : null) ||
+    null;
+  const mergedProviderAccountReference =
+    input.providerAccountReference ||
+    input.providerSubaccountCode ||
+    (typeof existingMapping?.provider_account_reference === "string" ? existingMapping.provider_account_reference : null) ||
+    mergedProviderSubaccountCode;
+  const mergedProviderSplitReference =
+    input.providerSplitReference ||
+    (typeof existingMapping?.provider_split_reference === "string" ? existingMapping.provider_split_reference : null) ||
+    null;
+  const mergedStatus = normalizeProviderAccountStatus(
+    input.rawProviderResponse,
+    input.providerSubaccountCode,
+    existingMapping?.status
+  );
+
   await supabase
     .from("merchant_provider_settlement_accounts")
     .upsert(
@@ -151,12 +227,15 @@ export async function upsertProviderNeutralSettlementAccount(
         merchant_id: input.merchantId,
         settlement_account_id: account.id,
         provider_name: input.providerName || "paystack",
-        provider_account_reference: input.providerAccountReference || input.providerSubaccountCode || null,
-        provider_subaccount_code: input.providerSubaccountCode || null,
-        provider_split_reference: input.providerSplitReference || null,
-        status: input.providerSubaccountCode ? "connected" : "pending",
+        provider_account_reference: mergedProviderAccountReference,
+        provider_subaccount_code: mergedProviderSubaccountCode,
+        provider_split_reference: mergedProviderSplitReference,
+        status: mergedStatus,
         environment,
-        raw_provider_response: input.rawProviderResponse || { source: "settlement_settings" },
+        raw_provider_response:
+          Object.keys(mergedRawProviderResponse).length > 0
+            ? mergedRawProviderResponse
+            : { source: "settlement_settings" },
         last_sync_at: new Date().toISOString(),
       },
       { onConflict: "settlement_account_id,provider_name,environment" }
@@ -258,28 +337,14 @@ export async function isProviderSettlementReady(
   }
 
   if (mapping) {
-    if (input.provider === "monnify") {
-      const source = String((mapping.raw_provider_response as Record<string, unknown> | null)?.source || "");
-      return Boolean(mapping.provider_subaccount_code && source === MONNIFY_SUBACCOUNT_SETUP_SOURCE);
-    }
+    const readiness = getProviderReadiness(input.provider, {
+      ...mapping,
+      environment: input.environment,
+    }, {
+      requireCryptoMapping: input.requireCryptoMapping,
+    });
 
-    if (input.provider !== "breet" || !input.requireCryptoMapping) {
-      return true;
-    }
-
-    const mappingState = getMerchantBreetMappingState(
-      {
-        raw_verification_payload: null,
-        bank_id: typeof mapping.provider_account_reference === "string" ? mapping.provider_account_reference : null,
-      },
-      {
-        provider_account_reference: typeof mapping.provider_account_reference === "string" ? mapping.provider_account_reference : null,
-        raw_provider_response: mapping.raw_provider_response as Record<string, unknown> | null,
-        status: mapping.status,
-      }
-    );
-
-    return mappingState.hasMappedBankId && (mappingState.mappingConfirmed || mappingState.validationPassed);
+    return readiness.ready;
   }
 
   return await hasLegacySettlementReadiness(supabase, input.merchantId, input.provider);
@@ -311,11 +376,11 @@ export async function getProviderSettlementMapping(
 
   const { data: mapping, error: mappingError } = await supabase
     .from("merchant_provider_settlement_accounts")
-    .select("id, provider_name, provider_account_reference, provider_subaccount_code, provider_split_reference, status, environment, raw_provider_response")
+    .select("id, provider_name, provider_account_reference, provider_subaccount_code, provider_split_reference, status, environment, raw_provider_response, last_sync_at")
     .eq("settlement_account_id", account.id)
     .eq("provider_name", input.provider)
     .eq("environment", input.environment)
-    .in("status", ["connected", "active"])
+    .in("status", ["connected", "active", "pending", "degraded", "temporarily_unavailable", "requires_action", "failed", "disabled"])
     .maybeSingle();
 
   if (mappingError) {
@@ -327,16 +392,278 @@ export async function getProviderSettlementMapping(
     };
   }
 
-  const source = String((mapping?.raw_provider_response as Record<string, unknown> | null)?.source || "");
-  const ready = input.provider === "monnify"
-    ? Boolean(mapping?.provider_subaccount_code && source === MONNIFY_SUBACCOUNT_SETUP_SOURCE)
-    : Boolean(mapping);
+  const readiness = mapping
+    ? getProviderReadiness(input.provider, {
+        ...mapping,
+        environment: input.environment,
+      })
+    : null;
 
   return {
     account,
     mapping: mapping || null,
-    ready,
+    readiness,
+    ready: readiness?.ready || false,
   };
+}
+
+export function getProviderReadiness(
+  provider: SettlementProvider,
+  mapping: ProviderMappingRow | null | undefined,
+  options?: { requireCryptoMapping?: boolean }
+): ProviderReadiness {
+  const environment = normalizeReadinessEnvironment(mapping?.environment);
+  const raw = (mapping?.raw_provider_response as Record<string, unknown> | null | undefined) || null;
+  const explicitStatus = normalizeReadinessStatus(mapping?.status, raw);
+  const explicitReasonCode = stringValue(raw?.reason_code);
+  const source = stringValue(raw?.source);
+  const lastCheckedAt =
+    stringValue(raw?.last_checked_at) ||
+    stringValue(raw?.checkedAt) ||
+    stringValue(mapping?.last_sync_at) ||
+    null;
+  const lastSuccessAt =
+    stringValue(raw?.last_success_at) ||
+    stringValue(raw?.successAt) ||
+    null;
+  const lastFailureAt =
+    stringValue(raw?.last_failure_at) ||
+    stringValue(raw?.failedAt) ||
+    null;
+  const lastError = stringValue(raw?.lastError);
+
+  if (!mapping) {
+    return {
+      provider_name: provider,
+      environment,
+      status: "pending",
+      reason_code: "missing_provider_mapping",
+      merchant_message: null,
+      admin_note: null,
+      last_checked_at: null,
+      last_success_at: null,
+      last_failure_at: null,
+      retryable: false,
+      recommended_action: "Complete settlement setup for this provider.",
+      ready: false,
+    };
+  }
+
+  if (provider === "monnify") {
+    const monnifyFailure = classifyMonnifyFailure(explicitReasonCode, lastError);
+    if (monnifyFailure) {
+      return {
+        provider_name: provider,
+        environment,
+        status: monnifyFailure.status,
+        reason_code: monnifyFailure.reason_code,
+        merchant_message: monnifyFailure.merchant_message,
+        admin_note: monnifyFailure.admin_note,
+        last_checked_at: lastCheckedAt,
+        last_success_at: lastSuccessAt,
+        last_failure_at: lastFailureAt || lastCheckedAt,
+        retryable: monnifyFailure.retryable,
+        recommended_action: monnifyFailure.recommended_action,
+        ready: false,
+      };
+    }
+
+    if (
+      source === MONNIFY_SUBACCOUNT_SETUP_SOURCE &&
+      typeof mapping.provider_subaccount_code === "string" &&
+      mapping.provider_subaccount_code.trim() &&
+      explicitStatus === "connected"
+    ) {
+      return {
+        provider_name: provider,
+        environment,
+        status: "connected",
+        reason_code: null,
+        merchant_message: null,
+        admin_note: null,
+        last_checked_at: lastCheckedAt,
+        last_success_at: lastSuccessAt || lastCheckedAt,
+        last_failure_at: lastFailureAt,
+        retryable: false,
+        recommended_action: null,
+        ready: true,
+      };
+    }
+
+    if (!stringValue(mapping.provider_subaccount_code)) {
+      return {
+        provider_name: provider,
+        environment,
+        status: explicitStatus === "disabled" ? "disabled" : "pending",
+        reason_code: explicitReasonCode,
+        merchant_message: null,
+        admin_note: stringValue(raw?.admin_note) || null,
+        last_checked_at: lastCheckedAt,
+        last_success_at: lastSuccessAt,
+        last_failure_at: lastFailureAt,
+        retryable: true,
+        recommended_action:
+          stringValue(raw?.recommended_action) ||
+          "Retry Monnify subaccount setup after confirming the provider is available.",
+        ready: false,
+      };
+    }
+  }
+
+  if (provider === "breet" && options?.requireCryptoMapping) {
+    const mappingState = getMerchantBreetMappingState(
+      {
+        raw_verification_payload: null,
+        bank_id: typeof mapping.provider_account_reference === "string" ? mapping.provider_account_reference : null,
+      },
+      {
+        provider_account_reference: typeof mapping.provider_account_reference === "string" ? mapping.provider_account_reference : null,
+        raw_provider_response: raw,
+        status: mapping.status || null,
+      }
+    );
+
+    const ready = mappingState.hasMappedBankId && (mappingState.mappingConfirmed || mappingState.validationPassed);
+    return {
+      provider_name: provider,
+      environment,
+      status: ready ? "connected" : "requires_action",
+      reason_code: ready ? null : "breet_mapping_incomplete",
+      merchant_message: ready ? null : "Breet settlement mapping needs to be confirmed before crypto collections can use this account.",
+      admin_note: ready ? null : "Validate the merchant account and confirm the Breet bank mapping.",
+      last_checked_at: lastCheckedAt,
+      last_success_at: ready ? (lastSuccessAt || lastCheckedAt) : lastSuccessAt,
+      last_failure_at: ready ? lastFailureAt : (lastFailureAt || lastCheckedAt),
+      retryable: !ready,
+      recommended_action: ready ? null : "Validate the account and confirm the mapped Breet bank.",
+      ready,
+    };
+  }
+
+  return {
+    provider_name: provider,
+    environment,
+    status: explicitStatus,
+    reason_code: explicitReasonCode,
+    merchant_message: stringValue(raw?.merchant_message) || null,
+    admin_note: stringValue(raw?.admin_note) || null,
+    last_checked_at: lastCheckedAt,
+    last_success_at: explicitStatus === "connected" ? (lastSuccessAt || lastCheckedAt) : lastSuccessAt,
+    last_failure_at: READY_PROVIDER_STATUSES.has(explicitStatus) ? lastFailureAt : (lastFailureAt || lastCheckedAt),
+    retryable: booleanValue(raw?.retryable) ?? !READY_PROVIDER_STATUSES.has(explicitStatus),
+    recommended_action: stringValue(raw?.recommended_action) || null,
+    ready: READY_PROVIDER_STATUSES.has(explicitStatus),
+  };
+}
+
+function classifyMonnifyFailure(reasonCode: string | null, lastError: string | null) {
+  const normalizedError = (lastError || "").toLowerCase();
+
+  if (
+    reasonCode === "opay_beneficiary_unavailable" ||
+    normalizedError.includes("beneficiary not available")
+  ) {
+    return {
+      status: "temporarily_unavailable" as const,
+      reason_code: "opay_beneficiary_unavailable",
+      merchant_message:
+        "OPay is temporarily unavailable for Monnify subaccount setup. Please add another bank account for Monnify collections or use another available provider while this is being resolved.",
+      admin_note:
+        "Monnify confirmed intermittent 'Beneficiary not available' errors from OPay/PAYCOM. Retry after Monnify confirms bank issue is resolved.",
+      retryable: true,
+      recommended_action:
+        "Retry Monnify setup after Monnify confirms the OPay/PAYCOM beneficiary issue is resolved, or use another bank account.",
+    };
+  }
+
+  if (
+    reasonCode === "invalid_account_details" ||
+    normalizedError.includes("invalid account details")
+  ) {
+    return {
+      status: "requires_action" as const,
+      reason_code: "invalid_account_details",
+      merchant_message:
+        "This bank account could not be verified for Monnify subaccount setup. Please confirm the bank details or add another bank account.",
+      admin_note:
+        "Monnify rejected the bank details for subaccount setup. Verify the bank code and account number before retrying.",
+      retryable: false,
+      recommended_action:
+        "Confirm the bank code and account number, then retry Monnify subaccount setup.",
+    };
+  }
+
+  if (
+    reasonCode === "generic_provider_error" ||
+    stringValue(reasonCode) ||
+    normalizedError
+  ) {
+    return {
+      status: "degraded" as const,
+      reason_code: reasonCode || "generic_provider_error",
+      merchant_message:
+        "Monnify settlement setup is temporarily experiencing provider issues. Please use another available provider while this is being resolved.",
+      admin_note:
+        "Monnify subaccount setup failed with a provider-side error. Retry after Monnify confirms the issue is resolved.",
+      retryable: true,
+      recommended_action:
+        "Retry Monnify subaccount setup after confirming provider availability.",
+    };
+  }
+
+  return null;
+}
+
+function normalizeReadinessStatus(status: unknown, raw: Record<string, unknown> | null): ProviderReadinessStatus {
+  const explicitStatus = stringValue(status)?.toLowerCase();
+  if (explicitStatus === "active") return "connected";
+  if (explicitStatus && PROVIDER_STATUS_VALUES.has(explicitStatus as ProviderReadinessStatus)) {
+    return explicitStatus as ProviderReadinessStatus;
+  }
+
+  const rawStatus = stringValue(raw?.status)?.toLowerCase();
+  if (rawStatus === "active") return "connected";
+  if (rawStatus && PROVIDER_STATUS_VALUES.has(rawStatus as ProviderReadinessStatus)) {
+    return rawStatus as ProviderReadinessStatus;
+  }
+
+  return "pending";
+}
+
+function normalizeReadinessEnvironment(environment: unknown): PaymentEnvironment {
+  return environment === "live" ? "live" : "sandbox";
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function booleanValue(value: unknown) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    if (value === "true") return true;
+    if (value === "false") return false;
+  }
+  return null;
+}
+
+function normalizeProviderAccountStatus(
+  rawProviderResponse: Record<string, unknown> | null | undefined,
+  providerSubaccountCode: string | null | undefined,
+  existingStatus: unknown
+) {
+  const explicitStatus = stringValue(rawProviderResponse?.status)?.toLowerCase();
+  if (explicitStatus === "active") return "connected";
+  if (explicitStatus && PROVIDER_STATUS_VALUES.has(explicitStatus as ProviderReadinessStatus)) {
+    return explicitStatus;
+  }
+  if (providerSubaccountCode) return "connected";
+  const normalizedExistingStatus = stringValue(existingStatus)?.toLowerCase();
+  if (normalizedExistingStatus === "active") return "connected";
+  if (normalizedExistingStatus && PROVIDER_STATUS_VALUES.has(normalizedExistingStatus as ProviderReadinessStatus)) {
+    return normalizedExistingStatus;
+  }
+  return "pending";
 }
 
 export async function upsertSettlementLedgerForTransaction(

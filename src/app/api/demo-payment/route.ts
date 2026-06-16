@@ -82,7 +82,7 @@ export async function POST(request: Request) {
     if (!providerReady) {
       const message =
         route.provider === "monnify"
-          ? "Monnify settlement account is not ready. Please complete settlement setup before collecting payments through Monnify."
+          ? "Monnify settlement account is not ready. OPay is temporarily unavailable for Monnify subaccount setup. Please add another bank account or choose another payment method."
           : "Merchant is not verified or has no settlement account set up";
       return NextResponse.json({ error: message }, { status: 403 });
     }
@@ -100,10 +100,13 @@ export async function POST(request: Request) {
       route.provider === "monnify" &&
       (!monnifySettlement?.ready || !monnifySettlement.mapping?.provider_subaccount_code)
     ) {
+      const providerMessage = monnifySettlement?.readiness?.merchant_message;
       return NextResponse.json(
         {
           error:
-            "Monnify settlement account is not ready. Please complete settlement setup before collecting payments through Monnify.",
+            providerMessage
+              ? `Monnify settlement account is not ready. ${providerMessage.replace(/\.$/, "")}. Please add another bank account or choose another payment method.`
+              : "Monnify settlement account is not ready. OPay is temporarily unavailable for Monnify subaccount setup. Please add another bank account or choose another payment method.",
         },
         { status: 403 }
       );

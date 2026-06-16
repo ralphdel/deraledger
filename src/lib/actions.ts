@@ -1736,6 +1736,8 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
           };
         } else {
           if (provider === "monnify") {
+            const lastError = apiError?.message || "Unknown Monnify provider error";
+            const isOpayBeneficiaryUnavailable = lastError.toLowerCase().includes("beneficiary not available");
             await upsertProviderNeutralSettlementAccount(adminClient, {
               merchantId,
               bankName: data.bankName,
@@ -1747,10 +1749,22 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
               providerAccountReference: null,
               environment: paymentEnvironment,
               rawProviderResponse: {
+                status: isOpayBeneficiaryUnavailable ? "temporarily_unavailable" : "degraded",
                 source: "monnify_subaccount_setup_failed",
-                note: "Monnify subaccount creation failed: provider-side error. Retry after Monnify support confirms fix.",
-                lastError: apiError?.message || "Unknown Monnify provider error",
-                failedAt: new Date().toISOString(),
+                reason_code: isOpayBeneficiaryUnavailable ? "opay_beneficiary_unavailable" : "generic_provider_error",
+                merchant_message: isOpayBeneficiaryUnavailable
+                  ? "OPay is temporarily unavailable for Monnify subaccount setup. Please add another bank account for Monnify collections or use another available provider while this is being resolved."
+                  : "Monnify settlement setup is temporarily experiencing provider issues. Please use another available provider while this is being resolved.",
+                admin_note: isOpayBeneficiaryUnavailable
+                  ? "Monnify confirmed intermittent 'Beneficiary not available' errors from OPay/PAYCOM. Retry after Monnify confirms bank issue is resolved."
+                  : "Monnify subaccount creation failed with a provider-side error. Retry after Monnify support confirms fix.",
+                recommended_action: isOpayBeneficiaryUnavailable
+                  ? "Retry Monnify setup after Monnify confirms the OPay/PAYCOM beneficiary issue is resolved, or use another bank account."
+                  : "Retry Monnify subaccount setup after confirming provider availability.",
+                retryable: true,
+                lastError,
+                last_checked_at: new Date().toISOString(),
+                last_failure_at: new Date().toISOString(),
               },
             });
           }
@@ -1778,7 +1792,15 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
         providerAccountReference: subaccount.providerReference || subaccount.subaccountCode,
         environment: paymentEnvironment,
         rawProviderResponse: {
+          status: "connected",
           source: `${provider}_subaccount_setup`,
+          reason_code: null,
+          merchant_message: null,
+          admin_note: null,
+          recommended_action: null,
+          retryable: false,
+          last_checked_at: new Date().toISOString(),
+          last_success_at: new Date().toISOString(),
           subaccount,
         },
       });

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { requireAdminPortalSession } from "@/lib/admin-portal-auth";
+import { getProviderReadiness, type ProviderReadiness, type SettlementProvider } from "@/lib/services/settlement-ledger.service";
 
 const supabase = createSupabaseClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -28,6 +29,16 @@ type PaymentSessionFallback = {
   raw_webhook_payload?: Record<string, unknown> | null;
 };
 
+type ProviderMappingRecord = {
+  provider_account_reference?: string | null;
+  provider_subaccount_code?: string | null;
+  provider_split_reference?: string | null;
+  status?: string | null;
+  environment?: string | null;
+  last_sync_at?: string | null;
+  raw_provider_response?: Record<string, unknown> | null;
+};
+
 export async function GET(request: Request) {
   const guard = await requireAdminPortalSession();
   if (!guard.ok) {
@@ -49,7 +60,7 @@ export async function GET(request: Request) {
       payment_records(*),
       merchants(business_name,email),
       merchant_settlement_accounts(bank_name,account_number,account_name,currency),
-      merchant_provider_settlement_accounts(provider_account_reference,provider_subaccount_code,provider_split_reference,status,environment),
+      merchant_provider_settlement_accounts(provider_account_reference,provider_subaccount_code,provider_split_reference,status,environment,last_sync_at,raw_provider_response),
       provider_settlement_batches(provider_batch_reference,actual_settlement_total,settlement_status,settled_at,provider_reported_settled_at)
     `)
     .order("created_at", { ascending: false })
@@ -71,7 +82,7 @@ export async function GET(request: Request) {
         payment_records(*),
         merchants(business_name,email),
         merchant_settlement_accounts(bank_name,account_number,account_name,currency),
-        merchant_provider_settlement_accounts(provider_account_reference,provider_subaccount_code,provider_split_reference,status,environment)
+        merchant_provider_settlement_accounts(provider_account_reference,provider_subaccount_code,provider_split_reference,status,environment,last_sync_at,raw_provider_response)
       `)
       .order("created_at", { ascending: false })
       .limit(limit);
@@ -93,7 +104,7 @@ export async function GET(request: Request) {
 
   const rows = await enrichSettlementRows(data || []);
   return NextResponse.json({
-    rows,
+    rows: rows.map(attachProviderReadiness),
     summary: {
       grossAmount: rows.reduce((sum, row) => sum + Number(row.gross_amount || 0), 0),
       providerFees: rows.reduce((sum, row) => sum + Number(row.provider_fee || 0), 0),
@@ -102,6 +113,24 @@ export async function GET(request: Request) {
       actualSettlement: rows.reduce((sum, row) => sum + Number(row.actual_settlement || 0), 0),
       manualReviewCount: rows.filter((row) => row.settlement_status === "manual_review").length,
     },
+  });
+}
+
+function attachProviderReadiness(row: Record<string, unknown>) {
+  const mapping = asProviderMappingRecord(row.merchant_provider_settlement_accounts);
+  return {
+    ...row,
+    provider_readiness: buildProviderReadiness(
+      typeof row.provider_name === "string" ? row.provider_name : null,
+      mapping
+    ),
+  };
+}
+
+function buildProviderReadiness(provider: string | null, mapping: ProviderMappingRecord | null): ProviderReadiness | null {
+  if (!isSettlementProvider(provider)) return null;
+  return getProviderReadiness(provider, mapping, {
+    requireCryptoMapping: provider === "breet",
   });
 }
 
@@ -328,6 +357,15 @@ function maskAccountNumber(accountNumber: string | null) {
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function asProviderMappingRecord(value: unknown): ProviderMappingRecord | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as ProviderMappingRecord;
+}
+
+function isSettlementProvider(value: string | null): value is SettlementProvider {
+  return value === "paystack" || value === "monnify" || value === "breet";
 }
 
 function stringValue(value: unknown) {

@@ -24,12 +24,39 @@ interface Bank {
   active: boolean;
 }
 
+type ProviderReadiness = {
+  provider_name?: string | null;
+  environment?: string | null;
+  status?: string | null;
+  reason_code?: string | null;
+  merchant_message?: string | null;
+  admin_note?: string | null;
+  last_checked_at?: string | null;
+  last_success_at?: string | null;
+  last_failure_at?: string | null;
+  retryable?: boolean;
+  recommended_action?: string | null;
+  ready?: boolean;
+};
+
+type SettlementAccountRecord = {
+  id: string;
+  bank_name?: string | null;
+  account_number?: string | null;
+  account_name?: string | null;
+  currency?: string | null;
+  is_default?: boolean | null;
+  provider_readiness?: ProviderReadiness[];
+};
+
 export default function SettlementSettingsPage() {
   const [merchant, setMerchant] = useState<Merchant | null>(null);
   const [loading, setLoading] = useState(true);
 
   const [banks, setBanks] = useState<Bank[]>([]);
   const [loadingBanks, setLoadingBanks] = useState(true);
+  const [settlementAccounts, setSettlementAccounts] = useState<SettlementAccountRecord[]>([]);
+  const [loadingAccounts, setLoadingAccounts] = useState(true);
 
   const [selectedBankCode, setSelectedBankCode] = useState("");
   const [accountNumber, setAccountNumber] = useState("");
@@ -44,6 +71,20 @@ export default function SettlementSettingsPage() {
   const [isEditing, setIsEditing] = useState(false);
 
   useEffect(() => {
+    const loadSettlementAccounts = async () => {
+      try {
+        const response = await fetch("/api/merchant/settlement-accounts", { cache: "no-store" });
+        const payload = await response.json();
+        if (response.ok) {
+          setSettlementAccounts(payload.accounts || []);
+        }
+      } catch (error) {
+        console.error("Failed to load settlement accounts:", error);
+      } finally {
+        setLoadingAccounts(false);
+      }
+    };
+
     // Load merchant
     getMerchant().then((m) => {
       if (m) {
@@ -61,6 +102,8 @@ export default function SettlementSettingsPage() {
       }
       setLoading(false);
     });
+
+    void loadSettlementAccounts();
 
     // Load banks
     fetch("/api/payment/banks")
@@ -127,6 +170,12 @@ export default function SettlementSettingsPage() {
 
     if (result.success) {
       setSaveSuccess(true);
+      setLoadingAccounts(true);
+      fetch("/api/merchant/settlement-accounts", { cache: "no-store" })
+        .then((response) => response.json())
+        .then((payload) => setSettlementAccounts(payload.accounts || []))
+        .catch((error) => console.error("Failed to refresh settlement accounts:", error))
+        .finally(() => setLoadingAccounts(false));
       // Update local merchant state
       setMerchant({
         ...merchant,
@@ -177,6 +226,7 @@ export default function SettlementSettingsPage() {
   }
 
   const isVerified = merchant?.subaccount_verified === true;
+  const primaryAccount = settlementAccounts.find((account) => account.is_default) || settlementAccounts[0] || null;
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
@@ -203,8 +253,35 @@ export default function SettlementSettingsPage() {
               </p>
               <div className="mt-4 bg-white/60 border border-emerald-200 rounded-lg p-3">
                 <p className="text-sm font-semibold text-emerald-900">{merchant?.settlement_bank_name}</p>
-                <p className="font-mono font-bold text-lg text-emerald-800">{merchant?.settlement_account_number}</p>
+                <p className="font-mono font-bold text-lg text-emerald-800">{primaryAccount?.account_number || maskAccountNumber(merchant?.settlement_account_number)}</p>
                 <p className="text-xs text-emerald-700 uppercase tracking-wide mt-1">{merchant?.settlement_account_name}</p>
+              </div>
+              <div className="mt-4 space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-emerald-800">Provider Readiness</p>
+                {loadingAccounts ? (
+                  <p className="text-xs text-emerald-700">Loading provider status...</p>
+                ) : primaryAccount?.provider_readiness?.length ? (
+                  primaryAccount.provider_readiness.map((readiness) => (
+                    <div key={`${readiness.provider_name}-${readiness.environment}`} className="rounded-lg border border-emerald-200 bg-white/70 p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-sm font-semibold text-emerald-950">
+                          {labelProvider(readiness.provider_name)}{readiness.environment ? ` (${readiness.environment})` : ""}
+                        </p>
+                        <span className={`rounded-full border px-2 py-1 text-xs font-semibold ${providerStatusClassName(readiness.status)}`}>
+                          {labelStatus(readiness.status)}
+                        </span>
+                      </div>
+                      {readiness.merchant_message ? (
+                        <p className="mt-2 text-xs text-amber-800">{readiness.merchant_message}</p>
+                      ) : null}
+                      {readiness.recommended_action ? (
+                        <p className="mt-2 text-xs text-emerald-800">Action: {readiness.recommended_action}</p>
+                      ) : null}
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-xs text-emerald-700">No provider mappings yet.</p>
+                )}
               </div>
             </div>
           </div>
@@ -371,4 +448,30 @@ export default function SettlementSettingsPage() {
       )}
     </div>
   );
+}
+
+function labelProvider(provider?: string | null) {
+  if (!provider) return "Provider";
+  return provider.charAt(0).toUpperCase() + provider.slice(1);
+}
+
+function labelStatus(status?: string | null) {
+  if (!status) return "Pending";
+  return status.replaceAll("_", " ");
+}
+
+function providerStatusClassName(status?: string | null) {
+  if (status === "connected") return "border-emerald-300 bg-emerald-50 text-emerald-700";
+  if (status === "temporarily_unavailable" || status === "degraded") return "border-amber-300 bg-amber-50 text-amber-700";
+  if (status === "requires_action" || status === "failed" || status === "disabled") {
+    return "border-red-300 bg-red-50 text-red-700";
+  }
+  return "border-blue-300 bg-blue-50 text-blue-700";
+}
+
+function maskAccountNumber(accountNumber?: string | null) {
+  if (!accountNumber) return "----";
+  const digits = String(accountNumber);
+  if (digits.startsWith("****")) return digits;
+  return `****${digits.slice(-4) || "----"}`;
 }

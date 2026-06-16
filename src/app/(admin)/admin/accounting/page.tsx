@@ -82,6 +82,19 @@ type SettlementRow = {
     provider_subaccount_code?: string | null;
     provider_split_reference?: string | null;
   } | null;
+  provider_readiness?: {
+    status: string;
+    reason_code?: string | null;
+    merchant_message?: string | null;
+    admin_note?: string | null;
+    recommended_action?: string | null;
+    retryable?: boolean | null;
+    environment?: string | null;
+    last_checked_at?: string | null;
+    last_success_at?: string | null;
+    last_failure_at?: string | null;
+    provider_subaccount_code?: string | null;
+  } | null;
   provider_settlement_batches?: {
     provider_batch_reference?: string | null;
     actual_settlement_total?: number | null;
@@ -392,6 +405,12 @@ export default function AdminAccountingPage() {
                     <TableCell>
                       <Badge variant="outline" className="capitalize border-2">{row.provider_name}</Badge>
                       <p className="text-xs text-neutral-500 mt-1">{label(row.payment_method || "method unknown")}</p>
+                      {row.provider_readiness ? (
+                        <p className={`text-xs mt-1 ${providerReadinessTone(row.provider_readiness.status)}`}>
+                          {label(row.provider_readiness.status)}
+                          {row.provider_readiness.environment ? ` · ${label(row.provider_readiness.environment)}` : ""}
+                        </p>
+                      ) : null}
                     </TableCell>
                     <TableCell className="text-sm">
                       <p>{settlementAccountSummary(row)}</p>
@@ -439,6 +458,18 @@ export default function AdminAccountingPage() {
               <div className="rounded-lg border border-neutral-200 bg-neutral-50 p-4 text-sm text-neutral-600">
                 {feePayerExplanation(selected)}
               </div>
+              {selected.provider_readiness?.admin_note ? (
+                <div className={`rounded-lg border p-4 text-sm ${providerReadinessPanelClassName(selected.provider_readiness.status)}`}>
+                  <p className="font-medium">{label(selected.provider_readiness.status)}</p>
+                  <p className="mt-1">{selected.provider_readiness.admin_note}</p>
+                  {selected.provider_readiness.reason_code ? (
+                    <p className="mt-2 text-xs opacity-80">Reason: {selected.provider_readiness.reason_code}</p>
+                  ) : null}
+                  {selected.provider_readiness.recommended_action ? (
+                    <p className="mt-1 text-xs opacity-80">Action: {selected.provider_readiness.recommended_action}</p>
+                  ) : null}
+                </div>
+              ) : null}
               <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
                 <Info label="Provider" value={label(selected.provider_name || "-")} />
                 <Info label="Payment method" value={label(selected.payment_method || "-")} />
@@ -453,6 +484,11 @@ export default function AdminAccountingPage() {
                 <Info label="Settlement delta" value={formatMoneyDisplay(settlementDeltaAmount(selected))} />
                 <Info label="Settlement owner" value={label(selected.settlement_owner || "-")} />
                 <Info label="Fee source" value={label(selected.provider_fee_source || "provider_missing")} />
+                <Info label="Provider readiness" value={label(selected.provider_readiness?.status || "-")} />
+                <Info label="Provider environment" value={label(selected.provider_readiness?.environment || "-")} />
+                <Info label="Readiness reason" value={selected.provider_readiness?.reason_code || "-"} />
+                <Info label="Retryable" value={selected.provider_readiness?.retryable ? "Yes" : "No"} />
+                <Info label="Last failure" value={selected.provider_readiness?.last_failure_at ? new Date(selected.provider_readiness.last_failure_at).toLocaleString("en-NG") : "-"} />
                 <Info label="Settlement account" value={settlementAccountSummary(selected)} />
                 <Info label="Account name" value={selected.settlement_account_name || selected.merchant_settlement_accounts?.account_name || "No account"} />
                 <Info label="Breet bankId" value={selected.provider_bank_id || "-"} />
@@ -643,4 +679,18 @@ function feePayerExplanation(row: SettlementRow) {
     return "Customer bears provider fee. Customer payable includes invoice amount plus fee.";
   }
   return "Review invoice credit, fee payer, and settlement details together so the credited amount is not confused with the merchant's net settlement.";
+}
+
+function providerReadinessTone(status?: string | null) {
+  if (status === "connected") return "text-emerald-700";
+  if (status === "temporarily_unavailable" || status === "failed") return "text-red-700";
+  if (status === "requires_action" || status === "degraded") return "text-amber-700";
+  return "text-blue-700";
+}
+
+function providerReadinessPanelClassName(status?: string | null) {
+  if (status === "connected") return "border-emerald-200 bg-emerald-50 text-emerald-800";
+  if (status === "temporarily_unavailable" || status === "failed") return "border-red-200 bg-red-50 text-red-800";
+  if (status === "requires_action" || status === "degraded") return "border-amber-200 bg-amber-50 text-amber-800";
+  return "border-blue-200 bg-blue-50 text-blue-800";
 }
