@@ -15,6 +15,7 @@ type SettlementAccountRow = Record<string, unknown> & {
   settlement_account_id?: string | null;
   provider_settlement_account_id?: string | null;
   settlement_account_snapshot?: Record<string, unknown> | null;
+  raw_settlement_payload?: Record<string, unknown> | null;
   settlement_bank_name?: string | null;
   settlement_account_name?: string | null;
   settlement_account_number_masked?: string | null;
@@ -81,7 +82,7 @@ export async function GET() {
   }
 
   rows = await hydrateMissingSettlementAccounts(serviceSupabase, merchantId, rows);
-  rows = rows.map(normalizeMerchantSettlementDisplay);
+  rows = rows.map(normalizeMerchantSettlementDisplay).map(sanitizeMerchantSettlementRow);
 
   return NextResponse.json({
     rows,
@@ -279,7 +280,7 @@ async function loadLegacySettlementAccount(
 
   return {
     bank_name: merchant.settlement_bank_name || "Settlement bank",
-    account_number: merchant.settlement_account_number,
+    account_number: maskAccountNumber(merchant.settlement_account_number),
     account_name: merchant.settlement_account_name || "Settlement account",
     currency: "NGN",
   };
@@ -401,14 +402,25 @@ function resolveDisplayedSettlementAccount(row: SettlementAccountRow) {
       bank_name: stringValue(row.settlement_bank_name) || stringValue(snapshot?.bank_name) || "Settlement bank",
       account_number:
         stringValue(row.settlement_account_number_masked) ||
-        stringValue(snapshot?.account_number_masked) ||
-        stringValue(snapshot?.account_number),
+        maskAccountNumber(stringValue(snapshot?.account_number_masked) || stringValue(snapshot?.account_number)) ||
+        null,
       account_name: stringValue(row.settlement_account_name) || stringValue(snapshot?.account_name) || "Settlement account",
       currency: stringValue(snapshot?.currency) || "NGN",
     };
   }
 
-  return row.merchant_settlement_accounts || null;
+  const account = normalizeEmbeddedRow(row.merchant_settlement_accounts) as Record<string, unknown> | null;
+  if (!account) return null;
+
+  return {
+    bank_name: stringValue(account.bank_name) || null,
+    account_number: maskAccountNumber(
+      stringValue(account.account_number_masked) ||
+      stringValue(account.account_number)
+    ),
+    account_name: stringValue(account.account_name) || null,
+    currency: stringValue(account.currency) || "NGN",
+  };
 }
 
 function stringValue(value: unknown) {
@@ -442,6 +454,47 @@ function normalizeMerchantSettlementDisplay(row: SettlementAccountRow) {
     settlement_display_status,
     settlement_display_amount,
   };
+}
+
+function sanitizeMerchantSettlementRow(row: SettlementAccountRow) {
+  const settlementAccount = normalizeEmbeddedRow(row.merchant_settlement_accounts) as Record<string, unknown> | null;
+  const snapshot = normalizeEmbeddedRow(row.settlement_account_snapshot) as Record<string, unknown> | null;
+  const { raw_settlement_payload, ...safeRow } = row;
+
+  return {
+    ...safeRow,
+    raw_settlement_payload: null,
+    merchant_settlement_accounts: settlementAccount
+      ? {
+          bank_name: stringValue(settlementAccount.bank_name) || null,
+          account_name: stringValue(settlementAccount.account_name) || null,
+          account_number: maskAccountNumber(
+            stringValue(settlementAccount.account_number_masked) ||
+            stringValue(settlementAccount.account_number)
+          ),
+          currency: stringValue(settlementAccount.currency) || "NGN",
+        }
+      : null,
+    settlement_account_snapshot: snapshot
+      ? {
+          bank_name: stringValue(snapshot.bank_name) || null,
+          account_name: stringValue(snapshot.account_name) || null,
+          account_number_masked:
+            maskAccountNumber(
+              stringValue(snapshot.account_number_masked) ||
+              stringValue(snapshot.account_number)
+            ),
+          currency: stringValue(snapshot.currency) || "NGN",
+        }
+      : null,
+  };
+}
+
+function maskAccountNumber(accountNumber?: string | null) {
+  if (!accountNumber) return null;
+  if (accountNumber.startsWith("****")) return accountNumber;
+  const last4 = accountNumber.slice(-4) || "----";
+  return `****${last4}`;
 }
 
 function isPendingSettlementStatus(status: string) {

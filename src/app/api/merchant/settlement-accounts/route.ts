@@ -25,7 +25,9 @@ export async function GET() {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json({ accounts: data || [] });
+  return NextResponse.json({
+    accounts: (data || []).map(sanitizeSettlementAccountRecord),
+  });
 }
 
 async function resolveCurrentMerchantId(supabase: Awaited<ReturnType<typeof createClient>>) {
@@ -52,4 +54,38 @@ async function resolveCurrentMerchantId(supabase: Awaited<ReturnType<typeof crea
     .maybeSingle();
 
   return (teamRow?.merchant_id as string | undefined) || null;
+}
+
+function sanitizeSettlementAccountRecord(account: Record<string, unknown>) {
+  const providerMappings = Array.isArray(account.merchant_provider_settlement_accounts)
+    ? account.merchant_provider_settlement_accounts
+    : account.merchant_provider_settlement_accounts
+      ? [account.merchant_provider_settlement_accounts]
+      : [];
+
+  return {
+    ...account,
+    account_number: maskAccountNumber(stringValue(account.account_number)),
+    merchant_provider_settlement_accounts: providerMappings.map(sanitizeProviderMapping),
+  };
+}
+
+function sanitizeProviderMapping(mapping: Record<string, unknown>) {
+  return {
+    provider_name: stringValue(mapping.provider_name),
+    status: stringValue(mapping.status),
+    environment: stringValue(mapping.environment),
+    provider_subaccount_code: stringValue(mapping.provider_subaccount_code),
+  };
+}
+
+function maskAccountNumber(accountNumber?: string | null) {
+  if (!accountNumber) return null;
+  if (accountNumber.startsWith("****")) return accountNumber;
+  const last4 = accountNumber.slice(-4) || "----";
+  return `****${last4}`;
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" && value.trim() ? value : null;
 }
