@@ -80,10 +80,7 @@ export async function POST(request: Request) {
     });
 
     if (!providerReady) {
-      const message =
-        route.provider === "monnify"
-          ? "Monnify settlement account is not ready. OPay is temporarily unavailable for Monnify subaccount setup. Please add another bank account or choose another payment method."
-          : "Merchant is not verified or has no settlement account set up";
+      const message = merchantFacingPayoutReadinessError(selectedMethod);
       return NextResponse.json({ error: message }, { status: 403 });
     }
 
@@ -100,13 +97,9 @@ export async function POST(request: Request) {
       route.provider === "monnify" &&
       (!monnifySettlement?.ready || !monnifySettlement.mapping?.provider_subaccount_code)
     ) {
-      const providerMessage = monnifySettlement?.readiness?.merchant_message;
       return NextResponse.json(
         {
-          error:
-            providerMessage
-              ? `Monnify settlement account is not ready. ${providerMessage.replace(/\.$/, "")}. Please add another bank account or choose another payment method.`
-              : "Monnify settlement account is not ready. OPay is temporarily unavailable for Monnify subaccount setup. Please add another bank account or choose another payment method.",
+          error: merchantFacingPayoutReadinessError(selectedMethod),
         },
         { status: 403 }
       );
@@ -199,4 +192,16 @@ export async function POST(request: Request) {
     console.error("Payment initialization failed:", error);
     return NextResponse.json({ error: message }, { status: 500 });
   }
+}
+
+function merchantFacingPayoutReadinessError(method: PaymentMethod) {
+  const label = paymentMethodDisplayName(method);
+  return `${label} is not ready for this payout account. Please add another bank account or choose another payment method.`;
+}
+
+function paymentMethodDisplayName(method: PaymentMethod) {
+  if (method === "card") return "Card payment";
+  if (method === "bank_transfer") return "Bank transfer";
+  if (method === "ussd") return "USSD";
+  return "Crypto payment";
 }

@@ -24,19 +24,22 @@ interface Bank {
   active: boolean;
 }
 
-type ProviderReadiness = {
-  provider_name?: string | null;
-  environment?: string | null;
-  status?: string | null;
-  reason_code?: string | null;
-  merchant_message?: string | null;
-  admin_note?: string | null;
-  last_checked_at?: string | null;
-  last_success_at?: string | null;
-  last_failure_at?: string | null;
-  retryable?: boolean;
-  recommended_action?: string | null;
-  ready?: boolean;
+type PaymentMethodReadiness = {
+  method: "card" | "bank_transfer" | "ussd" | "crypto";
+  label: string;
+  status: "ready" | "setup_in_progress" | "needs_attention" | "temporarily_unavailable" | "not_available";
+  message?: string | null;
+  available?: boolean;
+  affected?: boolean;
+};
+
+type ReadinessBanner = {
+  show: boolean;
+  title: string;
+  body: string;
+  affected_methods: string[];
+  action_label: string;
+  href: string;
 };
 
 type SettlementAccountRecord = {
@@ -46,7 +49,6 @@ type SettlementAccountRecord = {
   account_name?: string | null;
   currency?: string | null;
   is_default?: boolean | null;
-  provider_readiness?: ProviderReadiness[];
 };
 
 export default function SettlementSettingsPage() {
@@ -57,6 +59,8 @@ export default function SettlementSettingsPage() {
   const [loadingBanks, setLoadingBanks] = useState(true);
   const [settlementAccounts, setSettlementAccounts] = useState<SettlementAccountRecord[]>([]);
   const [loadingAccounts, setLoadingAccounts] = useState(true);
+  const [paymentMethodReadiness, setPaymentMethodReadiness] = useState<PaymentMethodReadiness[]>([]);
+  const [readinessBanner, setReadinessBanner] = useState<ReadinessBanner | null>(null);
 
   const [selectedBankCode, setSelectedBankCode] = useState("");
   const [accountNumber, setAccountNumber] = useState("");
@@ -77,6 +81,8 @@ export default function SettlementSettingsPage() {
         const payload = await response.json();
         if (response.ok) {
           setSettlementAccounts(payload.accounts || []);
+          setPaymentMethodReadiness(payload.payment_method_readiness || []);
+          setReadinessBanner(payload.readiness_banner || null);
         }
       } catch (error) {
         console.error("Failed to load settlement accounts:", error);
@@ -173,7 +179,11 @@ export default function SettlementSettingsPage() {
       setLoadingAccounts(true);
       fetch("/api/merchant/settlement-accounts", { cache: "no-store" })
         .then((response) => response.json())
-        .then((payload) => setSettlementAccounts(payload.accounts || []))
+        .then((payload) => {
+          setSettlementAccounts(payload.accounts || []);
+          setPaymentMethodReadiness(payload.payment_method_readiness || []);
+          setReadinessBanner(payload.readiness_banner || null);
+        })
         .catch((error) => console.error("Failed to refresh settlement accounts:", error))
         .finally(() => setLoadingAccounts(false));
       // Update local merchant state
@@ -205,8 +215,8 @@ export default function SettlementSettingsPage() {
     return (
       <div className="max-w-3xl mx-auto space-y-6">
         <div>
-          <h1 className="text-2xl font-bold text-purp-900">Settlement Accounts</h1>
-          <p className="text-neutral-500 text-sm mt-1">Configure where your funds are disbursed</p>
+          <h1 className="text-2xl font-bold text-purp-900">Payout Account</h1>
+          <p className="text-neutral-500 text-sm mt-1">Configure the bank account where customer payments will settle.</p>
         </div>
         <Card className="border-2 border-amber-200 bg-amber-50">
           <CardContent className="p-6 text-center">
@@ -236,20 +246,44 @@ export default function SettlementSettingsPage() {
       </Link>
       
       <div>
-        <h1 className="text-2xl font-bold text-purp-900">Settlement Accounts</h1>
+        <h1 className="text-2xl font-bold text-purp-900">Payout Account</h1>
         <p className="text-neutral-500 text-sm mt-1">
-          Configure your merchant settlement account and provider readiness.
+          This is the bank account where you receive funds from customer payments.
         </p>
       </div>
+
+      {readinessBanner?.show ? (
+        <div className="rounded-lg border-2 border-amber-200 bg-amber-50 p-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+              <div>
+                <h2 className="font-semibold text-amber-900">{readinessBanner.title}</h2>
+                <p className="mt-1 text-sm text-amber-800">{readinessBanner.body}</p>
+                {readinessBanner.affected_methods?.length ? (
+                  <p className="mt-2 text-xs font-medium text-amber-900">
+                    Affected: {readinessBanner.affected_methods.join(", ")}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+            <Link href={readinessBanner.href}>
+              <Button variant="outline" className="border-amber-300 text-amber-900 hover:bg-amber-100">
+                {readinessBanner.action_label}
+              </Button>
+            </Link>
+          </div>
+        </div>
+      ) : null}
 
       {isVerified && !isEditing && (
         <div className="bg-emerald-50 border-2 border-emerald-200 rounded-lg p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
           <div className="flex items-start gap-3">
             <CheckCircle2 className="w-6 h-6 text-emerald-600 shrink-0 mt-0.5" />
             <div>
-              <h3 className="font-bold text-emerald-900 text-lg">Settlement Account Active</h3>
+              <h3 className="font-bold text-emerald-900 text-lg">Your payout account is active</h3>
               <p className="text-emerald-700 text-sm mt-1 max-w-lg">
-                Future invoice collections use this account through active provider settlement mappings.
+                When customers pay your invoices, eligible payment methods will settle to this account.
               </p>
               <div className="mt-4 bg-white/60 border border-emerald-200 rounded-lg p-3">
                 <p className="text-sm font-semibold text-emerald-900">{merchant?.settlement_bank_name}</p>
@@ -257,30 +291,27 @@ export default function SettlementSettingsPage() {
                 <p className="text-xs text-emerald-700 uppercase tracking-wide mt-1">{merchant?.settlement_account_name}</p>
               </div>
               <div className="mt-4 space-y-2">
-                <p className="text-xs font-semibold uppercase tracking-wide text-emerald-800">Provider Readiness</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-emerald-800">Payment methods for this payout account</p>
                 {loadingAccounts ? (
-                  <p className="text-xs text-emerald-700">Loading provider status...</p>
-                ) : primaryAccount?.provider_readiness?.length ? (
-                  primaryAccount.provider_readiness.map((readiness) => (
-                    <div key={`${readiness.provider_name}-${readiness.environment}`} className="rounded-lg border border-emerald-200 bg-white/70 p-3">
+                  <p className="text-xs text-emerald-700">Loading payment methods...</p>
+                ) : paymentMethodReadiness.length ? (
+                  paymentMethodReadiness.map((readiness) => (
+                    <div key={readiness.method} className="rounded-lg border border-emerald-200 bg-white/70 p-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <p className="text-sm font-semibold text-emerald-950">
-                          {labelProvider(readiness.provider_name)}{readiness.environment ? ` (${readiness.environment})` : ""}
+                          {readiness.label}
                         </p>
-                        <span className={`rounded-full border px-2 py-1 text-xs font-semibold ${providerStatusClassName(readiness.status)}`}>
+                        <span className={`rounded-full border px-2 py-1 text-xs font-semibold ${paymentMethodStatusClassName(readiness.status)}`}>
                           {labelStatus(readiness.status)}
                         </span>
                       </div>
-                      {readiness.merchant_message ? (
-                        <p className="mt-2 text-xs text-amber-800">{readiness.merchant_message}</p>
-                      ) : null}
-                      {readiness.recommended_action ? (
-                        <p className="mt-2 text-xs text-emerald-800">Action: {readiness.recommended_action}</p>
+                      {readiness.message ? (
+                        <p className="mt-2 text-xs text-amber-800">{readiness.message}</p>
                       ) : null}
                     </div>
                   ))
                 ) : (
-                  <p className="text-xs text-emerald-700">No provider mappings yet.</p>
+                  <p className="text-xs text-emerald-700">No payment methods are ready for this payout account yet.</p>
                 )}
               </div>
             </div>
@@ -306,14 +337,14 @@ export default function SettlementSettingsPage() {
             </div>
             <CardDescription>
               {isVerified
-                ? "Enter your new Nigerian bank account details. Future payments will be routed here."
-                : "Enter your Nigerian bank account details to enable online payments."}
+                ? "Enter your new Nigerian bank account details. Future customer payments will settle here."
+                : "Enter your Nigerian bank account details to receive customer payments."}
             </CardDescription>
             {isVerified && (
               <div className="bg-amber-50 border border-amber-200 rounded p-3 mt-2 flex gap-2">
                 <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                 <p className="text-xs text-amber-800 leading-relaxed">
-                  <strong>Warning:</strong> Changing your settlement account will immediately reroute all future invoice collections. Make sure these details are absolutely correct.
+                  <strong>Warning:</strong> Changing your payout account will immediately reroute future customer payments. Make sure these details are absolutely correct.
                 </p>
               </div>
             )}
@@ -440,7 +471,7 @@ export default function SettlementSettingsPage() {
                 disabled={!accountName || saving}
                 onClick={handleSave}
               >
-                {saving ? (isVerified ? "Updating..." : "Activating Account...") : (isVerified ? "Update Settlement Account" : "Confirm & Activate")}
+                {saving ? (isVerified ? "Updating..." : "Activating Account...") : (isVerified ? "Update Payout Account" : "Confirm & Activate")}
               </Button>
             </div>
           </CardFooter>
@@ -450,23 +481,24 @@ export default function SettlementSettingsPage() {
   );
 }
 
-function labelProvider(provider?: string | null) {
-  if (!provider) return "Provider";
-  return provider.charAt(0).toUpperCase() + provider.slice(1);
-}
-
 function labelStatus(status?: string | null) {
-  if (!status) return "Pending";
+  if (!status) return "Setup in progress";
+  if (status === "ready") return "Ready";
+  if (status === "setup_in_progress") return "Setup in progress";
+  if (status === "needs_attention") return "Needs attention";
+  if (status === "temporarily_unavailable") return "Temporarily unavailable";
+  if (status === "not_available") return "Not available";
   return status.replaceAll("_", " ");
 }
 
-function providerStatusClassName(status?: string | null) {
-  if (status === "connected") return "border-emerald-300 bg-emerald-50 text-emerald-700";
-  if (status === "temporarily_unavailable" || status === "degraded") return "border-amber-300 bg-amber-50 text-amber-700";
-  if (status === "requires_action" || status === "failed" || status === "disabled") {
+function paymentMethodStatusClassName(status?: string | null) {
+  if (status === "ready") return "border-emerald-300 bg-emerald-50 text-emerald-700";
+  if (status === "setup_in_progress") return "border-blue-300 bg-blue-50 text-blue-700";
+  if (status === "temporarily_unavailable") return "border-amber-300 bg-amber-50 text-amber-700";
+  if (status === "needs_attention") {
     return "border-red-300 bg-red-50 text-red-700";
   }
-  return "border-blue-300 bg-blue-50 text-blue-700";
+  return "border-neutral-300 bg-neutral-50 text-neutral-700";
 }
 
 function maskAccountNumber(accountNumber?: string | null) {

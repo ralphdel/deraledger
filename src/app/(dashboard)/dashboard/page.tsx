@@ -46,11 +46,21 @@ interface DashboardData {
   recentActivity: { id: string; type: string; description: string; time: string; icon: string }[];
 }
 
+interface ReadinessBanner {
+  show: boolean;
+  title: string;
+  body: string;
+  affected_methods: string[];
+  action_label: string;
+  href: string;
+}
+
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardData | null>(null);
   const [merchant, setMerchant] = useState<Merchant | null>(null);
   const [userName, setUserName] = useState<string | null>(null);
   const [monthlyCollected, setMonthlyCollected] = useState(0);
+  const [readinessBanner, setReadinessBanner] = useState<ReadinessBanner | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -59,11 +69,15 @@ export default function DashboardPage() {
       getDashboardStats(), 
       getMerchant(), 
       getMonthlyCollectionTotal(),
-      sb.auth.getSession()
-    ]).then(([dashData, merchantData, collected, { data: { session } }]) => {
+      sb.auth.getSession(),
+      fetch("/api/merchant/settlement-accounts", { cache: "no-store" })
+        .then((response) => response.json())
+        .catch(() => null),
+    ]).then(([dashData, merchantData, collected, { data: { session } }, settlementPayload]) => {
       setStats(dashData);
       setMerchant(merchantData);
       setMonthlyCollected(collected);
+      setReadinessBanner(settlementPayload?.readiness_banner || null);
       if (session?.user) {
         setUserName(session.user.user_metadata?.full_name || null);
       }
@@ -208,6 +222,34 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       )}
+
+      {readinessBanner?.show && merchant?.subscription_plan !== "starter" ? (
+        <Card className="border-2 border-amber-300 bg-amber-50/70 shadow-none">
+          <CardContent className="p-4 sm:p-5">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-lg border-2 border-amber-200 bg-amber-100 flex items-center justify-center shrink-0">
+                  <AlertTriangle className="h-5 w-5 text-amber-700" />
+                </div>
+                <div>
+                  <p className="font-semibold text-sm text-amber-950">{readinessBanner.title}</p>
+                  <p className="text-xs text-amber-900 mt-0.5">{readinessBanner.body}</p>
+                  {readinessBanner.affected_methods?.length ? (
+                    <p className="text-xs font-medium text-amber-950 mt-2">
+                      Affected: {readinessBanner.affected_methods.join(", ")}
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+              <Link href={readinessBanner.href}>
+                <Button size="sm" className="bg-amber-700 hover:bg-amber-800 text-white">
+                  {readinessBanner.action_label}
+                </Button>
+              </Link>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

@@ -1,8 +1,17 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { getProviderReadiness, type ProviderReadiness, type SettlementProvider } from "@/lib/services/settlement-ledger.service";
+import { createClient as createSupabaseClient } from "@supabase/supabase-js";
+import {
+  getMerchantPaymentMethodReadiness,
+  getSettlementEnvironment,
+} from "@/lib/services/settlement-ledger.service";
 
 export const dynamic = "force-dynamic";
+
+const serviceRole = createSupabaseClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
 
 export async function GET() {
   const supabase = await createClient();
@@ -12,7 +21,13 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { data, error } = await supabase
+  const { data: merchant } = await serviceRole
+    .from("merchants")
+    .select("email")
+    .eq("id", merchantId)
+    .maybeSingle();
+
+  const { data, error } = await serviceRole
     .from("merchant_settlement_accounts")
     .select(`
       *,
@@ -26,8 +41,17 @@ export async function GET() {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
+  const paymentMethodReadiness = await getMerchantPaymentMethodReadiness(serviceRole, {
+    merchantId,
+    environment: getSettlementEnvironment(merchant?.email || null),
+    purpose: "invoice_payment",
+  });
+
   return NextResponse.json({
     accounts: (data || []).map(sanitizeSettlementAccountRecord),
+    payment_method_readiness: paymentMethodReadiness.methods,
+    readiness_banner: paymentMethodReadiness.banner,
+    has_payout_account: paymentMethodReadiness.has_payout_account,
   });
 }
 
@@ -58,50 +82,14 @@ async function resolveCurrentMerchantId(supabase: Awaited<ReturnType<typeof crea
 }
 
 function sanitizeSettlementAccountRecord(account: Record<string, unknown>) {
-  const providerMappings = Array.isArray(account.merchant_provider_settlement_accounts)
-    ? account.merchant_provider_settlement_accounts
-    : account.merchant_provider_settlement_accounts
-      ? [account.merchant_provider_settlement_accounts]
-      : [];
-
   return {
-    ...account,
+    id: stringValue(account.id),
+    bank_name: stringValue(account.bank_name),
     account_number: maskAccountNumber(stringValue(account.account_number)),
-    merchant_provider_settlement_accounts: providerMappings.map(sanitizeProviderMapping),
-    provider_readiness: providerMappings.map((mapping) => buildProviderReadiness(mapping)),
+    account_name: stringValue(account.account_name),
+    currency: stringValue(account.currency),
+    is_default: Boolean(account.is_default),
   };
-}
-
-function sanitizeProviderMapping(mapping: Record<string, unknown>) {
-  return {
-    provider_name: stringValue(mapping.provider_name),
-    status: stringValue(mapping.status),
-    environment: stringValue(mapping.environment),
-  };
-}
-
-function buildProviderReadiness(mapping: Record<string, unknown>): ProviderReadiness {
-  const provider = asSettlementProvider(stringValue(mapping.provider_name));
-  return getProviderReadiness(
-    provider,
-    {
-      provider_name: stringValue(mapping.provider_name),
-      provider_account_reference: stringValue(mapping.provider_account_reference),
-      provider_subaccount_code: stringValue(mapping.provider_subaccount_code),
-      provider_split_reference: stringValue(mapping.provider_split_reference),
-      status: stringValue(mapping.status),
-      environment: stringValue(mapping.environment),
-      raw_provider_response: asRecord(mapping.raw_provider_response),
-      last_sync_at: stringValue(mapping.last_sync_at),
-    }
-  );
-}
-
-function asSettlementProvider(value: string | null): SettlementProvider {
-  if (value === "paystack" || value === "monnify" || value === "breet") {
-    return value;
-  }
-  return "paystack";
 }
 
 function maskAccountNumber(accountNumber?: string | null) {
@@ -113,8 +101,4 @@ function maskAccountNumber(accountNumber?: string | null) {
 
 function stringValue(value: unknown) {
   return typeof value === "string" && value.trim() ? value : null;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }

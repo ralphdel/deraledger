@@ -2,9 +2,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
   AvailablePaymentMethod,
   PaymentEnvironment,
+  PaymentMethod,
   PaymentProvider,
   PaymentPurpose,
+  ResolvedPaymentRoute,
 } from "@/lib/services/payment-routing.service";
+import { listConfiguredPaymentMethodRoutes, resolvePaymentRoute } from "@/lib/services/payment-routing.service";
 import { calculateProviderReportedSettlement } from "@/lib/services/provider-settlement-calculation.service";
 import {
   canUseBreetCryptoCheckout,
@@ -55,6 +58,31 @@ export type ProviderReadiness = {
   ready: boolean;
 };
 
+export type MerchantPaymentMethodStatus =
+  | "ready"
+  | "setup_in_progress"
+  | "needs_attention"
+  | "temporarily_unavailable"
+  | "not_available";
+
+export type MerchantPaymentMethodReadiness = {
+  method: PaymentMethod;
+  label: string;
+  status: MerchantPaymentMethodStatus;
+  message: string | null;
+  available: boolean;
+  affected: boolean;
+};
+
+export type MerchantPaymentSetupBanner = {
+  show: boolean;
+  title: string;
+  body: string;
+  affected_methods: string[];
+  action_label: string;
+  href: string;
+};
+
 type ProviderMappingRow = {
   provider_name?: string | null;
   provider_account_reference?: string | null;
@@ -94,6 +122,7 @@ const PROVIDER_STATUS_VALUES = new Set<ProviderReadinessStatus>([
   "failed",
   "disabled",
 ]);
+const MERCHANT_PAYMENT_METHOD_ORDER: PaymentMethod[] = ["card", "bank_transfer", "ussd", "crypto"];
 
 export function getSettlementEnvironment(email?: string | null): PaymentEnvironment {
   const superAdminEmail = (process.env.SUPERADMIN_SANDBOX_EMAIL || "ralphdel14@yahoo.com").toLowerCase();
@@ -356,6 +385,7 @@ export async function getProviderSettlementMapping(
     merchantId: string;
     provider: SettlementProvider;
     environment: PaymentEnvironment;
+    requireCryptoMapping?: boolean;
   }
 ) {
   const { data: account, error: accountError } = await supabase
@@ -396,14 +426,156 @@ export async function getProviderSettlementMapping(
     ? getProviderReadiness(input.provider, {
         ...mapping,
         environment: input.environment,
+      }, {
+        requireCryptoMapping: input.requireCryptoMapping,
       })
     : null;
+
+  if (!mapping && input.provider === "paystack") {
+    const legacyReady = await hasLegacySettlementReadiness(supabase, input.merchantId, input.provider);
+    if (legacyReady) {
+      return {
+        account,
+        mapping: null,
+        readiness: {
+          provider_name: "paystack",
+          environment: input.environment,
+          status: "connected" as const,
+          reason_code: null,
+          merchant_message: null,
+          admin_note: null,
+          last_checked_at: null,
+          last_success_at: null,
+          last_failure_at: null,
+          retryable: false,
+          recommended_action: null,
+          ready: true,
+        },
+        ready: true,
+      };
+    }
+  }
 
   return {
     account,
     mapping: mapping || null,
     readiness,
     ready: readiness?.ready || false,
+  };
+}
+
+export async function getMerchantPaymentMethodReadiness(
+  supabase: SupabaseClient,
+  input: {
+    merchantId: string;
+    environment: PaymentEnvironment;
+    purpose?: PaymentPurpose;
+  }
+) {
+  const purpose = input.purpose || "invoice_payment";
+  const configuredRoutes = await listConfiguredPaymentMethodRoutes(purpose, input.environment);
+  const configuredRouteMap = new Map(
+    configuredRoutes.map((route) => [route.method, route])
+  );
+
+  const { data: account } = await supabase
+    .from("merchant_settlement_accounts")
+    .select("id, verification_status, status")
+    .eq("merchant_id", input.merchantId)
+    .eq("is_default", true)
+    .eq("status", "active")
+    .maybeSingle();
+
+  const hasVerifiedPayoutAccount = Boolean(account && account.verification_status === "verified");
+
+  const methods = await Promise.all(
+    MERCHANT_PAYMENT_METHOD_ORDER.map(async (method) => {
+      const route = configuredRouteMap.get(method) || null;
+      if (!route || !route.enabled) {
+        return {
+          method,
+          label: getMerchantPaymentMethodLabel(method),
+          status: "not_available" as const,
+          message: null,
+          available: false,
+          affected: false,
+        };
+      }
+
+      if (!hasVerifiedPayoutAccount) {
+        return {
+          method,
+          label: getMerchantPaymentMethodLabel(method),
+          status: "needs_attention" as const,
+          message: "Add a payout account before customers can use this payment option.",
+          available: false,
+          affected: true,
+        };
+      }
+
+      let selectedRoute: ResolvedPaymentRoute | null = null;
+      try {
+        selectedRoute = await resolvePaymentRoute(purpose, method, input.environment);
+      } catch {
+        selectedRoute = null;
+      }
+
+      if (!selectedRoute) {
+        return {
+          method,
+          label: getMerchantPaymentMethodLabel(method),
+          status: "not_available" as const,
+          message: null,
+          available: false,
+          affected: false,
+        };
+      }
+
+      const providerMapping = await getProviderSettlementMapping(supabase, {
+        merchantId: input.merchantId,
+        provider: selectedRoute.provider,
+        environment: input.environment,
+        requireCryptoMapping: method === "crypto",
+      });
+
+      const readiness =
+        providerMapping.readiness ||
+        getProviderReadiness(selectedRoute.provider, null, {
+          requireCryptoMapping: method === "crypto",
+        });
+
+      if (readiness.ready) {
+        return {
+          method,
+          label: getMerchantPaymentMethodLabel(method),
+          status: "ready" as const,
+          message: null,
+          available: true,
+          affected: false,
+        };
+      }
+
+      const status = mapProviderReadinessToMerchantStatus([readiness]);
+      return {
+        method,
+        label: getMerchantPaymentMethodLabel(method),
+        status,
+        message: getMerchantPaymentMethodMessage(method, status),
+        available: false,
+        affected: status !== "not_available",
+      };
+    })
+  );
+
+  const banner = buildMerchantPaymentSetupBanner({
+    methods,
+    hasVerifiedPayoutAccount,
+  });
+
+  return {
+    has_payout_account: hasVerifiedPayoutAccount,
+    methods,
+    banner,
   };
 }
 
@@ -553,6 +725,97 @@ export function getProviderReadiness(
     retryable: booleanValue(raw?.retryable) ?? !READY_PROVIDER_STATUSES.has(explicitStatus),
     recommended_action: stringValue(raw?.recommended_action) || null,
     ready: READY_PROVIDER_STATUSES.has(explicitStatus),
+  };
+}
+
+function getMerchantPaymentMethodLabel(method: PaymentMethod) {
+  if (method === "card") return "Card payments";
+  if (method === "bank_transfer") return "Bank transfer";
+  if (method === "ussd") return "USSD";
+  return "Crypto payments";
+}
+
+function mapProviderReadinessToMerchantStatus(
+  readiness: ProviderReadiness[]
+): MerchantPaymentMethodStatus {
+  if (readiness.some((entry) => entry.status === "temporarily_unavailable")) {
+    return "temporarily_unavailable";
+  }
+  if (readiness.some((entry) => entry.status === "pending")) {
+    return "setup_in_progress";
+  }
+  if (
+    readiness.some((entry) =>
+      ["requires_action", "failed", "disabled", "degraded"].includes(entry.status)
+    )
+  ) {
+    return "needs_attention";
+  }
+  return "not_available";
+}
+
+function getMerchantPaymentMethodMessage(
+  method: PaymentMethod,
+  status: MerchantPaymentMethodStatus
+) {
+  const label = getMerchantPaymentMethodLabel(method);
+  const verb = method === "bank_transfer" || method === "ussd" ? "is" : "are";
+
+  if (status === "temporarily_unavailable") {
+    return `${label} cannot settle to this payout account right now. Please add another bank account or try again later.`;
+  }
+  if (status === "setup_in_progress") {
+    return `${label} ${verb} still being prepared for this payout account. Please check back shortly or add another bank account if needed.`;
+  }
+  if (status === "needs_attention") {
+    return `${label} ${verb} not ready for this payout account yet. Please add another bank account or update your payout setup.`;
+  }
+  return null;
+}
+
+function buildMerchantPaymentSetupBanner(input: {
+  methods: MerchantPaymentMethodReadiness[];
+  hasVerifiedPayoutAccount: boolean;
+}): MerchantPaymentSetupBanner {
+  const affectedMethods = input.methods.filter((method) => method.affected);
+  if (!input.hasVerifiedPayoutAccount) {
+    const eligibleMethods = input.methods.filter((method) => method.status !== "not_available");
+    if (eligibleMethods.length === 0) {
+      return emptyMerchantPaymentSetupBanner();
+    }
+
+    return {
+      show: true,
+      title: "Payment setup needs attention",
+      body: "Some customer payment options cannot settle to your current payout account yet. Add another bank account to keep all payment methods available.",
+      affected_methods: eligibleMethods.map((method) => method.label),
+      action_label: "Review payout account",
+      href: "/settings/settlement",
+    };
+  }
+
+  if (affectedMethods.length === 0) {
+    return emptyMerchantPaymentSetupBanner();
+  }
+
+  return {
+    show: true,
+    title: "Payment setup needs attention",
+    body: "Some customer payment options cannot settle to your current payout account yet. Add another bank account to keep all payment methods available.",
+    affected_methods: affectedMethods.map((method) => method.label),
+    action_label: "Review payout account",
+    href: "/settings/settlement",
+  };
+}
+
+function emptyMerchantPaymentSetupBanner(): MerchantPaymentSetupBanner {
+  return {
+    show: false,
+    title: "Payment setup needs attention",
+    body: "",
+    affected_methods: [],
+    action_label: "Review payout account",
+    href: "/settings/settlement",
   };
 }
 

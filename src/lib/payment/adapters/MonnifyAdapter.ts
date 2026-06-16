@@ -125,7 +125,7 @@ export class MonnifyAdapter implements IPaymentProcessor {
 
     if (requiresMerchantSplit && (!p.incomeSplitConfig || p.incomeSplitConfig.length === 0)) {
       throw new Error(
-        "Monnify settlement account is not ready. Please complete settlement setup before collecting payments through Monnify."
+        "Payment setup is not ready for this payout account. Please add another bank account or choose another payment method."
       );
     }
 

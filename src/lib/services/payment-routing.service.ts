@@ -73,6 +73,17 @@ export type AvailablePaymentMethod = {
   fallbackProvider: PaymentProvider | null;
 };
 
+export type ConfiguredPaymentMethodRoute = {
+  method: PaymentMethod;
+  label: string;
+  description: string;
+  enabled: boolean;
+  primaryProvider: PaymentProvider | null;
+  fallbackProvider: PaymentProvider | null;
+  configuredProviders: PaymentProvider[];
+  availableProviders: PaymentProvider[];
+};
+
 export type ResolvedPaymentRoute = {
   purpose: PaymentPurpose;
   method: PaymentMethod;
@@ -267,6 +278,58 @@ export async function listAvailablePaymentMethods(
     .filter((value): value is AvailablePaymentMethod => value !== null);
 
   return available;
+}
+
+export async function listConfiguredPaymentMethodRoutes(
+  purpose: PaymentPurpose,
+  environment = getRuntimeEnvironment()
+): Promise<ConfiguredPaymentMethodRoute[]> {
+  const { providers, routes, methods } = await fetchRoutingState(environment);
+  const purposeMethods = methods.filter(
+    (row) => row.payment_purpose === purpose && row.environment === environment && row.is_enabled
+  );
+
+  return purposeMethods.map((methodConfig) => {
+    const route = routes.find(
+      (row) =>
+        row.payment_purpose === purpose &&
+        row.payment_method === methodConfig.payment_method &&
+        row.environment === environment &&
+        row.is_enabled
+    );
+
+    const configuredProviders = route
+      ? [route.primary_provider, route.fallback_provider].filter(
+          (provider): provider is PaymentProvider => Boolean(provider)
+        )
+      : [];
+
+    const availableProviders = route
+      ? configuredProviders.filter((providerName, index, providersList) => {
+          if (providersList.indexOf(providerName) !== index) return false;
+          return Boolean(
+            resolveProviderCandidate(
+              providerName,
+              providers,
+              methodConfig.payment_method,
+              environment
+            )
+          );
+        })
+      : [];
+
+    return {
+      method: methodConfig.payment_method,
+      label: methodConfig.display_label || DEFAULT_LABELS[methodConfig.payment_method].label,
+      description:
+        methodConfig.display_description || DEFAULT_LABELS[methodConfig.payment_method].description,
+      enabled: Boolean(route),
+      primaryProvider: route?.primary_provider || null,
+      fallbackProvider: route?.fallback_provider || null,
+      configuredProviders,
+      availableProviders,
+    };
+  });
 }
 
 export async function resolvePaymentRoute(
