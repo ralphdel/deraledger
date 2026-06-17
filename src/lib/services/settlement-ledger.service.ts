@@ -71,9 +71,11 @@ export type MerchantPaymentMethodReadiness = {
   method: PaymentMethod;
   label: string;
   status: MerchantPaymentMethodStatus;
+  display_status: string;
   message: string | null;
   available: boolean;
   affected: boolean;
+  action_label: string | null;
 };
 
 export type MerchantPaymentSetupBanner = {
@@ -83,6 +85,7 @@ export type MerchantPaymentSetupBanner = {
   affected_methods: string[];
   action_label: string;
   href: string;
+  action_method: PaymentMethod | "all" | null;
 };
 
 type ProviderMappingRow = {
@@ -540,9 +543,11 @@ export async function getMerchantPaymentMethodReadiness(
           method,
           label: getMerchantPaymentMethodLabel(method),
           status: "not_available" as const,
+          display_status: getMerchantPaymentMethodDisplayStatus(method, "not_available", null),
           message: null,
           available: false,
           affected: false,
+          action_label: null,
         };
       }
 
@@ -551,9 +556,11 @@ export async function getMerchantPaymentMethodReadiness(
           method,
           label: getMerchantPaymentMethodLabel(method),
           status: "needs_attention" as const,
-          message: "Add a payout account before customers can use this payment option.",
+          display_status: getMerchantPaymentMethodDisplayStatus(method, "needs_attention", null),
+          message: "Please update your payout account.",
           available: false,
           affected: true,
+          action_label: getMerchantPaymentMethodActionLabel(method, "needs_attention", null),
         };
       }
 
@@ -569,9 +576,11 @@ export async function getMerchantPaymentMethodReadiness(
           method,
           label: getMerchantPaymentMethodLabel(method),
           status: "not_available" as const,
+          display_status: getMerchantPaymentMethodDisplayStatus(method, "not_available", null),
           message: null,
           available: false,
           affected: false,
+          action_label: null,
         };
       }
 
@@ -593,9 +602,11 @@ export async function getMerchantPaymentMethodReadiness(
           method,
           label: getMerchantPaymentMethodLabel(method),
           status: "ready" as const,
+          display_status: getMerchantPaymentMethodDisplayStatus(method, "ready", readiness),
           message: null,
           available: true,
           affected: false,
+          action_label: null,
         };
       }
 
@@ -604,9 +615,11 @@ export async function getMerchantPaymentMethodReadiness(
         method,
         label: getMerchantPaymentMethodLabel(method),
         status,
-        message: getMerchantPaymentMethodMessage(method, status),
+        display_status: getMerchantPaymentMethodDisplayStatus(method, status, readiness),
+        message: getMerchantPaymentMethodMessage(method, status, readiness),
         available: false,
         affected: status !== "not_available",
+        action_label: getMerchantPaymentMethodActionLabel(method, status, readiness),
       };
     })
   );
@@ -799,6 +812,26 @@ function getMerchantPaymentMethodLabel(method: PaymentMethod) {
   return "Crypto payments";
 }
 
+function getMerchantPaymentMethodDisplayStatus(
+  method: PaymentMethod,
+  status: MerchantPaymentMethodStatus,
+  readiness: ProviderReadiness | null
+) {
+  if (status === "ready") return "Ready";
+  if (status === "setup_in_progress") return "Refreshing setup";
+  if (status === "temporarily_unavailable") return "Temporarily unavailable";
+  if (status === "not_available") return "Not available";
+  if (
+    method === "crypto" &&
+    ["breet_settlement_account_mismatch", "breet_mapping_incomplete", "missing_provider_mapping", "unsupported_bank"].includes(
+      String(readiness?.reason_code || "")
+    )
+  ) {
+    return "Setup required";
+  }
+  return "Needs attention";
+}
+
 function mapProviderReadinessToMerchantStatus(
   readiness: ProviderReadiness[]
 ): MerchantPaymentMethodStatus {
@@ -820,21 +853,52 @@ function mapProviderReadinessToMerchantStatus(
 
 function getMerchantPaymentMethodMessage(
   method: PaymentMethod,
-  status: MerchantPaymentMethodStatus
+  status: MerchantPaymentMethodStatus,
+  readiness: ProviderReadiness | null
 ) {
-  const label = getMerchantPaymentMethodLabel(method);
-  const verb = method === "bank_transfer" || method === "ussd" ? "is" : "are";
+  const reasonCode = String(readiness?.reason_code || "");
 
   if (status === "temporarily_unavailable") {
-    return `${label} cannot settle to this payout account right now. Please add another bank account or try again later.`;
+    return "This bank is temporarily unavailable for this payment method. Please use another bank or try again later.";
   }
+
   if (status === "setup_in_progress") {
-    return `${label} ${verb} still being prepared for this payout account. Please check back shortly or add another bank account if needed.`;
+    return "This payment method is being refreshed for your current payout account.";
   }
+
   if (status === "needs_attention") {
-    return `${label} ${verb} not ready for this payout account yet. Please add another bank account or update your payout setup.`;
+    if (method === "crypto" && ["breet_settlement_account_mismatch", "breet_mapping_incomplete", "missing_provider_mapping"].includes(reasonCode)) {
+      return "Crypto payments are not yet connected to this payout account. Activate crypto payouts to allow crypto payments to settle to this account.";
+    }
+    if (reasonCode === "invalid_account_details") {
+      return "Please update your payout account.";
+    }
+    if (reasonCode === "unsupported_bank") {
+      return "This bank is temporarily unavailable for this payment method. Please use another bank or try again later.";
+    }
+    if (reasonCode === "generic_provider_error") {
+      return "Setup could not be completed. Please try again.";
+    }
+    return "This payment method needs to be refreshed for your current payout account.";
   }
-  return null;
+
+  return readiness?.merchant_message || null;
+}
+
+function getMerchantPaymentMethodActionLabel(
+  method: PaymentMethod,
+  status: MerchantPaymentMethodStatus,
+  readiness: ProviderReadiness | null
+) {
+  if (status === "ready" || status === "not_available") return null;
+  if (method === "crypto") {
+    const reasonCode = String(readiness?.reason_code || "");
+    if (["breet_settlement_account_mismatch", "breet_mapping_incomplete", "missing_provider_mapping"].includes(reasonCode)) {
+      return "Activate crypto payouts";
+    }
+    return "Retry crypto setup";
+  }
+  return status === "setup_in_progress" ? "Check setup" : "Retry setup";
 }
 
 function buildMerchantPaymentSetupBanner(input: {
@@ -851,10 +915,11 @@ function buildMerchantPaymentSetupBanner(input: {
     return {
       show: true,
       title: "Payment setup needs attention",
-      body: "Some customer payment options cannot settle to your current payout account yet. Add another bank account to keep all payment methods available.",
+      body: "Please update your payout account before customers can use these payment methods.",
       affected_methods: eligibleMethods.map((method) => method.label),
-      action_label: "Review payout account",
+      action_label: "Update payout account",
       href: "/settings/settlement",
+      action_method: null,
     };
   }
 
@@ -862,13 +927,26 @@ function buildMerchantPaymentSetupBanner(input: {
     return emptyMerchantPaymentSetupBanner();
   }
 
+  if (affectedMethods.length === 1 && affectedMethods[0].method === "crypto") {
+    return {
+      show: true,
+      title: "Crypto payments need setup",
+      body: "Your payout account was updated, but crypto payments still need to be refreshed before they can settle to this account.",
+      affected_methods: [affectedMethods[0].label],
+      action_label: affectedMethods[0].action_label || "Activate crypto payouts",
+      href: "/settings/settlement",
+      action_method: "crypto",
+    };
+  }
+
   return {
     show: true,
     title: "Payment setup needs attention",
-    body: "Some customer payment options cannot settle to your current payout account yet. Add another bank account to keep all payment methods available.",
+    body: "Some payment methods need to be refreshed before they can settle to your current payout account.",
     affected_methods: affectedMethods.map((method) => method.label),
-    action_label: "Review payout account",
+    action_label: "Refresh payment setup",
     href: "/settings/settlement",
+    action_method: "all",
   };
 }
 
@@ -880,6 +958,7 @@ function emptyMerchantPaymentSetupBanner(): MerchantPaymentSetupBanner {
     affected_methods: [],
     action_label: "Review payout account",
     href: "/settings/settlement",
+    action_method: null,
   };
 }
 
@@ -1054,7 +1133,7 @@ function getProviderMappingConsistencyIssue(
       !compareIfPresent(mappedBankName, bankName)
     ) {
       return {
-        reason_code: "breet_mapping_account_mismatch",
+        reason_code: "breet_settlement_account_mismatch",
         admin_note:
           "Breet mapping details do not match the active payout account. Re-validate the correct Breet bank mapping for this settlement account.",
         recommended_action:

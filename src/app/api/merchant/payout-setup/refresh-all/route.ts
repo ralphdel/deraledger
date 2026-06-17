@@ -1,0 +1,64 @@
+import { NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
+import { createClient as createSupabaseClient } from "@supabase/supabase-js";
+import { refreshAllPayoutMethodSetup } from "@/lib/services/payout-setup-refresh.service";
+
+export const dynamic = "force-dynamic";
+
+const serviceRole = createSupabaseClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
+
+export async function POST() {
+  const supabase = await createClient();
+  const merchantId = await resolveCurrentMerchantId(supabase);
+
+  if (!merchantId) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  try {
+    const result = await refreshAllPayoutMethodSetup(serviceRole, {
+      merchantId,
+      actorType: "merchant",
+    });
+
+    return NextResponse.json({
+      success: result.success,
+      results: result.results,
+      payment_method_readiness: result.readiness.methods,
+      readiness_banner: result.readiness.banner,
+      has_payout_account: result.readiness.has_payout_account,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to refresh payment setup.";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+async function resolveCurrentMerchantId(supabase: Awaited<ReturnType<typeof createClient>>) {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) return null;
+
+  const { data: owned } = await supabase
+    .from("merchants")
+    .select("id")
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (owned?.id) return owned.id as string;
+
+  const { data: teamRow } = await supabase
+    .from("merchant_team")
+    .select("merchant_id")
+    .eq("user_id", user.id)
+    .eq("is_active", true)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  return (teamRow?.merchant_id as string | undefined) || null;
+}

@@ -28,9 +28,11 @@ type PaymentMethodReadiness = {
   method: "card" | "bank_transfer" | "ussd" | "crypto";
   label: string;
   status: "ready" | "setup_in_progress" | "needs_attention" | "temporarily_unavailable" | "not_available";
+  display_status?: string;
   message?: string | null;
   available?: boolean;
   affected?: boolean;
+  action_label?: string | null;
 };
 
 type ReadinessBanner = {
@@ -40,6 +42,7 @@ type ReadinessBanner = {
   affected_methods: string[];
   action_label: string;
   href: string;
+  action_method?: "card" | "bank_transfer" | "ussd" | "crypto" | "all" | null;
 };
 
 type SettlementAccountRecord = {
@@ -72,25 +75,16 @@ export default function SettlementSettingsPage() {
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [refreshMessage, setRefreshMessage] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [refreshingAll, setRefreshingAll] = useState(false);
+  const [refreshingMethod, setRefreshingMethod] = useState<string | null>(null);
 
   const [isEditing, setIsEditing] = useState(false);
 
   useEffect(() => {
     const loadSettlementAccounts = async () => {
-      try {
-        const response = await fetch("/api/merchant/settlement-accounts", { cache: "no-store" });
-        const payload = await response.json();
-        if (response.ok) {
-          setSettlementAccounts(payload.accounts || []);
-          setPaymentMethodReadiness(payload.payment_method_readiness || []);
-          setReadinessBanner(payload.readiness_banner || null);
-          setHasPayoutAccount(Boolean(payload.has_payout_account || (payload.accounts || []).length));
-        }
-      } catch (error) {
-        console.error("Failed to load settlement accounts:", error);
-      } finally {
-        setLoadingAccounts(false);
-      }
+      await refreshSettlementAccounts();
     };
 
     // Load merchant
@@ -178,17 +172,11 @@ export default function SettlementSettingsPage() {
 
     if (result.success) {
       setSaveSuccess(true);
+      setRefreshMessage("Payout account updated. We’re refreshing payment setup for this account.");
+      setRefreshError(null);
       setLoadingAccounts(true);
-      fetch("/api/merchant/settlement-accounts", { cache: "no-store" })
-        .then((response) => response.json())
-        .then((payload) => {
-          setSettlementAccounts(payload.accounts || []);
-          setPaymentMethodReadiness(payload.payment_method_readiness || []);
-          setReadinessBanner(payload.readiness_banner || null);
-          setHasPayoutAccount(Boolean(payload.has_payout_account || (payload.accounts || []).length));
-        })
-        .catch((error) => console.error("Failed to refresh settlement accounts:", error))
-        .finally(() => setLoadingAccounts(false));
+      await triggerRefreshAll({ silentError: true });
+      await refreshSettlementAccounts();
       // Update local merchant state
       setMerchant({
         ...merchant,
@@ -206,6 +194,76 @@ export default function SettlementSettingsPage() {
       setIsEditing(false);
     } else {
       setSaveError(result.error || "Failed to save settlement account.");
+    }
+  };
+
+  const refreshSettlementAccounts = async () => {
+    try {
+      const response = await fetch("/api/merchant/settlement-accounts", { cache: "no-store" });
+      const payload = await response.json();
+      if (response.ok) {
+        setSettlementAccounts(payload.accounts || []);
+        setPaymentMethodReadiness(payload.payment_method_readiness || []);
+        setReadinessBanner(payload.readiness_banner || null);
+        setHasPayoutAccount(Boolean(payload.has_payout_account || (payload.accounts || []).length));
+      }
+    } catch (error) {
+      console.error("Failed to load settlement accounts:", error);
+    } finally {
+      setLoadingAccounts(false);
+    }
+  };
+
+  const triggerRefreshAll = async (options?: { silentError?: boolean }) => {
+    setRefreshingAll(true);
+    if (!options?.silentError) {
+      setRefreshMessage(null);
+      setRefreshError(null);
+    }
+    try {
+      const response = await fetch("/api/merchant/payout-setup/refresh-all", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || "Failed to refresh payment setup.");
+      }
+      setPaymentMethodReadiness(payload.payment_method_readiness || []);
+      setReadinessBanner(payload.readiness_banner || null);
+      setHasPayoutAccount(Boolean(payload.has_payout_account || (payload.accounts || []).length || hasPayoutAccount));
+      setRefreshMessage("Payment setup refreshed for your current payout account.");
+    } catch (error) {
+      if (!options?.silentError) {
+        setRefreshError(error instanceof Error ? error.message : "Failed to refresh payment setup.");
+      }
+    } finally {
+      setRefreshingAll(false);
+    }
+  };
+
+  const triggerRefreshMethod = async (method: "card" | "bank_transfer" | "ussd" | "crypto") => {
+    setRefreshingMethod(method);
+    setRefreshMessage(null);
+    setRefreshError(null);
+    try {
+      const response = await fetch("/api/merchant/payout-setup/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ method }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || "Failed to refresh payment setup.");
+      }
+      setPaymentMethodReadiness(payload.payment_method_readiness || []);
+      setReadinessBanner(payload.readiness_banner || null);
+      setHasPayoutAccount(Boolean(payload.has_payout_account || hasPayoutAccount));
+      setRefreshMessage(payload.message || "Payment setup refreshed.");
+    } catch (error) {
+      setRefreshError(error instanceof Error ? error.message : "Failed to refresh payment setup.");
+    } finally {
+      setRefreshingMethod(null);
     }
   };
 
@@ -257,6 +315,16 @@ export default function SettlementSettingsPage() {
 
       {readinessBanner?.show ? (
         <div className="rounded-lg border-2 border-amber-200 bg-amber-50 p-4">
+          {(() => {
+            const actionMethod = readinessBanner.action_method || null;
+            const isMethodAction =
+              actionMethod === "all" ||
+              actionMethod === "card" ||
+              actionMethod === "bank_transfer" ||
+              actionMethod === "ussd" ||
+              actionMethod === "crypto";
+
+            return (
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div className="flex items-start gap-3">
               <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
@@ -270,12 +338,35 @@ export default function SettlementSettingsPage() {
                 ) : null}
               </div>
             </div>
-            <Link href={readinessBanner.href}>
-              <Button variant="outline" className="border-amber-300 text-amber-900 hover:bg-amber-100">
-                {readinessBanner.action_label}
+            {isMethodAction ? (
+              <Button
+                variant="outline"
+                className="border-amber-300 text-amber-900 hover:bg-amber-100"
+                disabled={refreshingAll || Boolean(refreshingMethod)}
+                onClick={() => {
+                  if (actionMethod === "all") {
+                    void triggerRefreshAll();
+                    return;
+                  }
+                  if (actionMethod) {
+                    void triggerRefreshMethod(actionMethod);
+                  }
+                }}
+              >
+                {(refreshingAll && actionMethod === "all") || refreshingMethod === actionMethod
+                  ? "Refreshing..."
+                  : readinessBanner.action_label}
               </Button>
-            </Link>
+            ) : (
+              <Link href={readinessBanner.href}>
+                <Button variant="outline" className="border-amber-300 text-amber-900 hover:bg-amber-100">
+                  {readinessBanner.action_label}
+                </Button>
+              </Link>
+            )}
           </div>
+            );
+          })()}
         </div>
       ) : null}
 
@@ -293,6 +384,22 @@ export default function SettlementSettingsPage() {
                 <p className="font-mono font-bold text-lg text-emerald-800">{primaryAccount?.account_number || maskAccountNumber(merchant?.settlement_account_number)}</p>
                 <p className="text-xs text-emerald-700 uppercase tracking-wide mt-1">{merchant?.settlement_account_name}</p>
               </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  className="border-emerald-300 text-emerald-800 hover:bg-emerald-100"
+                  disabled={refreshingAll || Boolean(refreshingMethod)}
+                  onClick={() => void triggerRefreshAll()}
+                >
+                  {refreshingAll ? "Refreshing setup..." : "Refresh all payment setup"}
+                </Button>
+              </div>
+              {refreshMessage ? (
+                <p className="mt-3 text-xs font-medium text-emerald-800">{refreshMessage}</p>
+              ) : null}
+              {refreshError ? (
+                <p className="mt-3 text-xs font-medium text-red-700">{refreshError}</p>
+              ) : null}
               <div className="mt-4 space-y-2">
                 <p className="text-xs font-semibold uppercase tracking-wide text-emerald-800">Payment methods for this payout account</p>
                 {loadingAccounts ? (
@@ -305,11 +412,24 @@ export default function SettlementSettingsPage() {
                           {readiness.label}
                         </p>
                         <span className={`rounded-full border px-2 py-1 text-xs font-semibold ${paymentMethodStatusClassName(readiness.status)}`}>
-                          {labelStatus(readiness.status)}
+                          {readiness.display_status || labelStatus(readiness.status)}
                         </span>
                       </div>
                       {readiness.message ? (
                         <p className="mt-2 text-xs text-amber-800">{readiness.message}</p>
+                      ) : null}
+                      {readiness.action_label ? (
+                        <div className="mt-3">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={refreshingAll || Boolean(refreshingMethod)}
+                            onClick={() => void triggerRefreshMethod(readiness.method)}
+                            className="border-emerald-300 text-emerald-900 hover:bg-emerald-100"
+                          >
+                            {refreshingMethod === readiness.method ? "Refreshing setup..." : readiness.action_label}
+                          </Button>
+                        </div>
                       ) : null}
                     </div>
                   ))

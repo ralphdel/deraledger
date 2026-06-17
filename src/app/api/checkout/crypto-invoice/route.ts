@@ -161,9 +161,10 @@ export async function POST(request: Request) {
     });
 
     if (!eligibility.allowed) {
-      const errorMessage = eligibility.reason === "Crypto settlement setup is incomplete for this merchant."
-        ? "Crypto payment is unavailable because the merchant settlement account has not been mapped and validated for Breet."
-        : eligibility.reason || "Crypto settlement setup is incomplete for this merchant.";
+      const errorMessage =
+        eligibility.reason === "Crypto settlement setup is incomplete for this merchant."
+          ? "Crypto payment is not ready for this payout account. Please refresh payout setup or choose another payment method."
+          : "Crypto payment is not ready for this payout account. Please refresh payout setup or choose another payment method.";
       return NextResponse.json({ error: errorMessage }, { status: 403 });
     }
 
@@ -210,7 +211,7 @@ export async function POST(request: Request) {
     if (settlementRecipientType === "merchant") {
       if (!merchantSettlementAccount) {
         return NextResponse.json(
-          { error: "Crypto payment is unavailable because the merchant settlement account is not fully configured." },
+          { error: "Crypto payment is not ready for this payout account. Please refresh payout setup or choose another payment method." },
           { status: 403 }
         );
       }
@@ -218,14 +219,14 @@ export async function POST(request: Request) {
       const validation = validateSettlementAccountForBreet(merchantSettlementAccount, { requireDefault: true });
       if (!validation.valid) {
         return NextResponse.json(
-          { error: "Crypto payment is unavailable because the merchant settlement account has not been mapped and validated for Breet." },
+          { error: "Crypto payment is not ready for this payout account. Please refresh payout setup or choose another payment method." },
           { status: 403 }
         );
       }
 
       if (!merchantSettlementAccount.bank_id || !(merchantSettlementAccount.mapping_confirmed || merchantSettlementAccount.validation_passed)) {
         return NextResponse.json(
-          { error: "Crypto payment is unavailable because the merchant settlement account has not been mapped and validated for Breet." },
+          { error: "Crypto payment is not ready for this payout account. Please refresh payout setup or choose another payment method." },
           { status: 403 }
         );
       }

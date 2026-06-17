@@ -21,6 +21,7 @@ import {
 import { ensureWorkspaceForMerchant, getLiveFeatureLockReasons, setupStatusForMerchant, syncMerchantSetupStatus } from "@/lib/services/onboarding-flow.service";
 import { ensureMerchantSettlementAccount, upsertProviderNeutralSettlementAccount } from "@/lib/services/settlement-ledger.service";
 import { getPaymentEnvironmentForMerchantEmail, listAvailablePaymentMethods, type PaymentProvider } from "@/lib/services/payment-routing.service";
+import { refreshAllPayoutMethodSetup } from "@/lib/services/payout-setup-refresh.service";
 
 // Service role client for admin-level operations
 function getServiceClient() {
@@ -1922,6 +1923,16 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
       settlement_account_name: verifiedAccountName,
       verification_status: "verified",
     });
+
+    try {
+      await refreshAllPayoutMethodSetup(adminClient, {
+        merchantId,
+        actorType: "system",
+        environment: paymentEnvironment,
+      });
+    } catch (refreshError) {
+      console.error("Post-update payout setup refresh failed:", refreshError);
+    }
 
     // Log to audit
     await adminClient.from("audit_logs").insert([{
