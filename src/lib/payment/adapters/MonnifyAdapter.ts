@@ -41,7 +41,29 @@ type MonnifySubaccountResponse = {
   currencyCode?: string;
   defaultSplitPercentage?: number;
   email?: string;
+  settlementProfileCode?: string;
+  settlementReportEmails?: unknown[];
 };
+
+type MonnifyApiEnvelope<T> = {
+  requestSuccessful?: boolean;
+  responseBody?: T;
+  responseMessage?: string;
+};
+
+const MONNIFY_EXISTING_SUBACCOUNT_SOURCE = "monnify_existing_subaccount_linked";
+const MONNIFY_CREATED_SUBACCOUNT_SOURCE = "monnify_subaccount_setup";
+
+class MonnifyApiError extends Error {
+  constructor(
+    message: string,
+    readonly responseBody?: unknown,
+    readonly responseMessage?: string
+  ) {
+    super(message);
+    this.name = "MonnifyApiError";
+  }
+}
 
 export class MonnifyAdapter implements IPaymentProcessor {
   constructor(
@@ -70,25 +92,44 @@ export class MonnifyAdapter implements IPaymentProcessor {
     return accessToken;
   }
 
-  private async authorizedRequest<T>(path: string, body?: unknown) {
-    const accessToken = await this.getAccessToken();
+  private async fetchWithAccessToken<T>(
+    accessToken: string,
+    path: string,
+    options?: {
+      method?: "GET" | "POST";
+      body?: unknown;
+    }
+  ) {
     const response = await fetch(`${MONNIFY_BASE}${path}`, {
-      method: "POST",
+      method: options?.method || "GET",
       headers: {
         Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
-      body: body ? JSON.stringify(body) : undefined,
+      body: options?.body ? JSON.stringify(options.body) : undefined,
     });
 
-    const payload = (await response.json().catch(() => ({}))) as {
-      requestSuccessful?: boolean;
-      responseBody?: T;
-      responseMessage?: string;
-    };
+    const payload = (await response.json().catch(() => ({}))) as MonnifyApiEnvelope<T>;
 
-    if (!response.ok || payload.requestSuccessful === false || !payload.responseBody) {
-      throw new Error(payload.responseMessage || "Monnify request failed.");
+    return {
+      ok: response.ok && payload.requestSuccessful !== false,
+      payload,
+    };
+  }
+
+  private async authorizedRequest<T>(path: string, body?: unknown) {
+    const accessToken = await this.getAccessToken();
+    const { ok, payload } = await this.fetchWithAccessToken<T>(accessToken, path, {
+      method: "POST",
+      body,
+    });
+
+    if (!ok || !payload.responseBody) {
+      throw new MonnifyApiError(
+        payload.responseMessage || "Monnify request failed.",
+        payload.responseBody,
+        payload.responseMessage
+      );
     }
 
     return payload.responseBody;
@@ -96,25 +137,96 @@ export class MonnifyAdapter implements IPaymentProcessor {
 
   private async authorizedGet<T>(path: string) {
     const accessToken = await this.getAccessToken();
-    const response = await fetch(`${MONNIFY_BASE}${path}`, {
+    const { ok, payload } = await this.fetchWithAccessToken<T>(accessToken, path, {
       method: "GET",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
     });
 
-    const payload = (await response.json().catch(() => ({}))) as {
-      requestSuccessful?: boolean;
-      responseBody?: T;
-      responseMessage?: string;
-    };
-
-    if (!response.ok || payload.requestSuccessful === false || !payload.responseBody) {
-      throw new Error(payload.responseMessage || "Monnify request failed.");
+    if (!ok || !payload.responseBody) {
+      throw new MonnifyApiError(
+        payload.responseMessage || "Monnify request failed.",
+        payload.responseBody,
+        payload.responseMessage
+      );
     }
 
     return payload.responseBody;
+  }
+
+  private normalizeSubaccountResult(
+    row: MonnifySubaccountResponse,
+    input: SubaccountParams,
+    source: string
+  ): SubaccountResult {
+    return {
+      subaccountCode: row.subAccountCode || "",
+      businessName: input.businessName,
+      accountNumber: row.accountNumber || input.accountNumber,
+      accountName: row.accountName || input.accountName || input.primaryContactName || input.businessName,
+      settlementBank: row.bankName || row.bankCode || input.bankCode,
+      providerReference: row.subAccountCode,
+      raw: {
+        source,
+        ...row,
+      } as Record<string, unknown>,
+    };
+  }
+
+  private matchesRequestedAccount(row: MonnifySubaccountResponse | null | undefined, input: SubaccountParams) {
+    if (!row?.subAccountCode) return false;
+    const requestedAccountNumber = String(input.accountNumber || "").trim();
+    const requestedBankCode = String(input.bankCode || "").trim();
+    const returnedAccountNumber = String(row.accountNumber || "").trim();
+    const returnedBankCode = String(row.bankCode || "").trim();
+
+    if (!requestedAccountNumber || returnedAccountNumber !== requestedAccountNumber) {
+      return false;
+    }
+
+    if (requestedBankCode && returnedBankCode && returnedBankCode !== requestedBankCode) {
+      return false;
+    }
+
+    return true;
+  }
+
+  private async lookupExistingSubaccount(
+    accessToken: string,
+    input: SubaccountParams
+  ): Promise<MonnifySubaccountResponse | null> {
+    const query = new URLSearchParams({
+      accountNumber: input.accountNumber,
+      bankCode: input.bankCode,
+    }).toString();
+
+    const candidatePaths = [
+      `/api/v1/sub-accounts?${query}`,
+      `/api/v1/sub-accounts`,
+    ];
+
+    for (const path of candidatePaths) {
+      try {
+        const { ok, payload } = await this.fetchWithAccessToken<
+          MonnifySubaccountResponse[] | MonnifySubaccountResponse
+        >(accessToken, path, { method: "GET" });
+
+        if (!ok || !payload.responseBody) {
+          continue;
+        }
+
+        const rows = Array.isArray(payload.responseBody)
+          ? payload.responseBody
+          : [payload.responseBody];
+
+        const matched = rows.find((row) => this.matchesRequestedAccount(row, input));
+        if (matched?.subAccountCode) {
+          return matched;
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    return null;
   }
 
   async initializeTransaction(p: TransactionParams): Promise<TransactionResult> {
@@ -231,25 +343,47 @@ export class MonnifyAdapter implements IPaymentProcessor {
       },
     ];
 
-    const response = await this.authorizedRequest<MonnifySubaccountResponse[] | MonnifySubaccountResponse>(
-      "/api/v1/sub-accounts",
-      body
-    );
-    const data = Array.isArray(response) ? response[0] : response;
+    const accessToken = await this.getAccessToken();
+    const { ok, payload } = await this.fetchWithAccessToken<
+      MonnifySubaccountResponse[] | MonnifySubaccountResponse
+    >(accessToken, "/api/v1/sub-accounts", {
+      method: "POST",
+      body,
+    });
 
-    if (!data?.subAccountCode) {
-      throw new Error("Monnify did not return a sub account code.");
+    const data = Array.isArray(payload.responseBody) ? payload.responseBody[0] : payload.responseBody;
+
+    if (ok && data?.subAccountCode) {
+      return this.normalizeSubaccountResult(data, p, MONNIFY_CREATED_SUBACCOUNT_SOURCE);
     }
 
-    return {
-      subaccountCode: data.subAccountCode,
-      businessName: p.businessName,
-      accountNumber: data.accountNumber || p.accountNumber,
-      accountName: data.accountName || p.accountName || p.primaryContactName || p.businessName,
-      settlementBank: data.bankName || data.bankCode || p.bankCode,
-      providerReference: data.subAccountCode,
-      raw: data as Record<string, unknown>,
-    };
+    const responseMessage = String(payload.responseMessage || "Monnify subaccount creation failed.");
+    const alreadyExists = responseMessage.toLowerCase().includes("already exists");
+
+    if (alreadyExists) {
+      if (this.matchesRequestedAccount(data, p)) {
+        return this.normalizeSubaccountResult(
+          data as MonnifySubaccountResponse,
+          p,
+          MONNIFY_EXISTING_SUBACCOUNT_SOURCE
+        );
+      }
+
+      const existingSubaccount = await this.lookupExistingSubaccount(accessToken, p);
+      if (existingSubaccount?.subAccountCode) {
+        return this.normalizeSubaccountResult(
+          existingSubaccount,
+          p,
+          MONNIFY_EXISTING_SUBACCOUNT_SOURCE
+        );
+      }
+    }
+
+    throw new MonnifyApiError(
+      responseMessage || "Monnify subaccount creation failed.",
+      payload.responseBody,
+      payload.responseMessage
+    );
   }
 
   async updateSubaccount(code: string, p: Partial<SubaccountParams>): Promise<SubaccountResult> {

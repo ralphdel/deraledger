@@ -20,7 +20,49 @@ if (!MONNIFY_API_KEY || !MONNIFY_SECRET_KEY) {
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 const APPLY = process.argv.includes("--apply");
 const MONNIFY_SOURCE = "monnify_subaccount_setup";
+const MONNIFY_EXISTING_SOURCE = "monnify_existing_subaccount_linked";
 const OPAY_UNAVAILABLE_REASON = "opay_beneficiary_unavailable";
+
+function matchesRequestedMonnifyAccount(row, record) {
+  if (!row?.subAccountCode) return false;
+  const accountNumber = String(row.accountNumber || "").trim();
+  const bankCode = String(row.bankCode || "").trim();
+  return (
+    accountNumber === String(record.account_number || "").trim() &&
+    (!bankCode || bankCode === String(record.bank_code || "").trim())
+  );
+}
+
+async function lookupExistingMonnifySubaccount(token, record) {
+  const query = new URLSearchParams({
+    accountNumber: String(record.account_number || ""),
+    bankCode: String(record.bank_code || ""),
+  }).toString();
+
+  for (const path of [`/api/v1/sub-accounts?${query}`, "/api/v1/sub-accounts"]) {
+    try {
+      const response = await fetch(`${MONNIFY_BASE_URL}${path}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload?.requestSuccessful === false || !payload?.responseBody) {
+        continue;
+      }
+      const rows = Array.isArray(payload.responseBody) ? payload.responseBody : [payload.responseBody];
+      const matched = rows.find((row) => matchesRequestedMonnifyAccount(row, record));
+      if (matched?.subAccountCode) {
+        return matched;
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
 
 async function getAccessToken() {
   const basic = Buffer.from(`${MONNIFY_API_KEY}:${MONNIFY_SECRET_KEY}`).toString("base64");
@@ -65,6 +107,41 @@ async function createMonnifySubaccount(token, record) {
 
   const payload = await response.json().catch(() => ({}));
   const row = Array.isArray(payload?.responseBody) ? payload.responseBody[0] : payload?.responseBody;
+  const responseMessage = String(payload?.responseMessage || "Monnify subaccount creation failed.");
+  const alreadyExists = responseMessage.toLowerCase().includes("already exists");
+
+  if ((!response.ok || payload?.requestSuccessful === false || !row?.subAccountCode) && alreadyExists) {
+    const existing = matchesRequestedMonnifyAccount(row, record)
+      ? row
+      : await lookupExistingMonnifySubaccount(token, record);
+
+    if (existing?.subAccountCode) {
+      return {
+        providerSubaccountCode: existing.subAccountCode,
+        providerAccountReference: existing.subAccountCode,
+        rawProviderResponse: {
+          status: "connected",
+          reason_code: null,
+          merchant_message: null,
+          admin_note: "Existing Monnify subaccount was linked successfully after provider returned already-exists response.",
+          recommended_action: null,
+          retryable: false,
+          lastError: null,
+          last_checked_at: new Date().toISOString(),
+          last_success_at: new Date().toISOString(),
+          source: MONNIFY_EXISTING_SOURCE,
+          subaccount: {
+            raw: existing,
+            accountNumber: existing.accountNumber || record.account_number,
+            accountName: existing.accountName || record.account_name,
+            settlementBank: existing.bankName || existing.bankCode || record.bank_code,
+            subaccountCode: existing.subAccountCode,
+            providerReference: existing.subAccountCode,
+          },
+        },
+      };
+    }
+  }
 
   if (!response.ok || payload?.requestSuccessful === false || !row?.subAccountCode) {
     throw new Error(payload?.responseMessage || "Monnify subaccount creation failed.");
@@ -154,6 +231,20 @@ function classifyMonnifyFailure(error) {
     };
   }
 
+  if (lowered.includes("already exists")) {
+    return {
+      classification: "monnify_existing_subaccount_unresolved",
+      status: "requires_action",
+      reason_code: "monnify_existing_subaccount_unresolved",
+      merchant_message:
+        "Some payment methods cannot settle to this payout account right now. Please try again later or contact support.",
+      admin_note:
+        "Monnify reported an existing subaccount but DeraLedger could not resolve or link it automatically.",
+      recommended_action: "Verify the existing Monnify subaccount for this bank account, then link it to the payout account.",
+      retryable: true,
+    };
+  }
+
   return {
     classification: "generic_provider_error",
     status: "degraded",
@@ -172,7 +263,10 @@ function summarize(record) {
     (row) => row.provider_name === "monnify" && row.environment === "sandbox"
   );
   const source = String(monnifyMapping?.raw_provider_response?.source || "");
-  const ready = Boolean(monnifyMapping?.provider_subaccount_code && source === MONNIFY_SOURCE);
+  const ready = Boolean(
+    monnifyMapping?.provider_subaccount_code &&
+      (source === MONNIFY_SOURCE || source === MONNIFY_EXISTING_SOURCE)
+  );
   const missingDetails = [];
 
   if (!record.bank_code) missingDetails.push("missing_bank_code");

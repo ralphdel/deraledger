@@ -1759,6 +1759,7 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
           if (provider === "monnify") {
             const lastError = apiError?.message || "Unknown Monnify provider error";
             const isOpayBeneficiaryUnavailable = lastError.toLowerCase().includes("beneficiary not available");
+            const isExistingSubaccountUnresolved = lastError.toLowerCase().includes("already exists");
             await upsertProviderNeutralSettlementAccount(adminClient, {
               merchantId,
               settlementAccountId: targetSettlementAccountId,
@@ -1771,17 +1772,31 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
               providerAccountReference: null,
               environment: paymentEnvironment,
               rawProviderResponse: {
-                status: isOpayBeneficiaryUnavailable ? "temporarily_unavailable" : "degraded",
+                status: isOpayBeneficiaryUnavailable
+                  ? "temporarily_unavailable"
+                  : isExistingSubaccountUnresolved
+                    ? "requires_action"
+                    : "degraded",
                 source: "monnify_subaccount_setup_failed",
-                reason_code: isOpayBeneficiaryUnavailable ? "opay_beneficiary_unavailable" : "generic_provider_error",
+                reason_code: isOpayBeneficiaryUnavailable
+                  ? "opay_beneficiary_unavailable"
+                  : isExistingSubaccountUnresolved
+                    ? "monnify_existing_subaccount_unresolved"
+                    : "generic_provider_error",
                 merchant_message: isOpayBeneficiaryUnavailable
                   ? "OPay is temporarily unavailable for Monnify subaccount setup. Please add another bank account for Monnify collections or use another available provider while this is being resolved."
+                  : isExistingSubaccountUnresolved
+                    ? "Some payment methods cannot settle to this payout account right now. Please try again later or contact support."
                   : "Monnify settlement setup is temporarily experiencing provider issues. Please use another available provider while this is being resolved.",
                 admin_note: isOpayBeneficiaryUnavailable
                   ? "Monnify confirmed intermittent 'Beneficiary not available' errors from OPay/PAYCOM. Retry after Monnify confirms bank issue is resolved."
+                  : isExistingSubaccountUnresolved
+                    ? "Monnify reported an existing subaccount but DeraLedger could not resolve or link it automatically. Verify the correct subaccount for this payout account."
                   : "Monnify subaccount creation failed with a provider-side error. Retry after Monnify support confirms fix.",
                 recommended_action: isOpayBeneficiaryUnavailable
                   ? "Retry Monnify setup after Monnify confirms the OPay/PAYCOM beneficiary issue is resolved, or use another bank account."
+                  : isExistingSubaccountUnresolved
+                    ? "List or verify the existing Monnify subaccount for this bank account, then link it to the active payout account."
                   : "Retry Monnify subaccount setup after confirming provider availability.",
                 retryable: true,
                 lastError,
@@ -1791,7 +1806,11 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
             });
             failedProviders.push({
               provider: "monnify",
-              status: isOpayBeneficiaryUnavailable ? "temporarily_unavailable" : "degraded",
+              status: isOpayBeneficiaryUnavailable
+                ? "temporarily_unavailable"
+                : isExistingSubaccountUnresolved
+                  ? "requires_action"
+                  : "degraded",
               reason: lastError,
             });
           } else {
@@ -1852,10 +1871,18 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
         environment: paymentEnvironment,
         rawProviderResponse: {
           status: "connected",
-          source: `${provider}_subaccount_setup`,
+          source:
+            provider === "monnify" &&
+            typeof subaccount.raw?.source === "string" &&
+            subaccount.raw.source.trim()
+              ? subaccount.raw.source
+              : `${provider}_subaccount_setup`,
           reason_code: null,
           merchant_message: null,
-          admin_note: null,
+          admin_note:
+            provider === "monnify" && subaccount.raw?.source === "monnify_existing_subaccount_linked"
+              ? "Existing Monnify subaccount was linked successfully after provider returned already-exists response."
+              : null,
           recommended_action: null,
           retryable: false,
           lastError: null,

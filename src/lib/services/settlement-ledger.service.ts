@@ -34,6 +34,7 @@ type SettlementAccountInput = {
 };
 
 export const MONNIFY_SUBACCOUNT_SETUP_SOURCE = "monnify_subaccount_setup";
+export const MONNIFY_EXISTING_SUBACCOUNT_LINKED_SOURCE = "monnify_existing_subaccount_linked";
 
 export type ProviderReadinessStatus =
   | "connected"
@@ -93,6 +94,16 @@ type ProviderMappingRow = {
   environment?: PaymentEnvironment | string | null;
   raw_provider_response?: Record<string, unknown> | null;
   last_sync_at?: string | null;
+};
+
+type SettlementAccountRow = {
+  id: string;
+  bank_name?: string | null;
+  bank_code?: string | null;
+  account_number?: string | null;
+  account_name?: string | null;
+  verification_status?: string | null;
+  status?: string | null;
 };
 
 type TransactionRow = {
@@ -364,7 +375,7 @@ export async function isProviderSettlementReady(
 ) {
   const { data: account, error: accountError } = await supabase
     .from("merchant_settlement_accounts")
-    .select("id, verification_status, status")
+    .select("id, bank_name, bank_code, account_number, account_name, verification_status, status")
     .eq("merchant_id", input.merchantId)
     .eq("is_default", true)
     .eq("status", "active")
@@ -402,6 +413,7 @@ export async function isProviderSettlementReady(
       environment: input.environment,
     }, {
       requireCryptoMapping: input.requireCryptoMapping,
+      settlementAccount: account,
     });
 
     return readiness.ready;
@@ -459,6 +471,7 @@ export async function getProviderSettlementMapping(
         environment: input.environment,
       }, {
         requireCryptoMapping: input.requireCryptoMapping,
+        settlementAccount: account,
       })
     : null;
 
@@ -613,7 +626,7 @@ export async function getMerchantPaymentMethodReadiness(
 export function getProviderReadiness(
   provider: SettlementProvider,
   mapping: ProviderMappingRow | null | undefined,
-  options?: { requireCryptoMapping?: boolean }
+  options?: { requireCryptoMapping?: boolean; settlementAccount?: SettlementAccountRow | null }
 ): ProviderReadiness {
   const environment = normalizeReadinessEnvironment(mapping?.environment);
   const raw = (mapping?.raw_provider_response as Record<string, unknown> | null | undefined) || null;
@@ -652,9 +665,29 @@ export function getProviderReadiness(
     };
   }
 
+  const consistencyIssue = getProviderMappingConsistencyIssue(provider, mapping, options?.settlementAccount || null);
+  if (consistencyIssue) {
+    return {
+      provider_name: provider,
+      environment,
+      status: "requires_action",
+      reason_code: consistencyIssue.reason_code,
+      merchant_message: null,
+      admin_note: consistencyIssue.admin_note,
+      last_checked_at: lastCheckedAt,
+      last_success_at: lastSuccessAt,
+      last_failure_at: lastFailureAt || lastCheckedAt,
+      retryable: true,
+      recommended_action: consistencyIssue.recommended_action,
+      ready: false,
+    };
+  }
+
   if (provider === "monnify") {
     if (
-      source === MONNIFY_SUBACCOUNT_SETUP_SOURCE &&
+      (source === MONNIFY_SUBACCOUNT_SETUP_SOURCE ||
+        source === MONNIFY_EXISTING_SUBACCOUNT_LINKED_SOURCE ||
+        explicitStatus === "connected") &&
       typeof mapping.provider_subaccount_code === "string" &&
       mapping.provider_subaccount_code.trim() &&
       explicitStatus === "connected"
@@ -958,6 +991,103 @@ function normalizeProviderAccountStatus(
     return normalizedExistingStatus;
   }
   return "pending";
+}
+
+function getProviderMappingConsistencyIssue(
+  provider: SettlementProvider,
+  mapping: ProviderMappingRow,
+  settlementAccount: SettlementAccountRow | null
+) {
+  if (!settlementAccount) return null;
+
+  const accountNumber = normalizeDigits(settlementAccount.account_number);
+  const bankCode = normalizeCode(settlementAccount.bank_code);
+  const bankName = normalizeLooseText(settlementAccount.bank_name);
+  const accountName = normalizeLooseText(settlementAccount.account_name);
+  const raw = (mapping.raw_provider_response as Record<string, unknown> | null | undefined) || null;
+  const compareIfPresent = (actual: string | null, expected: string | null) =>
+    !actual || !expected || actual === expected;
+
+  if (provider === "monnify") {
+    const rawSubaccount = asRecord(raw?.subaccount);
+    const providerRaw = asRecord(rawSubaccount?.raw) || rawSubaccount;
+    const mappedAccountNumber = normalizeDigits(stringValue(providerRaw?.accountNumber));
+    const mappedBankCode = normalizeCode(stringValue(providerRaw?.bankCode));
+
+    if (!compareIfPresent(mappedAccountNumber, accountNumber) || !compareIfPresent(mappedBankCode, bankCode)) {
+      return {
+        reason_code: "monnify_mapping_account_mismatch",
+        admin_note:
+          "Monnify mapping details do not match the active payout account. Re-link the correct Monnify subaccount for this settlement account.",
+        recommended_action:
+          "Verify the Monnify subaccount against the active payout account and relink or recreate it if needed.",
+      };
+    }
+  }
+
+  if (provider === "paystack") {
+    const providerRaw = asRecord(raw?.subaccount);
+    const mappedAccountNumber = normalizeDigits(stringValue(providerRaw?.accountNumber));
+
+    if (!compareIfPresent(mappedAccountNumber, accountNumber)) {
+      return {
+        reason_code: "paystack_mapping_account_mismatch",
+        admin_note:
+          "Paystack mapping details do not match the active payout account. Re-link the correct Paystack subaccount for this settlement account.",
+        recommended_action:
+          "Verify the Paystack subaccount against the active payout account and relink or recreate it if needed.",
+      };
+    }
+  }
+
+  if (provider === "breet") {
+    const validationPayload = asRecord(asRecord(raw?.breet_bank_validation_payload)?.data);
+    const mappedAccountNumber = normalizeDigits(stringValue(validationPayload?.accountNumber));
+    const mappedAccountName = normalizeLooseText(stringValue(validationPayload?.accountName));
+    const mappedBankName = normalizeLooseText(
+      stringValue(validationPayload?.bankName) || stringValue(raw?.breet_bank_name)
+    );
+
+    if (
+      !compareIfPresent(mappedAccountNumber, accountNumber) ||
+      !compareIfPresent(mappedAccountName, accountName) ||
+      !compareIfPresent(mappedBankName, bankName)
+    ) {
+      return {
+        reason_code: "breet_mapping_account_mismatch",
+        admin_note:
+          "Breet mapping details do not match the active payout account. Re-validate the correct Breet bank mapping for this settlement account.",
+        recommended_action:
+          "Validate the active payout account against Breet again before allowing crypto collections.",
+      };
+    }
+  }
+
+  return null;
+}
+
+function asRecord(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function normalizeDigits(value: string | null | undefined) {
+  const digits = String(value || "").replace(/\D/g, "").trim();
+  return digits || null;
+}
+
+function normalizeCode(value: string | null | undefined) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized || null;
+}
+
+function normalizeLooseText(value: string | null | undefined) {
+  const normalized = String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+  return normalized || null;
 }
 
 export async function upsertSettlementLedgerForTransaction(
