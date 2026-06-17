@@ -61,6 +61,7 @@ export default function SettlementSettingsPage() {
   const [loadingAccounts, setLoadingAccounts] = useState(true);
   const [paymentMethodReadiness, setPaymentMethodReadiness] = useState<PaymentMethodReadiness[]>([]);
   const [readinessBanner, setReadinessBanner] = useState<ReadinessBanner | null>(null);
+  const [hasPayoutAccount, setHasPayoutAccount] = useState(false);
 
   const [selectedBankCode, setSelectedBankCode] = useState("");
   const [accountNumber, setAccountNumber] = useState("");
@@ -83,6 +84,7 @@ export default function SettlementSettingsPage() {
           setSettlementAccounts(payload.accounts || []);
           setPaymentMethodReadiness(payload.payment_method_readiness || []);
           setReadinessBanner(payload.readiness_banner || null);
+          setHasPayoutAccount(Boolean(payload.has_payout_account || (payload.accounts || []).length));
         }
       } catch (error) {
         console.error("Failed to load settlement accounts:", error);
@@ -100,7 +102,7 @@ export default function SettlementSettingsPage() {
           setAccountNumber(m.settlement_account_number || "");
           setAccountName(m.settlement_account_name || "");
         }
-        if (!m.subaccount_verified) {
+        if (!m.settlement_bank_code || !m.settlement_account_number) {
           setIsEditing(true);
         }
       } else {
@@ -183,6 +185,7 @@ export default function SettlementSettingsPage() {
           setSettlementAccounts(payload.accounts || []);
           setPaymentMethodReadiness(payload.payment_method_readiness || []);
           setReadinessBanner(payload.readiness_banner || null);
+          setHasPayoutAccount(Boolean(payload.has_payout_account || (payload.accounts || []).length));
         })
         .catch((error) => console.error("Failed to refresh settlement accounts:", error))
         .finally(() => setLoadingAccounts(false));
@@ -235,7 +238,7 @@ export default function SettlementSettingsPage() {
     );
   }
 
-  const isVerified = merchant?.subaccount_verified === true;
+  const isVerified = hasPayoutAccount || merchant?.subaccount_verified === true;
   const primaryAccount = settlementAccounts.find((account) => account.is_default) || settlementAccounts[0] || null;
 
   return (

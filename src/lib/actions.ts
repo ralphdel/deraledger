@@ -1618,7 +1618,11 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
   const adminClient = getServiceClient();
 
   // 1. Verify caller owns merchant
-  const { data: m, error: mErr } = await sb.from("merchants").select("id, payment_subaccount_code").eq("id", merchantId).single();
+  const { data: m, error: mErr } = await sb
+    .from("merchants")
+    .select("id, payment_provider, payment_subaccount_code")
+    .eq("id", merchantId)
+    .single();
   if (mErr || !m) return { success: false, error: "Unauthorized" };
 
   try {
@@ -1663,6 +1667,11 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
     const provisionedProviders: Array<{
       provider: Exclude<PaymentProvider, "breet">;
       subaccountCode: string;
+    }> = [];
+    const failedProviders: Array<{
+      provider: Exclude<PaymentProvider, "breet">;
+      status: "failed" | "degraded" | "temporarily_unavailable" | "requires_action";
+      reason: string;
     }> = [];
 
     for (const provider of fiatProviders) {
@@ -1767,8 +1776,43 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
                 last_failure_at: new Date().toISOString(),
               },
             });
+            failedProviders.push({
+              provider: "monnify",
+              status: isOpayBeneficiaryUnavailable ? "temporarily_unavailable" : "degraded",
+              reason: lastError,
+            });
+          } else {
+            const lastError = apiError?.message || `Unknown ${provider} provider error`;
+            await upsertProviderNeutralSettlementAccount(adminClient, {
+              merchantId,
+              bankName: data.bankName,
+              bankCode: data.bankCode,
+              accountNumber: data.accountNumber,
+              accountName: verifiedAccountName,
+              providerName: provider,
+              providerSubaccountCode: null,
+              providerAccountReference: null,
+              environment: paymentEnvironment,
+              rawProviderResponse: {
+                status: "failed",
+                source: `${provider}_subaccount_setup_failed`,
+                reason_code: "generic_provider_error",
+                merchant_message: "Some payment methods cannot settle to this payout account right now. Please add another bank account or try again later.",
+                admin_note: `${provider} settlement setup failed while updating the merchant payout account.`,
+                recommended_action: `Retry ${provider} payout account setup after confirming provider availability.`,
+                retryable: true,
+                lastError,
+                last_checked_at: new Date().toISOString(),
+                last_failure_at: new Date().toISOString(),
+              },
+            });
+            failedProviders.push({
+              provider,
+              status: "failed",
+              reason: lastError,
+            });
           }
-          throw apiError;
+          continue;
         }
       }
 
@@ -1812,7 +1856,7 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
       null;
     const primaryLegacyProvider = provisionedProviders.some((entry) => entry.provider === "paystack")
       ? "paystack"
-      : provisionedProviders[0]?.provider || "monnify";
+      : provisionedProviders[0]?.provider || m.payment_provider || fiatProviders[0] || "monnify";
 
     // 3. Update DB
     const { error: dbErr } = await adminClient.from("merchants").update({
@@ -1846,6 +1890,7 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
         bank: data.bankName,
         account_number: data.accountNumber,
         providers: provisionedProviders.map((entry) => entry.provider),
+        failed_providers: failedProviders,
       },
     }]);
 
@@ -1863,6 +1908,7 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
     return {
       success: true,
       data: provisionedProviders,
+      warnings: failedProviders,
       merchant: refreshedMerchant || null,
     };
 
