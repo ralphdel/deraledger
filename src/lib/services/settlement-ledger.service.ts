@@ -24,6 +24,7 @@ type SettlementAccountInput = {
   bankCode?: string | null;
   accountNumber: string;
   accountName: string;
+  settlementAccountId?: string | null;
   providerName?: PaymentProvider | null;
   providerSubaccountCode?: string | null;
   providerAccountReference?: string | null;
@@ -138,13 +139,97 @@ export async function upsertProviderNeutralSettlementAccount(
 ) {
   const environment = input.environment || getSettlementEnvironment();
 
-  const { data: existingAccount, error: lookupError } = await supabase
+  const accountId =
+    input.settlementAccountId ||
+    (await ensureMerchantSettlementAccount(supabase, {
+      merchantId: input.merchantId,
+      bankName: input.bankName,
+      bankCode: input.bankCode,
+      accountNumber: input.accountNumber,
+      accountName: input.accountName,
+    }));
+
+  if (!accountId) {
+    return null;
+  }
+
+  const { data: existingMapping } = await supabase
+    .from("merchant_provider_settlement_accounts")
+    .select("provider_account_reference, provider_subaccount_code, provider_split_reference, status, raw_provider_response")
+    .eq("settlement_account_id", accountId)
+    .eq("provider_name", input.providerName || "paystack")
+    .eq("environment", environment)
+    .maybeSingle();
+
+  const mergedRawProviderResponse = {
+    ...((existingMapping?.raw_provider_response as Record<string, unknown> | null | undefined) || {}),
+    ...(input.rawProviderResponse || {}),
+  };
+  const mergedProviderSubaccountCode =
+    input.providerSubaccountCode ||
+    (typeof existingMapping?.provider_subaccount_code === "string" ? existingMapping.provider_subaccount_code : null) ||
+    null;
+  const mergedProviderAccountReference =
+    input.providerAccountReference ||
+    input.providerSubaccountCode ||
+    (typeof existingMapping?.provider_account_reference === "string" ? existingMapping.provider_account_reference : null) ||
+    mergedProviderSubaccountCode;
+  const mergedProviderSplitReference =
+    input.providerSplitReference ||
+    (typeof existingMapping?.provider_split_reference === "string" ? existingMapping.provider_split_reference : null) ||
+    null;
+  const mergedStatus = normalizeProviderAccountStatus(
+    input.rawProviderResponse,
+    input.providerSubaccountCode,
+    existingMapping?.status
+  );
+
+  await supabase
+    .from("merchant_provider_settlement_accounts")
+    .upsert(
+      {
+        merchant_id: input.merchantId,
+        settlement_account_id: accountId,
+        provider_name: input.providerName || "paystack",
+        provider_account_reference: mergedProviderAccountReference,
+        provider_subaccount_code: mergedProviderSubaccountCode,
+        provider_split_reference: mergedProviderSplitReference,
+        status: mergedStatus,
+        environment,
+        raw_provider_response:
+          Object.keys(mergedRawProviderResponse).length > 0
+            ? mergedRawProviderResponse
+            : { source: "settlement_settings" },
+        last_sync_at: new Date().toISOString(),
+      },
+      { onConflict: "settlement_account_id,provider_name,environment" }
+    )
+    .throwOnError();
+
+  return accountId as string;
+}
+
+export async function ensureMerchantSettlementAccount(
+  supabase: SupabaseClient,
+  input: Pick<
+    SettlementAccountInput,
+    "merchantId" | "bankName" | "bankCode" | "accountNumber" | "accountName"
+  >
+) {
+  let lookup = supabase
     .from("merchant_settlement_accounts")
     .select("id")
     .eq("merchant_id", input.merchantId)
-    .eq("is_default", true)
-    .eq("status", "active")
-    .maybeSingle();
+    .eq("account_number", input.accountNumber)
+    .limit(1);
+
+  if (input.bankCode) {
+    lookup = lookup.eq("bank_code", input.bankCode);
+  } else {
+    lookup = lookup.eq("bank_name", input.bankName);
+  }
+
+  const { data: existingAccount, error: lookupError } = await lookup.maybeSingle();
 
   if (lookupError) {
     if (!SETTLEMENT_TABLE_MISSING_CODES.has(lookupError.code || "")) {
@@ -217,60 +302,6 @@ export async function upsertProviderNeutralSettlementAccount(
       .update({ is_default: false })
       .in("id", otherDefaults.map((row: { id: string }) => row.id));
   }
-
-  const { data: existingMapping } = await supabase
-    .from("merchant_provider_settlement_accounts")
-    .select("provider_account_reference, provider_subaccount_code, provider_split_reference, status, raw_provider_response")
-    .eq("settlement_account_id", account.id)
-    .eq("provider_name", input.providerName || "paystack")
-    .eq("environment", environment)
-    .maybeSingle();
-
-  const mergedRawProviderResponse = {
-    ...((existingMapping?.raw_provider_response as Record<string, unknown> | null | undefined) || {}),
-    ...(input.rawProviderResponse || {}),
-  };
-  const mergedProviderSubaccountCode =
-    input.providerSubaccountCode ||
-    (typeof existingMapping?.provider_subaccount_code === "string" ? existingMapping.provider_subaccount_code : null) ||
-    null;
-  const mergedProviderAccountReference =
-    input.providerAccountReference ||
-    input.providerSubaccountCode ||
-    (typeof existingMapping?.provider_account_reference === "string" ? existingMapping.provider_account_reference : null) ||
-    mergedProviderSubaccountCode;
-  const mergedProviderSplitReference =
-    input.providerSplitReference ||
-    (typeof existingMapping?.provider_split_reference === "string" ? existingMapping.provider_split_reference : null) ||
-    null;
-  const mergedStatus = normalizeProviderAccountStatus(
-    input.rawProviderResponse,
-    input.providerSubaccountCode,
-    existingMapping?.status
-  );
-
-  await supabase
-    .from("merchant_provider_settlement_accounts")
-    .upsert(
-      {
-        merchant_id: input.merchantId,
-        settlement_account_id: account.id,
-        provider_name: input.providerName || "paystack",
-        provider_account_reference: mergedProviderAccountReference,
-        provider_subaccount_code: mergedProviderSubaccountCode,
-        provider_split_reference: mergedProviderSplitReference,
-        status: mergedStatus,
-        environment,
-        raw_provider_response:
-          Object.keys(mergedRawProviderResponse).length > 0
-            ? mergedRawProviderResponse
-            : { source: "settlement_settings" },
-        last_sync_at: new Date().toISOString(),
-      },
-      { onConflict: "settlement_account_id,provider_name,environment" }
-    )
-    .throwOnError();
-
   return account.id as string;
 }
 
@@ -622,24 +653,6 @@ export function getProviderReadiness(
   }
 
   if (provider === "monnify") {
-    const monnifyFailure = classifyMonnifyFailure(explicitReasonCode, lastError);
-    if (monnifyFailure) {
-      return {
-        provider_name: provider,
-        environment,
-        status: monnifyFailure.status,
-        reason_code: monnifyFailure.reason_code,
-        merchant_message: monnifyFailure.merchant_message,
-        admin_note: monnifyFailure.admin_note,
-        last_checked_at: lastCheckedAt,
-        last_success_at: lastSuccessAt,
-        last_failure_at: lastFailureAt || lastCheckedAt,
-        retryable: monnifyFailure.retryable,
-        recommended_action: monnifyFailure.recommended_action,
-        ready: false,
-      };
-    }
-
     if (
       source === MONNIFY_SUBACCOUNT_SETUP_SOURCE &&
       typeof mapping.provider_subaccount_code === "string" &&
@@ -659,6 +672,24 @@ export function getProviderReadiness(
         retryable: false,
         recommended_action: null,
         ready: true,
+      };
+    }
+
+    const monnifyFailure = classifyMonnifyFailure(explicitReasonCode, lastError);
+    if (monnifyFailure) {
+      return {
+        provider_name: provider,
+        environment,
+        status: monnifyFailure.status,
+        reason_code: monnifyFailure.reason_code,
+        merchant_message: monnifyFailure.merchant_message,
+        admin_note: monnifyFailure.admin_note,
+        last_checked_at: lastCheckedAt,
+        last_success_at: lastSuccessAt,
+        last_failure_at: lastFailureAt || lastCheckedAt,
+        retryable: monnifyFailure.retryable,
+        recommended_action: monnifyFailure.recommended_action,
+        ready: false,
       };
     }
 

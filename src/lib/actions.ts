@@ -19,7 +19,7 @@ import {
   canAccessFeature,
 } from "@/lib/services/access-control";
 import { ensureWorkspaceForMerchant, getLiveFeatureLockReasons, setupStatusForMerchant, syncMerchantSetupStatus } from "@/lib/services/onboarding-flow.service";
-import { upsertProviderNeutralSettlementAccount } from "@/lib/services/settlement-ledger.service";
+import { ensureMerchantSettlementAccount, upsertProviderNeutralSettlementAccount } from "@/lib/services/settlement-ledger.service";
 import { getPaymentEnvironmentForMerchantEmail, listAvailablePaymentMethods, type PaymentProvider } from "@/lib/services/payment-routing.service";
 
 // Service role client for admin-level operations
@@ -1645,6 +1645,18 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
         .map((method) => method.provider)
     )] as Exclude<PaymentProvider, "breet">[];
 
+    const targetSettlementAccountId = await ensureMerchantSettlementAccount(adminClient, {
+      merchantId,
+      bankName: data.bankName,
+      bankCode: data.bankCode,
+      accountNumber: data.accountNumber,
+      accountName: verifiedAccountName,
+    });
+
+    if (!targetSettlementAccountId) {
+      return { success: false, error: "Failed to prepare the payout account for this merchant." };
+    }
+
     if (fiatProviders.length === 0) {
       return { success: false, error: "No active fiat collection provider is configured for settlement provisioning." };
     }
@@ -1652,7 +1664,7 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
     const { data: existingMappings, error: mappingsError } = await adminClient
       .from("merchant_provider_settlement_accounts")
       .select("provider_name, provider_subaccount_code, provider_account_reference, raw_provider_response")
-      .eq("merchant_id", merchantId)
+      .eq("settlement_account_id", targetSettlementAccountId)
       .eq("environment", paymentEnvironment)
       .in("provider_name", fiatProviders);
 
@@ -1749,6 +1761,7 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
             const isOpayBeneficiaryUnavailable = lastError.toLowerCase().includes("beneficiary not available");
             await upsertProviderNeutralSettlementAccount(adminClient, {
               merchantId,
+              settlementAccountId: targetSettlementAccountId,
               bankName: data.bankName,
               bankCode: data.bankCode,
               accountNumber: data.accountNumber,
@@ -1785,6 +1798,7 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
             const lastError = apiError?.message || `Unknown ${provider} provider error`;
             await upsertProviderNeutralSettlementAccount(adminClient, {
               merchantId,
+              settlementAccountId: targetSettlementAccountId,
               bankName: data.bankName,
               bankCode: data.bankCode,
               accountNumber: data.accountNumber,
@@ -1827,6 +1841,7 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
 
       await upsertProviderNeutralSettlementAccount(adminClient, {
         merchantId,
+        settlementAccountId: targetSettlementAccountId,
         bankName: data.bankName,
         bankCode: data.bankCode,
         accountNumber: data.accountNumber,
@@ -1843,8 +1858,10 @@ export async function setupSettlementAccountAction(merchantId: string, data: {
           admin_note: null,
           recommended_action: null,
           retryable: false,
+          lastError: null,
           last_checked_at: new Date().toISOString(),
           last_success_at: new Date().toISOString(),
+          last_failure_at: null,
           subaccount,
         },
       });
