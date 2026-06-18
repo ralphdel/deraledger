@@ -1220,25 +1220,30 @@ export async function refreshAllPayoutMethodSetup(
   const merchant = await loadMerchant(supabase, input.merchantId);
   const environment = input.environment || getPaymentEnvironmentForMerchantEmail(merchant.email);
   const methods: PaymentMethod[] = ["card", "bank_transfer", "ussd", "crypto"];
-  const results: PayoutSetupActionResult[] = [];
-
-  for (const method of methods) {
-    try {
+  const settledResults = await Promise.allSettled(
+    methods.map(async (method) => {
       const route = await resolvePaymentRoute("invoice_payment", method, environment);
       if (!route?.provider) {
-        continue;
+        return null;
       }
-      const result = await refreshPayoutMethodSetup(supabase, {
+
+      return refreshPayoutMethodSetup(supabase, {
         merchantId: input.merchantId,
         method,
         actorType: input.actorType,
         environment,
       });
-      results.push(result);
-    } catch {
-      continue;
-    }
-  }
+    })
+  );
+
+  const results = settledResults
+    .filter(
+      (
+        result
+      ): result is PromiseFulfilledResult<PayoutSetupActionResult | null> => result.status === "fulfilled"
+    )
+    .map((result) => result.value)
+    .filter((result): result is PayoutSetupActionResult => Boolean(result));
 
   const readiness = await getMerchantPaymentMethodReadiness(supabase, {
     merchantId: input.merchantId,

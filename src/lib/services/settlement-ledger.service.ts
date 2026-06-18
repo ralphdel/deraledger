@@ -227,13 +227,37 @@ export async function upsertProviderNeutralSettlementAccount(
   return accountId as string;
 }
 
-export async function ensureMerchantSettlementAccount(
+export type EnsureMerchantSettlementAccountResult = {
+  accountId: string | null;
+  error: {
+    phase:
+      | "settlement_account_lookup_failed"
+      | "settlement_account_insert_or_update_failed"
+      | "default_switch_failed"
+      | "default_activate_failed";
+    message: string;
+    code?: string | null;
+    details?: string | null;
+    hint?: string | null;
+  } | null;
+};
+
+export async function ensureMerchantSettlementAccountDetailed(
   supabase: SupabaseClient,
   input: Pick<
     SettlementAccountInput,
     "merchantId" | "bankName" | "bankCode" | "accountNumber" | "accountName"
-  >
-) {
+  >,
+  options?: {
+    trace?: (event: string, payload?: Record<string, unknown>) => void;
+  }
+): Promise<EnsureMerchantSettlementAccountResult> {
+  options?.trace?.("settlement_account_lookup_started", {
+    merchant_id: input.merchantId,
+    bank_code: input.bankCode,
+    bank_name: input.bankName,
+    account_number_masked: `****${String(input.accountNumber || "").slice(-4)}`,
+  });
   let lookup = supabase
     .from("merchant_settlement_accounts")
     .select("id")
@@ -253,7 +277,16 @@ export async function ensureMerchantSettlementAccount(
     if (!SETTLEMENT_TABLE_MISSING_CODES.has(lookupError.code || "")) {
       console.error("Failed to look up settlement account:", lookupError.message);
     }
-    return null;
+    return {
+      accountId: null,
+      error: {
+        phase: "settlement_account_lookup_failed",
+        message: lookupError.message,
+        code: lookupError.code || null,
+        details: lookupError.details || null,
+        hint: lookupError.hint || null,
+      },
+    };
   }
 
   const accountMutation = existingAccount?.id
@@ -266,7 +299,7 @@ export async function ensureMerchantSettlementAccount(
             account_number: input.accountNumber,
             account_name: input.accountName,
             currency: "NGN",
-            is_default: true,
+            is_default: false,
             verification_status: "verified",
             status: "active",
             raw_verification_payload: {
@@ -285,7 +318,7 @@ export async function ensureMerchantSettlementAccount(
             account_number: input.accountNumber,
             account_name: input.accountName,
             currency: "NGN",
-            is_default: true,
+            is_default: false,
             verification_status: "verified",
             status: "active",
             raw_verification_payload: {
@@ -293,6 +326,11 @@ export async function ensureMerchantSettlementAccount(
             },
           }
         );
+
+  options?.trace?.("settlement_account_insert_or_update_started", {
+    mode: existingAccount?.id ? "update" : "insert",
+    existing_account_id: existingAccount?.id || null,
+  });
 
   const { data: account, error: accountError } = await accountMutation
     .select("id")
@@ -302,10 +340,30 @@ export async function ensureMerchantSettlementAccount(
     if (!SETTLEMENT_TABLE_MISSING_CODES.has(accountError.code || "")) {
       console.error("Failed to upsert settlement account:", accountError.message);
     }
-    return null;
+    return {
+      accountId: null,
+      error: {
+        phase: "settlement_account_insert_or_update_failed",
+        message: accountError.message,
+        code: accountError.code || null,
+        details: accountError.details || null,
+        hint: accountError.hint || null,
+      },
+    };
   }
 
-  if (!account?.id) return null;
+  if (!account?.id) {
+    return {
+      accountId: null,
+      error: {
+        phase: "settlement_account_insert_or_update_failed",
+        message: "Settlement account insert/update did not return an id.",
+        code: null,
+        details: null,
+        hint: null,
+      },
+    };
+  }
 
   const { data: otherDefaults } = await supabase
     .from("merchant_settlement_accounts")
@@ -315,12 +373,69 @@ export async function ensureMerchantSettlementAccount(
     .neq("id", account.id);
 
   if (otherDefaults && otherDefaults.length > 0) {
-    await supabase
+    options?.trace?.("default_switch_started", {
+      settlement_account_id: account.id,
+      previous_default_count: otherDefaults.length,
+    });
+    const { error: defaultSwitchError } = await supabase
       .from("merchant_settlement_accounts")
       .update({ is_default: false })
       .in("id", otherDefaults.map((row: { id: string }) => row.id));
+
+    if (defaultSwitchError) {
+      console.error("Failed to clear other default settlement accounts:", defaultSwitchError.message);
+      return {
+        accountId: null,
+        error: {
+          phase: "default_switch_failed",
+          message: defaultSwitchError.message,
+          code: defaultSwitchError.code || null,
+          details: defaultSwitchError.details || null,
+          hint: defaultSwitchError.hint || null,
+        },
+      };
+    }
+    options?.trace?.("default_switch_succeeded", {
+      settlement_account_id: account.id,
+      previous_default_count: otherDefaults.length,
+    });
   }
-  return account.id as string;
+
+  const { error: activateDefaultError } = await supabase
+    .from("merchant_settlement_accounts")
+    .update({ is_default: true })
+    .eq("id", account.id);
+
+  if (activateDefaultError) {
+    console.error("Failed to activate default settlement account:", activateDefaultError.message);
+    return {
+      accountId: null,
+      error: {
+        phase: "default_activate_failed",
+        message: activateDefaultError.message,
+        code: activateDefaultError.code || null,
+        details: activateDefaultError.details || null,
+        hint: activateDefaultError.hint || null,
+      },
+    };
+  }
+
+  options?.trace?.("settlement_account_insert_or_update_succeeded", {
+    settlement_account_id: account.id,
+  });
+
+  return { accountId: account.id as string, error: null };
+}
+
+export async function ensureMerchantSettlementAccount(
+  supabase: SupabaseClient,
+  input: Pick<
+    SettlementAccountInput,
+    "merchantId" | "bankName" | "bankCode" | "accountNumber" | "accountName"
+  >
+) {
+  const result = await ensureMerchantSettlementAccountDetailed(supabase, input);
+  return result.accountId;
 }
 
 export async function filterMethodsBySettlementReadiness(

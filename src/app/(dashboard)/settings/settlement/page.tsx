@@ -54,6 +54,26 @@ type SettlementAccountRecord = {
   is_default?: boolean | null;
 };
 
+type SaveSettlementAccountResult = {
+  success: boolean;
+  payout_account_saved?: boolean;
+  active_settlement_account_id?: string;
+  message?: string;
+  error?: string;
+  phase?: string;
+  trace_id?: string;
+  readiness?: PaymentMethodReadiness[];
+  readiness_banner?: ReadinessBanner | null;
+  warnings?: Array<{
+    method?: string;
+    provider?: string | null;
+    status?: string;
+    reason_code?: string | null;
+    ready?: boolean;
+  }>;
+  merchant?: Partial<Merchant> | null;
+};
+
 export default function SettlementSettingsPage() {
   const [merchant, setMerchant] = useState<Merchant | null>(null);
   const [loading, setLoading] = useState(true);
@@ -166,16 +186,22 @@ export default function SettlementSettingsPage() {
       businessName: merchant.business_name,
       email: merchant.email,
       phone: merchant.phone || "0000000000",
-    });
+    }) as SaveSettlementAccountResult;
 
     setSaving(false);
 
     if (result.success) {
       setSaveSuccess(true);
-      setRefreshMessage("Payout account updated. We’re refreshing payment setup for this account.");
+      setRefreshMessage(result.message || "Payout account updated.");
       setRefreshError(null);
+      if (Array.isArray(result.readiness)) {
+        setPaymentMethodReadiness(result.readiness);
+      }
+      if (result.readiness_banner) {
+        setReadinessBanner(result.readiness_banner);
+      }
+      setHasPayoutAccount(true);
       setLoadingAccounts(true);
-      await triggerRefreshAll({ silentError: true });
       await refreshSettlementAccounts();
       // Update local merchant state
       setMerchant({
@@ -667,3 +693,4 @@ function maskAccountNumber(accountNumber?: string | null) {
   if (digits.startsWith("****")) return digits;
   return `****${digits.slice(-4) || "----"}`;
 }
+
