@@ -401,6 +401,8 @@ export function assessBreetValidationForSettlementAccount(
     stringFromUnknown(options?.validation?.bankId) ||
     stringFromUnknown(validationPayload?.id) ||
     stringFromUnknown(validationPayloadData?.id) ||
+    stringFromUnknown(validationPayload?.bankId) ||
+    stringFromUnknown(validationPayloadData?.bankId) ||
     (hasValidationEvidence ? stringFromUnknown(raw.breet_bank_id) : null) ||
     null;
   const returnedBankName =
@@ -412,13 +414,17 @@ export function assessBreetValidationForSettlementAccount(
   const returnedAccountNumber =
     normalizeDigits(options?.validation?.accountNumber) ||
     normalizeDigits(stringFromUnknown(validationPayload?.accountNumber)) ||
+    normalizeDigits(stringFromUnknown(validationPayload?.account_number)) ||
     normalizeDigits(stringFromUnknown(validationPayloadData?.accountNumber)) ||
+    normalizeDigits(stringFromUnknown(validationPayloadData?.account_number)) ||
     normalizeDigits(stringFromUnknown(raw.validated_account_number)) ||
     null;
   const returnedAccountName =
     stringFromUnknown(options?.validation?.accountName) ||
     stringFromUnknown(validationPayload?.accountName) ||
+    stringFromUnknown(validationPayload?.account_name) ||
     stringFromUnknown(validationPayloadData?.accountName) ||
+    stringFromUnknown(validationPayloadData?.account_name) ||
     stringFromUnknown(raw.breet_returned_account_name) ||
     null;
   const localBankName = normalizeLooseText(bankAccount.bank_name);
@@ -429,8 +435,9 @@ export function assessBreetValidationForSettlementAccount(
   const bankMatched =
     (mappedBankId && returnedBankId
       ? mappedBankId === returnedBankId
-      : stringsMatch(normalizedReturnedBankName, localBankName)) ||
-    (Boolean(mappedBankId) && !returnedBankId && !normalizedReturnedBankName ? false : false);
+      : false) ||
+    stringsMatch(normalizedReturnedBankName, localBankName) ||
+    stringsMatch(normalizeLooseText(stringFromUnknown(raw.breet_bank_name)), normalizedReturnedBankName);
   const accountNumberMatched = Boolean(localAccountNumber && returnedAccountNumber && localAccountNumber === returnedAccountNumber);
   const accountNameMatched =
     localAccountName && normalizedReturnedAccountName
@@ -1065,6 +1072,10 @@ export function getMerchantBreetMappingState(
     booleanFromUnknown(raw.mapping_confirmed) === true;
   const validationAssessment = assessBreetValidationForSettlementAccount(
     {
+      bank_name: bankAccount.bank_name,
+      bank_code: bankAccount.bank_code,
+      account_number: bankAccount.account_number,
+      account_name: bankAccount.account_name,
       bank_id: bankAccount.bank_id || mapping?.provider_account_reference || null,
       raw_verification_payload: raw,
     },
