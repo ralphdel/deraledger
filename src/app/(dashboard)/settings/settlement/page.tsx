@@ -427,7 +427,9 @@ export default function SettlementSettingsPage() {
                             onClick={() => void triggerRefreshMethod(readiness.method)}
                             className="border-emerald-300 text-emerald-900 hover:bg-emerald-100"
                           >
-                            {refreshingMethod === readiness.method ? "Refreshing setup..." : readiness.action_label}
+                            {refreshingMethod === readiness.method
+                              ? (readiness.method === "crypto" ? "Activating..." : "Refreshing setup...")
+                              : readiness.action_label}
                           </Button>
                         </div>
                       ) : null}

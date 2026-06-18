@@ -104,7 +104,7 @@ async function loadMerchantSettlementAccount(merchantId: string, environment: "s
   const mappingState = getMerchantBreetMappingState(account, {
     provider_account_reference: providerMapping?.provider_account_reference || null,
     raw_provider_response: providerPayload || null,
-  });
+  }, environment === "live" ? "production" : "development");
 
   return {
     ...account,
@@ -224,7 +224,7 @@ export async function POST(request: Request) {
         );
       }
 
-      if (!merchantSettlementAccount.bank_id || !(merchantSettlementAccount.mapping_confirmed || merchantSettlementAccount.validation_passed)) {
+      if (!merchantSettlementAccount.bank_id || !merchantSettlementAccount.validation_passed) {
         return NextResponse.json(
           { error: "Crypto payment is not ready for this payout account. Please refresh payout setup or choose another payment method." },
           { status: 403 }

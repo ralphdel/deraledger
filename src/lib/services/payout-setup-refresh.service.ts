@@ -3,11 +3,13 @@ import { PaymentService } from "@/lib/payment";
 import type { PaymentEnvironment, PaymentMethod, PaymentProvider } from "@/lib/services/payment-routing.service";
 import { getPaymentEnvironmentForMerchantEmail, resolvePaymentRoute } from "@/lib/services/payment-routing.service";
 import {
+  assessBreetValidationForSettlementAccount,
   fetchBreetBanks,
   getConfiguredBreetApiEnvironment,
   loadBreetRuntimeConfig,
   matchBreetBank,
   validateBreetBankAccount,
+  withBreetTimeout,
 } from "@/lib/services/breet-crypto.service";
 import {
   ensureMerchantSettlementAccount,
@@ -435,7 +437,7 @@ async function refreshBreetSetup(
 ): Promise<RefreshResult> {
   const runtimeConfig = await loadBreetRuntimeConfig(supabase);
   const effectiveBreetEnvironment = runtimeConfig.apiEnvironment || getConfiguredBreetApiEnvironment();
-  const banks = await fetchBreetBanks("ngn", effectiveBreetEnvironment);
+  const banks = await withBreetTimeout(fetchBreetBanks("ngn", effectiveBreetEnvironment), "Breet bank lookup timed out.");
   const matchedBank = matchBreetBank(
     {
       bank_name: account.bank_name,
@@ -489,24 +491,44 @@ async function refreshBreetSetup(
   }
 
   try {
-    const validation = await validateBreetBankAccount(
+    const validation = await withBreetTimeout(validateBreetBankAccount(
       {
         bankId: matchedBank.id,
         accountNumber: account.account_number,
       },
       effectiveBreetEnvironment
+    ), "Breet validation timed out.");
+    const validatedAt = new Date().toISOString();
+    const assessment = assessBreetValidationForSettlementAccount(
+      {
+        bank_name: account.bank_name,
+        bank_code: account.bank_code,
+        bank_id: matchedBank.id,
+        account_number: account.account_number,
+        account_name: account.account_name,
+        raw_verification_payload: account.raw_verification_payload || {},
+      },
+      {
+        env: effectiveBreetEnvironment,
+        expectedBankId: matchedBank.id,
+        validation,
+      }
     );
 
     const nextAccountPayload = {
       ...(account.raw_verification_payload || {}),
       breet_bank_id: matchedBank.id,
-      breet_bank_name: validation.bankName || matchedBank.name || account.bank_name,
+      breet_bank_name: matchedBank.name || account.bank_name,
       breet_bank_validation_payload: validation.raw,
-      breet_bank_validation_passed: true,
-      breet_validation_passed: true,
-      breet_bank_validation_at: new Date().toISOString(),
+      breet_bank_validation_passed: assessment.passed,
+      breet_validation_passed: assessment.passed,
+      breet_bank_validation_at: validatedAt,
+      validated_account_number: validation.accountNumber || account.account_number,
+      breet_returned_account_name: validation.accountName || null,
+      breet_validation_reason_code: assessment.reasonCode,
+      breet_validation_warning_code: assessment.warningReasonCode,
       breet_mapping_confirmed: true,
-      payout_setup_refreshed_at: new Date().toISOString(),
+      payout_setup_refreshed_at: validatedAt,
     };
 
     await supabase
@@ -529,26 +551,40 @@ async function refreshBreetSetup(
       providerAccountReference: matchedBank.id,
       environment,
       rawProviderResponse: {
-        status: "connected",
+        status: assessment.passed ? "connected" : "requires_action",
         source: "merchant_payout_setup_refresh",
-        reason_code: null,
-        merchant_message: null,
-        admin_note: null,
-        recommended_action: null,
-        retryable: false,
-        lastError: null,
-        last_checked_at: new Date().toISOString(),
-        last_success_at: new Date().toISOString(),
-        last_failure_at: null,
+        reason_code: assessment.reasonCode,
+        warning_reason_code: assessment.warningReasonCode,
+        merchant_message: assessment.passed ? null : "Crypto payments are not yet connected to this payout account.",
+        admin_note: assessment.passed
+          ? null
+          : "Breet account validation did not confirm the active payout account for this settlement account.",
+        recommended_action: assessment.passed
+          ? null
+          : "Validate the active payout account against Breet again before allowing crypto collections.",
+        retryable: !assessment.passed,
+        lastError: assessment.passed ? null : "Breet validation did not confirm the active payout account.",
+        last_checked_at: validatedAt,
+        last_success_at: assessment.passed ? validatedAt : null,
+        last_failure_at: assessment.passed ? null : validatedAt,
         breet_bank_id: matchedBank.id,
-        breet_bank_name: validation.bankName || matchedBank.name || account.bank_name,
+        breet_bank_name: matchedBank.name || account.bank_name,
         breet_bank_validation_payload: validation.raw,
-        breet_bank_validation_passed: true,
-        breet_validation_passed: true,
-        breet_bank_validation_at: new Date().toISOString(),
+        breet_bank_validation_passed: assessment.passed,
+        breet_validation_passed: assessment.passed,
+        breet_bank_validation_at: validatedAt,
         breet_mapping_confirmed: true,
       },
     });
+
+    if (!assessment.passed) {
+      return {
+        success: false,
+        method: "crypto",
+        provider: "breet",
+        message: "Crypto payouts could not be activated for this account. Please try again or contact support.",
+      };
+    }
 
     return {
       success: true,
@@ -559,6 +595,9 @@ async function refreshBreetSetup(
   } catch (error) {
     const lastError = error instanceof Error ? error.message : "Unknown Breet provider error";
     const failedAt = new Date().toISOString();
+    const reasonCode = lastError.toLowerCase().includes("timed out")
+      ? "breet_validation_timeout"
+      : "breet_validation_failed";
     await supabase
       .from("merchant_provider_settlement_accounts")
       .upsert(
@@ -573,10 +612,12 @@ async function refreshBreetSetup(
           raw_provider_response: {
             source: "breet_payout_setup_refresh_failed",
             status: "requires_action",
-            reason_code: "breet_settlement_account_mismatch",
+            reason_code: reasonCode,
             merchant_message: "Crypto payments are not yet connected to this payout account.",
             admin_note:
-              "Breet validation for the active payout account failed or returned mismatched settlement details.",
+              reasonCode === "breet_validation_timeout"
+                ? "Breet validation for the active payout account timed out."
+                : "Breet validation for the active payout account failed before confirming the settlement details.",
             recommended_action:
               "Retry Breet validation for the active payout account and confirm the saved bank mapping.",
             retryable: true,
@@ -595,7 +636,7 @@ async function refreshBreetSetup(
       success: false,
       method: "crypto",
       provider: "breet",
-      message: "Crypto payout setup could not be refreshed.",
+      message: "Crypto payouts could not be activated for this account. Please try again or contact support.",
     };
   }
 }

@@ -10,6 +10,7 @@ import type {
 import { listConfiguredPaymentMethodRoutes, resolvePaymentRoute } from "@/lib/services/payment-routing.service";
 import { calculateProviderReportedSettlement } from "@/lib/services/provider-settlement-calculation.service";
 import {
+  assessBreetValidationForSettlementAccount,
   canUseBreetCryptoCheckout,
   getMerchantBreetMappingState,
   normalizeBreetSettlementMode,
@@ -73,6 +74,7 @@ export type MerchantPaymentMethodReadiness = {
   status: MerchantPaymentMethodStatus;
   display_status: string;
   message: string | null;
+  reason_code: string | null;
   available: boolean;
   affected: boolean;
   action_label: string | null;
@@ -107,6 +109,7 @@ type SettlementAccountRow = {
   account_name?: string | null;
   verification_status?: string | null;
   status?: string | null;
+  raw_verification_payload?: Record<string, unknown> | null;
 };
 
 type TransactionRow = {
@@ -378,7 +381,7 @@ export async function isProviderSettlementReady(
 ) {
   const { data: account, error: accountError } = await supabase
     .from("merchant_settlement_accounts")
-    .select("id, bank_name, bank_code, account_number, account_name, verification_status, status")
+    .select("id, bank_name, bank_code, account_number, account_name, verification_status, status, raw_verification_payload")
     .eq("merchant_id", input.merchantId)
     .eq("is_default", true)
     .eq("status", "active")
@@ -436,7 +439,7 @@ export async function getProviderSettlementMapping(
 ) {
   const { data: account, error: accountError } = await supabase
     .from("merchant_settlement_accounts")
-    .select("id, bank_name, bank_code, account_number, account_name, verification_status, status")
+    .select("id, bank_name, bank_code, account_number, account_name, verification_status, status, raw_verification_payload")
     .eq("merchant_id", input.merchantId)
     .eq("is_default", true)
     .eq("status", "active")
@@ -545,6 +548,7 @@ export async function getMerchantPaymentMethodReadiness(
           status: "not_available" as const,
           display_status: getMerchantPaymentMethodDisplayStatus(method, "not_available", null),
           message: null,
+          reason_code: null,
           available: false,
           affected: false,
           action_label: null,
@@ -558,6 +562,7 @@ export async function getMerchantPaymentMethodReadiness(
           status: "needs_attention" as const,
           display_status: getMerchantPaymentMethodDisplayStatus(method, "needs_attention", null),
           message: "Please update your payout account.",
+          reason_code: "missing_verified_payout_account",
           available: false,
           affected: true,
           action_label: getMerchantPaymentMethodActionLabel(method, "needs_attention", null),
@@ -578,6 +583,7 @@ export async function getMerchantPaymentMethodReadiness(
           status: "not_available" as const,
           display_status: getMerchantPaymentMethodDisplayStatus(method, "not_available", null),
           message: null,
+          reason_code: null,
           available: false,
           affected: false,
           action_label: null,
@@ -604,6 +610,7 @@ export async function getMerchantPaymentMethodReadiness(
           status: "ready" as const,
           display_status: getMerchantPaymentMethodDisplayStatus(method, "ready", readiness),
           message: null,
+          reason_code: null,
           available: true,
           affected: false,
           action_label: null,
@@ -617,6 +624,7 @@ export async function getMerchantPaymentMethodReadiness(
         status,
         display_status: getMerchantPaymentMethodDisplayStatus(method, status, readiness),
         message: getMerchantPaymentMethodMessage(method, status, readiness),
+        reason_code: readiness.reason_code,
         available: false,
         affected: status !== "not_available",
         action_label: getMerchantPaymentMethodActionLabel(method, status, readiness),
@@ -762,29 +770,44 @@ export function getProviderReadiness(
   if (provider === "breet" && options?.requireCryptoMapping) {
     const mappingState = getMerchantBreetMappingState(
       {
-        raw_verification_payload: null,
+        bank_name: options?.settlementAccount?.bank_name || null,
+        bank_code: options?.settlementAccount?.bank_code || null,
+        account_number: options?.settlementAccount?.account_number || null,
+        account_name: options?.settlementAccount?.account_name || null,
+        raw_verification_payload: options?.settlementAccount?.raw_verification_payload || null,
         bank_id: typeof mapping.provider_account_reference === "string" ? mapping.provider_account_reference : null,
       },
       {
         provider_account_reference: typeof mapping.provider_account_reference === "string" ? mapping.provider_account_reference : null,
         raw_provider_response: raw,
         status: mapping.status || null,
-      }
+      },
+      environment
     );
 
-    const ready = mappingState.hasMappedBankId && (mappingState.mappingConfirmed || mappingState.validationPassed);
+    const ready = mappingState.hasMappedBankId && mappingState.validationPassed;
     return {
       provider_name: provider,
       environment,
       status: ready ? "connected" : "requires_action",
-      reason_code: ready ? null : "breet_mapping_incomplete",
-      merchant_message: ready ? null : "Breet settlement mapping needs to be confirmed before crypto collections can use this account.",
-      admin_note: ready ? null : "Validate the merchant account and confirm the Breet bank mapping.",
+      reason_code: ready ? null : (mappingState.validationReasonCode || "breet_mapping_incomplete"),
+      merchant_message: ready ? null : "Crypto payments are not yet connected to this payout account.",
+      admin_note:
+        ready
+          ? null
+          : mappingState.hasMappedBankId
+            ? "Validate the merchant account against Breet before allowing crypto collections."
+            : "Confirm the mapped Breet bank and then validate the merchant account before allowing crypto collections.",
       last_checked_at: lastCheckedAt,
       last_success_at: ready ? (lastSuccessAt || lastCheckedAt) : lastSuccessAt,
       last_failure_at: ready ? lastFailureAt : (lastFailureAt || lastCheckedAt),
       retryable: !ready,
-      recommended_action: ready ? null : "Validate the account and confirm the mapped Breet bank.",
+      recommended_action:
+        ready
+          ? null
+          : mappingState.hasMappedBankId
+            ? "Validate the active payout account against Breet again before allowing crypto collections."
+            : "Confirm the correct Breet bank and rerun account validation.",
       ready,
     };
   }
@@ -867,8 +890,16 @@ function getMerchantPaymentMethodMessage(
   }
 
   if (status === "needs_attention") {
-    if (method === "crypto" && ["breet_settlement_account_mismatch", "breet_mapping_incomplete", "missing_provider_mapping"].includes(reasonCode)) {
+    if (method === "crypto" && [
+      "breet_settlement_account_mismatch",
+      "breet_mapping_incomplete",
+      "missing_provider_mapping",
+      "breet_validation_pending",
+    ].includes(reasonCode)) {
       return "Crypto payments are not yet connected to this payout account. Activate crypto payouts to allow crypto payments to settle to this account.";
+    }
+    if (method === "crypto" && ["breet_validation_failed", "breet_validation_timeout"].includes(reasonCode)) {
+      return "Crypto payouts could not be activated for this account. Please try again or contact support.";
     }
     if (reasonCode === "invalid_account_details") {
       return "Please update your payout account.";
@@ -893,7 +924,12 @@ function getMerchantPaymentMethodActionLabel(
   if (status === "ready" || status === "not_available") return null;
   if (method === "crypto") {
     const reasonCode = String(readiness?.reason_code || "");
-    if (["breet_settlement_account_mismatch", "breet_mapping_incomplete", "missing_provider_mapping"].includes(reasonCode)) {
+    if ([
+      "breet_settlement_account_mismatch",
+      "breet_mapping_incomplete",
+      "missing_provider_mapping",
+      "breet_validation_pending",
+    ].includes(reasonCode)) {
       return "Activate crypto payouts";
     }
     return "Retry crypto setup";
@@ -928,10 +964,13 @@ function buildMerchantPaymentSetupBanner(input: {
   }
 
   if (affectedMethods.length === 1 && affectedMethods[0].method === "crypto") {
+    const cryptoReasonCode = String(affectedMethods[0].reason_code || "");
     return {
       show: true,
       title: "Crypto payments need setup",
-      body: "Your payout account was updated, but crypto payments still need to be refreshed before they can settle to this account.",
+      body: ["breet_validation_failed", "breet_validation_timeout"].includes(cryptoReasonCode)
+        ? "Crypto payouts could not be activated for this payout account yet. Please try again or contact support."
+        : "Your payout account was updated, but crypto payments still need to be refreshed before they can settle to this account.",
       affected_methods: [affectedMethods[0].label],
       action_label: affectedMethods[0].action_label || "Activate crypto payouts",
       href: "/settings/settlement",
@@ -1120,20 +1159,28 @@ function getProviderMappingConsistencyIssue(
   }
 
   if (provider === "breet") {
-    const validationPayload = asRecord(asRecord(raw?.breet_bank_validation_payload)?.data);
-    const mappedAccountNumber = normalizeDigits(stringValue(validationPayload?.accountNumber));
-    const mappedAccountName = normalizeLooseText(stringValue(validationPayload?.accountName));
-    const mappedBankName = normalizeLooseText(
-      stringValue(validationPayload?.bankName) || stringValue(raw?.breet_bank_name)
+    const assessment = assessBreetValidationForSettlementAccount(
+      {
+        bank_name: settlementAccount.bank_name,
+        bank_code: settlementAccount.bank_code,
+        bank_id: mapping.provider_account_reference,
+        account_number: settlementAccount.account_number,
+        account_name: settlementAccount.account_name,
+        raw_verification_payload: settlementAccount.raw_verification_payload || null,
+      },
+      {
+        env: mapping.environment || null,
+        expectedBankId: mapping.provider_account_reference,
+        mapping: {
+          provider_account_reference: mapping.provider_account_reference || null,
+          raw_provider_response: raw,
+        },
+      }
     );
 
-    if (
-      !compareIfPresent(mappedAccountNumber, accountNumber) ||
-      !compareIfPresent(mappedAccountName, accountName) ||
-      !compareIfPresent(mappedBankName, bankName)
-    ) {
+    if (!assessment.passed) {
       return {
-        reason_code: "breet_settlement_account_mismatch",
+        reason_code: assessment.reasonCode || "breet_settlement_account_mismatch",
         admin_note:
           "Breet mapping details do not match the active payout account. Re-validate the correct Breet bank mapping for this settlement account.",
         recommended_action:

@@ -4,6 +4,7 @@ import { requireAdminPortalSession } from "@/lib/admin-portal-auth";
 import type { BreetBankListItem } from "@/lib/payment/types";
 import {
   addBreetIntegrationBank,
+  assessBreetValidationForSettlementAccount,
   getBreetConfigWarnings,
   fetchBreetBanks,
   fetchSavedBreetIntegrationBanks,
@@ -13,6 +14,7 @@ import {
   matchBreetBank,
   resolveBreetBankId,
   validateBreetBankAccount,
+  withBreetTimeout,
 } from "@/lib/services/breet-crypto.service";
 import { getPaymentEnvironmentForMerchantEmail } from "@/lib/services/payment-routing.service";
 
@@ -490,11 +492,27 @@ export async function POST(request: Request) {
     if (!merchantContext) {
       return NextResponse.json({ error: "Merchant settlement account not found." }, { status: 404 });
     }
+    const existingMappingState = getMerchantBreetMappingState(
+      {
+        bank_name: merchantContext.account.bank_name,
+        bank_code: merchantContext.account.bank_code,
+        bank_id: merchantContext.mapping?.provider_account_reference || null,
+        account_number: merchantContext.account.account_number,
+        account_name: merchantContext.account.account_name,
+        raw_verification_payload: {
+          ...(merchantContext.account.raw_verification_payload || {}),
+          ...(merchantContext.mapping?.raw_provider_response || {}),
+        },
+      },
+      merchantContext.mapping || null,
+      runtimeConfig.apiEnvironment
+    );
 
     const banks = providerHealth.configured
-      ? await fetchBreetBanks("ngn", runtimeConfig.apiEnvironment).catch(() => [])
+      ? await withBreetTimeout(fetchBreetBanks("ngn", runtimeConfig.apiEnvironment).catch(() => []), "Breet bank lookup timed out.")
       : [];
     const matchedBank = banks.find((bank) => bank.id === bankId) || null;
+    const bankChanged = existingMappingState.mappedBankId !== bankId;
     const nextRawPayload = {
       ...(merchantContext.account.raw_verification_payload || {}),
       breet_bank_id: bankId,
@@ -502,6 +520,13 @@ export async function POST(request: Request) {
       breet_mapping_confirmed: true,
       mapping_confirmed_by_admin: true,
       breet_mapping_confirmed_at: new Date().toISOString(),
+      ...(bankChanged ? {
+        breet_bank_validation_payload: null,
+        breet_bank_validation_passed: false,
+        breet_validation_passed: false,
+        breet_validation_reason_code: "breet_validation_pending",
+        breet_validation_warning_code: null,
+      } : {}),
     };
 
     await supabase
@@ -519,7 +544,7 @@ export async function POST(request: Request) {
         settlement_account_id: merchantContext.account.id,
         provider_name: "breet",
         provider_account_reference: bankId,
-        status: "connected",
+        status: !bankChanged && existingMappingState.validationPassed ? "connected" : "requires_action",
         environment: merchantContext.environment,
         raw_provider_response: {
           ...(merchantContext.mapping?.raw_provider_response || {}),
@@ -528,6 +553,19 @@ export async function POST(request: Request) {
           breet_mapping_confirmed: true,
           mapping_confirmed_by_admin: true,
           breet_mapping_confirmed_at: new Date().toISOString(),
+          ...(bankChanged ? {
+            status: "requires_action",
+            reason_code: "breet_validation_pending",
+            merchant_message: "Crypto payments are not yet connected to this payout account.",
+            admin_note: "Bank mapping was updated. Run Breet account validation before allowing crypto collections.",
+            recommended_action: "Validate the merchant account against Breet for the active payout account.",
+            breet_bank_validation_payload: null,
+            breet_bank_validation_passed: false,
+            breet_validation_passed: false,
+            breet_validation_reason_code: "breet_validation_pending",
+            breet_validation_warning_code: null,
+            last_failure_at: new Date().toISOString(),
+          } : {}),
         },
         last_sync_at: new Date().toISOString(),
       }, { onConflict: "settlement_account_id,provider_name,environment" });
@@ -547,7 +585,15 @@ export async function POST(request: Request) {
       },
     });
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({
+      success: true,
+      message: bankChanged
+        ? "Bank mapping saved. Account validation is still required."
+        : (existingMappingState.validationPassed
+          ? "Bank mapping saved. Existing Breet account validation remains active."
+          : "Bank mapping saved. Account validation is still required."),
+      note: bankChanged ? "Confirm / Save Mapping only stores the bank mapping. It does not validate the account." : null,
+    });
   }
 
   if (body.action === "validate_merchant_breet_bank") {
@@ -565,30 +611,50 @@ export async function POST(request: Request) {
 
     try {
       const [banks, validation] = await Promise.all([
-        fetchBreetBanks("ngn", runtimeConfig.apiEnvironment),
-        validateBreetBankAccount({
+        withBreetTimeout(fetchBreetBanks("ngn", runtimeConfig.apiEnvironment), "Breet bank lookup timed out."),
+        withBreetTimeout(validateBreetBankAccount({
           bankId,
           accountNumber: merchantContext.account.account_number,
-        }, runtimeConfig.apiEnvironment),
+        }, runtimeConfig.apiEnvironment), "Breet validation timed out."),
       ]);
       const matchedBank = banks.find((bank) => bank.id === bankId) || null;
+      const validatedAt = new Date().toISOString();
+      const assessment = assessBreetValidationForSettlementAccount(
+        {
+          bank_name: merchantContext.account.bank_name,
+          bank_code: merchantContext.account.bank_code,
+          bank_id: bankId,
+          account_number: merchantContext.account.account_number,
+          account_name: merchantContext.account.account_name,
+          raw_verification_payload: merchantContext.account.raw_verification_payload || {},
+        },
+        {
+          env: runtimeConfig.apiEnvironment,
+          expectedBankId: bankId,
+          validation,
+          mapping: merchantContext.mapping || null,
+        }
+      );
       const nextRawPayload = {
         ...(merchantContext.account.raw_verification_payload || {}),
         breet_bank_id: bankId,
-        breet_bank_name: validation.bankName || matchedBank?.name || merchantContext.account.bank_name,
+        breet_bank_name: matchedBank?.name || merchantContext.account.bank_name,
         breet_bank_validation_payload: validation.raw,
-        breet_bank_validation_passed: true,
-        breet_validation_passed: true,
-        breet_bank_validation_at: new Date().toISOString(),
+        breet_bank_validation_passed: assessment.passed,
+        breet_validation_passed: assessment.passed,
+        breet_bank_validation_at: validatedAt,
+        validated_account_number: validation.accountNumber || merchantContext.account.account_number,
+        breet_returned_account_name: validation.accountName || null,
+        breet_validation_reason_code: assessment.reasonCode,
+        breet_validation_warning_code: assessment.warningReasonCode,
         breet_mapping_confirmed: true,
         mapping_confirmed_by_admin: true,
       };
 
       await supabase
-        .from("merchant_settlement_accounts")
-        .update({
+      .from("merchant_settlement_accounts")
+      .update({
           raw_verification_payload: nextRawPayload,
-          account_name: validation.accountName || merchantContext.account.account_name,
           updated_at: new Date().toISOString(),
         })
         .eq("id", merchantContext.account.id);
@@ -600,18 +666,34 @@ export async function POST(request: Request) {
           settlement_account_id: merchantContext.account.id,
           provider_name: "breet",
           provider_account_reference: bankId,
-          status: "active",
+          status: assessment.passed ? "connected" : "requires_action",
           environment: merchantContext.environment,
           raw_provider_response: {
             ...(merchantContext.mapping?.raw_provider_response || {}),
             breet_bank_id: bankId,
-            breet_bank_name: validation.bankName || matchedBank?.name || merchantContext.account.bank_name,
+            breet_bank_name: matchedBank?.name || merchantContext.account.bank_name,
             breet_bank_validation_payload: validation.raw,
-            breet_bank_validation_passed: true,
-            breet_validation_passed: true,
-            breet_bank_validation_at: new Date().toISOString(),
+            breet_bank_validation_passed: assessment.passed,
+            breet_validation_passed: assessment.passed,
+            breet_bank_validation_at: validatedAt,
             breet_mapping_confirmed: true,
             mapping_confirmed_by_admin: true,
+            status: assessment.passed ? "connected" : "requires_action",
+            reason_code: assessment.reasonCode,
+            warning_reason_code: assessment.warningReasonCode,
+            merchant_message: assessment.passed ? null : "Crypto payments are not yet connected to this payout account.",
+            admin_note: assessment.passed
+              ? null
+              : "Breet account validation did not confirm the active payout account. Re-run validation after fixing the mapped bank or account details.",
+            recommended_action: assessment.passed
+              ? null
+              : "Validate the merchant account against Breet again after confirming the mapped bank and payout account details.",
+            retryable: true,
+            last_checked_at: validatedAt,
+            last_success_at: assessment.passed ? validatedAt : null,
+            last_failure_at: assessment.passed ? null : validatedAt,
+            lastError: assessment.passed ? null : "Breet validation did not confirm the active payout account.",
+            source: "breet_account_validation",
           },
           last_sync_at: new Date().toISOString(),
         }, { onConflict: "settlement_account_id,provider_name,environment" });
@@ -632,17 +714,64 @@ export async function POST(request: Request) {
         },
       });
 
+      if (!assessment.passed) {
+        return NextResponse.json({
+          success: false,
+          reason_code: assessment.reasonCode || "breet_validation_failed",
+          error: "Breet account validation did not confirm this payout account.",
+          note: null,
+        }, { status: 409 });
+      }
+
       return NextResponse.json({
         success: true,
         validation,
-        note:
-          validation.accountName && validation.accountName !== merchantContext.account.account_name
-            ? "Sandbox account name may differ from real account name."
-            : null,
+        reason_code: null,
+        note: assessment.note,
+        message: assessment.note
+          ? "Validation passed for sandbox. Breet returned a different account name, but bank and account number matched."
+          : "Breet account validation passed.",
       });
     } catch (error) {
+      const failedAt = new Date().toISOString();
       const message = error instanceof Error ? error.message : "Failed to validate merchant Breet bank account.";
-      return NextResponse.json({ error: message }, { status: 502 });
+      const reasonCode = message.toLowerCase().includes("timed out")
+        ? "breet_validation_timeout"
+        : "breet_validation_failed";
+      await supabase
+        .from("merchant_provider_settlement_accounts")
+        .upsert({
+          merchant_id: merchantId,
+          settlement_account_id: merchantContext.account.id,
+          provider_name: "breet",
+          provider_account_reference: bankId,
+          status: "requires_action",
+          environment: merchantContext.environment,
+          raw_provider_response: {
+            ...(merchantContext.mapping?.raw_provider_response || {}),
+            breet_bank_id: bankId,
+            breet_bank_name: merchantContext.account.bank_name,
+            breet_mapping_confirmed: true,
+            mapping_confirmed_by_admin: true,
+            breet_bank_validation_passed: false,
+            breet_validation_passed: false,
+            status: "requires_action",
+            source: "breet_account_validation",
+            reason_code: reasonCode,
+            merchant_message: "Crypto payments are not yet connected to this payout account.",
+            admin_note: reasonCode === "breet_validation_timeout"
+              ? "Breet account validation timed out before confirming the active payout account."
+              : "Breet account validation failed before confirming the active payout account.",
+            recommended_action: "Retry Breet account validation for the active payout account.",
+            retryable: true,
+            last_checked_at: failedAt,
+            last_failure_at: failedAt,
+            lastError: message,
+          },
+          last_sync_at: failedAt,
+        }, { onConflict: "settlement_account_id,provider_name,environment" });
+
+      return NextResponse.json({ success: false, error: message, reason_code: reasonCode }, { status: 502 });
     }
   }
 
@@ -724,7 +853,7 @@ async function loadMerchantReadiness(
       ...(mapping?.raw_provider_response || {}),
     },
   };
-  const mappingState = getMerchantBreetMappingState(mergedAccount, mapping || null);
+  const mappingState = getMerchantBreetMappingState(mergedAccount, mapping || null, environment === "live" ? "production" : "development");
   const matchedBank = matchBreetBank(mergedAccount, banks) || null;
 
   const hasVerifiedSettlementAccount =
@@ -732,7 +861,7 @@ async function loadMerchantReadiness(
     account.status === "active" &&
     Boolean(account.account_number);
   const hasMappedBreetBankId = mappingState.hasMappedBankId;
-  const validationConfirmed = hasMappedBreetBankId && (mappingState.validationPassed || mappingState.mappingConfirmed);
+  const validationConfirmed = hasMappedBreetBankId && mappingState.validationPassed;
 
   return {
     merchantId,
@@ -765,12 +894,7 @@ async function loadMerchantReadiness(
       : null,
     matchedBreetBank: matchedBank ? { bankId: matchedBank.id, bankName: matchedBank.name } : null,
     mappingEnvironment: environment,
-    validationNote:
-      mappingState.validationPassed &&
-      mergedAccount.account_name &&
-      typeof mergedAccount.raw_verification_payload?.breet_bank_validation_payload === "object"
-        ? "Sandbox account name may differ from real account name."
-        : null,
+    validationNote: mappingState.validationNote,
   };
 }
 

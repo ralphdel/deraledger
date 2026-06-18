@@ -495,23 +495,29 @@ export default function AdminTreasuryPage() {
     setBusy("save-merchant-bank");
     setFeedback(null);
     setMerchantValidationNote(null);
-    const res = await fetch("/api/admin/treasury", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: "confirm_merchant_breet_mapping",
-        merchantId: data.merchantReadiness.merchantId,
-        bankId: merchantBreetBankId,
-      }),
-    });
-    const payload = await res.json() as { error?: string };
-    if (!res.ok) {
-      setFeedback(payload.error || "Failed to save merchant Breet bank mapping.");
-    } else {
-      setFeedback("Merchant Breet bank mapping saved.");
-      await loadTreasury();
+    try {
+      const res = await fetch("/api/admin/treasury", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "confirm_merchant_breet_mapping",
+          merchantId: data.merchantReadiness.merchantId,
+          bankId: merchantBreetBankId,
+        }),
+      });
+      const payload = await res.json().catch(() => ({})) as { error?: string; message?: string; note?: string | null };
+      if (!res.ok || payload.error) {
+        setFeedback(payload.error || "Failed to save merchant Breet bank mapping.");
+      } else {
+        setMerchantValidationNote(payload.note || "Bank mapping saved. Account validation is still required.");
+        setFeedback(payload.message || "Bank mapping saved. Account validation is still required.");
+        await loadTreasury();
+      }
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Failed to save merchant Breet bank mapping.");
+    } finally {
+      setBusy(null);
     }
-    setBusy(null);
   }
 
   async function validateMerchantBreetBank() {
@@ -519,24 +525,35 @@ export default function AdminTreasuryPage() {
     setBusy("validate-merchant-bank");
     setFeedback(null);
     setMerchantValidationNote(null);
-    const res = await fetch("/api/admin/treasury", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: "validate_merchant_breet_bank",
-        merchantId: data.merchantReadiness.merchantId,
-        bankId: merchantBreetBankId,
-      }),
-    });
-    const payload = await res.json() as { error?: string; note?: string | null };
-    if (!res.ok) {
-      setFeedback(payload.error || "Failed to validate merchant account with Breet.");
-    } else {
-      setMerchantValidationNote(payload.note || null);
-      setFeedback("Merchant settlement account validated with Breet.");
-      await loadTreasury();
+    try {
+      const res = await fetch("/api/admin/treasury", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "validate_merchant_breet_bank",
+          merchantId: data.merchantReadiness.merchantId,
+          bankId: merchantBreetBankId,
+        }),
+      });
+      const payload = await res.json().catch(() => ({})) as {
+        success?: boolean;
+        error?: string;
+        note?: string | null;
+        message?: string;
+      };
+      if (!res.ok || payload.success === false) {
+        setMerchantValidationNote(payload.note || null);
+        setFeedback(payload.error || payload.message || "Failed to validate merchant account with Breet.");
+      } else {
+        setMerchantValidationNote(payload.note || null);
+        setFeedback(payload.message || "Breet account validation passed.");
+        await loadTreasury();
+      }
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Failed to validate merchant account with Breet.");
+    } finally {
+      setBusy(null);
     }
-    setBusy(null);
   }
 
   async function triggerMockTrade() {
@@ -1030,7 +1047,7 @@ export default function AdminTreasuryPage() {
                     </p>
                     <ChecklistItem label="Merchant has verified settlement account" ok={data.merchantReadiness.hasVerifiedSettlementAccount} />
                     <ChecklistItem label="Merchant settlement account mapped to Breet bankId" ok={data.merchantReadiness.hasMappedBreetBankId} />
-                    <ChecklistItem label="Merchant account validation passed or mapping confirmed" ok={data.merchantReadiness.validationConfirmed} />
+                    <ChecklistItem label="Merchant account validation passed" ok={data.merchantReadiness.validationConfirmed} />
                     <ChecklistItem label="Amount above minimum auto-settlement threshold" ok={data.merchantReadiness.amountThresholdEnforced} note="Enforced at checkout." />
                     <div className="rounded-xl border border-neutral-200 p-4 space-y-4">
                       <div>
@@ -1073,14 +1090,18 @@ export default function AdminTreasuryPage() {
                           onClick={() => void saveMerchantBreetMapping()}
                           disabled={busy === "save-merchant-bank" || !merchantBreetBankId}
                         >
-                          {busy === "save-merchant-bank" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Confirm / Save Mapping"}
+                          {busy === "save-merchant-bank"
+                            ? <span className="inline-flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Saving...</span>
+                            : "Confirm / Save Mapping"}
                         </Button>
                         <Button
                           onClick={() => void validateMerchantBreetBank()}
                           disabled={busy === "validate-merchant-bank" || !merchantBreetBankId}
                           className="bg-purp-900 hover:bg-purp-800"
                         >
-                          {busy === "validate-merchant-bank" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Validate Merchant Account With Breet"}
+                          {busy === "validate-merchant-bank"
+                            ? <span className="inline-flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Validating...</span>
+                            : "Validate Merchant Account With Breet"}
                         </Button>
                       </div>
                       <div className="rounded-lg border border-neutral-200 bg-neutral-50 p-3 text-xs text-neutral-600">

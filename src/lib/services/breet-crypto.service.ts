@@ -113,6 +113,9 @@ export type BreetMerchantMappingState = {
   mappingConfirmed: boolean;
   validationPassed: boolean;
   mappedBankId: string | null;
+  validationReasonCode: string | null;
+  validationWarningCode: string | null;
+  validationNote: string | null;
 };
 
 function settingValue(settings: Map<string, string>, key: string, fallback = "") {
@@ -305,6 +308,215 @@ export function resolveBreetBankId(bankAccount: BreetSettlementBankAccount) {
 
 function stringFromUnknown(value: unknown) {
   return typeof value === "string" ? value : null;
+}
+
+function asRecord(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function normalizeDigits(value: string | null | undefined) {
+  const digits = String(value || "").replace(/\D/g, "").trim();
+  return digits || null;
+}
+
+function normalizeLooseText(value: string | null | undefined) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return normalized || null;
+}
+
+function stringsMatch(actual: string | null, expected: string | null) {
+  return Boolean(actual && expected && actual === expected);
+}
+
+export type BreetValidationAssessment = {
+  passed: boolean;
+  reasonCode: string | null;
+  warningReasonCode: string | null;
+  note: string | null;
+  mappedBankId: string | null;
+  returnedBankId: string | null;
+  returnedBankName: string | null;
+  returnedAccountNumber: string | null;
+  returnedAccountName: string | null;
+  bankMatched: boolean;
+  accountNumberMatched: boolean;
+  accountNameMatched: boolean | null;
+};
+
+export function assessBreetValidationForSettlementAccount(
+  bankAccount: BreetBankSetupCandidate,
+  options?: {
+    env?: string | null;
+    expectedBankId?: string | null;
+    validation?: BreetBankValidationResult | null;
+    mapping?: {
+      provider_account_reference?: string | null;
+      raw_provider_response?: Record<string, unknown> | null;
+    } | null;
+  }
+): BreetValidationAssessment {
+  const raw = {
+    ...(bankAccount.raw_verification_payload || {}),
+    ...(options?.mapping?.raw_provider_response || {}),
+  } as Record<string, unknown>;
+  const validationPayload = asRecord(raw.breet_bank_validation_payload);
+  const validationPayloadData = asRecord(validationPayload?.data) || validationPayload;
+  const hasValidationEvidence =
+    raw.breet_validation_passed === true ||
+    raw.breet_bank_validation_passed === true ||
+    Boolean(validationPayload) ||
+    Boolean(options?.validation);
+  const mappedBankId =
+    options?.expectedBankId ||
+    resolveBreetBankId({
+      bank_name: bankAccount.bank_name,
+      bank_code: bankAccount.bank_code,
+      bank_id: bankAccount.bank_id || options?.mapping?.provider_account_reference || null,
+      account_number: bankAccount.account_number,
+      account_name: bankAccount.account_name,
+      raw_verification_payload: raw,
+    }) ||
+    stringFromUnknown(options?.validation?.bankId) ||
+    null;
+  const returnedBankId =
+    stringFromUnknown(options?.validation?.bankId) ||
+    stringFromUnknown(validationPayload?.id) ||
+    stringFromUnknown(validationPayloadData?.id) ||
+    (hasValidationEvidence ? stringFromUnknown(raw.breet_bank_id) : null) ||
+    null;
+  const returnedBankName =
+    stringFromUnknown(options?.validation?.bankName) ||
+    stringFromUnknown(validationPayload?.bankName) ||
+    stringFromUnknown(validationPayloadData?.bankName) ||
+    stringFromUnknown(raw.breet_bank_name) ||
+    null;
+  const returnedAccountNumber =
+    normalizeDigits(options?.validation?.accountNumber) ||
+    normalizeDigits(stringFromUnknown(validationPayload?.accountNumber)) ||
+    normalizeDigits(stringFromUnknown(validationPayloadData?.accountNumber)) ||
+    normalizeDigits(stringFromUnknown(raw.validated_account_number)) ||
+    null;
+  const returnedAccountName =
+    stringFromUnknown(options?.validation?.accountName) ||
+    stringFromUnknown(validationPayload?.accountName) ||
+    stringFromUnknown(validationPayloadData?.accountName) ||
+    stringFromUnknown(raw.breet_returned_account_name) ||
+    null;
+  const localBankName = normalizeLooseText(bankAccount.bank_name);
+  const localAccountNumber = normalizeDigits(bankAccount.account_number);
+  const localAccountName = normalizeLooseText(bankAccount.account_name);
+  const normalizedReturnedBankName = normalizeLooseText(returnedBankName);
+  const normalizedReturnedAccountName = normalizeLooseText(returnedAccountName);
+  const bankMatched =
+    (mappedBankId && returnedBankId
+      ? mappedBankId === returnedBankId
+      : stringsMatch(normalizedReturnedBankName, localBankName)) ||
+    (Boolean(mappedBankId) && !returnedBankId && !normalizedReturnedBankName ? false : false);
+  const accountNumberMatched = Boolean(localAccountNumber && returnedAccountNumber && localAccountNumber === returnedAccountNumber);
+  const accountNameMatched =
+    localAccountName && normalizedReturnedAccountName
+      ? localAccountName === normalizedReturnedAccountName
+      : null;
+
+  if (!hasValidationEvidence) {
+    return {
+      passed: false,
+      reasonCode: "breet_validation_pending",
+      warningReasonCode: null,
+      note: null,
+      mappedBankId,
+      returnedBankId,
+      returnedBankName,
+      returnedAccountNumber,
+      returnedAccountName,
+      bankMatched,
+      accountNumberMatched,
+      accountNameMatched,
+    };
+  }
+
+  if (!bankMatched || !accountNumberMatched) {
+    return {
+      passed: false,
+      reasonCode: "breet_settlement_account_mismatch",
+      warningReasonCode: null,
+      note: null,
+      mappedBankId,
+      returnedBankId,
+      returnedBankName,
+      returnedAccountNumber,
+      returnedAccountName,
+      bankMatched,
+      accountNumberMatched,
+      accountNameMatched,
+    };
+  }
+
+  const environment = normalizeBreetApiEnvironment(options?.env);
+  if (environment === "production" && accountNameMatched !== true) {
+    return {
+      passed: false,
+      reasonCode: "breet_validation_failed",
+      warningReasonCode: null,
+      note: null,
+      mappedBankId,
+      returnedBankId,
+      returnedBankName,
+      returnedAccountNumber,
+      returnedAccountName,
+      bankMatched,
+      accountNumberMatched,
+      accountNameMatched,
+    };
+  }
+
+  const warningReasonCode =
+    environment === "development" && accountNameMatched === false
+      ? "breet_sandbox_name_mismatch_warning"
+      : null;
+
+  return {
+    passed: true,
+    reasonCode: null,
+    warningReasonCode,
+    note:
+      warningReasonCode === "breet_sandbox_name_mismatch_warning"
+        ? "Validation passed for sandbox. Breet returned a different account name, but bank and account number matched."
+        : null,
+    mappedBankId,
+    returnedBankId,
+    returnedBankName,
+    returnedAccountNumber,
+    returnedAccountName,
+    bankMatched,
+    accountNumberMatched,
+    accountNameMatched,
+  };
+}
+
+export async function withBreetTimeout<T>(
+  promise: Promise<T>,
+  message = "Breet validation timed out.",
+  timeoutMs = 15000
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 export async function fetchBreetBanks(currency = "ngn", env?: BreetApiEnvironment) {
@@ -815,12 +1027,16 @@ export function getBreetProviderHealth() {
 }
 
 export function getMerchantBreetMappingState(
-  bankAccount: Pick<BreetSettlementBankAccount, "raw_verification_payload"> & { bank_id?: string | null },
+  bankAccount: Pick<
+    BreetSettlementBankAccount,
+    "raw_verification_payload" | "bank_name" | "bank_code" | "account_number" | "account_name"
+  > & { bank_id?: string | null },
   mapping?: {
     provider_account_reference?: string | null;
     raw_provider_response?: Record<string, unknown> | null;
     status?: string | null;
-  } | null
+  } | null,
+  env?: string | null
 ): BreetMerchantMappingState {
   const raw = {
     ...(bankAccount.raw_verification_payload || {}),
@@ -832,16 +1048,36 @@ export function getMerchantBreetMappingState(
       raw_verification_payload: raw,
     }) || null;
   const mappingConfirmed = raw.mapping_confirmed_by_admin === true || raw.breet_mapping_confirmed === true;
+  const validationAssessment = assessBreetValidationForSettlementAccount(
+    {
+      bank_id: bankAccount.bank_id || mapping?.provider_account_reference || null,
+      raw_verification_payload: raw,
+    },
+    {
+      env,
+      expectedBankId: mappedBankId,
+      mapping: mapping
+        ? {
+            provider_account_reference: mapping.provider_account_reference || null,
+            raw_provider_response: mapping.raw_provider_response || null,
+          }
+        : null,
+    }
+  );
   const validationPassed =
-    raw.breet_validation_passed === true ||
-    raw.breet_bank_validation_passed === true ||
-    Boolean(raw.breet_bank_validation_payload);
+    (raw.breet_validation_passed === true ||
+      raw.breet_bank_validation_passed === true ||
+      Boolean(raw.breet_bank_validation_payload)) &&
+    validationAssessment.passed;
 
   return {
     hasMappedBankId: Boolean(mappedBankId),
     mappingConfirmed,
     validationPassed,
     mappedBankId,
+    validationReasonCode: validationAssessment.reasonCode,
+    validationWarningCode: validationAssessment.warningReasonCode,
+    validationNote: validationAssessment.note,
   };
 }
 
