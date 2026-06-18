@@ -310,6 +310,16 @@ function stringFromUnknown(value: unknown) {
   return typeof value === "string" ? value : null;
 }
 
+function booleanFromUnknown(value: unknown) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") return true;
+    if (normalized === "false") return false;
+  }
+  return null;
+}
+
 function asRecord(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -366,11 +376,13 @@ export function assessBreetValidationForSettlementAccount(
     ...(bankAccount.raw_verification_payload || {}),
     ...(options?.mapping?.raw_provider_response || {}),
   } as Record<string, unknown>;
-  const validationPayload = asRecord(raw.breet_bank_validation_payload);
+  const validationPayload = asRecord(raw.breet_bank_validation_payload) || asRecord(raw.bank_validation_payload);
   const validationPayloadData = asRecord(validationPayload?.data) || validationPayload;
   const hasValidationEvidence =
-    raw.breet_validation_passed === true ||
-    raw.breet_bank_validation_passed === true ||
+    booleanFromUnknown(raw.breet_validation_passed) === true ||
+    booleanFromUnknown(raw.breet_bank_validation_passed) === true ||
+    booleanFromUnknown(raw.validation_passed) === true ||
+    booleanFromUnknown(raw.bank_validation_passed) === true ||
     Boolean(validationPayload) ||
     Boolean(options?.validation);
   const mappedBankId =
@@ -1047,7 +1059,10 @@ export function getMerchantBreetMappingState(
       bank_id: bankAccount.bank_id || mapping?.provider_account_reference || null,
       raw_verification_payload: raw,
     }) || null;
-  const mappingConfirmed = raw.mapping_confirmed_by_admin === true || raw.breet_mapping_confirmed === true;
+  const mappingConfirmed =
+    booleanFromUnknown(raw.mapping_confirmed_by_admin) === true ||
+    booleanFromUnknown(raw.breet_mapping_confirmed) === true ||
+    booleanFromUnknown(raw.mapping_confirmed) === true;
   const validationAssessment = assessBreetValidationForSettlementAccount(
     {
       bank_id: bankAccount.bank_id || mapping?.provider_account_reference || null,
@@ -1065,9 +1080,11 @@ export function getMerchantBreetMappingState(
     }
   );
   const validationPassed =
-    (raw.breet_validation_passed === true ||
-      raw.breet_bank_validation_passed === true ||
-      Boolean(raw.breet_bank_validation_payload)) &&
+    (booleanFromUnknown(raw.breet_validation_passed) === true ||
+      booleanFromUnknown(raw.breet_bank_validation_passed) === true ||
+      booleanFromUnknown(raw.validation_passed) === true ||
+      booleanFromUnknown(raw.bank_validation_passed) === true ||
+      Boolean(raw.breet_bank_validation_payload || raw.bank_validation_payload)) &&
     validationAssessment.passed;
 
   return {
