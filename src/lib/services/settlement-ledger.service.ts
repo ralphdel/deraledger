@@ -75,6 +75,7 @@ export type MerchantPaymentMethodReadiness = {
   display_status: string;
   message: string | null;
   reason_code: string | null;
+  ready: boolean;
   available: boolean;
   affected: boolean;
   action_label: string | null;
@@ -549,6 +550,7 @@ export async function getMerchantPaymentMethodReadiness(
           display_status: getMerchantPaymentMethodDisplayStatus(method, "not_available", null),
           message: null,
           reason_code: null,
+          ready: false,
           available: false,
           affected: false,
           action_label: null,
@@ -563,6 +565,7 @@ export async function getMerchantPaymentMethodReadiness(
           display_status: getMerchantPaymentMethodDisplayStatus(method, "needs_attention", null),
           message: "Please update your payout account.",
           reason_code: "missing_verified_payout_account",
+          ready: false,
           available: false,
           affected: true,
           action_label: getMerchantPaymentMethodActionLabel(method, "needs_attention", null),
@@ -584,6 +587,7 @@ export async function getMerchantPaymentMethodReadiness(
           display_status: getMerchantPaymentMethodDisplayStatus(method, "not_available", null),
           message: null,
           reason_code: null,
+          ready: false,
           available: false,
           affected: false,
           action_label: null,
@@ -611,6 +615,7 @@ export async function getMerchantPaymentMethodReadiness(
           display_status: getMerchantPaymentMethodDisplayStatus(method, "ready", readiness),
           message: null,
           reason_code: null,
+          ready: true,
           available: true,
           affected: false,
           action_label: null,
@@ -625,6 +630,7 @@ export async function getMerchantPaymentMethodReadiness(
         display_status: getMerchantPaymentMethodDisplayStatus(method, status, readiness),
         message: getMerchantPaymentMethodMessage(method, status, readiness),
         reason_code: readiness.reason_code,
+        ready: false,
         available: false,
         affected: status !== "not_available",
         action_label: getMerchantPaymentMethodActionLabel(method, status, readiness),

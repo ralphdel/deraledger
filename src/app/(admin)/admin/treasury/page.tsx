@@ -505,14 +505,20 @@ export default function AdminTreasuryPage() {
           bankId: merchantBreetBankId,
         }),
       });
-      const payload = await res.json().catch(() => ({})) as { error?: string; message?: string; note?: string | null };
+      const payload = await res.json().catch(() => ({})) as {
+        error?: string;
+        success?: boolean;
+        ready?: boolean;
+        admin_message?: string | null;
+        merchant_message?: string;
+      };
       if (!res.ok || payload.error) {
         setFeedback(payload.error || "Failed to save merchant Breet bank mapping.");
       } else {
-        setMerchantValidationNote(payload.note || "Bank mapping saved. Account validation is still required.");
-        setFeedback(payload.message || "Bank mapping saved. Account validation is still required.");
-        await loadTreasury();
+        setMerchantValidationNote(payload.ready ? null : "Bank mapping saved. Account validation is still required.");
+        setFeedback(payload.admin_message || "Bank mapping saved. Account validation is still required.");
       }
+      await loadTreasury();
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "Failed to save merchant Breet bank mapping.");
     } finally {
@@ -537,18 +543,28 @@ export default function AdminTreasuryPage() {
       });
       const payload = await res.json().catch(() => ({})) as {
         success?: boolean;
+        status?: "ready" | "setup_required" | "requires_action" | "failed" | "timeout";
+        ready?: boolean;
         error?: string;
-        note?: string | null;
-        message?: string;
+        reason_code?: string | null;
+        admin_message?: string | null;
       };
-      if (!res.ok || payload.success === false) {
-        setMerchantValidationNote(payload.note || null);
-        setFeedback(payload.error || payload.message || "Failed to validate merchant account with Breet.");
+      if (!res.ok || payload.error) {
+        setMerchantValidationNote(null);
+        setFeedback(payload.error || "Failed to validate merchant account with Breet.");
       } else {
-        setMerchantValidationNote(payload.note || null);
-        setFeedback(payload.message || "Breet account validation passed.");
-        await loadTreasury();
+        if (payload.ready) {
+          setMerchantValidationNote(null);
+          setFeedback(payload.admin_message || "Breet account validation passed.");
+        } else if (payload.status === "timeout") {
+          setMerchantValidationNote(payload.reason_code || null);
+          setFeedback(payload.admin_message || "Breet validation timed out. Please retry.");
+        } else {
+          setMerchantValidationNote(payload.reason_code || null);
+          setFeedback(payload.admin_message || `Breet account validation failed: ${payload.reason_code || "breet_validation_failed"}.`);
+        }
       }
+      await loadTreasury();
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "Failed to validate merchant account with Breet.");
     } finally {

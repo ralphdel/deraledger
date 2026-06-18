@@ -17,6 +17,7 @@ import {
   withBreetTimeout,
 } from "@/lib/services/breet-crypto.service";
 import { getPaymentEnvironmentForMerchantEmail } from "@/lib/services/payment-routing.service";
+import { getMerchantPaymentMethodReadiness } from "@/lib/services/settlement-ledger.service";
 
 const supabase = createSupabaseClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -63,6 +64,22 @@ type MerchantReadinessStatus = {
   } | null;
   mappingEnvironment: "sandbox" | "live" | null;
   validationNote: string | null;
+};
+
+type CryptoActionResponse = {
+  success: boolean;
+  method: "crypto";
+  status: "ready" | "setup_required" | "requires_action" | "failed" | "timeout";
+  ready: boolean;
+  reason_code: string | null;
+  merchant_message: string;
+  admin_message: string | null;
+  readiness: {
+    method: "crypto";
+    label: string;
+    status: string;
+    ready: boolean;
+  };
 };
 
 const CONFIG_KEYS = [
@@ -585,15 +602,19 @@ export async function POST(request: Request) {
       },
     });
 
-    return NextResponse.json({
+    return NextResponse.json(await buildCryptoActionResponse({
+      merchantId,
+      environment: merchantContext.environment,
       success: true,
-      message: bankChanged
+      fallbackStatus: bankChanged || !existingMappingState.validationPassed ? "setup_required" : "ready",
+      fallbackReasonCode: bankChanged ? "breet_validation_pending" : null,
+      fallbackMerchantMessage: "Crypto payments are not yet connected to this payout account.",
+      fallbackAdminMessage: bankChanged
         ? "Bank mapping saved. Account validation is still required."
         : (existingMappingState.validationPassed
           ? "Bank mapping saved. Existing Breet account validation remains active."
           : "Bank mapping saved. Account validation is still required."),
-      note: bankChanged ? "Confirm / Save Mapping only stores the bank mapping. It does not validate the account." : null,
-    });
+    }));
   }
 
   if (body.action === "validate_merchant_breet_bank") {
@@ -714,24 +735,19 @@ export async function POST(request: Request) {
         },
       });
 
-      if (!assessment.passed) {
-        return NextResponse.json({
-          success: false,
-          reason_code: assessment.reasonCode || "breet_validation_failed",
-          error: "Breet account validation did not confirm this payout account.",
-          note: null,
-        }, { status: 409 });
-      }
-
-      return NextResponse.json({
+      return NextResponse.json(await buildCryptoActionResponse({
+        merchantId,
+        environment: merchantContext.environment,
         success: true,
-        validation,
-        reason_code: null,
-        note: assessment.note,
-        message: assessment.note
-          ? "Validation passed for sandbox. Breet returned a different account name, but bank and account number matched."
-          : "Breet account validation passed.",
-      });
+        fallbackStatus: assessment.passed ? "ready" : "requires_action",
+        fallbackReasonCode: assessment.reasonCode,
+        fallbackMerchantMessage: assessment.passed
+          ? "Crypto payouts are now connected to this payout account."
+          : "Crypto payouts could not be activated for this account. Please try again or contact support.",
+        fallbackAdminMessage: assessment.passed
+          ? (assessment.note || "Breet account validation passed.")
+          : `Breet account validation failed: ${assessment.reasonCode || "breet_validation_failed"}.`,
+      }));
     } catch (error) {
       const failedAt = new Date().toISOString();
       const message = error instanceof Error ? error.message : "Failed to validate merchant Breet bank account.";
@@ -771,7 +787,19 @@ export async function POST(request: Request) {
           last_sync_at: failedAt,
         }, { onConflict: "settlement_account_id,provider_name,environment" });
 
-      return NextResponse.json({ success: false, error: message, reason_code: reasonCode }, { status: 502 });
+      return NextResponse.json(await buildCryptoActionResponse({
+        merchantId,
+        environment: merchantContext.environment,
+        success: false,
+        fallbackStatus: reasonCode === "breet_validation_timeout" ? "timeout" : "failed",
+        fallbackReasonCode: reasonCode,
+        fallbackMerchantMessage: reasonCode === "breet_validation_timeout"
+          ? "Crypto setup is taking longer than expected. Please try again."
+          : "Crypto payouts could not be activated for this account. Please try again or contact support.",
+        fallbackAdminMessage: reasonCode === "breet_validation_timeout"
+          ? "Breet validation timed out. Please retry."
+          : `Breet account validation failed: ${message}`,
+      }));
     }
   }
 
@@ -803,6 +831,54 @@ function maskAccountNumber(accountNumber?: string | null) {
   const value = String(accountNumber || "").trim();
   if (!value) return null;
   return `****${value.slice(-4)}`;
+}
+
+async function buildCryptoActionResponse(input: {
+  merchantId: string;
+  environment: "sandbox" | "live";
+  success: boolean;
+  fallbackStatus: CryptoActionResponse["status"];
+  fallbackReasonCode?: string | null;
+  fallbackMerchantMessage: string;
+  fallbackAdminMessage: string | null;
+}) {
+  const readinessSnapshot = await getMerchantPaymentMethodReadiness(supabase, {
+    merchantId: input.merchantId,
+    environment: input.environment,
+    purpose: "invoice_payment",
+  });
+  const cryptoReadiness = readinessSnapshot.methods.find((entry) => entry.method === "crypto");
+  const ready = Boolean(cryptoReadiness?.ready);
+  let status: CryptoActionResponse["status"] = input.fallbackStatus;
+  if (ready) {
+    status = "ready";
+  } else {
+    const reasonCode = String(cryptoReadiness?.reason_code || input.fallbackReasonCode || "");
+    if (reasonCode === "breet_validation_timeout") status = "timeout";
+    else if (reasonCode === "breet_validation_failed") status = "failed";
+    else if (["needs_attention", "temporarily_unavailable"].includes(String(cryptoReadiness?.status || ""))) status = "requires_action";
+    else status = "setup_required";
+  }
+
+  return {
+    success: input.success,
+    method: "crypto" as const,
+    status,
+    ready,
+    reason_code: cryptoReadiness?.reason_code || input.fallbackReasonCode || null,
+    merchant_message: ready
+      ? "Crypto payouts are now connected to this payout account."
+      : (cryptoReadiness?.message || input.fallbackMerchantMessage),
+    admin_message: ready
+      ? (input.fallbackAdminMessage || "Breet account validation passed.")
+      : input.fallbackAdminMessage,
+    readiness: {
+      method: "crypto" as const,
+      label: cryptoReadiness?.label || "Crypto payments",
+      status: cryptoReadiness?.display_status || (ready ? "Ready" : "Setup required"),
+      ready,
+    },
+  };
 }
 
 async function loadMerchantReadiness(

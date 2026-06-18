@@ -48,6 +48,40 @@ type RefreshResult = {
   method: PaymentMethod;
   provider: PaymentProvider | null;
   message: string;
+  reasonCode?: string | null;
+  adminMessage?: string | null;
+};
+
+export type PayoutSetupActionStatus =
+  | "ready"
+  | "setup_required"
+  | "requires_action"
+  | "failed"
+  | "timeout";
+
+type MerchantReadinessSnapshot = Awaited<ReturnType<typeof getMerchantPaymentMethodReadiness>>;
+type MerchantReadinessMethod = MerchantReadinessSnapshot["methods"][number];
+
+export type PayoutSetupActionResult = {
+  success: boolean;
+  method: PaymentMethod;
+  provider: PaymentProvider | null;
+  status: PayoutSetupActionStatus;
+  ready: boolean;
+  reason_code: string | null;
+  merchant_message: string;
+  admin_message: string | null;
+  readiness: {
+    method: PaymentMethod;
+    label: string;
+    status: string;
+    ready: boolean;
+  };
+  payment_method_readiness: MerchantReadinessSnapshot["methods"];
+  readiness_banner: MerchantReadinessSnapshot["banner"];
+  has_payout_account: boolean;
+  actorType: ActorType;
+  environment: PaymentEnvironment;
 };
 
 function asRecord(value: unknown) {
@@ -579,10 +613,12 @@ async function refreshBreetSetup(
 
     if (!assessment.passed) {
       return {
-        success: false,
+        success: true,
         method: "crypto",
         provider: "breet",
         message: "Crypto payouts could not be activated for this account. Please try again or contact support.",
+        reasonCode: assessment.reasonCode,
+        adminMessage: "Breet account validation did not confirm the active payout account.",
       };
     }
 
@@ -591,6 +627,8 @@ async function refreshBreetSetup(
       method: "crypto",
       provider: "breet",
       message: "Crypto payouts are now connected to this payout account.",
+      reasonCode: null,
+      adminMessage: "Breet account validation passed.",
     };
   } catch (error) {
     const lastError = error instanceof Error ? error.message : "Unknown Breet provider error";
@@ -637,8 +675,75 @@ async function refreshBreetSetup(
       method: "crypto",
       provider: "breet",
       message: "Crypto payouts could not be activated for this account. Please try again or contact support.",
+      reasonCode,
+      adminMessage:
+        reasonCode === "breet_validation_timeout"
+          ? "Breet validation timed out. Please retry."
+          : "Breet account validation failed before confirming the active payout account.",
     };
   }
+}
+
+function deriveActionStatus(
+  readinessMethod: MerchantReadinessMethod | undefined,
+  refreshResult: RefreshResult
+): PayoutSetupActionStatus {
+  const reasonCode = String(readinessMethod?.reason_code || refreshResult.reasonCode || "");
+  if (readinessMethod?.ready) return "ready";
+  if (reasonCode === "breet_validation_timeout") return "timeout";
+  if (reasonCode === "breet_validation_failed") return "failed";
+  if (["needs_attention", "temporarily_unavailable"].includes(String(readinessMethod?.status || ""))) {
+    return "requires_action";
+  }
+  return "setup_required";
+}
+
+function deriveActionMessages(input: {
+  method: PaymentMethod;
+  ready: boolean;
+  actionStatus: PayoutSetupActionStatus;
+  refreshResult: RefreshResult;
+  readinessMethod: MerchantReadinessMethod | undefined;
+}) {
+  if (input.method === "crypto") {
+    if (input.ready) {
+      return {
+        merchant_message: "Crypto payouts are now connected to this payout account.",
+        admin_message:
+          input.refreshResult.adminMessage ||
+          "Breet account validation passed.",
+      };
+    }
+    if (input.actionStatus === "timeout") {
+      return {
+        merchant_message: "Crypto setup is taking longer than expected. Please try again.",
+        admin_message:
+          input.refreshResult.adminMessage ||
+          "Breet validation timed out. Please retry.",
+      };
+    }
+    if (input.actionStatus === "failed" || input.actionStatus === "requires_action") {
+      return {
+        merchant_message: "Crypto payouts could not be activated for this account. Please try again or contact support.",
+        admin_message:
+          input.refreshResult.adminMessage ||
+          "Breet account validation failed.",
+      };
+    }
+    return {
+      merchant_message:
+        input.readinessMethod?.message ||
+        "Crypto payments are not yet connected to this payout account.",
+      admin_message:
+        input.refreshResult.adminMessage ||
+        "Bank mapping saved. Account validation is still required.",
+    };
+  }
+
+  return {
+    merchant_message: input.refreshResult.message || "Payment setup refreshed for your current payout account.",
+    admin_message: input.refreshResult.adminMessage || input.refreshResult.message || "Payment setup refreshed.",
+  };
 }
 
 export async function refreshPayoutMethodSetup(
@@ -649,7 +754,7 @@ export async function refreshPayoutMethodSetup(
     actorType: ActorType;
     environment?: PaymentEnvironment;
   }
-) {
+): Promise<PayoutSetupActionResult> {
   const merchant = await loadMerchant(supabase, input.merchantId);
   const environment = input.environment || getPaymentEnvironmentForMerchantEmail(merchant.email);
   const account = await loadActiveSettlementAccount(supabase, input.merchantId);
@@ -677,13 +782,37 @@ export async function refreshPayoutMethodSetup(
     environment,
     purpose: "invoice_payment",
   });
+  const readinessMethod = readiness.methods.find((entry) => entry.method === input.method);
+  const ready = Boolean(readinessMethod?.ready);
+  const status = deriveActionStatus(readinessMethod, refreshResult);
+  const messages = deriveActionMessages({
+    method: input.method,
+    ready,
+    actionStatus: status,
+    refreshResult,
+    readinessMethod,
+  });
 
   return {
-    ...refreshResult,
+    success: refreshResult.success,
     method: input.method,
+    provider: refreshResult.provider,
+    status,
+    ready,
+    reason_code: readinessMethod?.reason_code || refreshResult.reasonCode || null,
+    merchant_message: messages.merchant_message,
+    admin_message: messages.admin_message,
+    readiness: {
+      method: input.method,
+      label: readinessMethod?.label || input.method,
+      status: readinessMethod?.display_status || (ready ? "Ready" : "Setup required"),
+      ready,
+    },
+    payment_method_readiness: readiness.methods,
+    readiness_banner: readiness.banner,
+    has_payout_account: readiness.has_payout_account,
     actorType: input.actorType,
     environment,
-    readiness,
   };
 }
 
@@ -694,11 +823,19 @@ export async function refreshAllPayoutMethodSetup(
     actorType: ActorType;
     environment?: PaymentEnvironment;
   }
-) {
+): Promise<{
+  success: boolean;
+  results: PayoutSetupActionResult[];
+  environment: PaymentEnvironment;
+  payment_method_readiness: MerchantReadinessSnapshot["methods"];
+  readiness_banner: MerchantReadinessSnapshot["banner"];
+  has_payout_account: boolean;
+  message: string;
+}> {
   const merchant = await loadMerchant(supabase, input.merchantId);
   const environment = input.environment || getPaymentEnvironmentForMerchantEmail(merchant.email);
   const methods: PaymentMethod[] = ["card", "bank_transfer", "ussd", "crypto"];
-  const results: RefreshResult[] = [];
+  const results: PayoutSetupActionResult[] = [];
 
   for (const method of methods) {
     try {
@@ -712,12 +849,7 @@ export async function refreshAllPayoutMethodSetup(
         actorType: input.actorType,
         environment,
       });
-      results.push({
-        success: result.success,
-        method,
-        provider: result.provider,
-        message: result.message,
-      });
+      results.push(result);
     } catch {
       continue;
     }
@@ -733,6 +865,11 @@ export async function refreshAllPayoutMethodSetup(
     success: results.every((result) => result.success),
     results,
     environment,
-    readiness,
+    payment_method_readiness: readiness.methods,
+    readiness_banner: readiness.banner,
+    has_payout_account: readiness.has_payout_account,
+    message: readiness.banner.show
+      ? "Payment setup refreshed. Some payment methods still need setup."
+      : "Payment setup refreshed for your current payout account.",
   };
 }

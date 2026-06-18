@@ -232,7 +232,9 @@ export default function SettlementSettingsPage() {
       setPaymentMethodReadiness(payload.payment_method_readiness || []);
       setReadinessBanner(payload.readiness_banner || null);
       setHasPayoutAccount(Boolean(payload.has_payout_account || (payload.accounts || []).length || hasPayoutAccount));
-      setRefreshMessage("Payment setup refreshed for your current payout account.");
+      setRefreshMessage(payload.message || "Payment setup refreshed for your current payout account.");
+      setLoadingAccounts(true);
+      await refreshSettlementAccounts();
     } catch (error) {
       if (!options?.silentError) {
         setRefreshError(error instanceof Error ? error.message : "Failed to refresh payment setup.");
@@ -252,14 +254,47 @@ export default function SettlementSettingsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ method }),
       });
-      const payload = await response.json();
+      const payload = await response.json() as {
+        error?: string;
+        success?: boolean;
+        status?: "ready" | "setup_required" | "requires_action" | "failed" | "timeout";
+        ready?: boolean;
+        merchant_message?: string;
+        payment_method_readiness?: typeof paymentMethodReadiness;
+        readiness_banner?: typeof readinessBanner;
+        has_payout_account?: boolean;
+        readiness?: { method: string; label: string; status: string; ready: boolean };
+      };
       if (!response.ok) {
         throw new Error(payload.error || "Failed to refresh payment setup.");
       }
       setPaymentMethodReadiness(payload.payment_method_readiness || []);
       setReadinessBanner(payload.readiness_banner || null);
       setHasPayoutAccount(Boolean(payload.has_payout_account || hasPayoutAccount));
-      setRefreshMessage(payload.message || "Payment setup refreshed.");
+      const cryptoReady =
+        method === "crypto" &&
+        payload.ready === true &&
+        payload.readiness?.method === "crypto" &&
+        payload.readiness.ready === true &&
+        payload.readiness.status === "Ready";
+
+      if (method === "crypto") {
+        if (cryptoReady) {
+          setRefreshMessage("Crypto payouts are now connected to this payout account.");
+        } else if (payload.status === "timeout") {
+          setRefreshError("Crypto setup is taking longer than expected. Please try again.");
+        } else if (payload.ready === false) {
+          setRefreshError(payload.merchant_message || "Crypto payouts could not be activated for this account. Please try again or contact support.");
+        } else {
+          setRefreshError("Crypto payouts could not be activated for this account. Please try again or contact support.");
+        }
+      } else if (payload.merchant_message) {
+        setRefreshMessage(payload.merchant_message);
+      } else {
+        setRefreshMessage("Payment setup refreshed.");
+      }
+      setLoadingAccounts(true);
+      await refreshSettlementAccounts();
     } catch (error) {
       setRefreshError(error instanceof Error ? error.message : "Failed to refresh payment setup.");
     } finally {

@@ -34,13 +34,7 @@ export async function POST(request: Request) {
       actorType: "merchant",
     });
 
-    return NextResponse.json({
-      success: result.success,
-      message: result.message,
-      payment_method_readiness: result.readiness.methods,
-      readiness_banner: result.readiness.banner,
-      has_payout_account: result.readiness.has_payout_account,
-    });
+    return NextResponse.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to refresh payment setup.";
     return NextResponse.json({ error: message }, { status: 500 });
