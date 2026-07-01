@@ -649,7 +649,7 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
                 <p className="text-sm text-white/60">
                   Need online collections?{" "}
                   <Link href="/onboarding/individual" className="font-medium text-[#B58CFF] hover:text-white transition-colors">
-                    Choose Individual / Collections
+                    Choose Solo Lite
                   </Link>
                 </p>
               ) : (

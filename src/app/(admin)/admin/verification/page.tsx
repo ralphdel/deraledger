@@ -672,7 +672,7 @@ export default function VerificationQueuePage() {
                       "Not submitted"
                     );
                     const identityLabel = isBusinessPlan ? (isRepresentativeFlow ? "Representative Identity" : "Owner/Director Identity") : "Identity Verification";
-                    const identitySectionLabel = isBusinessPlan ? (isRepresentativeFlow ? "Representative Identity Evidence" : "Owner/Director Identity Evidence") : "Individual Identity Evidence";
+                    const identitySectionLabel = isBusinessPlan ? (isRepresentativeFlow ? "Representative Identity Evidence" : "Owner/Director Identity Evidence") : "Solo Lite Identity Evidence";
                     const repIdentityBlocked = repNameReviewState === "mismatch";
                     const repHasCurrentEvidence = !!repLog;
                     const repIdentityResolvedByCompliance = repNameReviewState === "partial" && repIdentityReviewApproved;
@@ -1109,7 +1109,7 @@ export default function VerificationQueuePage() {
                           <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
                             {[ 
                               { label: "Current active provider", value: activeProvider, note: "System default", tone: "info" as const },
-                              { label: isBusinessPlan ? "Representative evidence provider" : "Individual identity evidence provider", value: formattedRepProvider, note: repProviderUnknown ? "Unknown provider" : isHistoricalRepProvider ? "Historical evidence" : "Current evidence", tone: repProviderUnknown ? "blocked" as const : isHistoricalRepProvider ? "pending" as const : "neutral" as const },
+                              { label: isBusinessPlan ? "Representative evidence provider" : "Solo Lite identity evidence provider", value: formattedRepProvider, note: repProviderUnknown ? "Unknown provider" : isHistoricalRepProvider ? "Historical evidence" : "Current evidence", tone: repProviderUnknown ? "blocked" as const : isHistoricalRepProvider ? "pending" as const : "neutral" as const },
                               { label: "CAC evidence provider", value: !isBusinessPlan ? "Not required" : formattedCacProvider, note: !isBusinessPlan ? "Not required for this plan" : formattedCacProvider.toLowerCase() === "unknown" ? "Unknown provider" : isHistoricalCacProvider ? "Historical evidence" : "Current evidence", tone: !isBusinessPlan ? "neutral" as const : formattedCacProvider.toLowerCase() === "unknown" ? "blocked" as const : isHistoricalCacProvider ? "pending" as const : "neutral" as const },
                               { label: "Director identity evidence provider", value: !requiresDirectorFlow ? "Not required" : formattedDirectorProviders.length > 0 ? formattedDirectorProviders.join(", ") : "No evidence yet", note: !requiresDirectorFlow ? "Not required for this flow" : hasUnknownDirectorProvider ? "Unknown provider present" : hasHistoricalDirectorProvider ? "Historical evidence present" : "Current evidence", tone: !requiresDirectorFlow ? "neutral" as const : hasUnknownDirectorProvider ? "blocked" as const : hasHistoricalDirectorProvider ? "pending" as const : "neutral" as const },
                             ].map((provider) => (
@@ -1271,7 +1271,7 @@ export default function VerificationQueuePage() {
                             <span className="flex items-center justify-between gap-3">
                               <span>
                                 <span className="block text-sm font-semibold text-blue-950">{identitySectionLabel}</span>
-                                <span className="block text-xs text-blue-700">{isBusinessPlan ? "Representative-only identity evidence, separate from director identity review." : "Individual identity evidence and provider traceability review."}</span>
+                                <span className="block text-xs text-blue-700">{isBusinessPlan ? "Representative-only identity evidence, separate from director identity review." : "Solo Lite identity evidence and provider traceability review."}</span>
                               </span>
                               <span className="text-[10px] font-medium text-blue-700">Details collapsed by default</span>
                             </span>

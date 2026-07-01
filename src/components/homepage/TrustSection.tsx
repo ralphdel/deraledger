@@ -22,7 +22,7 @@ export function TrustSection() {
               Compliant infrastructure designed for verified operations.
             </h2>
             <p className="text-sm md:text-base text-white/60 mb-8 leading-relaxed">
-              We keep your operational receivables safe by enforcing clear, secure structures. Verify your corporate profile to unlock online collections powered securely by bank-grade standards.
+              We keep your operational receivables safe by enforcing clear, secure structures. Verify your business profile to unlock online collections powered securely by bank-grade standards.
             </p>
 
             <div className="grid sm:grid-cols-2 gap-6">

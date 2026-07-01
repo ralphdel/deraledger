@@ -173,9 +173,9 @@ export default function ReferencesPage() {
               <Lock className="w-7 h-7 text-amber-700 dark:text-amber-400" />
             </div>
             <div>
-              <h2 className="text-xl font-bold text-amber-900 dark:text-amber-300 mb-2">References require Individual plan</h2>
+              <h2 className="text-xl font-bold text-amber-900 dark:text-amber-300 mb-2">References require Solo Lite or Business</h2>
               <p className="text-amber-800 dark:text-amber-400 max-w-md text-sm leading-relaxed">
-                References let you group deposits, partial payments, and milestone invoices under a single project. Upgrade to the <strong>Individual</strong> or <strong>Business</strong> plan to unlock this feature.
+                References let you group deposits, partial payments, and milestone invoices under a single project. Upgrade to the <strong>Solo Lite</strong> or <strong>Business</strong> plan to unlock this feature.
               </p>
             </div>
             <a href="/settings/billing">

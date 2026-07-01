@@ -285,7 +285,7 @@ export default function OnboardingPage() {
             </div>
             <h2 className="text-3xl font-bold text-foreground dark:text-white">Verification follows the workflow.</h2>
             <p className="mx-auto mt-4 max-w-2xl text-base leading-relaxed text-muted-foreground dark:text-white/70">
-              Starter opens immediately. Individual collections require identity verification. Business
+              Starter opens immediately. Solo Lite collections require identity verification. Business
               workspaces use business and authority checks for higher trust and unlimited collections.
             </p>
             <div className="mt-8 flex flex-wrap justify-center gap-4 text-sm font-semibold text-foreground dark:text-white">

@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/select";
 import { createClient } from "@/lib/supabase/client";
 import { formatNaira } from "@/lib/calculations";
+import { getPlanDisplayName, getPlanMonthlyPriceLabel } from "@/lib/plans";
 import type { Merchant, AuditLog } from "@/lib/types";
 import {
   adminDeactivateMerchantAction, adminReactivateMerchantAction,
@@ -440,8 +441,8 @@ export default function MerchantDetailPage() {
             <SelectTrigger className="border-2"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="starter">Starter (Free)</SelectItem>
-              <SelectItem value="individual">Individual (₦5,000/mo)</SelectItem>
-              <SelectItem value="corporate">Business (₦20,000/mo)</SelectItem>
+              <SelectItem value="individual">{getPlanDisplayName("individual")} ({getPlanMonthlyPriceLabel("individual")})</SelectItem>
+              <SelectItem value="corporate">{getPlanDisplayName("corporate")} ({getPlanMonthlyPriceLabel("corporate")})</SelectItem>
             </SelectContent>
           </Select>
           <DialogFooter>

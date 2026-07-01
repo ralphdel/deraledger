@@ -1,9 +1,9 @@
--- ════════════════════════════════════════════════════════════
+-- ══════════════════════════════════════════════════════════════
 -- DeraLedger — Legacy Role Cleanup
 -- Run this AFTER fix_predefined_roles.sql
 -- Removes legacy system roles: owner, support, admin_support
 -- Final state: only admin, accountant, viewer remain as system roles
--- ════════════════════════════════════════════════════════════
+-- ══════════════════════════════════════════════════════════════
 
 -- Step 1: Reassign any merchant_team rows pointing at legacy roles
 -- support → viewer

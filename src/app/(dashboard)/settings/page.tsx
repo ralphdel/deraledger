@@ -142,7 +142,7 @@ function getPlanProgressTitle(isStarter: boolean, isCorporate: boolean, relation
     return "Business & Director Approval Progress";
   }
   if (isCorporate) return "Director-Owned Business Verification";
-  return "Your Individual Verification Progress";
+  return "Your Solo Lite Verification Progress";
 }
 
 function getIdentitySectionTitle(isCorporate: boolean, relationshipClaim?: string | null) {
@@ -1269,7 +1269,7 @@ export default function SettingsPage() {
                             ? merchant?.relationship_claim === "representative_claim"
                               ? "You are opening this account as a representative of the business. We verify you, verify the business, and then ask a listed director to approve access."
                               : "You are registering as a director or owner of this business. We verify your identity, match it with the business record, and then complete the business checks."
-                            : "Complete these steps to unlock payment collection on your Individual plan."}
+                            : "Complete these steps to unlock payment collection on your Solo Lite plan."}
                         </p>
                         {!liveFeaturesActive && liveFeatureLockReasons.length > 0 ? (
                           <div className="rounded-xl border border-amber-200 bg-white p-3 text-sm text-amber-700">
@@ -2519,9 +2519,9 @@ export default function SettingsPage() {
                 </p>
                 <p className="mt-2 text-sm font-semibold text-neutral-900">
                   {isStarter
-                    ? "Upgrade to Individual or Business"
+                    ? "Upgrade to Solo Lite or Business"
                     : isIndividual
-                    ? "Complete your Individual verification to start collecting payments"
+                    ? "Complete your Solo Lite verification to start collecting payments"
                     : "Complete Business verification"}
                 </p>
                 <p className="mt-2 text-sm text-neutral-500">
@@ -2536,7 +2536,7 @@ export default function SettingsPage() {
                       href="/settings/upgrade/individual"
                       className="flex items-center justify-between rounded-xl border border-purp-200 px-4 py-3 text-sm font-medium text-purp-900 transition hover:bg-purp-50"
                     >
-                      Upgrade to Individual
+                      Upgrade to Solo Lite
                       <ArrowRight className="h-4 w-4" />
                     </Link>
                     <Link

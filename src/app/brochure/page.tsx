@@ -446,7 +446,7 @@ const slides = [
         </div>
 
         <div className="border-t border-neutral-100 pt-6 text-xs text-neutral-400">
-          Provides corporate and individual tiers complete operational transparency.
+          Provides Business and Solo Lite tiers complete operational transparency.
         </div>
       </div>
     )

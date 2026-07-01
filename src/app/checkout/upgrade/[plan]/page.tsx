@@ -100,15 +100,17 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
   const [relationshipClaim, setRelationshipClaim] = useState<"owner_affiliated_claim" | "representative_claim" | null>(null);
   const [verificationDisclosureAccepted, setVerificationDisclosureAccepted] = useState(false);
   const [disclosureVersion, setDisclosureVersion] = useState("1.0");
+  const checkingPlanAvailability = plan === "solo_plus" && !soloPlusAvailabilityLoaded;
+  const planAvailable = plan !== "solo_plus" || soloPlusAvailable;
 
   useEffect(() => {
-    if (paystackLoaded.current) return;
+    if (checkingPlanAvailability || !planAvailable || paystackLoaded.current) return;
     const script = document.createElement("script");
     script.src = "https://js.paystack.co/v1/inline.js";
     script.async = true;
     document.body.appendChild(script);
     paystackLoaded.current = true;
-  }, []);
+  }, [checkingPlanAvailability, planAvailable]);
 
   useEffect(() => {
     if (plan !== "solo_plus") {
@@ -133,9 +135,6 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
       active = false;
     };
   }, [plan]);
-
-  const checkingPlanAvailability = plan === "solo_plus" && !soloPlusAvailabilityLoaded;
-  const planAvailable = plan !== "solo_plus" || soloPlusAvailable;
 
   useEffect(() => {
     if (plan === "solo_plus" && !soloPlusAvailabilityLoaded) {

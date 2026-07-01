@@ -1,5 +1,7 @@
 const { chromium, request } = require("playwright");
 
+const BASE_URL = process.env.PHASE1_QA_BASE_URL || process.env.BASE_URL || "http://127.0.0.1:3100";
+
 function attachDiagnostics(page) {
   const issues = {
     console: [],
@@ -22,6 +24,9 @@ function attachDiagnostics(page) {
     const failureText = req.failure()?.errorText || "unknown";
     const url = req.url();
     if (failureText === "net::ERR_ABORTED") {
+      return;
+    }
+    if (url.includes("paystack.com/public/css/button.min.css") && failureText === "net::ERR_BLOCKED_BY_RESPONSE.NotSameOrigin") {
       return;
     }
     issues.requestFailures.push(`${req.method()} ${url} :: ${failureText}`);
@@ -55,7 +60,7 @@ async function runPageCheck(browser, label, url, interact) {
   await runPageCheck(
     context,
     "onboarding plan selection",
-    "http://127.0.0.1:3000/onboarding",
+    `${BASE_URL}/onboarding`,
     async (page) => {
       await page.getByText("Solo Lite", { exact: true }).waitFor();
       await page.getByText("Business", { exact: true }).waitFor();
@@ -67,7 +72,7 @@ async function runPageCheck(browser, label, url, interact) {
   await runPageCheck(
     context,
     "individual onboarding",
-    "http://127.0.0.1:3000/onboarding/individual",
+    `${BASE_URL}/onboarding/individual`,
     async (page) => {
       await page.getByLabel("Email Address").fill("phase1@example.com");
       await page.getByLabel("Trading Name").fill("Phase One Store");
@@ -79,7 +84,7 @@ async function runPageCheck(browser, label, url, interact) {
   await runPageCheck(
     context,
     "solo plus onboarding block",
-    "http://127.0.0.1:3000/onboarding/solo_plus",
+    `${BASE_URL}/onboarding/solo_plus`,
     async (page) => {
       await page.getByText("Solo Plus is currently unavailable", { exact: false }).waitFor();
     },
@@ -88,36 +93,26 @@ async function runPageCheck(browser, label, url, interact) {
   await runPageCheck(
     context,
     "solo plus subscription block",
-    "http://127.0.0.1:3000/checkout/subscription?plan=solo_plus",
+    `${BASE_URL}/checkout/subscription?plan=solo_plus`,
     async (page) => {
-      await page.waitForLoadState("networkidle");
-      const body = await page.locator("body").textContent();
-      const currentUrl = page.url();
-      if (!body?.includes("This plan is not available right now.") && !currentUrl.includes("/onboarding")) {
-        throw new Error(`Expected solo_plus subscription direct URL to be blocked, got ${currentUrl}`);
-      }
+      await page.getByText("This plan is not available right now.", { exact: true }).waitFor();
     },
   );
 
   await runPageCheck(
     context,
     "solo plus upgrade block",
-    "http://127.0.0.1:3000/checkout/upgrade/solo_plus",
+    `${BASE_URL}/checkout/upgrade/solo_plus`,
     async (page) => {
-      await page.waitForLoadState("networkidle");
-      const body = await page.locator("body").textContent();
-      const currentUrl = page.url();
-      if (
-        !body?.includes("This plan is not available right now.") &&
-        !currentUrl.includes("/settings") &&
-        !currentUrl.includes("/login")
-      ) {
-        throw new Error(`Expected solo_plus upgrade direct URL to be blocked, got ${currentUrl}`);
+      await page.getByText("This plan is not available right now.", { exact: true }).waitFor();
+      const paystackScripts = await page.locator('script[src*="paystack.co"]').count();
+      if (paystackScripts !== 0) {
+        throw new Error(`Expected blocked solo_plus upgrade route to avoid Paystack assets, found ${paystackScripts} script tag(s).`);
       }
     },
   );
 
-  const api = await request.newContext({ baseURL: "http://127.0.0.1:3000" });
+  const api = await request.newContext({ baseURL: BASE_URL });
   const createSession = await api.post("/api/onboarding/create-session", {
     data: {
       email: "phase1@example.com",

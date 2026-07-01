@@ -8,7 +8,7 @@
 
 import type { Merchant } from "@/lib/types";
 import { getLiveFeatureLockReasons, isLiveFeatureEnabled, isSuperadminSandboxMerchant } from "@/lib/services/onboarding-flow.service";
-import { normalizeCapabilityPlanCode } from "@/lib/plans";
+import { getPlanDisplayName, normalizeCapabilityPlanCode } from "@/lib/plans";
 
 // ── Plan limits (mirrors platform_settings in DB) ─────────────────────────────
 export const PLAN_LIMITS = {
@@ -115,7 +115,7 @@ export function canCreateCollectionInvoice(
   if (!limits.canCollect) {
     return {
       allowed: false,
-      reason: "Collection invoices are not available on the Starter plan. Upgrade to Individual or Business.",
+      reason: `Collection invoices are not available on the ${getPlanDisplayName("starter")} plan. Upgrade to ${getPlanDisplayName("individual")} or ${getPlanDisplayName("corporate")}.`,
       upgradeRequired: "individual",
     };
   }
@@ -147,7 +147,7 @@ export function canAddActiveCollectionInvoice(
   ) {
     return {
       allowed: false,
-      reason: `You have reached the limit of ${limits.activeCollectionLimit} active collection invoices on the Individual plan. Close some invoices or upgrade to Business.`,
+      reason: `You have reached the limit of ${limits.activeCollectionLimit} active collection invoices on the ${getPlanDisplayName("individual")} plan. Close some invoices or upgrade to ${getPlanDisplayName("corporate")}.`,
       upgradeRequired: "corporate",
     };
   }
@@ -282,7 +282,7 @@ export function canAccessFeature(
  * Checks if a merchant can collect payments based on identity verification alone.
  *
  * This is the PROGRESSIVE unlock gate:
- * - Individual/Corporate merchants with identity_verified = true can collect
+ * - Solo Lite/Business merchants with identity_verified = true can collect
  *   without waiting for full business CAC verification.
  *
  * This runs ALONGSIDE the existing canCreateCollectionInvoice() check.
@@ -299,7 +299,7 @@ export function canCollectAfterIdentityVerification(
   if (plan === "starter") {
     return {
       allowed: false,
-      reason: "Collection invoices are not available on the Starter plan. Upgrade to Individual or Business.",
+      reason: `Collection invoices are not available on the ${getPlanDisplayName("starter")} plan. Upgrade to ${getPlanDisplayName("individual")} or ${getPlanDisplayName("corporate")}.`,
       upgradeRequired: "individual",
     };
   }
@@ -307,7 +307,7 @@ export function canCollectAfterIdentityVerification(
   if (!merchant.identity_verified) {
     return {
       allowed: false,
-      reason: "Complete BVN and selfie verification first to enable individual payment collection.",
+      reason: `Complete BVN and selfie verification first to enable ${getPlanDisplayName("individual")} payment collection.`,
     };
   }
 

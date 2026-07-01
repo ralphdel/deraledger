@@ -130,16 +130,18 @@ function SubscriptionCheckoutContent() {
   const [soloPlusAvailabilityLoaded, setSoloPlusAvailabilityLoaded] = useState(plan !== "solo_plus");
   const paystackLoaded = useRef(false);
   const cryptoStorageKey = `breet-subscription-crypto:${context}:${plan}`;
+  const checkingPlanAvailability = plan === "solo_plus" && !soloPlusAvailabilityLoaded;
+  const planAvailable = plan !== "solo_plus" || soloPlusAvailable;
 
   // Load Paystack inline JS
   useEffect(() => {
-    if (paystackLoaded.current) return;
+    if (checkingPlanAvailability || !planAvailable || paystackLoaded.current) return;
     const script = document.createElement("script");
     script.src = "https://js.paystack.co/v1/inline.js";
     script.async = true;
     document.body.appendChild(script);
     paystackLoaded.current = true;
-  }, []);
+  }, [checkingPlanAvailability, planAvailable]);
 
   useEffect(() => {
     if (plan !== "solo_plus") {
@@ -165,8 +167,6 @@ function SubscriptionCheckoutContent() {
     };
   }, [plan]);
 
-  const checkingPlanAvailability = plan === "solo_plus" && !soloPlusAvailabilityLoaded;
-  const planAvailable = plan !== "solo_plus" || soloPlusAvailable;
 
   // ── Load checkout data based on context ────────────────────────────────────
   useEffect(() => {
