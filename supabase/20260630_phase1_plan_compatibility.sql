@@ -27,18 +27,18 @@ ALTER TABLE public.onboarding_sessions
 
 ALTER TABLE public.onboarding_sessions
   ADD CONSTRAINT onboarding_sessions_plan_check
-  CHECK (plan IN ('starter', 'individual', 'corporate', 'solo_plus'));
+  CHECK (plan IN ('starter', 'individual', 'solo_lite', 'solo_plus', 'corporate', 'business'));
 
 ALTER TABLE public.workspaces
   DROP CONSTRAINT IF EXISTS workspaces_plan_type_check;
 
 ALTER TABLE public.workspaces
   ADD CONSTRAINT workspaces_plan_type_check
-  CHECK (plan_type IN ('starter', 'individual', 'corporate', 'solo_plus'));
+  CHECK (plan_type IN ('starter', 'individual', 'solo_lite', 'solo_plus', 'corporate', 'business'));
 
 ALTER TABLE public.workspace_subscriptions
   DROP CONSTRAINT IF EXISTS workspace_subscriptions_plan_type_check;
 
 ALTER TABLE public.workspace_subscriptions
   ADD CONSTRAINT workspace_subscriptions_plan_type_check
-  CHECK (plan_type IN ('starter', 'individual', 'corporate', 'solo_plus'));
+  CHECK (plan_type IN ('starter', 'individual', 'solo_lite', 'solo_plus', 'corporate', 'business'));
