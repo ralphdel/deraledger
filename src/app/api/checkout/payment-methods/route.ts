@@ -13,21 +13,12 @@ import {
   type PaymentPurpose,
 } from "@/lib/services/payment-routing.service";
 import { filterMethodsBySettlementReadiness } from "@/lib/services/settlement-ledger.service";
+import { assertPlanAvailable, getPlanPrice, getStoragePlanCode, normalizePlanCode } from "@/lib/plans";
 
 const supabase = createSupabaseClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
-
-const SUBSCRIPTION_PLAN_PRICES_NGN: Record<string, number> = {
-  individual: 5000,
-  corporate: 20000,
-};
-
-const UPGRADE_PLAN_PRICES_NGN: Record<string, number> = {
-  individual: 5000,
-  corporate: 20000,
-};
 
 function resolvePurpose(kind: string | null): PaymentPurpose | null {
   if (kind === "subscription") return "plan_subscription";
@@ -47,11 +38,22 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const kind = searchParams.get("kind");
     const invoiceId = searchParams.get("invoiceId");
-    const plan = searchParams.get("plan");
+    const requestedPlan = searchParams.get("plan");
     const purpose = resolvePurpose(kind);
 
     if (!purpose) {
       return NextResponse.json({ error: "Invalid checkout kind." }, { status: 400 });
+    }
+
+    let normalizedPlan: string | null = null;
+    let storagePlan: string | null = null;
+    if (requestedPlan) {
+      normalizedPlan = normalizePlanCode(requestedPlan);
+      storagePlan = getStoragePlanCode(normalizedPlan);
+      const availability = await assertPlanAvailable(supabase, normalizedPlan);
+      if (!availability.ok) {
+        return NextResponse.json({ error: "This plan is not available right now." }, { status: 403 });
+      }
     }
 
     let environment = getPaymentEnvironment();
@@ -107,9 +109,9 @@ export async function GET(request: Request) {
       purpose === "invoice_payment" || purpose === "payment_link" || purpose === "crypto_payment"
         ? requestedInvoiceAmount ?? invoiceAmountForCrypto
         : purpose === "plan_subscription"
-          ? (plan ? SUBSCRIPTION_PLAN_PRICES_NGN[plan] ?? null : null)
+          ? (normalizedPlan ? getPlanPrice(normalizedPlan) : null)
           : purpose === "plan_upgrade"
-            ? (plan ? UPGRADE_PLAN_PRICES_NGN[plan] ?? null : null)
+            ? (normalizedPlan ? getPlanPrice(normalizedPlan) : null)
             : null;
     const cryptoBelowMinimum =
       amountToCheck !== null &&
@@ -162,6 +164,8 @@ export async function GET(request: Request) {
     return NextResponse.json({
       kind,
       purpose,
+      plan: storagePlan,
+      displayPlan: normalizedPlan,
       environment,
       effectiveCryptoEnvironment: breetEligibility?.effectiveEnvironment || cryptoEnvironment,
       minimumAutoSettlementNgn: runtimeConfig.minimumAutoSettlementNgn,

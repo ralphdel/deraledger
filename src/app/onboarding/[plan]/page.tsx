@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useState } from "react";
+import { use, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-type PlanId = "starter" | "individual" | "corporate";
+type PlanId = "starter" | "individual" | "solo_plus" | "corporate";
 
 type PlanConfig = {
   label: string;
@@ -62,7 +62,7 @@ const PLAN_CONFIG: Record<PlanId, PlanConfig> = {
     ],
   },
   individual: {
-    label: "Individual",
+    label: "Solo Lite",
     workflow: "For verified online collections",
     price: "NGN 5,000/month",
     checkoutLabel: "Pay NGN 5,000",
@@ -84,6 +84,29 @@ const PLAN_CONFIG: Record<PlanId, PlanConfig> = {
       "20 active collection invoices",
       "Predefined team roles only",
       "Watermark enabled",
+    ],
+  },
+  solo_plus: {
+    label: "Solo Plus",
+    workflow: "For higher reviewed collection capacity",
+    price: "NGN 13,000/month",
+    checkoutLabel: "Pay NGN 13,000",
+    priceKobo: 1300000,
+    verification: "Enhanced verification required later",
+    formDescription:
+      "Set up the Solo Plus subscription path. Additional product access remains locked in Phase 1.",
+    footnote:
+      "Solo Plus exists in the system for Phase 1 migration testing, but it does not unlock storefront, receivable sale, discount codes, or ratings yet.",
+    successTitle: "Solo Plus workspace started",
+    successMessage:
+      "After payment, complete the required verification steps before any live collection features can be activated.",
+    features: [
+      "Subscription path available when enabled",
+      "NGN 13,000 monthly billing",
+      "No new feature unlocks in Phase 1",
+      "Compatibility-first migration ready",
+      "Hidden unless explicitly enabled",
+      "Backed by the existing billing rails",
     ],
   },
   corporate: {
@@ -114,7 +137,7 @@ const PLAN_CONFIG: Record<PlanId, PlanConfig> = {
 };
 
 function isPlanId(value: string): value is PlanId {
-  return value === "starter" || value === "individual" || value === "corporate";
+  return value === "starter" || value === "individual" || value === "solo_plus" || value === "corporate";
 }
 
 function BrandHeader() {
@@ -148,7 +171,33 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isSuccess, setIsSuccess] = useState(false);
+  const [soloPlusAvailable, setSoloPlusAvailable] = useState(false);
+  const [soloPlusAvailabilityLoaded, setSoloPlusAvailabilityLoaded] = useState(plan !== "solo_plus");
 
+
+  useEffect(() => {
+    if (!isPlanId(plan) || plan !== "solo_plus") {
+      return;
+    }
+
+    let active = true;
+    fetch(`/api/plans/availability?plan=${plan}`)
+      .then((res) => res.json())
+      .then((payload) => {
+        if (!active) return;
+        setSoloPlusAvailable(payload?.available === true);
+        setSoloPlusAvailabilityLoaded(true);
+      })
+      .catch(() => {
+        if (!active) return;
+        setSoloPlusAvailable(false);
+        setSoloPlusAvailabilityLoaded(true);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [plan]);
 
   if (!isPlanId(plan)) {
     return (
@@ -173,6 +222,8 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
   const planId = plan;
   const config = PLAN_CONFIG[planId];
   const Icon = planId === "corporate" ? Building2 : planId === "starter" ? Sparkles : User;
+  const checkingAvailability = planId === "solo_plus" && !soloPlusAvailabilityLoaded;
+  const planAllowed = planId !== "solo_plus" || soloPlusAvailable;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -180,6 +231,12 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
     setLoading(true);
 
     try {
+      if (!planAllowed) {
+        setError("This plan is not available right now.");
+        setLoading(false);
+        return;
+      }
+
       if (planId !== "starter" && !verificationDisclosureAccepted) {
         setError("Please acknowledge that live payment collection unlocks only after verification.");
         setLoading(false);
@@ -352,6 +409,18 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
             <p className="mt-2 text-sm leading-relaxed text-white/60">{config.formDescription}</p>
 
             <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+              {checkingAvailability && (
+                <div className="rounded-lg border border-white/10 bg-white/5 p-3 text-sm text-white/70">
+                  Checking plan availability...
+                </div>
+              )}
+
+              {!checkingAvailability && !planAllowed && (
+                <div className="rounded-lg border border-amber-400/30 bg-amber-400/10 p-3 text-sm text-amber-100">
+                  Solo Plus is currently unavailable. Please choose Starter, Solo Lite, or Business.
+                </div>
+              )}
+
               {error && (
                 <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-400">
                   {error}
@@ -558,7 +627,7 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
 
               <Button
                 type="submit"
-                disabled={loading || (planId !== "starter" && !verificationDisclosureAccepted)}
+                disabled={loading || checkingAvailability || !planAllowed || (planId !== "starter" && !verificationDisclosureAccepted)}
                 className="mt-4 h-12 w-full bg-[#7B2FF7] text-base font-bold text-white hover:bg-[#B58CFF] hover:text-[#12061F] transition-all border-0"
               >
                 {loading ? (

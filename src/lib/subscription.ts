@@ -1,15 +1,23 @@
-export type PlanType = "individual" | "corporate" | "starter";
+import { normalizeCapabilityPlanCode } from "@/lib/plans";
+
+export type PlanType = "individual" | "corporate" | "starter" | "solo_plus";
 
 interface SubscriptionState {
   planType: PlanType;
   expiryDate: string; // ISO String
 }
 
-const DAILY_RATES = {
+const DAILY_RATES: Record<PlanType, number> = {
   starter: 0,
-  individual: 5000 / 30, // ₦166.67/day
-  corporate: 20000 / 30, // ₦666.67/day
+  individual: 5000 / 30,
+  solo_plus: 13000 / 30,
+  corporate: 20000 / 30,
 };
+
+function resolveRatePlan(planType: PlanType): PlanType {
+  if (planType === "starter" || planType === "solo_plus") return planType;
+  return normalizeCapabilityPlanCode(planType);
+}
 
 /**
  * Calculates the new expiry date for a subscription, accounting for prorated upgrades.
@@ -23,7 +31,7 @@ export function calculateSubscriptionExpiry(
   newPlanType: PlanType,
   currentSubscription?: SubscriptionState
 ): Date {
-  const newDailyRate = DAILY_RATES[newPlanType];
+  const newDailyRate = DAILY_RATES[resolveRatePlan(newPlanType)];
 
   if (newDailyRate === 0) {
     // Starter plan expires theoretically in 10 years (managed by invoice count instead)
@@ -36,21 +44,17 @@ export function calculateSubscriptionExpiry(
   let remainingValue = 0;
   let baseDate = now;
 
-  // Proration Logic
   if (currentSubscription) {
     const currentExpiry = new Date(currentSubscription.expiryDate);
     if (currentExpiry > now) {
       const daysRemaining = (currentExpiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24);
-      const currentDailyRate = DAILY_RATES[currentSubscription.planType];
-      
-      // Calculate how much NGN value they have left in their current plan
+      const currentDailyRate = DAILY_RATES[resolveRatePlan(currentSubscription.planType)];
+
       remainingValue = Math.max(0, daysRemaining * currentDailyRate);
-      
-      // If they are renewing the SAME plan, we just append days to their existing expiry date
-      // If upgrading, we convert their remaining value + new amount to days at the NEW rate from today.
-      if (currentSubscription.planType === newPlanType) {
+
+      if (resolveRatePlan(currentSubscription.planType) === resolveRatePlan(newPlanType)) {
         baseDate = currentExpiry;
-        remainingValue = 0; // Don't double count if we're extending baseDate
+        remainingValue = 0;
       }
     }
   }
@@ -58,8 +62,5 @@ export function calculateSubscriptionExpiry(
   const totalValueToApply = amountPaid + remainingValue;
   const daysGranted = totalValueToApply / newDailyRate;
 
-  // Add daysGranted to baseDate
-  const newExpiry = new Date(baseDate.getTime() + daysGranted * 24 * 60 * 60 * 1000);
-  
-  return newExpiry;
+  return new Date(baseDate.getTime() + daysGranted * 24 * 60 * 60 * 1000);
 }

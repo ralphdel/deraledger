@@ -15,6 +15,12 @@ import { getPaymentEnvironment } from "@/lib/services/payment-routing.service";
 import { createPendingPlanPaymentRecord } from "@/lib/services/plan-payment-recovery.service";
 import { defaultNetworkForRail, rateSettingKeyForRail, resolveBreetCheckoutQuote } from "@/lib/treasury";
 import crypto from "crypto";
+import {
+  assertPlanAvailable,
+  getPlanPrice,
+  getStoragePlanCode,
+  normalizePlanCode,
+} from "@/lib/plans";
 
 /**
  * POST /api/checkout/crypto-upgrade
@@ -50,9 +56,12 @@ export async function POST(request: Request) {
 
     const { newPlan } = await request.json();
 
-    if (newPlan !== "individual" && newPlan !== "corporate") {
-      return NextResponse.json({ error: "Invalid plan." }, { status: 400 });
+    const normalizedPlan = normalizePlanCode(newPlan);
+    const availability = await assertPlanAvailable(serviceSupabase, normalizedPlan);
+    if (!availability.ok) {
+      return NextResponse.json({ error: "This plan is not available right now." }, { status: 403 });
     }
+    const storagePlan = getStoragePlanCode(normalizedPlan);
 
     const environment = getPaymentEnvironment();
     const eligibility = await canUseBreetCryptoCheckout({
@@ -69,7 +78,7 @@ export async function POST(request: Request) {
     const settlementMode = eligibility.settlementMode;
     const settlementRecipientType = "platform" as const;
     const platformSettlementAccount = eligibility.config.platformSettlementBankAccount;
-    const amountNgn = newPlan === "corporate" ? 20000 : 5000;
+    const amountNgn = getPlanPrice(normalizedPlan);
     const minimumAutoSettlementNgn = eligibility.config.minimumAutoSettlementNgn;
 
     if (isBelowBreetMinimumAmount(amountNgn, minimumAutoSettlementNgn)) {
@@ -90,7 +99,7 @@ export async function POST(request: Request) {
       settlementMode,
     });
 
-    const reference = `CRYPTO-UPG-${newPlan.toUpperCase()}-${crypto.randomBytes(5).toString("hex").toUpperCase()}`;
+    const reference = `CRYPTO-UPG-${storagePlan.toUpperCase()}-${crypto.randomBytes(5).toString("hex").toUpperCase()}`;
     await createPendingPlanPaymentRecord(serviceSupabase, {
       internalReference: reference,
       provider: "breet",
@@ -98,13 +107,14 @@ export async function POST(request: Request) {
       paymentPurpose: "plan_upgrade",
       customerEmail: user.email || merchant.email || "billing@deraledger.app",
       expectedAmount: amountNgn,
-      planName: newPlan,
-      planId: newPlan,
+      planName: normalizedPlan,
+      planId: storagePlan,
       userId: user.id,
       merchantId: merchant.id,
       metadata: {
         merchant_id: merchant.id,
-        new_plan: newPlan,
+        new_plan: storagePlan,
+        new_plan_display_code: normalizedPlan,
         type: "subscription_upgrade",
         amount_expected_kobo: amountNgn * 100,
         payment_purpose: "plan_upgrade",
@@ -112,7 +122,7 @@ export async function POST(request: Request) {
     });
     const settlementBankPayload = buildSettlementBankPayload(
       platformSettlementAccount,
-      `Upgrade ${newPlan.toUpperCase()} ${reference.slice(-12)}`
+      `Upgrade ${storagePlan.toUpperCase()} ${reference.slice(-12)}`
     );
     if (!settlementBankPayload) {
       return NextResponse.json({ error: "Platform settlement account is not configured." }, { status: 403 });
@@ -147,7 +157,7 @@ export async function POST(request: Request) {
       merchant_id: merchant.id,
       user_id: user.id,
       business_id: null,
-      plan_id: newPlan,
+      plan_id: storagePlan,
       payment_purpose: "plan_upgrade",
       provider_name: "breet",
       internal_reference: reference,
@@ -169,7 +179,8 @@ export async function POST(request: Request) {
       expires_at: new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString(),
       metadata: {
         merchant_id: merchant.id,
-        new_plan: newPlan,
+        new_plan: storagePlan,
+        new_plan_display_code: normalizedPlan,
         type: "subscription_upgrade",
         wallet_id: result.walletId || result.vaultId || result.id || null,
         wallet_address: result.address,

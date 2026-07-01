@@ -6,6 +6,7 @@ import { requiresVerificationDisclosure, VERIFICATION_DISCLOSURE_VERSION } from 
 import { getPaymentEnvironmentForMerchantEmail, resolvePaymentRoute, type PaymentMethod } from "@/lib/services/payment-routing.service";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { createPendingPlanPaymentRecord } from "@/lib/services/plan-payment-recovery.service";
+import { assertPlanAvailable, getStoragePlanCode, normalizePlanCode } from "@/lib/plans";
 
 const supabase = createSupabaseClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -32,16 +33,24 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
   }
 
-  if (requiresVerificationDisclosure(plan) && verificationDisclosureAccepted !== true) {
+  const normalizedPlan = normalizePlanCode(plan);
+  const availability = await assertPlanAvailable(supabase, normalizedPlan);
+  if (!availability.ok) {
+    return NextResponse.json({ error: "This plan is not available right now." }, { status: 403 });
+  }
+
+  if (requiresVerificationDisclosure(normalizedPlan) && verificationDisclosureAccepted !== true) {
     return NextResponse.json(
       { error: "Please acknowledge the verification disclosure before payment." },
       { status: 400 }
     );
   }
 
+  const storagePlan = getStoragePlanCode(normalizedPlan);
+
   const appUrl = getAppUrl();
   // Unique reference per transaction
-  const reference = `SUB-${plan.toUpperCase()}-${crypto.randomBytes(6).toString("hex").toUpperCase()}`;
+  const reference = `SUB-${storagePlan.toUpperCase()}-${crypto.randomBytes(6).toString("hex").toUpperCase()}`;
 
   try {
     const method = (paymentMethod || "card") as PaymentMethod;
@@ -53,12 +62,13 @@ export async function POST(request: Request) {
       paymentPurpose: "plan_subscription",
       customerEmail: email,
       expectedAmount: Number(amountKobo) / 100,
-      planName: plan,
-      planId: plan,
+      planName: normalizedPlan,
+      planId: storagePlan,
       passwordSetupRequired: true,
       metadata: {
         type: "subscription",
-        plan,
+        plan: storagePlan,
+        plan_display_code: normalizedPlan,
         email,
         business_name: registeredName,
         trading_name: tradingName,
@@ -83,7 +93,8 @@ export async function POST(request: Request) {
       callbackUrl: callback.toString(),
       metadata: {
         type: "subscription",
-        plan,
+        plan: storagePlan,
+        plan_display_code: normalizedPlan,
         email,
         business_name: registeredName,
         trading_name: tradingName,

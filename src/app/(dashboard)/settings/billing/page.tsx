@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { AlertCircle, CheckCircle, Clock, Copy, Download, Info } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { PermissionGuard } from "@/components/PermissionGuard";
+import { getPlanDisplayName, getPlanPriceLabel, getStoragePlanCode, normalizePlanCode } from "@/lib/plans";
 
 type MerchantWithAccess = Merchant & {
   permissions?: Record<string, boolean>;
@@ -48,7 +49,7 @@ export default function BillingSettingsPage() {
     // Navigate to the premium checkout page in renewal context
     // The checkout page will load merchant data directly (authenticated)
     // and route the Paystack callback back to /settings/billing/renew-callback
-    const plan = merchant.subscription_plan || subscription.plan_type || "individual";
+    const plan = getStoragePlanCode(merchant.subscription_plan || subscription.plan_type || "individual");
     if (plan === "starter") return; // Starter is free, can't renew
     router.push(`/checkout/subscription?plan=${plan}&context=renewal`);
   };
@@ -103,14 +104,10 @@ export default function BillingSettingsPage() {
   // Use merchant.subscription_plan as the authoritative source for the current plan.
   // The subscription row is used for dates/status, but the plan column on merchants is
   // always updated atomically during upgrade/renewal so it's the most reliable.
-  const currentPlan = (merchant.subscription_plan || effectiveSubscription.plan_type || "starter") as string;
+  const currentPlan = normalizePlanCode(merchant.subscription_plan || effectiveSubscription.plan_type || "starter");
   const isStarter = currentPlan === "starter";
-  const planLabel = isStarter
-    ? "Starter Plan"
-    : currentPlan === "individual"
-      ? "Individual / Collections Plan"
-      : "Business Plan";
-  const planPrice = isStarter ? "Free" : currentPlan === "individual" ? "NGN 5,000" : "NGN 20,000";
+  const planLabel = `${getPlanDisplayName(currentPlan)} Plan`;
+  const planPrice = getPlanPriceLabel(currentPlan);
   
   const now = new Date();
   const expiryDate = new Date(effectiveSubscription.expiry_date);
@@ -163,7 +160,7 @@ export default function BillingSettingsPage() {
           <div className="flex flex-col gap-3 w-full md:w-auto">
             {isStarter ? (
               <Link href="/settings/upgrade/individual" className={cn(buttonVariants({ variant: "default" }), "bg-purp-900 hover:bg-purp-800 text-white w-full md:w-auto")}>
-                Upgrade to Individual / Collections
+                Upgrade to Solo Lite
               </Link>
             ) : merchant.currentUserRole !== "owner" ? (
               <Button disabled className="bg-neutral-200 text-neutral-500 w-full md:w-auto font-bold">
@@ -177,7 +174,7 @@ export default function BillingSettingsPage() {
                 >
                   Renew Now — {planPrice}
                 </Button>
-                {currentPlan === "individual" && (
+                {(currentPlan === "solo_lite" || currentPlan === "solo_plus") && (
                   <Link href="/settings/upgrade/corporate" className={cn(buttonVariants({ variant: "outline" }), "border-purp-200 text-purp-900 w-full md:w-auto")}>
                     Upgrade to Business - NGN 20,000
                   </Link>
@@ -251,7 +248,7 @@ export default function BillingSettingsPage() {
                         <td className="px-4 py-4 font-medium text-neutral-900">
                           {new Date(record.created_at).toLocaleDateString("en-NG", { day: "numeric", month: "short", year: "numeric" })}
                         </td>
-                        <td className="px-4 py-4 capitalize">{record.plan}</td>
+                        <td className="px-4 py-4">{getPlanDisplayName(record.plan)}</td>
                         <td className="px-4 py-4">{formatNaira(record.amount_ngn)}</td>
                         <td className="px-4 py-4 text-neutral-600 text-xs">
                           {new Date(record.period_start).toLocaleDateString("en-NG", { day: "numeric", month: "short", year: "numeric" })} – <br/>

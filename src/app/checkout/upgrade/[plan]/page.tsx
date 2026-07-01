@@ -19,10 +19,16 @@ const PLAN_CONFIG: Record<string, {
   icon: typeof User; color: string;
 }> = {
   individual: {
-    label: "Individual / Collections", price: "NGN 5,000", priceKobo: 500000, interval: "/month",
+    label: "Solo Lite", price: "NGN 5,000", priceKobo: 500000, interval: "/month",
     verification: "BVN & Selfie required",
     features: ["Collection invoices enabled", "Online payment collection", "Grouped references & deposits", "Partial payment controls", "₦5M monthly collection limit", "20 active collection invoices"],
     icon: User, color: "from-[#1A0B2E] to-[#3D0B66]",
+  },
+  solo_plus: {
+    label: "Solo Plus", price: "NGN 13,000", priceKobo: 1300000, interval: "/month",
+    verification: "Enhanced verification required later",
+    features: ["Phase 1 compatibility billing path", "No new feature unlocks in Phase 1", "Storefront remains disabled", "Receivable Sale remains disabled", "Discount codes remain disabled", "Ratings remain disabled"],
+    icon: User, color: "from-[#2A1033] to-[#5E1F66]",
   },
   corporate: {
     label: "Business", price: "NGN 20,000", priceKobo: 2000000, interval: "/month",
@@ -84,6 +90,8 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
   const [cryptoCheckoutStatus, setCryptoCheckoutStatus] = useState<CryptoCheckoutStatus | null>(null);
   const [availableMethods, setAvailableMethods] = useState<AvailableMethod[]>([]);
   const [copied, setCopied] = useState(false);
+  const [soloPlusAvailable, setSoloPlusAvailable] = useState(false);
+  const [soloPlusAvailabilityLoaded, setSoloPlusAvailabilityLoaded] = useState(plan !== "solo_plus");
   const paystackLoaded = useRef(false);
   const cryptoStorageKey = `breet-upgrade-crypto:${plan}`;
   // ownerName + businessType are read from sessionStorage (set by upgrade settings page)
@@ -103,6 +111,41 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
   }, []);
 
   useEffect(() => {
+    if (plan !== "solo_plus") {
+      return;
+    }
+
+    let active = true;
+    fetch(`/api/plans/availability?plan=${plan}`)
+      .then((res) => res.json())
+      .then((payload) => {
+        if (!active) return;
+        setSoloPlusAvailable(payload?.available === true);
+        setSoloPlusAvailabilityLoaded(true);
+      })
+      .catch(() => {
+        if (!active) return;
+        setSoloPlusAvailable(false);
+        setSoloPlusAvailabilityLoaded(true);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [plan]);
+
+  const checkingPlanAvailability = plan === "solo_plus" && !soloPlusAvailabilityLoaded;
+  const planAvailable = plan !== "solo_plus" || soloPlusAvailable;
+
+  useEffect(() => {
+    if (plan === "solo_plus" && !soloPlusAvailabilityLoaded) {
+      return;
+    }
+    if (plan === "solo_plus" && !soloPlusAvailable) {
+      setLoadingMerchant(false);
+      return;
+    }
+
     let timer: number | null = null;
     const stored = sessionStorage.getItem("upgradeCheckout");
     if (stored) {
@@ -123,7 +166,7 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
     return () => {
       if (timer !== null) window.clearTimeout(timer);
     };
-  }, []);
+  }, [plan, soloPlusAvailabilityLoaded, soloPlusAvailable]);
 
   useEffect(() => {
     const raw = sessionStorage.getItem(cryptoStorageKey);
@@ -144,6 +187,14 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
   }, [cryptoStorageKey]);
 
   useEffect(() => {
+    if (plan === "solo_plus" && !soloPlusAvailabilityLoaded) {
+      return;
+    }
+    if (plan === "solo_plus" && !soloPlusAvailable) {
+      setAvailableMethods([]);
+      return;
+    }
+
     const controller = new AbortController();
     fetch(`/api/checkout/payment-methods?kind=upgrade&plan=${plan}`, {
       signal: controller.signal,
@@ -160,7 +211,7 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
         setAvailableMethods([]);
       });
     return () => controller.abort();
-  }, [plan, tab]);
+  }, [plan, soloPlusAvailabilityLoaded, soloPlusAvailable, tab]);
 
   useEffect(() => {
     if (!cryptoDetails) return;
@@ -261,6 +312,31 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#12061F]">
         <p className="text-white/60">Invalid plan. <Link href="/settings" className="text-[#B58CFF] underline">Go back</Link></p>
+      </div>
+    );
+  }
+
+  if (checkingPlanAvailability) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#12061F]">
+        <div className="flex items-center gap-3 text-white/70">
+          <Loader2 className="h-5 w-5 animate-spin text-[#B58CFF]" />
+          Checking plan availability...
+        </div>
+      </div>
+    );
+  }
+
+  if (!planAvailable) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#12061F] px-6">
+        <div className="max-w-md rounded-2xl border border-amber-400/30 bg-amber-400/10 p-6 text-center text-amber-100">
+          <p className="text-lg font-semibold">This plan is not available right now.</p>
+          <p className="mt-2 text-sm text-amber-50/80">Solo Plus is currently hidden until its feature flag is enabled.</p>
+          <Link href="/settings/billing" className="mt-5 inline-block text-sm font-semibold text-white underline">
+            Back to billing
+          </Link>
+        </div>
       </div>
     );
   }

@@ -8,6 +8,7 @@
 
 import type { Merchant } from "@/lib/types";
 import { getLiveFeatureLockReasons, isLiveFeatureEnabled, isSuperadminSandboxMerchant } from "@/lib/services/onboarding-flow.service";
+import { normalizeCapabilityPlanCode } from "@/lib/plans";
 
 // ── Plan limits (mirrors platform_settings in DB) ─────────────────────────────
 export const PLAN_LIMITS = {
@@ -33,6 +34,17 @@ export const PLAN_LIMITS = {
     canAccessApi: false,
     canAccessCrypto: false,
   },
+  solo_plus: {
+    invoiceLimit: Infinity,
+    teamLimit: 4,
+    activeCollectionLimit: 20,
+    monthlyCollectionNgn: 5_000_000,
+    canCollect: true,
+    canCustomRoles: false,
+    canRemoveWatermark: false,
+    canAccessApi: false,
+    canAccessCrypto: false,
+  },
   corporate: {
     invoiceLimit: Infinity,
     teamLimit: Infinity,
@@ -50,7 +62,9 @@ type PlanKey = keyof typeof PLAN_LIMITS;
 
 function getPlan(merchant: Pick<Merchant, "subscription_plan" | "merchant_tier">): PlanKey {
   const raw = merchant.subscription_plan || merchant.merchant_tier || "starter";
-  if (raw === "individual" || raw === "corporate") return raw;
+  if (raw === "solo_plus") return "solo_plus";
+  const capabilityPlan = normalizeCapabilityPlanCode(raw);
+  if (capabilityPlan === "individual" || capabilityPlan === "corporate") return capabilityPlan;
   return "starter";
 }
 
@@ -175,14 +189,14 @@ export function canInviteTeamMember(
     if (plan === "starter") {
       return {
         allowed: false,
-        reason: `Starter plan only supports 1 team member (owner + 1 invited). Upgrade to Individual to invite up to 3 predefined-role members.`,
+        reason: `Starter plan only supports 1 team member (owner + 1 invited). Upgrade to Solo Lite to invite up to 3 predefined-role members.`,
         upgradeRequired: "individual",
       };
     }
-    if (plan === "individual") {
+    if (plan === "individual" || plan === "solo_plus") {
       return {
         allowed: false,
-        reason: `Individual plan supports up to 3 invited members (4 seats total including owner). Upgrade to Business for unlimited team members and custom roles.`,
+        reason: `Solo Lite and Solo Plus support up to 3 invited members (4 seats total including owner). Upgrade to Business for unlimited team members and custom roles.`,
         upgradeRequired: "corporate",
       };
     }
@@ -249,14 +263,14 @@ export function canAccessFeature(
   const plan = getPlan(merchant);
   const required = FEATURE_PLAN_MAP[feature];
 
-  const planOrder: PlanKey[] = ["starter", "individual", "corporate"];
+  const planOrder: PlanKey[] = ["starter", "individual", "solo_plus", "corporate"];
   const currentLevel = planOrder.indexOf(plan);
   const requiredLevel = planOrder.indexOf(required);
 
   if (currentLevel < requiredLevel) {
     return {
       allowed: false,
-      reason: `This feature requires the ${required === "individual" ? "Individual" : "Business"} plan.`,
+      reason: `This feature requires the ${required === "individual" ? "Solo Lite" : "Business"} plan.`,
       upgradeRequired: required === "individual" ? "individual" : "corporate",
     };
   }

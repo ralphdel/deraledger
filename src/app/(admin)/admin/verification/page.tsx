@@ -30,6 +30,7 @@ import {
   adminGetVerificationDetailsAction,
   getActiveVerificationProviderKeyAction,
 } from "@/lib/actions";
+import { getPlanDisplayName, normalizeCapabilityPlanCode } from "@/lib/plans";
 import type { Merchant } from "@/lib/types";
 
 type ActionMode = "idle" | "reject" | "reupload" | "reset";
@@ -192,8 +193,9 @@ export default function VerificationQueuePage() {
   const getEffectiveStatus = (m: Merchant | null): string => {
     if (!m) return "unverified";
     const tier = m.subscription_plan || m.merchant_tier || "starter";
+    const capabilityPlan = normalizeCapabilityPlanCode(tier);
     if (tier !== "starter" && !m.owner_name) return "incomplete";
-    if (tier === "corporate" && !m.business_name) return "incomplete";
+    if (capabilityPlan === "corporate" && !m.business_name) return "incomplete";
     if (tier !== "starter" && (!m.business_street || !m.business_city || !m.business_state || !m.business_country || !m.phone)) return "incomplete";
     if (tier !== "starter" && m.bvn_status === "verified" && (m.selfie_status || "unverified") !== "verified") return "pending";
     return m.verification_status;
@@ -246,9 +248,7 @@ export default function VerificationQueuePage() {
 
   /** Maps internal plan keys to user-facing labels. "corporate" → "Business". */
   const formatPlanLabel = (plan: string | null | undefined): string => {
-    if (!plan) return "Starter";
-    if (plan === "corporate") return "Business";
-    return plan.charAt(0).toUpperCase() + plan.slice(1);
+    return getPlanDisplayName(plan);
   };
 
   const updateItemStatus = async (merchant: Merchant, field: "cac_status" | "bvn_status" | "utility_status" | "selfie_status", status: "verified" | "rejected") => {
@@ -359,7 +359,7 @@ export default function VerificationQueuePage() {
     const freshMerchant = await reloadSelectedMerchant(m.id);
     const merchantForReview = freshMerchant || m;
     const plan = merchantForReview.subscription_plan || merchantForReview.merchant_tier || "starter";
-    const isBusinessPlan = plan === "corporate" || plan === "business";
+    const isBusinessPlan = normalizeCapabilityPlanCode(plan) === "corporate";
 
     setDirectorsLoading(true);
     try {
@@ -560,9 +560,9 @@ export default function VerificationQueuePage() {
                   {selectedMerchant && (() => {
                     const planKey = selectedMerchant.subscription_plan || selectedMerchant.merchant_tier;
                     const planLabel = formatPlanLabel(planKey);
-                    const isBusinessPlan = planKey === "corporate" || planKey === "business";
+                    const isBusinessPlan = normalizeCapabilityPlanCode(planKey) === "corporate";
                     const isRepresentativeFlow = selectedMerchant.relationship_claim === "representative_claim";
-                    const requiresDirectorFlow = planKey === "corporate" && isRepresentativeFlow;
+                    const requiresDirectorFlow = normalizeCapabilityPlanCode(planKey) === "corporate" && isRepresentativeFlow;
                     const effectiveStatus = getEffectiveStatus(selectedMerchant);
                     const roster = extractKeyPersonnel(registrySnapshot);
                     const rosterCount = roster.length;

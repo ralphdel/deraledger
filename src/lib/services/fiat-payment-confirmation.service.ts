@@ -1,4 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import {
+  logPlanMigration,
+  normalizeCapabilityPlanCode,
+} from "@/lib/plans";
 import { calculateSubscriptionExpiry, type PlanType } from "@/lib/subscription";
 import { getAppUrl } from "@/lib/server-utils";
 import {
@@ -59,7 +63,7 @@ async function confirmSubscriptionRenewal(
 ) {
   const { metadata, amountKobo, reference, provider } = payment;
   const merchantId = metadata?.merchant_id as string | undefined;
-  const plan = metadata?.plan as "individual" | "corporate" | undefined;
+  const plan = metadata?.plan as "individual" | "corporate" | "solo_plus" | undefined;
 
   if (!merchantId || !plan) {
     console.error("Renewal confirmation missing metadata:", metadata);
@@ -127,7 +131,8 @@ async function confirmSubscriptionRenewal(
     .update({
       subscription_plan: plan,
       merchant_tier: plan,
-      monthly_collection_limit: plan === "individual" ? 5000000 : 0,
+      monthly_collection_limit:
+        normalizeCapabilityPlanCode(plan) === "individual" ? 5000000 : 0,
       subscription_notifications_sent: {},
     })
     .eq("id", merchantId);
@@ -188,6 +193,14 @@ async function confirmSubscriptionRenewal(
     paid_at: new Date().toISOString(),
   }, provider);
 
+  await logPlanMigration(supabase, {
+    merchantId,
+    sourceTable: "merchants",
+    sourceRecordId: merchantId,
+    oldPlanCode: plan,
+    context: "fiat_payment_confirmation:renewal",
+  });
+
   try {
     const { data: merchant } = await supabase
       .from("merchants")
@@ -219,7 +232,7 @@ async function confirmSubscriptionUpgrade(
 ) {
   const { metadata, amountKobo, reference, provider } = payment;
   const merchantId = metadata?.merchant_id as string | undefined;
-  const newPlan = metadata?.new_plan as "individual" | "corporate" | undefined;
+  const newPlan = metadata?.new_plan as "individual" | "corporate" | "solo_plus" | undefined;
   const relationshipClaim = metadata?.relationship_claim as RelationshipClaim | undefined;
 
   if (!merchantId || !newPlan) {
@@ -277,13 +290,14 @@ async function confirmSubscriptionUpgrade(
   const updates: Record<string, unknown> = {
     subscription_plan: newPlan,
     merchant_tier: newPlan,
-    monthly_collection_limit: newPlan === "individual" ? 5000000 : 0,
+    monthly_collection_limit:
+      normalizeCapabilityPlanCode(newPlan) === "individual" ? 5000000 : 0,
     subscription_notifications_sent: {},
   };
 
   if (businessType) {
     updates.business_type = businessType;
-  } else if (newPlan === "individual" && !merchant.business_type) {
+  } else if (normalizeCapabilityPlanCode(newPlan) === "individual" && !merchant.business_type) {
     updates.business_type = "sole_proprietorship";
   }
 
@@ -396,6 +410,14 @@ async function confirmSubscriptionUpgrade(
     paid_at: new Date().toISOString(),
   }, provider);
 
+  await logPlanMigration(supabase, {
+    merchantId,
+    sourceTable: "merchants",
+    sourceRecordId: merchantId,
+    oldPlanCode: newPlan,
+    context: "fiat_payment_confirmation:upgrade",
+  });
+
   return { received: true, processed: true };
 }
 
@@ -405,7 +427,7 @@ async function confirmInitialSubscription(
 ) {
   const { metadata, amountKobo, reference, provider } = payment;
   const sessionId = metadata?.session_id as string | undefined;
-  const plan = metadata?.plan as "individual" | "corporate" | undefined;
+  const plan = metadata?.plan as "individual" | "corporate" | "solo_plus" | undefined;
   const email = metadata?.email as string | undefined;
   const businessName = metadata?.business_name as string | undefined;
   const businessType = metadata?.business_type as string | undefined;
@@ -556,7 +578,8 @@ async function confirmInitialSubscription(
         business_type: businessType || "sole_proprietorship",
         owner_name: ownerName || null,
         relationship_claim: relationshipClaim || null,
-        monthly_collection_limit: activePlan === "individual" ? 5000000 : 0,
+        monthly_collection_limit:
+          normalizeCapabilityPlanCode(activePlan) === "individual" ? 5000000 : 0,
         subscription_notifications_sent: {},
       })
       .eq("id", merchantId);
@@ -595,7 +618,8 @@ async function confirmInitialSubscription(
         merchant_tier: activePlan,
         verification_status: "unverified",
         fee_absorption_default: "business",
-        monthly_collection_limit: activePlan === "individual" ? 5000000 : 0,
+        monthly_collection_limit:
+          normalizeCapabilityPlanCode(activePlan) === "individual" ? 5000000 : 0,
         subscription_notifications_sent: {},
       })
       .select("id")
@@ -613,6 +637,14 @@ async function confirmInitialSubscription(
       must_change_password: true,
     });
   }
+
+  await logPlanMigration(supabase, {
+    merchantId,
+    sourceTable: "merchants",
+    sourceRecordId: merchantId,
+    oldPlanCode: activePlan,
+    context: "fiat_payment_confirmation:subscription",
+  });
 
   await enterPaidSetupMode(supabase, {
     merchantId,
@@ -691,7 +723,7 @@ async function confirmInitialSubscription(
       await sendOnboardingWelcomeEmail(
         email,
         businessName,
-        activePlan as "individual" | "corporate",
+        activePlan as "individual" | "solo_plus" | "corporate",
         setPasswordLink,
         expiryDate.toISOString()
       );

@@ -19,7 +19,7 @@ export interface Merchant {
   fee_absorption_default: "business" | "customer";
   verification_status: "unverified" | "pending" | "pending_admin_review" | "requires_reupload" | "verified" | "rejected" | "suspended" | "restricted";
   // v2.1: subscription_plan replaces merchant_tier
-  subscription_plan: "starter" | "individual" | "corporate" | string;
+  subscription_plan: "starter" | "individual" | "solo_plus" | "corporate" | string;
   // Keep merchant_tier during migration — both columns exist in DB
   merchant_tier: "starter" | "individual" | "corporate" | string;
   business_type?: string | null;
@@ -92,7 +92,7 @@ export interface Merchant {
 export interface Subscription {
   id: string;
   merchant_id: string;
-  plan_type: "individual" | "corporate" | "starter";
+  plan_type: "individual" | "solo_plus" | "corporate" | "starter";
   amount_paid: number;
   start_date: string;
   expiry_date: string;
@@ -390,7 +390,7 @@ export interface OnboardingSession {
   id: string;
   email: string;
   business_name: string;
-  plan: "individual" | "corporate";
+  plan: "individual" | "solo_plus" | "corporate";
   status: "awaiting_payment" | "payment_confirmed" | "activated" | "expired";
   paystack_ref: string | null;
   amount_paid: number | null;
@@ -464,7 +464,7 @@ export const SUBSCRIPTION_PLANS = {
     watermarkRequired: true,
   },
   individual: {
-    label: "Individual",
+    label: "Solo Lite",
     price: 5000,
     invoiceLimit: Infinity,
     clientLimit: Infinity,
@@ -472,6 +472,21 @@ export const SUBSCRIPTION_PLANS = {
     activeCollectionLimit: 20,
     monthlyCollectionLimitNgn: 5_000_000,
     canCollect: true,        // requires BVN+selfie verified
+    canUsePurpBot: true,
+    canUseAnalytics: true,
+    canCustomRoles: false,
+    canRemoveWatermark: false,
+    watermarkRequired: true,
+  },
+  solo_plus: {
+    label: "Solo Plus",
+    price: 13000,
+    invoiceLimit: Infinity,
+    clientLimit: Infinity,
+    teamLimit: 2,
+    activeCollectionLimit: 20,
+    monthlyCollectionLimitNgn: 5_000_000,
+    canCollect: true,
     canUsePurpBot: true,
     canUseAnalytics: true,
     canCustomRoles: false,

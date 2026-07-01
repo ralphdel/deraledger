@@ -19,7 +19,7 @@ const PLAN_CONFIG: Record<string, {
   features: string[]; color: string;
 }> = {
   individual: {
-    label: "Individual / Collections",
+    label: "Solo Lite",
     price: "NGN 5,000", priceKobo: 500000, interval: "/month",
     features: [
       "Collection invoices enabled",
@@ -30,6 +30,19 @@ const PLAN_CONFIG: Record<string, {
       "20 active collection invoices",
     ],
     color: "from-[#1A0B2E] to-[#3D0B66]",
+  },
+  solo_plus: {
+    label: "Solo Plus",
+    price: "NGN 13,000", priceKobo: 1300000, interval: "/month",
+    features: [
+      "Phase 1 compatibility subscription path",
+      "No new feature unlocks in Phase 1",
+      "Existing billing rails reused",
+      "Storefront remains disabled",
+      "Receivable Sale remains disabled",
+      "Enhanced KYC remains out of scope",
+    ],
+    color: "from-[#2A1033] to-[#5E1F66]",
   },
   corporate: {
     label: "Business",
@@ -113,6 +126,8 @@ function SubscriptionCheckoutContent() {
   const [cryptoCheckoutStatus, setCryptoCheckoutStatus] = useState<CryptoCheckoutStatus | null>(null);
   const [availableMethods, setAvailableMethods] = useState<AvailableMethod[]>([]);
   const [copied, setCopied] = useState(false);
+  const [soloPlusAvailable, setSoloPlusAvailable] = useState(false);
+  const [soloPlusAvailabilityLoaded, setSoloPlusAvailabilityLoaded] = useState(plan !== "solo_plus");
   const paystackLoaded = useRef(false);
   const cryptoStorageKey = `breet-subscription-crypto:${context}:${plan}`;
 
@@ -126,8 +141,42 @@ function SubscriptionCheckoutContent() {
     paystackLoaded.current = true;
   }, []);
 
+  useEffect(() => {
+    if (plan !== "solo_plus") {
+      return;
+    }
+
+    let active = true;
+    fetch(`/api/plans/availability?plan=${plan}`)
+      .then((res) => res.json())
+      .then((payload) => {
+        if (!active) return;
+        setSoloPlusAvailable(payload?.available === true);
+        setSoloPlusAvailabilityLoaded(true);
+      })
+      .catch(() => {
+        if (!active) return;
+        setSoloPlusAvailable(false);
+        setSoloPlusAvailabilityLoaded(true);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [plan]);
+
+  const checkingPlanAvailability = plan === "solo_plus" && !soloPlusAvailabilityLoaded;
+  const planAvailable = plan !== "solo_plus" || soloPlusAvailable;
+
   // ── Load checkout data based on context ────────────────────────────────────
   useEffect(() => {
+    if (plan === "solo_plus" && !soloPlusAvailabilityLoaded) {
+      return;
+    }
+    if (plan === "solo_plus" && !soloPlusAvailable) {
+      return;
+    }
+
     if (context === "renewal") {
       // Renewal context: load merchant data directly from API (authenticated user)
       getMerchant().then((merchant) => {
@@ -169,7 +218,7 @@ function SubscriptionCheckoutContent() {
         router.replace("/onboarding");
       }
     }
-  }, [context, plan, router, config]);
+  }, [context, plan, router, config, soloPlusAvailabilityLoaded, soloPlusAvailable]);
 
   useEffect(() => {
     const raw = sessionStorage.getItem(cryptoStorageKey);
@@ -190,6 +239,14 @@ function SubscriptionCheckoutContent() {
   }, [cryptoStorageKey]);
 
   useEffect(() => {
+    if (plan === "solo_plus" && !soloPlusAvailabilityLoaded) {
+      return;
+    }
+    if (plan === "solo_plus" && !soloPlusAvailable) {
+      setAvailableMethods([]);
+      return;
+    }
+
     const controller = new AbortController();
     fetch(`/api/checkout/payment-methods?kind=subscription&plan=${plan}&context=${context}`, {
       signal: controller.signal,
@@ -206,7 +263,7 @@ function SubscriptionCheckoutContent() {
         setAvailableMethods([]);
       });
     return () => controller.abort();
-  }, [context, plan, tab]);
+  }, [context, plan, soloPlusAvailabilityLoaded, soloPlusAvailable, tab]);
 
   useEffect(() => {
     if (!cryptoDetails) return;
@@ -317,6 +374,31 @@ function SubscriptionCheckoutContent() {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#12061F]">
         <p className="text-white/60">Invalid plan. <Link href="/onboarding" className="text-[#B58CFF] underline">Go back</Link></p>
+      </div>
+    );
+  }
+
+  if (checkingPlanAvailability) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#12061F]">
+        <div className="flex items-center gap-3 text-white/70">
+          <Loader2 className="h-5 w-5 animate-spin text-[#B58CFF]" />
+          Checking plan availability...
+        </div>
+      </div>
+    );
+  }
+
+  if (!planAvailable) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#12061F] px-6">
+        <div className="max-w-md rounded-2xl border border-amber-400/30 bg-amber-400/10 p-6 text-center text-amber-100">
+          <p className="text-lg font-semibold">This plan is not available right now.</p>
+          <p className="mt-2 text-sm text-amber-50/80">Solo Plus is currently hidden until its feature flag is enabled.</p>
+          <Link href="/onboarding" className="mt-5 inline-block text-sm font-semibold text-white underline">
+            Back to plan selection
+          </Link>
+        </div>
       </div>
     );
   }

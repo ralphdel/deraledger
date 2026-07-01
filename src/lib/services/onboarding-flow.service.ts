@@ -9,8 +9,13 @@ import {
   getVerificationRequirements,
   hasVerificationRequirement,
 } from "@/lib/verification-requirements";
+import {
+  getStoragePlanCode,
+  normalizeCapabilityPlanCode,
+  requiresPlanVerificationDisclosure,
+} from "@/lib/plans";
 
-export type PlanType = "starter" | "individual" | "corporate";
+export type PlanType = "starter" | "individual" | "corporate" | "solo_plus";
 export type RelationshipClaim = "owner_affiliated_claim" | "representative_claim";
 
 export const VERIFICATION_DISCLOSURE_VERSION = "1.0";
@@ -31,7 +36,7 @@ export function isSuperadminSandboxMerchant(merchant: {
 }
 
 export function requiresVerificationDisclosure(plan: string | null | undefined): boolean {
-  return plan === "individual" || plan === "corporate";
+  return requiresPlanVerificationDisclosure(plan);
 }
 
 export function isLiveFeatureEnabled(merchant: {
@@ -314,7 +319,7 @@ export async function enterPaidSetupMode(
     paymentReference?: string | null;
   }
 ) {
-  const plan = params.planType as PlanType;
+  const plan = getStoragePlanCode(params.planType) as PlanType;
   const setupFields = plan === "starter"
     ? { onboarding_status: "active", setup_mode: false, live_features_enabled: false }
     : { onboarding_status: "setup_mode", setup_mode: true, live_features_enabled: false };
@@ -410,7 +415,7 @@ export async function ensureWorkspaceForMerchant(adminClient: SupabaseClient, me
   if (!merchant) return null;
 
   const derived = setupStatusForMerchant(merchant);
-  const plan = merchant.subscription_plan || merchant.merchant_tier || "starter";
+  const plan = getStoragePlanCode(merchant.subscription_plan || merchant.merchant_tier || "starter");
   const displayName = merchant.trading_name || merchant.business_name || "DeraLedger Workspace";
 
   const { data: existing } = await adminClient
@@ -440,7 +445,7 @@ export async function ensureWorkspaceForMerchant(adminClient: SupabaseClient, me
     .insert({
       owner_user_id: merchant.user_id,
       merchant_id: merchantId,
-      workspace_type: plan === "individual" ? "personal" : "business",
+      workspace_type: normalizeCapabilityPlanCode(plan) === "individual" ? "personal" : "business",
       display_name: displayName,
       plan_type: plan,
       onboarding_status: merchant.onboarding_status || derived.onboarding_status,

@@ -15,6 +15,7 @@ import { getPaymentEnvironment } from "@/lib/services/payment-routing.service";
 import { createPendingPlanPaymentRecord } from "@/lib/services/plan-payment-recovery.service";
 import { defaultNetworkForRail, rateSettingKeyForRail, resolveBreetCheckoutQuote } from "@/lib/treasury";
 import crypto from "crypto";
+import { assertPlanAvailable, getStoragePlanCode, normalizePlanCode } from "@/lib/plans";
 
 /**
  * POST /api/checkout/crypto-subscription
@@ -35,6 +36,13 @@ export async function POST(request: Request) {
     if (!email || !plan || !sessionId || !amountKobo) {
       return NextResponse.json({ error: "Missing required fields." }, { status: 400 });
     }
+
+    const normalizedPlan = normalizePlanCode(plan);
+    const availability = await assertPlanAvailable(supabase, normalizedPlan);
+    if (!availability.ok) {
+      return NextResponse.json({ error: "This plan is not available right now." }, { status: 403 });
+    }
+    const storagePlan = getStoragePlanCode(normalizedPlan);
 
     let resolvedEmail = String(email);
     let merchantId: string | null = null;
@@ -107,7 +115,7 @@ export async function POST(request: Request) {
     });
 
     const referencePrefix = checkoutContext === "renewal" ? "CRYPTO-RNW" : "CRYPTO-SUB";
-    const reference = `${referencePrefix}-${plan.toUpperCase()}-${crypto.randomBytes(5).toString("hex").toUpperCase()}`;
+    const reference = `${referencePrefix}-${storagePlan.toUpperCase()}-${crypto.randomBytes(5).toString("hex").toUpperCase()}`;
     await createPendingPlanPaymentRecord(supabase, {
       internalReference: reference,
       provider: "breet",
@@ -115,14 +123,15 @@ export async function POST(request: Request) {
       paymentPurpose,
       customerEmail: resolvedEmail,
       expectedAmount: fiatAmount,
-      planName: plan,
-      planId: plan,
+      planName: normalizedPlan,
+      planId: storagePlan,
       userId,
       merchantId,
       passwordSetupRequired: checkoutContext === "onboarding",
       metadata: {
         email: resolvedEmail,
-        plan,
+        plan: storagePlan,
+        plan_display_code: normalizedPlan,
         session_id: sessionId,
         type: paymentType,
         merchant_id: merchantId,
@@ -170,7 +179,7 @@ export async function POST(request: Request) {
       merchant_id: merchantId,
       user_id: userId,
       business_id: null,
-      plan_id: plan,
+      plan_id: storagePlan,
       payment_purpose: paymentPurpose,
       provider_name: "breet",
       internal_reference: reference,
@@ -192,7 +201,8 @@ export async function POST(request: Request) {
       expires_at: new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString(),
       metadata: {
         email: resolvedEmail,
-        plan,
+        plan: storagePlan,
+        plan_display_code: normalizedPlan,
         session_id: sessionId,
         type: paymentType,
         merchant_id: merchantId,
