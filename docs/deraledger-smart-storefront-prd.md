@@ -2244,7 +2244,7 @@ updated_at
 ## 29.10 storefront_discount_codes
 
 ```txt
-id
+id3
 merchant_id
 storefront_id
 code
