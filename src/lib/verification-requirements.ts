@@ -1,3 +1,5 @@
+import { normalizeCapabilityPlanCode } from "@/lib/plans";
+
 export type VerificationRequirementKey =
   | "basic_profile"
   | "no_payment_collection"
@@ -108,16 +110,11 @@ export const PLAN_REQUIREMENTS: Record<string, VerificationRequirementKey[]> = {
   ],
 };
 
-const PLAN_ALIASES: Record<string, string> = {
-  starter: "starter",
-  individual: "individual_tier_1",
-  business: "business",
-  corporate: "corporate",
-};
-
 export function normalizePlanTier(planTier: string | null | undefined) {
-  const normalized = String(planTier || "").trim().toLowerCase();
-  return PLAN_ALIASES[normalized] || normalized || "starter";
+  const capabilityPlan = normalizeCapabilityPlanCode(planTier);
+  if (capabilityPlan === "individual") return "individual_tier_1";
+  if (capabilityPlan === "corporate") return "corporate";
+  return "starter";
 }
 
 export function getVerificationRequirements(planTier: string | null | undefined) {
@@ -248,7 +245,7 @@ export function getIncompleteComplianceRequirements(merchant: RequirementAwareMe
   const planTier = merchant.subscription_plan || merchant.merchant_tier;
   const normalizedPlan = normalizePlanTier(planTier);
   return getIncompleteRequirements(merchant).filter((requirement) =>
-    normalizedPlan === "business" || normalizedPlan === "corporate"
+    normalizedPlan === "corporate"
       ? requirement !== "settlement_account"
       : true,
   );

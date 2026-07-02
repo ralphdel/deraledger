@@ -6,6 +6,7 @@ import {
   VERIFICATION_DISCLOSURE_VERSION,
   type RelationshipClaim,
 } from "@/lib/services/onboarding-flow.service";
+import { assertPlanAvailable, getStoragePlanCode, normalizePlanCode } from "@/lib/plans";
 
 const supabase = createSupabaseClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -27,12 +28,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Missing fields" }, { status: 400 });
   }
 
-  if (requiresVerificationDisclosure(plan) && verificationDisclosureAccepted !== true) {
+  const normalizedPlan = normalizePlanCode(plan);
+  const availability = await assertPlanAvailable(supabase, normalizedPlan);
+  if (!availability.ok) {
+    return NextResponse.json({ error: "This plan is not available right now." }, { status: 403 });
+  }
+
+  if (requiresVerificationDisclosure(normalizedPlan) && verificationDisclosureAccepted !== true) {
     return NextResponse.json(
       { error: "Please acknowledge the verification disclosure before continuing." },
       { status: 400 }
     );
   }
+  const storagePlan = getStoragePlanCode(normalizedPlan);
 
   const ipAddress =
     request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
@@ -45,13 +53,13 @@ export async function POST(request: Request) {
     .insert({
       email,
       business_name: businessName,
-      plan,
+      plan: storagePlan,
       business_type: businessType || null,
       relationship_claim: (relationshipClaim as RelationshipClaim) || null,
-      verification_disclosure_acknowledged_at: requiresVerificationDisclosure(plan)
+      verification_disclosure_acknowledged_at: requiresVerificationDisclosure(normalizedPlan)
         ? new Date().toISOString()
         : null,
-      verification_disclosure_version: requiresVerificationDisclosure(plan)
+      verification_disclosure_version: requiresVerificationDisclosure(normalizedPlan)
         ? disclosureVersionToStore
         : null,
       disclosure_ip_address: ipAddress || null,
@@ -67,9 +75,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  if (requiresVerificationDisclosure(plan)) {
+  if (requiresVerificationDisclosure(normalizedPlan)) {
     await recordVerificationDisclosure(supabase, {
-      planType: plan,
+      planType: normalizedPlan,
       context: "onboarding",
       onboardingSessionId: data.id,
       ipAddress,

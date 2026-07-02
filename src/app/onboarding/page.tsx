@@ -48,9 +48,9 @@ const plans = [
   },
   {
     id: "individual",
-    name: "Individual",
+    name: "Solo Lite",
     href: "/onboarding/individual",
-    price: "BVN Verified",
+    price: "NGN 5,000/month",
     priceNote: "",
     verification: "BVN & Selfie required",
     bestFor: "For verified online collections",
@@ -76,7 +76,7 @@ const plans = [
     id: "corporate",
     name: "Business",
     href: "/onboarding/corporate",
-    price: "Business Verified",
+    price: "NGN 20,000/month",
     priceNote: "",
     verification: "Business & authority checks required",
     bestFor: "Operational collections infrastructure for growing businesses",
@@ -285,7 +285,7 @@ export default function OnboardingPage() {
             </div>
             <h2 className="text-3xl font-bold text-foreground dark:text-white">Verification follows the workflow.</h2>
             <p className="mx-auto mt-4 max-w-2xl text-base leading-relaxed text-muted-foreground dark:text-white/70">
-              Starter opens immediately. Individual collections require identity verification. Business
+              Starter opens immediately. Solo Lite collections require identity verification. Business
               workspaces use business and authority checks for higher trust and unlimited collections.
             </p>
             <div className="mt-8 flex flex-wrap justify-center gap-4 text-sm font-semibold text-foreground dark:text-white">

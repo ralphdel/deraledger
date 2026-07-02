@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { requireAdminPortalSession } from "@/lib/admin-portal-auth";
 import { sendOnboardingWelcomeEmail } from "@/lib/brevo";
+import { getStoragePlanCode } from "@/lib/plans";
 import { getAppUrl } from "@/lib/server-utils";
 
 const supabase = createSupabaseClient(
@@ -105,8 +106,10 @@ export async function POST(request: Request) {
   return NextResponse.json({ success: true });
 }
 
-function normalizePlanLabel(value: unknown): "starter" | "individual" | "corporate" {
-  if (value === "corporate") return "corporate";
-  if (value === "starter") return "starter";
+function normalizePlanLabel(value: unknown): "starter" | "individual" | "solo_plus" | "corporate" {
+  const normalized = getStoragePlanCode(String(value || "starter"));
+  if (normalized === "corporate") return "corporate";
+  if (normalized === "solo_plus") return "solo_plus";
+  if (normalized === "starter") return "starter";
   return "individual";
 }

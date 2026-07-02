@@ -4,6 +4,7 @@ import { useEffect, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { CheckCircle2, ArrowRight, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { getPlanDisplayName, normalizePlanCode } from "@/lib/plans";
 
 function UpgradeSuccessContent() {
   const router = useRouter();
@@ -15,12 +16,7 @@ function UpgradeSuccessContent() {
     searchParams.get("paymentReference") ||
     searchParams.get("transactionReference");
   const provider = searchParams.get("provider") || undefined;
-  const planLabel =
-    plan === "corporate"
-      ? "Business"
-      : plan === "individual"
-        ? "Individual / Collections"
-        : "your selected";
+  const planLabel = plan ? getPlanDisplayName(normalizePlanCode(plan)) : "your selected";
   
   const [countdown, setCountdown] = useState(5);
   const [verifying, setVerifying] = useState(true);

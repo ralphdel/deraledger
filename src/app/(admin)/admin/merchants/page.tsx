@@ -271,7 +271,7 @@ export default function AdminMerchantsPage() {
             <SelectContent>
               <SelectItem value="all">All Plans</SelectItem>
               <SelectItem value="starter">Starter</SelectItem>
-              <SelectItem value="individual">Individual</SelectItem>
+              <SelectItem value="individual">Solo Lite</SelectItem>
               <SelectItem value="corporate">Business</SelectItem>
             </SelectContent>
           </Select>

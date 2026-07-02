@@ -2189,7 +2189,7 @@ export async function createReferenceAction(data: {
 }) {
   const adminClient = getServiceClient();
 
-  // ── Plan gate: References require Individual plan or above ─────────────────
+  // ── Plan gate: References require Solo Lite plan or above ─────────────────
   const { data: merchantRow } = await adminClient
     .from("merchants")
     .select("subscription_plan, merchant_tier")
@@ -2201,7 +2201,7 @@ export async function createReferenceAction(data: {
     if (!access.allowed) {
       return {
         success: false,
-        error: "References are not available on the Starter plan. Upgrade to Individual or Business to group invoices under project references.",
+        error: "References are not available on the Starter plan. Upgrade to Solo Lite or Business to group invoices under project references.",
         upgradeRequired: "individual" as const,
       };
     }

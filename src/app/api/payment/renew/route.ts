@@ -3,6 +3,12 @@ import { createClient } from "@/lib/supabase/server";
 import { PaymentService } from "@/lib/payment";
 import { getAppUrl } from "@/lib/server-utils";
 import { getPaymentEnvironmentForMerchantEmail, resolvePaymentRoute, type PaymentMethod } from "@/lib/services/payment-routing.service";
+import {
+  assertPlanAvailable,
+  getPlanPriceKobo,
+  getStoragePlanCode,
+  normalizePlanCode,
+} from "@/lib/plans";
 
 export async function POST(request: Request) {
   try {
@@ -15,9 +21,12 @@ export async function POST(request: Request) {
 
     const { plan, paymentMethod } = await request.json();
 
-    if (plan !== "individual" && plan !== "corporate") {
-      return NextResponse.json({ error: "Invalid plan or plan is not renewable" }, { status: 400 });
+    const normalizedPlan = normalizePlanCode(plan);
+    const availability = await assertPlanAvailable(supabase, normalizedPlan);
+    if (!availability.ok) {
+      return NextResponse.json({ error: "This plan is not available right now." }, { status: 403 });
     }
+    const storagePlan = getStoragePlanCode(normalizedPlan);
 
     // Get merchant
     const { data: merchant, error: merchantError } = await supabase
@@ -31,7 +40,7 @@ export async function POST(request: Request) {
     }
 
     // Determine price
-    const amountKobo = plan === "corporate" ? 2000000 : 500000;
+    const amountKobo = getPlanPriceKobo(normalizedPlan);
     const reference = `rnw_${merchant.id.substring(0, 8)}_${Date.now()}`;
 
     const appUrl = getAppUrl();
@@ -49,7 +58,8 @@ export async function POST(request: Request) {
       metadata: {
         type: "subscription_renewal",
         merchant_id: merchant.id,
-        plan: plan,
+        plan: storagePlan,
+        plan_display_code: normalizedPlan,
         amount_expected_kobo: amountKobo,
         payment_method_requested: method,
         resolved_provider: route.provider,

@@ -16,6 +16,7 @@ import type {
   Subscription,
   Reference,
 } from "@/lib/types";
+import { getPlanDisplayName, normalizeCapabilityPlanCode, normalizePlanCode } from "@/lib/plans";
 
 // ── Active Merchant ID Resolver ───────────────────────────────────────────────
 function supabase() {
@@ -167,7 +168,7 @@ export async function getMerchant(id?: string): Promise<(Merchant & { currentUse
           // Even if a role grants a permission, strip it if the merchant's plan
           // does not include that feature. This enforces plan boundaries server-side
           // so team members can't access features above their merchant's plan.
-          const planKey = data.subscription_plan || data.merchant_tier || "starter";
+          const planKey = normalizeCapabilityPlanCode(data.subscription_plan || data.merchant_tier || "starter");
 
           // Permissions never available on Starter plan
           const STARTER_BLOCKED = new Set([
@@ -679,7 +680,7 @@ export async function getNotifications(merchantId?: string): Promise<AppNotifica
       notifications.push({
         id: "sub-warning",
         title: "Subscription Expiring",
-        message: `Your ${subscription.plan_type} plan expires in ${daysRemaining} days.`,
+        message: `Your ${getPlanDisplayName(subscription.plan_type)} plan expires in ${daysRemaining} days.`,
         type: "warning",
         time: `${daysRemaining} days left`,
         isRead: false,

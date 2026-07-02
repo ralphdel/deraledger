@@ -13,6 +13,7 @@ import {
   Loader2
 } from "lucide-react";
 import { formatNaira } from "@/lib/calculations";
+import { getPlanDisplayName } from "@/lib/plans";
 import { SubscriptionActions } from "./subscription-actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -281,7 +282,13 @@ export function SubscriptionTable({ initialSubs }: SubscriptionTableProps) {
                   checked={planFilter.includes("individual")}
                   onCheckedChange={() => togglePlanFilter("individual")}
                 >
-                  Individual
+                  Solo Lite
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuCheckboxItem 
+                  checked={planFilter.includes("solo_plus")}
+                  onCheckedChange={() => togglePlanFilter("solo_plus")}
+                >
+                  Solo Plus
                 </DropdownMenuCheckboxItem>
                 <DropdownMenuCheckboxItem 
                   checked={planFilter.includes("corporate")}
@@ -345,7 +352,7 @@ export function SubscriptionTable({ initialSubs }: SubscriptionTableProps) {
                 </td>
                 <td className="px-6 py-4">
                   <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-neutral-100 text-neutral-700 capitalize">
-                    {sub.plan_type}
+                    {getPlanDisplayName(sub.plan_type)}
                   </span>
                 </td>
                 <td className="px-6 py-4 font-medium">

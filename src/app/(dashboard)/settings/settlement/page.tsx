@@ -349,7 +349,7 @@ export default function SettlementSettingsPage() {
               Upgrade your plan to enable this feature and configure your settlement account.
             </p>
             <Button className="mt-4 bg-amber-600 hover:bg-amber-700 text-white">
-              Upgrade to Individual
+              Upgrade to Solo Lite
             </Button>
           </CardContent>
         </Card>

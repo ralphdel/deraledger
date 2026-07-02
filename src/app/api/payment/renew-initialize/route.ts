@@ -4,6 +4,12 @@ import { PaymentService } from "@/lib/payment";
 import { getAppUrl } from "@/lib/server-utils";
 import { getPaymentEnvironmentForMerchantEmail, resolvePaymentRoute, type PaymentMethod } from "@/lib/services/payment-routing.service";
 import { createPendingPlanPaymentRecord } from "@/lib/services/plan-payment-recovery.service";
+import {
+  assertPlanAvailable,
+  getPlanPriceKobo,
+  getStoragePlanCode,
+  normalizePlanCode,
+} from "@/lib/plans";
 
 /**
  * POST /api/payment/renew-initialize
@@ -27,9 +33,12 @@ export async function POST(request: Request) {
 
     const { plan, email, paymentMethod } = await request.json();
 
-    if (plan !== "individual" && plan !== "corporate") {
-      return NextResponse.json({ error: "Invalid plan for renewal" }, { status: 400 });
+    const normalizedPlan = normalizePlanCode(plan);
+    const availability = await assertPlanAvailable(supabase, normalizedPlan);
+    if (!availability.ok) {
+      return NextResponse.json({ error: "This plan is not available right now." }, { status: 403 });
     }
+    const storagePlan = getStoragePlanCode(normalizedPlan);
 
     // Get merchant — must be the owner (user_id match)
     const { data: merchant, error: merchantError } = await supabase
@@ -44,14 +53,14 @@ export async function POST(request: Request) {
 
     // Security: Validate the plan is the same as current (renewal = same plan only)
     const currentPlan = merchant.subscription_plan || "starter";
-    if (currentPlan !== plan && currentPlan !== "expired_" + plan) {
+    if (currentPlan !== storagePlan && currentPlan !== "expired_" + storagePlan) {
       // Allow renewing if current plan matches OR if plan matches a lapsed version
       // We allow the renewal payload plan to proceed for flexible handling
       // but we log the mismatch for audit
-      console.warn(`Renewal plan mismatch: merchant ${merchant.id} is on ${currentPlan}, renewing as ${plan}`);
+      console.warn(`Renewal plan mismatch: merchant ${merchant.id} is on ${currentPlan}, renewing as ${storagePlan}`);
     }
 
-    const amountKobo = plan === "corporate" ? 2_000_000 : 500_000;
+    const amountKobo = getPlanPriceKobo(normalizedPlan);
     const reference = `rnw_${merchant.id.substring(0, 8)}_${Date.now()}`;
 
     const resolvedEmail = email || user.email || merchant.email || "billing@deraledger.app";
@@ -68,14 +77,15 @@ export async function POST(request: Request) {
       paymentPurpose: "plan_subscription",
       customerEmail: resolvedEmail,
       expectedAmount: amountKobo / 100,
-      planName: plan,
-      planId: plan,
+      planName: normalizedPlan,
+      planId: storagePlan,
       userId: user.id,
       merchantId: merchant.id,
       metadata: {
         type: "subscription_renewal",
         merchant_id: merchant.id,
-        plan,
+        plan: storagePlan,
+        plan_display_code: normalizedPlan,
         email: resolvedEmail,
         business_name: merchant.business_name,
         owner_name: merchant.owner_name || null,
@@ -95,7 +105,8 @@ export async function POST(request: Request) {
       metadata: {
         type: "subscription_renewal",
         merchant_id: merchant.id,
-        plan,
+        plan: storagePlan,
+        plan_display_code: normalizedPlan,
         email: resolvedEmail,
         business_name: merchant.business_name,
         owner_name: merchant.owner_name || null,

@@ -30,6 +30,7 @@ import {
   adminGetVerificationDetailsAction,
   getActiveVerificationProviderKeyAction,
 } from "@/lib/actions";
+import { getPlanDisplayName, normalizeCapabilityPlanCode } from "@/lib/plans";
 import type { Merchant } from "@/lib/types";
 
 type ActionMode = "idle" | "reject" | "reupload" | "reset";
@@ -192,8 +193,9 @@ export default function VerificationQueuePage() {
   const getEffectiveStatus = (m: Merchant | null): string => {
     if (!m) return "unverified";
     const tier = m.subscription_plan || m.merchant_tier || "starter";
+    const capabilityPlan = normalizeCapabilityPlanCode(tier);
     if (tier !== "starter" && !m.owner_name) return "incomplete";
-    if (tier === "corporate" && !m.business_name) return "incomplete";
+    if (capabilityPlan === "corporate" && !m.business_name) return "incomplete";
     if (tier !== "starter" && (!m.business_street || !m.business_city || !m.business_state || !m.business_country || !m.phone)) return "incomplete";
     if (tier !== "starter" && m.bvn_status === "verified" && (m.selfie_status || "unverified") !== "verified") return "pending";
     return m.verification_status;
@@ -246,9 +248,7 @@ export default function VerificationQueuePage() {
 
   /** Maps internal plan keys to user-facing labels. "corporate" → "Business". */
   const formatPlanLabel = (plan: string | null | undefined): string => {
-    if (!plan) return "Starter";
-    if (plan === "corporate") return "Business";
-    return plan.charAt(0).toUpperCase() + plan.slice(1);
+    return getPlanDisplayName(plan);
   };
 
   const updateItemStatus = async (merchant: Merchant, field: "cac_status" | "bvn_status" | "utility_status" | "selfie_status", status: "verified" | "rejected") => {
@@ -359,7 +359,7 @@ export default function VerificationQueuePage() {
     const freshMerchant = await reloadSelectedMerchant(m.id);
     const merchantForReview = freshMerchant || m;
     const plan = merchantForReview.subscription_plan || merchantForReview.merchant_tier || "starter";
-    const isBusinessPlan = plan === "corporate" || plan === "business";
+    const isBusinessPlan = normalizeCapabilityPlanCode(plan) === "corporate";
 
     setDirectorsLoading(true);
     try {
@@ -560,9 +560,9 @@ export default function VerificationQueuePage() {
                   {selectedMerchant && (() => {
                     const planKey = selectedMerchant.subscription_plan || selectedMerchant.merchant_tier;
                     const planLabel = formatPlanLabel(planKey);
-                    const isBusinessPlan = planKey === "corporate" || planKey === "business";
+                    const isBusinessPlan = normalizeCapabilityPlanCode(planKey) === "corporate";
                     const isRepresentativeFlow = selectedMerchant.relationship_claim === "representative_claim";
-                    const requiresDirectorFlow = planKey === "corporate" && isRepresentativeFlow;
+                    const requiresDirectorFlow = normalizeCapabilityPlanCode(planKey) === "corporate" && isRepresentativeFlow;
                     const effectiveStatus = getEffectiveStatus(selectedMerchant);
                     const roster = extractKeyPersonnel(registrySnapshot);
                     const rosterCount = roster.length;
@@ -672,7 +672,7 @@ export default function VerificationQueuePage() {
                       "Not submitted"
                     );
                     const identityLabel = isBusinessPlan ? (isRepresentativeFlow ? "Representative Identity" : "Owner/Director Identity") : "Identity Verification";
-                    const identitySectionLabel = isBusinessPlan ? (isRepresentativeFlow ? "Representative Identity Evidence" : "Owner/Director Identity Evidence") : "Individual Identity Evidence";
+                    const identitySectionLabel = isBusinessPlan ? (isRepresentativeFlow ? "Representative Identity Evidence" : "Owner/Director Identity Evidence") : "Solo Lite Identity Evidence";
                     const repIdentityBlocked = repNameReviewState === "mismatch";
                     const repHasCurrentEvidence = !!repLog;
                     const repIdentityResolvedByCompliance = repNameReviewState === "partial" && repIdentityReviewApproved;
@@ -1109,7 +1109,7 @@ export default function VerificationQueuePage() {
                           <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
                             {[ 
                               { label: "Current active provider", value: activeProvider, note: "System default", tone: "info" as const },
-                              { label: isBusinessPlan ? "Representative evidence provider" : "Individual identity evidence provider", value: formattedRepProvider, note: repProviderUnknown ? "Unknown provider" : isHistoricalRepProvider ? "Historical evidence" : "Current evidence", tone: repProviderUnknown ? "blocked" as const : isHistoricalRepProvider ? "pending" as const : "neutral" as const },
+                              { label: isBusinessPlan ? "Representative evidence provider" : "Solo Lite identity evidence provider", value: formattedRepProvider, note: repProviderUnknown ? "Unknown provider" : isHistoricalRepProvider ? "Historical evidence" : "Current evidence", tone: repProviderUnknown ? "blocked" as const : isHistoricalRepProvider ? "pending" as const : "neutral" as const },
                               { label: "CAC evidence provider", value: !isBusinessPlan ? "Not required" : formattedCacProvider, note: !isBusinessPlan ? "Not required for this plan" : formattedCacProvider.toLowerCase() === "unknown" ? "Unknown provider" : isHistoricalCacProvider ? "Historical evidence" : "Current evidence", tone: !isBusinessPlan ? "neutral" as const : formattedCacProvider.toLowerCase() === "unknown" ? "blocked" as const : isHistoricalCacProvider ? "pending" as const : "neutral" as const },
                               { label: "Director identity evidence provider", value: !requiresDirectorFlow ? "Not required" : formattedDirectorProviders.length > 0 ? formattedDirectorProviders.join(", ") : "No evidence yet", note: !requiresDirectorFlow ? "Not required for this flow" : hasUnknownDirectorProvider ? "Unknown provider present" : hasHistoricalDirectorProvider ? "Historical evidence present" : "Current evidence", tone: !requiresDirectorFlow ? "neutral" as const : hasUnknownDirectorProvider ? "blocked" as const : hasHistoricalDirectorProvider ? "pending" as const : "neutral" as const },
                             ].map((provider) => (
@@ -1271,7 +1271,7 @@ export default function VerificationQueuePage() {
                             <span className="flex items-center justify-between gap-3">
                               <span>
                                 <span className="block text-sm font-semibold text-blue-950">{identitySectionLabel}</span>
-                                <span className="block text-xs text-blue-700">{isBusinessPlan ? "Representative-only identity evidence, separate from director identity review." : "Individual identity evidence and provider traceability review."}</span>
+                                <span className="block text-xs text-blue-700">{isBusinessPlan ? "Representative-only identity evidence, separate from director identity review." : "Solo Lite identity evidence and provider traceability review."}</span>
                               </span>
                               <span className="text-[10px] font-medium text-blue-700">Details collapsed by default</span>
                             </span>

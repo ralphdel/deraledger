@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { CheckCircle2, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { getPlanDisplayName, getPlanMonthlyPriceLabel } from "@/lib/plans";
 
 const plans = [
   {
@@ -23,9 +24,9 @@ const plans = [
     ],
   },
   {
-    name: "Individual",
+    name: getPlanDisplayName("individual"),
     href: "/onboarding/individual",
-    price: "BVN Verified",
+    price: getPlanMonthlyPriceLabel("individual"),
     bestFor: "For verified online collections",
     verification: "Identity validation required",
     cta: "Start collecting",
@@ -40,9 +41,9 @@ const plans = [
     ],
   },
   {
-    name: "Business",
+    name: getPlanDisplayName("corporate"),
     href: "/onboarding/corporate",
-    price: "Business Verified",
+    price: getPlanMonthlyPriceLabel("corporate"),
     bestFor: "Collections infrastructure for growing teams",
     verification: "Business vetting required",
     cta: "Set up business",

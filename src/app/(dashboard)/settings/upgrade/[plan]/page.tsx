@@ -58,7 +58,7 @@ interface UpgradePageProps {
 
 const PLAN_CONFIG: Record<UpgradePlanId, UpgradePlanConfig> = {
   individual: {
-    label: "Individual",
+    label: "Solo Lite",
     routeLabel: "individual",
     price: "NGN 5,000",
     interval: "/month",
@@ -166,7 +166,7 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
           <CardContent className="p-8 text-center">
             <h1 className="text-2xl font-bold text-foreground dark:text-white">Upgrade plan not found</h1>
             <p className="mt-2 text-sm text-muted-foreground dark:text-white/70">
-              Choose Individual / Collections or Business to continue.
+              Choose Solo Lite or Business to continue.
             </p>
           </CardContent>
         </Card>
@@ -367,7 +367,7 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
                     </div>
 
                     {/* For individual→corporate: quick checkbox to reuse existing owner */}
-                    {merchant?.subscription_plan === "individual" && plan === "corporate" && merchant.owner_name && (
+                    {(merchant?.subscription_plan === "individual" || merchant?.subscription_plan === "solo_plus") && plan === "corporate" && merchant.owner_name && (
                       <label className="flex items-center gap-3 rounded-xl border border-white/10 bg-[#12061F]/50 px-4 py-3 cursor-pointer">
                         <input
                           type="checkbox"
@@ -389,7 +389,7 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
                       onChange={(e) => {
                         setOwnerName(e.target.value);
                         // Uncheck "same owner" if user starts typing a different name
-                        if (merchant?.subscription_plan === "individual" && plan === "corporate") {
+                        if ((merchant?.subscription_plan === "individual" || merchant?.subscription_plan === "solo_plus") && plan === "corporate") {
                           setSameOwner(e.target.value === (merchant?.owner_name || ""));
                         }
                       }}

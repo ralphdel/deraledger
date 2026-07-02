@@ -1,5 +1,6 @@
 // src/lib/brevo.ts
 import { getAppUrl } from "@/lib/server-utils";
+import { getPlanDisplayName, getPlanMonthlyPriceLabel, getPlanPriceLabel } from "@/lib/plans";
 
 const BREVO_API_URL = "https://api.brevo.com/v3/smtp/email";
 const ADMIN_EMAIL = "ralphdel14@yahoo.com"; // Verified sender email on Brevo
@@ -380,23 +381,23 @@ export async function sendMerchantPaymentReceivedEmail(params: {
 export async function sendOnboardingWelcomeEmail(
   toEmail: string,
   businessName: string,
-  plan: "starter" | "individual" | "corporate",
+  plan: "starter" | "individual" | "solo_plus" | "corporate",
   setPasswordLink: string,
   expiryDate?: string
 ) {
-  const planLabel = plan === "starter" ? "Starter" : plan === "individual" ? "Individual" : "Business";
+  const planLabel = getPlanDisplayName(plan);
   const planPrice = plan === "starter" ? "Free" : plan === "individual" ? "₦5,000/month" : "₦20,000/month";
   const appUrl = getAppUrl();
-
+  const resolvedPlanPrice = getPlanMonthlyPriceLabel(plan);
   const htmlContent = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #111827; border: 1px solid #E5E7EB; border-radius: 8px; overflow: hidden;">
       <div style="background-color: #4C1D95; padding: 28px; text-align: center;">
         <h1 style="color: white; margin: 0; font-size: 24px;">Welcome to Deraledger!</h1>
-        <p style="color: #C4B5FD; margin: 8px 0 0 0; font-size: 14px;">Your ${planLabel} plan (${planPrice}) is now active${expiryDate ? ` until ${new Date(expiryDate).toLocaleDateString('en-NG')}` : ""}</p>
+        <p style="color: #C4B5FD; margin: 8px 0 0 0; font-size: 14px;">Your ${planLabel} plan (${resolvedPlanPrice || planPrice}) is now active${expiryDate ? ` until ${new Date(expiryDate).toLocaleDateString('en-NG')}` : ""}</p>
       </div>
       <div style="padding: 32px;">
         <p>Hello ${businessName},</p>
-        <p>${plan === "starter" ? `Your <strong>Deraledger ${planLabel} Plan</strong> is now active. Your account is ready.` : `Your payment for the <strong>Deraledger ${planLabel} Plan</strong> has been confirmed. Your account is ready.`}</p>
+        <p>${plan === "starter" ? `Your <strong>DeraLedger ${planLabel} Plan</strong> is now active. Your account is ready.` : `Your payment for the <strong>DeraLedger ${planLabel} Plan</strong> has been confirmed. Your account is ready.`}</p>
         <p>Click the button below to set your password and access your dashboard.</p>
         <div style="text-align: center; margin: 32px 0;">
           <a href="${setPasswordLink}" style="background-color: #4C1D95; color: white; padding: 14px 32px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 16px; display: inline-block;">
@@ -506,6 +507,8 @@ export async function sendSubscriptionExpiringEmail(
   const settingsLink = `${appUrl}/settings/billing`;
   const formattedDate = new Date(expiryDate).toLocaleDateString("en-NG", { year: 'numeric', month: 'long', day: 'numeric' });
   const isUrgent = daysRemaining <= 3;
+  const planLabel = getPlanDisplayName(planType);
+  const resolvedAmount = getPlanPriceLabel(planType);
   const amount = planType === "individual" ? "₦5,000" : "₦20,000";
 
   const htmlContent = `
@@ -516,10 +519,10 @@ export async function sendSubscriptionExpiringEmail(
       <div style="padding: 30px;">
         <p>Hello ${businessName},</p>
         <p style="font-size: 15px; line-height: 1.6;">
-          This is a reminder that your Deraledger <strong>${planType.toUpperCase()}</strong> plan will expire in <strong>${daysRemaining} days</strong> (on ${formattedDate}).
+          This is a reminder that your DeraLedger <strong>${planLabel}</strong> plan will expire in <strong>${daysRemaining} days</strong> (on ${formattedDate}).
         </p>
         <div style="background-color: #F9FAFB; border: 1px solid #E5E7EB; padding: 16px; border-radius: 6px; margin: 20px 0;">
-          <p style="margin: 0; color: #374151;">To ensure uninterrupted access to Deraledger's invoicing and collection tools, please renew your subscription (${amount}) before it expires.</p>
+          <p style="margin: 0; color: #374151;">To ensure uninterrupted access to DeraLedger's invoicing and collection tools, please renew your subscription (${resolvedAmount || amount}) before it expires.</p>
         </div>
         <div style="text-align: center; margin: 30px 0;">
           <a href="${settingsLink}" style="background-color: #4C1D95; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 16px; display: inline-block;">
@@ -555,6 +558,7 @@ export async function sendSubscriptionRenewalEmail(
 ) {
   const formattedStart = new Date(periodStart).toLocaleDateString("en-NG", { year: 'numeric', month: 'long', day: 'numeric' });
   const formattedEnd = new Date(periodEnd).toLocaleDateString("en-NG", { year: 'numeric', month: 'long', day: 'numeric' });
+  const planLabel = getPlanDisplayName(planType);
 
   const htmlContent = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #111827; border: 1px solid #E5E7EB; border-radius: 8px; overflow: hidden;">
@@ -564,7 +568,7 @@ export async function sendSubscriptionRenewalEmail(
       <div style="padding: 30px;">
         <p>Hello ${businessName},</p>
         <p style="font-size: 15px; line-height: 1.6;">
-          Thank you! Your Deraledger <strong>${planType.toUpperCase()}</strong> plan has been successfully renewed.
+          Thank you! Your DeraLedger <strong>${planLabel}</strong> plan has been successfully renewed.
         </p>
         <div style="background-color: #F9FAFB; border: 1px solid #E5E7EB; padding: 16px; border-radius: 6px; margin: 20px 0;">
           <p style="margin: 4px 0; color: #374151;"><strong>Amount Paid:</strong> ₦${amountPaid.toLocaleString('en-US')}</p>

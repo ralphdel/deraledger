@@ -10,6 +10,12 @@ import {
 } from "@/lib/services/onboarding-flow.service";
 import { getPaymentEnvironmentForMerchantEmail, resolvePaymentRoute, type PaymentMethod } from "@/lib/services/payment-routing.service";
 import { createPendingPlanPaymentRecord } from "@/lib/services/plan-payment-recovery.service";
+import {
+  assertPlanAvailable,
+  getPlanPriceKobo,
+  getStoragePlanCode,
+  normalizePlanCode,
+} from "@/lib/plans";
 
 export async function POST(request: Request) {
   try {
@@ -30,11 +36,14 @@ export async function POST(request: Request) {
       paymentMethod,
     } = await request.json();
 
-    if (newPlan !== "individual" && newPlan !== "corporate") {
-      return NextResponse.json({ error: "Invalid plan" }, { status: 400 });
+    const normalizedPlan = normalizePlanCode(newPlan);
+    const availability = await assertPlanAvailable(supabase, normalizedPlan);
+    if (!availability.ok) {
+      return NextResponse.json({ error: "This plan is not available right now." }, { status: 403 });
     }
+    const storagePlan = getStoragePlanCode(normalizedPlan);
 
-    if (requiresVerificationDisclosure(newPlan) && verificationDisclosureAccepted !== true) {
+    if (requiresVerificationDisclosure(normalizedPlan) && verificationDisclosureAccepted !== true) {
       return NextResponse.json(
         { error: "Please acknowledge the verification disclosure before payment." },
         { status: 400 }
@@ -53,7 +62,7 @@ export async function POST(request: Request) {
     }
 
     // Determine price
-    const amountKobo = newPlan === "corporate" ? 2000000 : 500000;
+    const amountKobo = getPlanPriceKobo(normalizedPlan);
     const reference = `upg_${merchant.id.substring(0, 8)}_${Date.now()}`;
 
     const appUrl = getAppUrl();
@@ -61,7 +70,7 @@ export async function POST(request: Request) {
     const route = await resolvePaymentRoute("plan_upgrade", method, getPaymentEnvironmentForMerchantEmail(user.email || merchant.email));
     const callback = new URL(`${appUrl}/settings/upgrade-success`);
     callback.searchParams.set("reference", reference);
-    callback.searchParams.set("plan", newPlan);
+    callback.searchParams.set("plan", storagePlan);
     callback.searchParams.set("provider", route.provider);
     const ipAddress =
       request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
@@ -69,7 +78,7 @@ export async function POST(request: Request) {
     const disclosureVersionToStore = disclosureVersion || VERIFICATION_DISCLOSURE_VERSION;
 
     await recordVerificationDisclosure(supabase, {
-      planType: newPlan,
+      planType: normalizedPlan,
       context: "upgrade",
       userId: user.id,
       merchantId: merchant.id,
@@ -86,14 +95,15 @@ export async function POST(request: Request) {
       paymentPurpose: "plan_upgrade",
       customerEmail: user.email || merchant.email || "billing@deraledger.app",
       expectedAmount: amountKobo / 100,
-      planName: newPlan,
-      planId: newPlan,
+      planName: normalizedPlan,
+      planId: storagePlan,
       userId: user.id,
       merchantId: merchant.id,
       metadata: {
         type: "subscription_upgrade",
         merchant_id: merchant.id,
-        new_plan: newPlan,
+        new_plan: storagePlan,
+        new_plan_display_code: normalizedPlan,
         owner_name: ownerName || null,
         business_type: businessType || null,
         relationship_claim: (relationshipClaim as RelationshipClaim) || null,
@@ -114,7 +124,8 @@ export async function POST(request: Request) {
       metadata: {
         type: "subscription_upgrade",
         merchant_id: merchant.id,
-        new_plan: newPlan,
+        new_plan: storagePlan,
+        new_plan_display_code: normalizedPlan,
         owner_name: ownerName || null,
         business_type: businessType || null,
         relationship_claim: (relationshipClaim as RelationshipClaim) || null,
