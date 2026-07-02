@@ -173,3 +173,85 @@ Results to record after rerun:
 ## Final Recommendation
 
 Ready for re-audit.
+
+## Production Rollout Completion
+
+**Production rollout date:** 2 July 2026  
+**Final status:** Completed and production verified
+
+### Database preparation and migration
+
+- A production database backup was created before migration.
+- Backup format: PostgreSQL custom-format archive.
+- The archive was validated successfully using `pg_restore --list`.
+- A SHA-256 checksum was generated and retained with the backup.
+- Production pre-migration plan-value checks returned no unexpected values.
+- Existing plan row counts were recorded before migration.
+- Only `supabase/migrations/20260630_phase1_plan_compatibility.sql` was executed against production.
+- The migration completed successfully.
+- No onboarding, workspace, merchant, or subscription rows were mass rewritten.
+- Existing row counts remained unchanged after migration.
+- The new compatibility constraints allow legacy and canonical plan codes.
+- The `plan_migrations` table was created successfully.
+
+### Application deployment
+
+- The audited Phase 1 branch was pushed and reviewed through a pull request.
+- The Vercel preview deployment completed successfully.
+- Preview application checks passed.
+- The pull request was merged into `main` using a merge commit.
+- The resulting production deployment completed successfully.
+- Final smoke testing was completed on the live production domain.
+
+### Production verification completed
+
+The following areas were tested successfully:
+
+- Authentication and dashboard loading
+- Billing and subscription settings
+- Business and settlement settings
+- Existing invoice access
+- Internal test invoice creation
+- Public payment-link resolution
+- Record Invoice flow
+- Collection Invoice flow
+- Legacy-plan compatibility
+- Solo Lite display mapping
+- Business display mapping
+- Solo Plus route blocking
+- Browser network and application-error checks
+
+No regression was found in:
+
+- Invoice creation
+- Existing checkout
+- Payment references
+- Payment-provider routing
+- Settlement behaviour
+- Webhooks and idempotency
+- Existing subscription records
+- Legacy plan records
+
+### Feature-flag state after deployment
+
+The following production flags remain disabled:
+
+- `plan_migration_solo_lite_enabled = false`
+- `solo_plus_enabled = false`
+- `solo_plus_kyc_enabled = false`
+
+Solo Plus has not been activated, and no Phase 2 storefront functionality has been released.
+
+### Known non-blocking issue
+
+A Recharts `ResponsiveContainer` warning may appear when a chart initially receives a calculated width or height of `-1`.
+
+The chart remains visible and functional. This warning is unrelated to the Phase 1 plan migration and is deferred to a separate UI-maintenance task.
+
+### Final Phase 1 verdict
+
+**Passed — production verified with conditions satisfied.**
+
+Phase 1 is formally closed. Further storefront development must begin from a fresh branch based on the latest `main` branch and must follow the approved phase-gate process.
+
+
