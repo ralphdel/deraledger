@@ -22,6 +22,21 @@ export type SoloPlusSafeJsonObject = {
   [key: string]: SoloPlusSafeJsonValue;
 };
 
+export type SoloPlusAmount = string;
+
+const SOLO_PLUS_AMOUNT_PATTERN = /^(0|[1-9][0-9]{0,15})(\.[0-9]{1,2})?$/;
+
+export function normalizeSoloPlusAmount(value: string): SoloPlusAmount {
+  const trimmed = value.trim();
+
+  if (!SOLO_PLUS_AMOUNT_PATTERN.test(trimmed)) {
+    throw new Error("Solo Plus amount must be a canonical numeric(18,2)-compatible decimal string.");
+  }
+
+  const [wholePart, fractionalPart = ""] = trimmed.split(".");
+  return `${wholePart}.${fractionalPart.padEnd(2, "0")}`;
+}
+
 export type SoloPlusCaseRecord = {
   id: string;
   merchantId: string | null;
@@ -35,7 +50,7 @@ export type SoloPlusCaseRecord = {
   paymentRecordId: string | null;
   paymentProvider: SoloPlusPaymentProvider;
   paymentReference: string | null;
-  expectedAmount: number;
+  expectedAmount: SoloPlusAmount;
   paymentCurrency: "NGN";
   requirementsPolicyVersion: string;
   requirementsSnapshot: SoloPlusSafeJsonObject;
@@ -101,7 +116,7 @@ export type SoloPlusCaseCreationIntent = {
   onboardingSessionId: string | null;
   sourcePlan: SoloPlusSourcePlan;
   targetPlan: SoloPlusTargetPlan;
-  expectedAmount: number;
+  expectedAmount: SoloPlusAmount;
   paymentCurrency: "NGN";
   requirementsPolicyVersion: string;
   requirementsSnapshot: SoloPlusSafeJsonObject;
@@ -143,6 +158,14 @@ export type SoloPlusCaseCreateAtomicResult =
       event: SoloPlusCaseEventRecord;
     }
   | {
+      kind: "idempotent_replay";
+      existingCase: SoloPlusCaseRecord;
+    }
+  | {
+      kind: "existing_active_case";
+      existingCase: SoloPlusCaseRecord;
+    }
+  | {
       kind: "idempotency_conflict";
       existingCase: SoloPlusCaseRecord;
     }
@@ -177,6 +200,14 @@ export type SoloPlusAttachMerchantAtomicResult =
     }
   | {
       kind: "not_found";
+    }
+  | {
+      kind: "idempotency_conflict";
+      currentCase: SoloPlusCaseRecord;
+    }
+  | {
+      kind: "active_case_conflict";
+      currentCase: SoloPlusCaseRecord;
     }
   | {
       kind: "version_conflict";
@@ -232,6 +263,10 @@ export type SoloPlusCaseTransitionAtomicResult =
     }
   | {
       kind: "not_found";
+    }
+  | {
+      kind: "idempotency_conflict";
+      currentCase: SoloPlusCaseRecord;
     }
   | {
       kind: "version_conflict";

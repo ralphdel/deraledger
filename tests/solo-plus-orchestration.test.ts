@@ -9,6 +9,7 @@ import {
   type CreateSoloPlusUpgradeCaseInput,
 } from "../src/lib/solo-plus/orchestration";
 import {
+  normalizeSoloPlusAmount,
   SOLO_PLUS_ACTIVE_CASE_STATUSES,
   type SoloPlusCaseCreateAtomicInput,
   type SoloPlusCaseCreateAtomicResult,
@@ -99,13 +100,20 @@ class FakeSoloPlusRepository implements SoloPlusCaseRepository {
 
     const existingByIdempotency = await this.findCaseByIdempotencyKey(input.caseRecord.idempotencyKey);
     if (existingByIdempotency) {
-      return { kind: "idempotency_conflict", existingCase: existingByIdempotency };
+      return this.sameIntent(input.caseRecord, existingByIdempotency)
+        ? { kind: "idempotent_replay", existingCase: existingByIdempotency }
+        : { kind: "idempotency_conflict", existingCase: existingByIdempotency };
     }
 
     if (input.caseRecord.merchantId) {
       const activeByMerchant = await this.findActiveCaseByMerchantId(input.caseRecord.merchantId);
       if (activeByMerchant) {
-        return { kind: "active_case_conflict", existingCase: activeByMerchant };
+        return {
+          kind: this.sameIntent(input.caseRecord, activeByMerchant)
+            ? "existing_active_case"
+            : "active_case_conflict",
+          existingCase: activeByMerchant,
+        };
       }
     }
 
@@ -114,7 +122,12 @@ class FakeSoloPlusRepository implements SoloPlusCaseRepository {
         input.caseRecord.onboardingSessionId,
       );
       if (activeBySession) {
-        return { kind: "active_case_conflict", existingCase: activeBySession };
+        return {
+          kind: this.sameIntent(input.caseRecord, activeBySession)
+            ? "existing_active_case"
+            : "active_case_conflict",
+          existingCase: activeBySession,
+        };
       }
     }
 
@@ -232,6 +245,35 @@ class FakeSoloPlusRepository implements SoloPlusCaseRepository {
   private cloneEvent(record: SoloPlusCaseEventRecord): SoloPlusCaseEventRecord {
     return JSON.parse(JSON.stringify(record)) as SoloPlusCaseEventRecord;
   }
+
+  private sameIntent(
+    proposed: SoloPlusCaseRecord,
+    existing: SoloPlusCaseRecord,
+  ): boolean {
+    return JSON.stringify({
+      flowOrigin: proposed.flowOrigin,
+      merchantId: proposed.merchantId,
+      onboardingSessionId: proposed.onboardingSessionId,
+      sourcePlan: proposed.sourcePlan,
+      targetPlan: proposed.targetPlan,
+      expectedAmount: proposed.expectedAmount,
+      paymentCurrency: proposed.paymentCurrency,
+      requirementsPolicyVersion: proposed.requirementsPolicyVersion,
+      requirementsSnapshot: proposed.requirementsSnapshot,
+      activePlanSnapshot: proposed.activePlanSnapshot,
+    }) === JSON.stringify({
+      flowOrigin: existing.flowOrigin,
+      merchantId: existing.merchantId,
+      onboardingSessionId: existing.onboardingSessionId,
+      sourcePlan: existing.sourcePlan,
+      targetPlan: existing.targetPlan,
+      expectedAmount: existing.expectedAmount,
+      paymentCurrency: existing.paymentCurrency,
+      requirementsPolicyVersion: existing.requirementsPolicyVersion,
+      requirementsSnapshot: existing.requirementsSnapshot,
+      activePlanSnapshot: existing.activePlanSnapshot,
+    });
+  }
 }
 
 function createIdGenerator(prefix = "id") {
@@ -295,7 +337,7 @@ function buildOnboardingInput(
   return {
     onboardingSessionId: "session-1",
     idempotencyKey: "idem-onboarding-1",
-    expectedAmount: 13000,
+    expectedAmount: "13000.00",
     paymentCurrency: "NGN",
     requirementsPolicyVersion: "solo-plus-v1",
     requirementsSnapshot: buildRequirementsSnapshot(),
@@ -312,7 +354,7 @@ function buildUpgradeInput(
     merchantId: "merchant-1",
     currentPlan: "solo_lite",
     idempotencyKey: "idem-upgrade-1",
-    expectedAmount: 13000,
+    expectedAmount: "13000.00",
     paymentCurrency: "NGN",
     requirementsPolicyVersion: "solo-plus-v1",
     requirementsSnapshot: buildRequirementsSnapshot(),
@@ -338,7 +380,7 @@ function createHistoricalCase(
     paymentRecordId: null,
     paymentProvider: null,
     paymentReference: null,
-    expectedAmount: 13000,
+    expectedAmount: "13000.00",
     paymentCurrency: "NGN",
     requirementsPolicyVersion: "solo-plus-v1",
     requirementsSnapshot: buildRequirementsSnapshot(),
@@ -357,6 +399,11 @@ function createHistoricalCase(
 }
 
 async function run() {
+  assert.equal(normalizeSoloPlusAmount("0"), "0.00");
+  assert.equal(normalizeSoloPlusAmount("1"), "1.00");
+  assert.equal(normalizeSoloPlusAmount("1.0"), "1.00");
+  assert.equal(normalizeSoloPlusAmount("1.00"), "1.00");
+
   assert.equal(
     canCreatePublicSoloPlusCaseIntent(buildFeatureFlags(), buildPublicContext()),
     true,
@@ -437,6 +484,39 @@ async function run() {
     "SOLO_PLUS_INVALID_CREATION_INPUT",
   );
 
+  await expectCode(
+    async () =>
+      serviceA.createSoloPlusOnboardingCase(
+        buildOnboardingInput({
+          onboardingSessionId: "session-three-decimals",
+          idempotencyKey: "idem-three-decimals",
+          expectedAmount: "13000.123",
+        }),
+      ),
+    "SOLO_PLUS_INVALID_CREATION_INPUT",
+  );
+
+  await expectCode(
+    async () =>
+      serviceA.createSoloPlusOnboardingCase(
+        buildOnboardingInput({
+          onboardingSessionId: "session-overflow",
+          idempotencyKey: "idem-overflow",
+          expectedAmount: "10000000000000000.00",
+        }),
+      ),
+    "SOLO_PLUS_INVALID_CREATION_INPUT",
+  );
+
+  const maxBoundaryResult = await serviceA.createSoloPlusOnboardingCase(
+    buildOnboardingInput({
+      onboardingSessionId: "session-max-boundary",
+      idempotencyKey: "idem-max-boundary",
+      expectedAmount: "9999999999999999.99",
+    }),
+  );
+  assert.equal(maxBoundaryResult.caseRecord.expectedAmount, "9999999999999999.99");
+
   const onboardingInput = buildOnboardingInput();
   const onboardingSnapshotBefore = JSON.stringify(onboardingInput.requirementsSnapshot);
   const onboardingResult = await serviceA.createSoloPlusOnboardingCase(onboardingInput);
@@ -467,10 +547,38 @@ async function run() {
   const onboardingEvents = await repoA.listSafeEvents(onboardingResult.caseRecord.id);
   assert.equal(onboardingEvents.length, 1);
 
+  const normalizedAmountRepo = new FakeSoloPlusRepository();
+  const normalizedAmountService = buildService(normalizedAmountRepo);
+  const normalizedOne = await normalizedAmountService.createSoloPlusOnboardingCase(
+    buildOnboardingInput({
+      onboardingSessionId: "session-normalized-one",
+      idempotencyKey: "idem-normalized-one",
+      expectedAmount: "1",
+    }),
+  );
+  assert.equal(normalizedOne.caseRecord.expectedAmount, "1.00");
+  const normalizedOnePointZero = await normalizedAmountService.createSoloPlusOnboardingCase(
+    buildOnboardingInput({
+      onboardingSessionId: "session-normalized-one",
+      idempotencyKey: "idem-normalized-one",
+      expectedAmount: "1.0",
+    }),
+  );
+  assert.equal(normalizedOnePointZero.outcome, "idempotent_replay");
+  const normalizedOnePointZeroZero = await normalizedAmountService.createSoloPlusOnboardingCase(
+    buildOnboardingInput({
+      onboardingSessionId: "session-normalized-one",
+      idempotencyKey: "idem-normalized-one",
+      expectedAmount: "1.00",
+    }),
+  );
+  assert.equal(normalizedOnePointZeroZero.outcome, "idempotent_replay");
+
   await expectCode(
     async () =>
       serviceA.createSoloPlusOnboardingCase(
-        buildOnboardingInput({ expectedAmount: 14000 }),
+        buildOnboardingInput({ expectedAmount: "14000.00" }),
+
       ),
     "SOLO_PLUS_IDEMPOTENCY_CONFLICT",
   );
@@ -514,7 +622,7 @@ async function run() {
       activeConflictService.createSoloPlusUpgradeCase(
         buildUpgradeInput({
           idempotencyKey: "idem-upgrade-2",
-          expectedAmount: 14000,
+          expectedAmount: "14000.00",
         }),
       ),
     "SOLO_PLUS_ACTIVE_CASE_CONFLICT",
@@ -537,7 +645,7 @@ async function run() {
       sessionConflictService.createSoloPlusOnboardingCase(
         buildOnboardingInput({
           idempotencyKey: "idem-onboarding-2",
-          expectedAmount: 14000,
+          expectedAmount: "14000.00",
         }),
       ),
     "SOLO_PLUS_ACTIVE_CASE_CONFLICT",
@@ -787,7 +895,19 @@ async function run() {
     async () =>
       serviceA.createSoloPlusOnboardingCase(
         buildOnboardingInput({
-          expectedAmount: Number.NaN,
+          expectedAmount: "1e3" as never,
+        }),
+      ),
+    "SOLO_PLUS_INVALID_CREATION_INPUT",
+  );
+
+  await expectCode(
+    async () =>
+      serviceA.createSoloPlusOnboardingCase(
+        buildOnboardingInput({
+          onboardingSessionId: "session-negative",
+          idempotencyKey: "idem-negative",
+          expectedAmount: "-1.00" as never,
         }),
       ),
     "SOLO_PLUS_INVALID_CREATION_INPUT",

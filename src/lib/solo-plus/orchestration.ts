@@ -8,6 +8,8 @@ import {
   type SoloPlusFeatureFlags,
 } from "./access";
 import {
+  normalizeSoloPlusAmount,
+  type SoloPlusAmount,
   type SoloPlusCaseCreationIntent,
   type SoloPlusCaseCreationResult,
   type SoloPlusCaseEventRecord,
@@ -64,7 +66,7 @@ export class SoloPlusOrchestrationError extends Error {
 export type CreateSoloPlusOnboardingCaseInput = {
   onboardingSessionId: string;
   idempotencyKey: string;
-  expectedAmount: number;
+  expectedAmount: SoloPlusAmount;
   paymentCurrency: "NGN";
   requirementsPolicyVersion: string;
   requirementsSnapshot: SoloPlusSafeJsonObject;
@@ -76,7 +78,7 @@ export type CreateSoloPlusUpgradeCaseInput = {
   merchantId: string;
   currentPlan: "solo_lite";
   idempotencyKey: string;
-  expectedAmount: number;
+  expectedAmount: SoloPlusAmount;
   paymentCurrency: "NGN";
   requirementsPolicyVersion: string;
   requirementsSnapshot: SoloPlusSafeJsonObject;
@@ -162,16 +164,24 @@ function assertIdentifier(value: unknown, field: string): string {
   return value.trim();
 }
 
-function assertFiniteAmount(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+function assertCanonicalAmount(value: unknown): SoloPlusAmount {
+  if (typeof value !== "string") {
     throw createIssuesError(
       "SOLO_PLUS_INVALID_CREATION_INPUT",
-      "expectedAmount must be a finite non-negative number.",
+      "expectedAmount must be a decimal string compatible with numeric(18,2).",
       "expectedAmount",
     );
   }
 
-  return value;
+  try {
+    return normalizeSoloPlusAmount(value);
+  } catch {
+    throw createIssuesError(
+      "SOLO_PLUS_INVALID_CREATION_INPUT",
+      "expectedAmount must be a non-negative decimal string with up to two fractional digits and at most sixteen integer digits.",
+      "expectedAmount",
+    );
+  }
 }
 
 function assertCurrency(value: unknown): "NGN" {
@@ -523,6 +533,13 @@ function mapCreateConflict(
     );
   }
 
+  if ("kind" in result && result.kind === "existing_active_case") {
+    throw new SoloPlusOrchestrationError(
+      "SOLO_PLUS_ACTIVE_CASE_CONFLICT",
+      "An equivalent active Solo Plus case already exists for this anchor.",
+    );
+  }
+
   if ("kind" in result && result.kind === "idempotency_conflict") {
     throw new SoloPlusOrchestrationError(
       "SOLO_PLUS_IDEMPOTENCY_CONFLICT",
@@ -588,7 +605,7 @@ function normalizeCreateInput(params: {
     params.requirementsPolicyVersion,
     "requirementsPolicyVersion",
   );
-  const expectedAmount = assertFiniteAmount(params.expectedAmount);
+  const expectedAmount = assertCanonicalAmount(params.expectedAmount);
   const paymentCurrency = assertCurrency(params.paymentCurrency);
   const requirementsSnapshot = cloneRequirementsSnapshot(params.requirementsSnapshot);
 
@@ -730,6 +747,23 @@ export function createSoloPlusOrchestration(
     });
 
     if (createResult.kind !== "created") {
+      if (createResult.kind === "idempotent_replay") {
+        return hydrateCreationResult(
+          repository,
+          "idempotent_replay",
+          createResult.existingCase,
+          null,
+        );
+      }
+
+      if (createResult.kind === "existing_active_case") {
+        return hydrateCreationResult(
+          repository,
+          "existing_active_case",
+          createResult.existingCase,
+          null,
+        );
+      }
       mapCreateConflict(createResult);
     }
 
