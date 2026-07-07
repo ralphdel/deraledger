@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:solo-plus": "tsx tests/solo-plus-orchestration.test.ts && tsx tests/solo-plus-supabase-repository.test.ts"
+    "test:solo-plus": "tsx tests/solo-plus-orchestration.test.ts && tsx tests/solo-plus-supabase-repository.test.ts && tsx tests/solo-plus-server-service.test.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.4.1",
@@ -28,6 +28,7 @@
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "recharts": "^3.8.1",
+    "server-only": "^0.0.1",
     "shadcn": "^4.4.0",
     "tailwind-merge": "^3.5.0",
     "tw-animate-css": "^1.4.0",
