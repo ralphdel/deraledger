@@ -33,27 +33,35 @@ export async function POST(request: Request) {
 
   const normalized = normalizePaystackWebhook(payload);
   if (normalized) {
-    await upsertWebhookAuditEvent(supabase, {
-      provider: "paystack",
-      eventType: payload.event || "paystack.webhook",
-      paymentMethod: normalized.paymentMethod,
-      paymentPurpose: normalized.paymentPurpose,
-      paymentReference: normalized.reference,
-      providerReference: normalized.providerReference,
-      expectedAmount: normalized.expectedAmount,
-      paidAmount: normalized.paidAmount,
-      currency: normalized.currency,
-      fee: normalized.fee,
-      planId: normalized.planId,
-      merchantId: normalized.merchantId,
-      invoiceId: normalized.invoiceId,
-      customerEmail: normalized.customerEmail,
-      rawPayload: payload as Record<string, unknown>,
-      processingStatus: verification.valid ? "received" : "failed",
-      failureReason: verification.valid ? null : verification.error || "Signature mismatch",
-      idempotencyKey: `paystack:${normalized.providerReference || normalized.reference}:${payload.event || "event"}:received`,
-      settlementDestinationSource: normalized.settlementDestinationSource,
-    });
+    if (normalized.merchantId) {
+      await upsertWebhookAuditEvent(supabase, {
+        provider: "paystack",
+        eventType: payload.event || "paystack.webhook",
+        paymentMethod: normalized.paymentMethod,
+        paymentPurpose: normalized.paymentPurpose,
+        paymentReference: normalized.reference,
+        providerReference: normalized.providerReference,
+        expectedAmount: normalized.expectedAmount,
+        paidAmount: normalized.paidAmount,
+        currency: normalized.currency,
+        fee: normalized.fee,
+        planId: normalized.planId,
+        merchantId: normalized.merchantId,
+        invoiceId: normalized.invoiceId,
+        customerEmail: normalized.customerEmail,
+        rawPayload: payload as Record<string, unknown>,
+        processingStatus: verification.valid ? "received" : "failed",
+        failureReason: verification.valid ? null : verification.error || "Signature mismatch",
+        idempotencyKey: `paystack:${normalized.providerReference || normalized.reference}:${payload.event || "event"}:received`,
+        settlementDestinationSource: normalized.settlementDestinationSource,
+      });
+    } else {
+      console.warn("Skipping payment_events audit without merchant_id for Paystack webhook receipt.", {
+        event: payload.event || "paystack.webhook",
+        reference: normalized.reference,
+        paymentPurpose: normalized.paymentPurpose,
+      });
+    }
   }
 
   if (process.env.NODE_ENV === "production" && !verification.valid) {
@@ -82,28 +90,36 @@ export async function POST(request: Request) {
       rawProviderPayload: payload as Record<string, unknown>,
     });
 
-    await upsertWebhookAuditEvent(supabase, {
-      provider: "paystack",
-      eventType: payload.event || "charge.success",
-      paymentMethod: normalized.paymentMethod,
-      paymentPurpose: normalized.paymentPurpose,
-      paymentReference: normalized.reference,
-      providerReference: normalized.providerReference,
-      expectedAmount: normalized.expectedAmount,
-      paidAmount: normalized.paidAmount,
-      currency: normalized.currency,
-      fee: normalized.fee,
-      planId: normalized.planId,
-      merchantId: normalized.merchantId,
-      invoiceId: normalized.invoiceId,
-      customerEmail: normalized.customerEmail,
-      rawPayload: payload as Record<string, unknown>,
-      processingStatus: "needs_review" in result && result.needs_review ? "manual_review" : "processed",
-      failureReason: "needs_review" in result && result.needs_review ? "Amount mismatch requires manual review." : null,
-      idempotencyKey: `paystack:${normalized.providerReference || normalized.reference}:${payload.event || "event"}:processed`,
-      settlementDestinationSource: normalized.settlementDestinationSource,
-      reconciliationStatus: "needs_review" in result && result.needs_review ? "needs_review" : "pending_reconciliation",
-    });
+    if (normalized.merchantId) {
+      await upsertWebhookAuditEvent(supabase, {
+        provider: "paystack",
+        eventType: payload.event || "charge.success",
+        paymentMethod: normalized.paymentMethod,
+        paymentPurpose: normalized.paymentPurpose,
+        paymentReference: normalized.reference,
+        providerReference: normalized.providerReference,
+        expectedAmount: normalized.expectedAmount,
+        paidAmount: normalized.paidAmount,
+        currency: normalized.currency,
+        fee: normalized.fee,
+        planId: normalized.planId,
+        merchantId: normalized.merchantId,
+        invoiceId: normalized.invoiceId,
+        customerEmail: normalized.customerEmail,
+        rawPayload: payload as Record<string, unknown>,
+        processingStatus: "needs_review" in result && result.needs_review ? "manual_review" : "processed",
+        failureReason: "needs_review" in result && result.needs_review ? "Amount mismatch requires manual review." : null,
+        idempotencyKey: `paystack:${normalized.providerReference || normalized.reference}:${payload.event || "event"}:processed`,
+        settlementDestinationSource: normalized.settlementDestinationSource,
+        reconciliationStatus: "needs_review" in result && result.needs_review ? "needs_review" : "pending_reconciliation",
+      });
+    } else {
+      console.warn("Skipping payment_events audit without merchant_id for Paystack processed webhook.", {
+        event: payload.event || "charge.success",
+        reference: normalized.reference,
+        paymentPurpose: normalized.paymentPurpose,
+      });
+    }
     await recordWebhookHealth("success");
 
     return NextResponse.json({
@@ -116,28 +132,36 @@ export async function POST(request: Request) {
     const message = error instanceof Error ? error.message : "Webhook processing failed";
     console.error("Paystack webhook processing failed:", error);
     await recordWebhookHealth("failed");
-    await upsertWebhookAuditEvent(supabase, {
-      provider: "paystack",
-      eventType: payload.event || "charge.success",
-      paymentMethod: normalized.paymentMethod,
-      paymentPurpose: normalized.paymentPurpose,
-      paymentReference: normalized.reference,
-      providerReference: normalized.providerReference,
-      expectedAmount: normalized.expectedAmount,
-      paidAmount: normalized.paidAmount,
-      currency: normalized.currency,
-      fee: normalized.fee,
-      planId: normalized.planId,
-      merchantId: normalized.merchantId,
-      invoiceId: normalized.invoiceId,
-      customerEmail: normalized.customerEmail,
-      rawPayload: payload as Record<string, unknown>,
-      processingStatus: "failed",
-      failureReason: message,
-      idempotencyKey: `paystack:${normalized.providerReference || normalized.reference}:${payload.event || "event"}:failed`,
-      settlementDestinationSource: normalized.settlementDestinationSource,
-      reconciliationStatus: "needs_review",
-    });
+    if (normalized.merchantId) {
+      await upsertWebhookAuditEvent(supabase, {
+        provider: "paystack",
+        eventType: payload.event || "charge.success",
+        paymentMethod: normalized.paymentMethod,
+        paymentPurpose: normalized.paymentPurpose,
+        paymentReference: normalized.reference,
+        providerReference: normalized.providerReference,
+        expectedAmount: normalized.expectedAmount,
+        paidAmount: normalized.paidAmount,
+        currency: normalized.currency,
+        fee: normalized.fee,
+        planId: normalized.planId,
+        merchantId: normalized.merchantId,
+        invoiceId: normalized.invoiceId,
+        customerEmail: normalized.customerEmail,
+        rawPayload: payload as Record<string, unknown>,
+        processingStatus: "failed",
+        failureReason: message,
+        idempotencyKey: `paystack:${normalized.providerReference || normalized.reference}:${payload.event || "event"}:failed`,
+        settlementDestinationSource: normalized.settlementDestinationSource,
+        reconciliationStatus: "needs_review",
+      });
+    } else {
+      console.warn("Skipping payment_events audit without merchant_id for Paystack failed webhook.", {
+        event: payload.event || "charge.success",
+        reference: normalized.reference,
+        paymentPurpose: normalized.paymentPurpose,
+      });
+    }
 
     if (normalized.paymentPurpose === "plan_subscription" || normalized.paymentPurpose === "plan_upgrade") {
       await updatePlanPaymentRecord(supabase, normalized.reference, {

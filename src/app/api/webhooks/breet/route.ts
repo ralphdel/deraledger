@@ -6,6 +6,7 @@ import {
   sendInvoiceReceipt,
   sendMerchantPaymentNotification,
 } from "@/lib/services/fiat-payment-confirmation.service";
+import { confirmSoloPlusPayment } from "@/lib/solo-plus/server/payment-lifecycle";
 import {
   buildBreetWebhookIdempotencyKey,
   mapBreetEventToCryptoStatus,
@@ -122,6 +123,74 @@ function buildPendingObservation(payload: WebhookPayload, eventType: string) {
     latest_estimated_ngn: estimatedNgn,
     latest_amount_settled: positiveNumberValue(payload.amountSettled) || null,
   };
+}
+
+async function insertMerchantPaymentEvent(input: {
+  merchantId: string | null;
+  payload: Record<string, unknown>;
+  eventType: string;
+  processorRef: string | null;
+  idempotencyKey: string | null;
+  paymentMethod?: string | null;
+  paymentPurpose?: string | null;
+  paymentReference?: string | null;
+  providerReference?: string | null;
+  expectedAmount?: number | null;
+  paidAmount?: number | null;
+  currency?: string | null;
+  fee?: number | null;
+  planId?: string | null;
+  customerEmail?: string | null;
+  processingStatus?: string | null;
+  failureReason?: string | null;
+  reconciliationStatus?: string | null;
+  invoiceId?: string | null;
+  amountKobo?: number | null;
+  sourceLabel: string;
+  onboardingSessionId?: string | null;
+}) {
+  if (!input.merchantId) {
+    console.warn("Skipping payment_events audit without merchant_id.", {
+      source: input.sourceLabel,
+      eventType: input.eventType,
+      paymentReference: input.paymentReference || null,
+      providerReference: input.providerReference || null,
+      paymentPurpose: input.paymentPurpose || null,
+      onboardingSessionId: input.onboardingSessionId || null,
+    });
+    return false;
+  }
+
+  const { error } = await supabase.from("payment_events").insert({
+    merchant_id: input.merchantId,
+    invoice_id: input.invoiceId || null,
+    transaction_id: null,
+    event_type: input.eventType,
+    processor: "breet",
+    processor_ref: input.processorRef,
+    amount_kobo: input.amountKobo ?? null,
+    raw_payload: input.payload,
+    idempotency_key: input.idempotencyKey || null,
+    payment_method: input.paymentMethod || null,
+    payment_purpose: input.paymentPurpose || null,
+    payment_reference: input.paymentReference || null,
+    provider_reference: input.providerReference || null,
+    expected_amount: input.expectedAmount ?? null,
+    paid_amount: input.paidAmount ?? null,
+    currency: input.currency || "NGN",
+    fee: input.fee ?? null,
+    plan_id: input.planId || null,
+    customer_email: input.customerEmail || null,
+    processing_status: input.processingStatus || "received",
+    failure_reason: input.failureReason ?? null,
+    reconciliation_status: input.reconciliationStatus ?? null,
+  });
+
+  if (error) {
+    throw error;
+  }
+
+  return true;
 }
 
 function getNonTerminalProcessingStatus(eventType: string, lifecycleStatus: string) {
@@ -531,35 +600,34 @@ async function recordNonTerminalEvent(input: {
     .update(updatePayload)
     .eq("id", input.paymentSessionId);
 
-  await supabase.from("payment_events").insert({
-    merchant_id: input.merchantId,
-    invoice_id: input.invoiceId,
-    transaction_id: null,
-    event_type: input.eventType,
-    processor: "breet",
-    processor_ref: input.providerReference || input.txHash || null,
-    amount_kobo: Math.round(Number(convertedNgN || 0) * 100),
-    raw_payload: input.payload,
-    idempotency_key: input.idempotencyKey || null,
-    payment_method: "crypto",
-    payment_purpose:
+  await insertMerchantPaymentEvent({
+    merchantId: input.merchantId,
+    payload: input.payload,
+    eventType: input.eventType,
+    processorRef: input.providerReference || input.txHash || null,
+    idempotencyKey: input.idempotencyKey || null,
+    paymentMethod: "crypto",
+    paymentPurpose:
       String(input.session.payment_purpose || input.session.payment_method || "") === "invoice_payment"
         ? "invoice_payment"
         : String(input.session.payment_purpose || "crypto_payment"),
-    payment_reference: String(input.session.reference || input.session.internal_reference || input.paymentSessionId),
-    provider_reference: input.providerReference || input.txHash || null,
-    expected_amount: Number(input.session.amount_ngn || input.session.expected_ngn_amount || 0) || null,
-    paid_amount: convertedNgN || null,
+    paymentReference: String(input.session.reference || input.session.internal_reference || input.paymentSessionId),
+    providerReference: input.providerReference || input.txHash || null,
+    expectedAmount: Number(input.session.amount_ngn || input.session.expected_ngn_amount || 0) || null,
+    paidAmount: convertedNgN || null,
     currency: "NGN",
-    plan_id: stringValue(input.session.plan_id) || null,
-    customer_email: stringValue(asRecord(input.session.metadata).email) || null,
-    processing_status: isFlagged ? "manual_review" : processingStatus,
-    failure_reason: isFlagged ? "breet_flagged" : pendingShortfallAmount > 0 ? "amount_below_expected" : null,
-    reconciliation_status: isFlagged
+    planId: stringValue(input.session.plan_id) || null,
+    customerEmail: stringValue(asRecord(input.session.metadata).email) || null,
+    processingStatus: isFlagged ? "manual_review" : processingStatus,
+    failureReason: isFlagged ? "breet_flagged" : pendingShortfallAmount > 0 ? "amount_below_expected" : null,
+    reconciliationStatus: isFlagged
       ? "under_review"
       : pendingShortfallAmount > 0
         ? "amount_under_review"
         : "awaiting_terminal_breet_event",
+    invoiceId: input.invoiceId,
+    amountKobo: Math.round(Number(convertedNgN || 0) * 100),
+    sourceLabel: "breet-non-terminal-session-observation",
   });
 
   await recordWebhookLog({
@@ -649,24 +717,31 @@ export async function POST(request: Request) {
   });
 
   if (!invoiceSession && !planSession) {
-    const { error: eventError } = await supabase.from("payment_events").insert({
-      merchant_id: context.merchantId || null,
-      invoice_id: context.invoiceId || null,
-      transaction_id: null,
-      event_type: eventType,
-      processor: "breet",
-      processor_ref: providerReference || txHash || null,
-      amount_kobo: 0,
-      raw_payload: payload,
-      idempotency_key: idempotencyKey || null,
-    });
-
-    if (eventError) {
-      console.warn("Breet unmatched webhook payment event failed:", {
+    if (context.merchantId) {
+      try {
+        await insertMerchantPaymentEvent({
+          merchantId: context.merchantId,
+          payload,
+          eventType,
+          processorRef: providerReference || txHash || null,
+          idempotencyKey: idempotencyKey || null,
+          invoiceId: context.invoiceId || null,
+          amountKobo: 0,
+          sourceLabel: "breet-unmatched-webhook",
+        });
+      } catch (eventError) {
+        console.warn("Breet unmatched webhook payment event failed:", {
+          eventType,
+          providerReference,
+          walletAddress: context.walletAddress,
+          reason: eventError instanceof Error ? eventError.message : String(eventError),
+        });
+      }
+    } else {
+      console.warn("Skipping unmatched Breet payment_events audit without merchant_id.", {
         eventType,
         providerReference,
         walletAddress: context.walletAddress,
-        reason: eventError.message,
       });
     }
 
@@ -848,28 +923,27 @@ async function handleInvoiceWebhook(input: {
       })
       .eq("id", session.id);
 
-    await supabase.from("payment_events").insert({
-      merchant_id: session.merchant_id,
-      invoice_id: session.invoice_id,
-      transaction_id: null,
-      event_type: eventType,
-      processor: "breet",
-      processor_ref: providerReference || txHash || null,
-      amount_kobo: Math.round(accounting.selectedInvoiceAmount * 100),
-      raw_payload: accountingPayload,
-      idempotency_key: idempotencyKey || null,
-      payment_method: "crypto",
-      payment_purpose: "invoice_payment",
-      payment_reference: String(session.reference || session.id),
-      provider_reference: providerReference || txHash || null,
-      expected_amount: accounting.selectedInvoiceAmount,
-      paid_amount: 0,
+    await insertMerchantPaymentEvent({
+      merchantId: stringValue(session.merchant_id) || null,
+      payload: accountingPayload,
+      eventType,
+      processorRef: providerReference || txHash || null,
+      idempotencyKey: idempotencyKey || null,
+      paymentMethod: "crypto",
+      paymentPurpose: "invoice_payment",
+      paymentReference: String(session.reference || session.id),
+      providerReference: providerReference || txHash || null,
+      expectedAmount: accounting.selectedInvoiceAmount,
+      paidAmount: 0,
       currency: "NGN",
       fee: accounting.providerFeeAmount,
-      customer_email: stringValue(asRecord(session.metadata).client_email) || null,
-      processing_status: "manual_review",
-      failure_reason: "amount_mismatch",
-      reconciliation_status: "underpaid",
+      customerEmail: stringValue(asRecord(session.metadata).client_email) || null,
+      processingStatus: "manual_review",
+      failureReason: "amount_mismatch",
+      reconciliationStatus: "underpaid",
+      invoiceId: stringValue(session.invoice_id) || null,
+      amountKobo: Math.round(accounting.selectedInvoiceAmount * 100),
+      sourceLabel: "breet-invoice-underpayment",
     });
 
     await recordWebhookLog({
@@ -994,27 +1068,26 @@ async function handleInvoiceWebhook(input: {
     return NextResponse.json({ error: "Breet invoice session finalization failed" }, { status: 500 });
   }
 
-  await supabase.from("payment_events").insert({
-    merchant_id: session.merchant_id,
-    invoice_id: session.invoice_id,
-    transaction_id: null,
-    event_type: eventType,
-    processor: "breet",
-    processor_ref: providerReference || txHash || null,
-    amount_kobo: Math.round(accounting.selectedInvoiceAmount * 100),
-    raw_payload: accountingPayload,
-    idempotency_key: idempotencyKey || null,
-    payment_method: "crypto",
-    payment_purpose: "invoice_payment",
-    payment_reference: String(session.reference || session.id),
-    provider_reference: providerReference || txHash || null,
-    expected_amount: accounting.selectedInvoiceAmount,
-    paid_amount: accounting.selectedInvoiceAmount,
+  await insertMerchantPaymentEvent({
+    merchantId: stringValue(session.merchant_id) || null,
+    payload: accountingPayload,
+    eventType,
+    processorRef: providerReference || txHash || null,
+    idempotencyKey: idempotencyKey || null,
+    paymentMethod: "crypto",
+    paymentPurpose: "invoice_payment",
+    paymentReference: String(session.reference || session.id),
+    providerReference: providerReference || txHash || null,
+    expectedAmount: accounting.selectedInvoiceAmount,
+    paidAmount: accounting.selectedInvoiceAmount,
     currency: "NGN",
     fee: accounting.providerFeeAmount,
-    customer_email: stringValue(asRecord(session.metadata).client_email) || null,
-    processing_status: "completed",
-    reconciliation_status: "invoice_credited",
+    customerEmail: stringValue(asRecord(session.metadata).client_email) || null,
+    processingStatus: "completed",
+    reconciliationStatus: "invoice_credited",
+    invoiceId: stringValue(session.invoice_id) || null,
+    amountKobo: Math.round(accounting.selectedInvoiceAmount * 100),
+    sourceLabel: "breet-invoice-confirmed",
   });
 
   const { data: transactionRow } = await supabase
@@ -1299,15 +1372,9 @@ async function handlePlanWebhook(input: {
       errorMessage: cryptoStatus,
       rawPayload: payload,
     });
-    await supabase.from("payment_events").insert({
-      merchant_id: stringValue(session.merchant_id) || null,
-      invoice_id: null,
-      transaction_id: null,
-      event_type: eventType,
-      processor: "breet",
-      processor_ref: providerReference || txHash || null,
-      amount_kobo: amountKobo,
-      raw_payload: {
+    await insertMerchantPaymentEvent({
+      merchantId: stringValue(session.merchant_id) || null,
+      payload: {
         ...payload,
         deraledger_accounting: {
           fee_payer: planAccounting.feePayer,
@@ -1322,20 +1389,25 @@ async function handlePlanWebhook(input: {
           tx_hash: txHash || null,
         },
       },
-      idempotency_key: idempotencyKey || null,
-      payment_method: "crypto",
-      payment_purpose: String(session.payment_purpose || asRecord(session.metadata).payment_purpose || "plan_subscription"),
-      payment_reference: String(session.internal_reference || session.id),
-      provider_reference: providerReference || txHash || null,
-      expected_amount: planAccounting.expectedAmountNgn,
-      paid_amount: grossPaidNgN,
+      eventType,
+      processorRef: providerReference || txHash || null,
+      idempotencyKey: idempotencyKey || null,
+      paymentMethod: "crypto",
+      paymentPurpose: String(session.payment_purpose || asRecord(session.metadata).payment_purpose || "plan_subscription"),
+      paymentReference: String(session.internal_reference || session.id),
+      providerReference: providerReference || txHash || null,
+      expectedAmount: planAccounting.expectedAmountNgn,
+      paidAmount: grossPaidNgN,
       currency: "NGN",
       fee: planAccounting.providerFeeAmount,
-      plan_id: stringValue(session.plan_id) || stringValue(asRecord(session.metadata).new_plan) || stringValue(asRecord(session.metadata).plan) || null,
-      customer_email: stringValue(asRecord(session.metadata).email) || null,
-      processing_status: "manual_review",
-      failure_reason: "amount_below_expected",
-      reconciliation_status: "underpaid_manual_review",
+      planId: stringValue(session.plan_id) || stringValue(asRecord(session.metadata).new_plan) || stringValue(asRecord(session.metadata).plan) || null,
+      customerEmail: stringValue(asRecord(session.metadata).email) || null,
+      processingStatus: "manual_review",
+      failureReason: "amount_below_expected",
+      reconciliationStatus: "underpaid_manual_review",
+      amountKobo,
+      sourceLabel: "breet-plan-underpayment",
+      onboardingSessionId: stringValue(session.payment_session_reference) || stringValue(asRecord(session.metadata).session_id) || null,
     });
     await updateProviderWebhookHealth("success");
     return NextResponse.json({ received: true, mapped: true, underReview: true });
@@ -1359,6 +1431,92 @@ async function handlePlanWebhook(input: {
       tx_hash: txHash || null,
     },
   };
+  const soloPlusConfirmation = await confirmSoloPlusPayment({
+    provider: "breet",
+    internalReference: String(session.internal_reference),
+    providerReference: providerReference || String(session.provider_reference || session.internal_reference),
+    paymentPurpose:
+      paymentPurpose === "plan_upgrade"
+        ? "plan_upgrade"
+        : paymentPurpose === "plan_renewal"
+          ? "plan_renewal"
+          : "plan_subscription",
+    amountNgn: grossPaidNgN.toFixed(2),
+    currency: "NGN",
+    merchantId: stringValue(session.merchant_id) || stringValue(metadata.merchant_id) || null,
+    onboardingSessionId: onboardingSessionId || stringValue(metadata.session_id) || null,
+    platformDirected:
+      String(session.settlement_recipient_type || "").toLowerCase() === "platform" &&
+      settlementMode === "platform_auto_settlement",
+    rawProviderPayload: accountingPayload,
+    requestIdempotencyKey:
+      idempotencyKey ||
+      `breet:${providerReference || txHash || String(session.internal_reference)}:trade.completed`,
+    serviceClient: supabase,
+  });
+
+  if (soloPlusConfirmation) {
+    const kind = String(soloPlusConfirmation.kind || "");
+    if (kind !== "confirmed" && kind !== "idempotent_replay") {
+      throw new Error(String(
+        soloPlusConfirmation.message ||
+        `Solo Plus Breet confirmation failed with outcome ${kind || "unknown"}.`,
+      ));
+    }
+
+    await supabase
+      .from("crypto_payment_sessions")
+      .update({
+        provider_reference: providerReference || session.provider_reference || null,
+        crypto_amount_received: amountCrypto || null,
+        converted_ngn_amount: grossPaidNgN,
+        provider_fee: planAccounting.providerFeeAmount,
+        expected_settlement_ngn: planAccounting.amountSettledNgn,
+        actual_settlement_ngn: planAccounting.amountSettledNgn,
+        amount_settled: planAccounting.amountSettledNgn,
+        settlement_mode: settlementMode,
+        crypto_status: mapBreetEventToCryptoStatus(eventType, stringValue(payload.status), payload),
+        settlement_status: "completed",
+        webhook_status: "processed",
+        raw_webhook_payload: accountingPayload,
+        payment_status: "successful",
+        paid_at: new Date().toISOString(),
+        processed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", session.id);
+
+    await insertMerchantPaymentEvent({
+      merchantId: stringValue(session.merchant_id) || stringValue(metadata.merchant_id) || null,
+      payload: accountingPayload,
+      eventType,
+      processorRef: providerReference || txHash || null,
+      idempotencyKey: idempotencyKey || null,
+      paymentMethod: "crypto",
+      paymentPurpose,
+      paymentReference: String(session.internal_reference || session.id),
+      providerReference: providerReference || txHash || null,
+      expectedAmount: planAccounting.expectedAmountNgn,
+      paidAmount: grossPaidNgN,
+      currency: "NGN",
+      fee: planAccounting.providerFeeAmount,
+      planId: stringValue(session.plan_id) || stringValue(metadata.new_plan) || stringValue(metadata.plan) || null,
+      customerEmail: stringValue(metadata.email) || null,
+      processingStatus: "processed",
+      failureReason: null,
+      reconciliationStatus: planAccounting.overpaymentAmount > 0 ? "solo_plus_overpayment" : "solo_plus_confirmed",
+      amountKobo,
+      sourceLabel: "breet-solo-plus-confirmed",
+      onboardingSessionId: onboardingSessionId || stringValue(metadata.session_id) || null,
+    });
+    await updateProviderWebhookHealth("success");
+    return NextResponse.json({
+      received: true,
+      mapped: true,
+      soloPlus: true,
+      replay: kind === "idempotent_replay",
+    });
+  }
   const confirmation = await processSuccessfulFiatPayment(supabase, {
     provider: "breet",
     metadata: {
@@ -1486,28 +1644,27 @@ async function handlePlanWebhook(input: {
     })
     .eq("id", session.id);
 
-  await supabase.from("payment_events").insert({
-    merchant_id: merchantId,
-    invoice_id: null,
-    transaction_id: null,
-    event_type: eventType,
-    processor: "breet",
-    processor_ref: providerReference || txHash || null,
-    amount_kobo: amountKobo,
-    raw_payload: accountingPayload,
-    idempotency_key: idempotencyKey || null,
-    payment_method: "crypto",
-    payment_purpose: paymentPurpose,
-    payment_reference: String(session.internal_reference || session.id),
-    provider_reference: providerReference || txHash || null,
-    expected_amount: planAccounting.expectedAmountNgn,
-    paid_amount: grossPaidNgN,
+  await insertMerchantPaymentEvent({
+    merchantId,
+    payload: accountingPayload,
+    eventType,
+    processorRef: providerReference || txHash || null,
+    idempotencyKey: idempotencyKey || null,
+    paymentMethod: "crypto",
+    paymentPurpose,
+    paymentReference: String(session.internal_reference || session.id),
+    providerReference: providerReference || txHash || null,
+    expectedAmount: planAccounting.expectedAmountNgn,
+    paidAmount: grossPaidNgN,
     currency: "NGN",
     fee: planAccounting.providerFeeAmount,
-    plan_id: stringValue(session.plan_id) || stringValue(metadata.new_plan) || stringValue(metadata.plan) || null,
-    customer_email: stringValue(metadata.email) || null,
-    processing_status: "completed",
-    reconciliation_status: planAccounting.overpaymentAmount > 0 ? "settlement_recorded_overpayment" : "settlement_recorded",
+    planId: stringValue(session.plan_id) || stringValue(metadata.new_plan) || stringValue(metadata.plan) || null,
+    customerEmail: stringValue(metadata.email) || null,
+    processingStatus: "completed",
+    reconciliationStatus: planAccounting.overpaymentAmount > 0 ? "settlement_recorded_overpayment" : "settlement_recorded",
+    amountKobo,
+    sourceLabel: "breet-plan-confirmed",
+    onboardingSessionId: onboardingSessionId || stringValue(metadata.session_id) || null,
   });
 
   await recordWebhookLog({

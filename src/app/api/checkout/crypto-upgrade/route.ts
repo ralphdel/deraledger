@@ -21,6 +21,10 @@ import {
   getStoragePlanCode,
   normalizePlanCode,
 } from "@/lib/plans";
+import {
+  prepareSoloPlusUpgradePayment,
+  SoloPlusPaymentLifecycleError,
+} from "@/lib/solo-plus/server/payment-lifecycle";
 
 /**
  * POST /api/checkout/crypto-upgrade
@@ -100,7 +104,27 @@ export async function POST(request: Request) {
     });
 
     const reference = `CRYPTO-UPG-${storagePlan.toUpperCase()}-${crypto.randomBytes(5).toString("hex").toUpperCase()}`;
-    await createPendingPlanPaymentRecord(serviceSupabase, {
+    const paymentMetadata = {
+      merchant_id: merchant.id,
+      new_plan: storagePlan,
+      new_plan_display_code: normalizedPlan,
+      type: "subscription_upgrade",
+      amount_expected_kobo: amountNgn * 100,
+      payment_purpose: "plan_upgrade",
+    };
+    const soloPlusPayment = normalizedPlan === "solo_plus"
+      ? await prepareSoloPlusUpgradePayment({
+          merchantId: merchant.id,
+          customerEmail: user.email || merchant.email || "billing@deraledger.app",
+          amountKobo: amountNgn * 100,
+          paymentMethod: "crypto",
+          provider: "breet",
+          metadata: paymentMetadata,
+          serviceClient: serviceSupabase,
+        })
+      : null;
+    const resolvedReference = soloPlusPayment?.reference || reference;
+    const pendingPaymentRecord = soloPlusPayment?.paymentRecord || await createPendingPlanPaymentRecord(serviceSupabase, {
       internalReference: reference,
       provider: "breet",
       paymentMethod: "crypto",
@@ -111,18 +135,40 @@ export async function POST(request: Request) {
       planId: storagePlan,
       userId: user.id,
       merchantId: merchant.id,
-      metadata: {
-        merchant_id: merchant.id,
-        new_plan: storagePlan,
-        new_plan_display_code: normalizedPlan,
-        type: "subscription_upgrade",
-        amount_expected_kobo: amountNgn * 100,
-        payment_purpose: "plan_upgrade",
-      },
+      metadata: paymentMetadata,
     });
+    const { data: existingSession } = await serviceSupabase
+      .from("crypto_payment_sessions")
+      .select("id, provider_reference, expected_ngn_amount, crypto_amount_expected, crypto_asset, crypto_network, settlement_mode, settlement_recipient_type, expires_at, metadata")
+      .eq("payment_record_id", pendingPaymentRecord.id)
+      .maybeSingle();
+
+    if (existingSession) {
+      const sessionMetadata = typeof existingSession.metadata === "object" && existingSession.metadata !== null
+        ? existingSession.metadata as Record<string, unknown>
+        : {};
+      return NextResponse.json({
+        success: true,
+        cryptoAddress: typeof sessionMetadata.wallet_address === "string" ? sessionMetadata.wallet_address : null,
+        cryptoNetwork: existingSession.crypto_network,
+        cryptoCoin: existingSession.crypto_asset,
+        fiatAmount: existingSession.expected_ngn_amount,
+        cryptoAmount: existingSession.crypto_amount_expected,
+        exchangeRate: typeof sessionMetadata.exchange_rate === "number" ? sessionMetadata.exchange_rate : Number(sessionMetadata.exchange_rate || 0),
+        quoteSource: typeof sessionMetadata.quote_source === "string" ? sessionMetadata.quote_source : "stored_session",
+        providerQuoteAvailable: sessionMetadata.provider_quote_available === true,
+        reference: resolvedReference,
+        paymentSessionId: existingSession.id,
+        providerReference: existingSession.provider_reference || resolvedReference,
+        settlementMode: existingSession.settlement_mode,
+        settlementRecipientType: existingSession.settlement_recipient_type,
+        minimumAutoSettlementNgn,
+        expiresAt: existingSession.expires_at,
+      });
+    }
     const settlementBankPayload = buildSettlementBankPayload(
       platformSettlementAccount,
-      `Upgrade ${storagePlan.toUpperCase()} ${reference.slice(-12)}`
+      `Upgrade ${storagePlan.toUpperCase()} ${resolvedReference.slice(-12)}`
     );
     if (!settlementBankPayload) {
       return NextResponse.json({ error: "Platform settlement account is not configured." }, { status: 403 });
@@ -138,7 +184,7 @@ export async function POST(request: Request) {
 
     const result = await PaymentService.generatePlatformPaymentAddress({
       assetId: "USDT",
-      label: reference,
+      label: resolvedReference,
       settlementBank: settlementBankPayload,
       settlementMode,
       settlementRecipientType,
@@ -157,11 +203,12 @@ export async function POST(request: Request) {
       merchant_id: merchant.id,
       user_id: user.id,
       business_id: null,
+      payment_record_id: pendingPaymentRecord.id,
       plan_id: storagePlan,
       payment_purpose: "plan_upgrade",
       provider_name: "breet",
-      internal_reference: reference,
-      provider_reference: result.id || reference,
+      internal_reference: resolvedReference,
+      provider_reference: result.id || resolvedReference,
       payment_method: "crypto",
       expected_ngn_amount: amountNgn,
       crypto_asset: result.asset || "USDT",
@@ -214,9 +261,9 @@ export async function POST(request: Request) {
       exchangeRate: quote.exchangeRate,
       quoteSource: quote.quoteSource,
       providerQuoteAvailable: quote.providerQuoteAvailable,
-      reference,
+      reference: resolvedReference,
       paymentSessionId: createdSession?.id || null,
-      providerReference: result.id || reference,
+      providerReference: result.id || resolvedReference,
       settlementMode,
       settlementRecipientType,
       minimumAutoSettlementNgn,
@@ -225,6 +272,12 @@ export async function POST(request: Request) {
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to generate crypto address.";
     console.error("Crypto upgrade init error:", message);
-    return NextResponse.json({ error: message }, { status: 500 });
+    const status =
+      error instanceof SoloPlusPaymentLifecycleError &&
+      (error.code === "SOLO_PLUS_PAYMENT_INIT_CONFLICT" ||
+        error.code === "SOLO_PLUS_PAYMENT_ALREADY_CONFIRMED")
+        ? 409
+        : 500;
+    return NextResponse.json({ error: message }, { status });
   }
 }

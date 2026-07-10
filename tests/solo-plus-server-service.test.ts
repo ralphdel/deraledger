@@ -388,28 +388,28 @@ async function run() {
       email: "owner@example.com",
       merchant_id: null,
       status: "awaiting_payment",
-      expires_at: "2026-07-08T00:00:00.000Z",
+      expires_at: "2099-01-01T00:00:00.000Z",
     },
     {
       id: "session-mismatch",
       email: "stranger@example.com",
       merchant_id: null,
       status: "awaiting_payment",
-      expires_at: "2026-07-08T00:00:00.000Z",
+      expires_at: "2099-01-01T00:00:00.000Z",
     },
     {
       id: "session-linked-merchant",
       email: "other@example.com",
       merchant_id: "merchant-1",
       status: "payment_confirmed",
-      expires_at: "2026-07-08T00:00:00.000Z",
+      expires_at: "2099-01-01T00:00:00.000Z",
     },
     {
       id: "session-expired",
       email: "owner@example.com",
       merchant_id: null,
       status: "awaiting_payment",
-      expires_at: "2026-07-06T00:00:00.000Z",
+      expires_at: "2000-01-01T00:00:00.000Z",
     },
   ];
   authClient.tables.set("onboarding_sessions", sessionRows);
@@ -566,14 +566,14 @@ async function run() {
       email: "admin@example.com",
       merchant_id: null,
       status: "awaiting_payment",
-      expires_at: "2026-07-08T00:00:00.000Z",
+      expires_at: "2099-01-01T00:00:00.000Z",
     },
     {
       id: "session-linked-admin-merchant",
       email: "not-admin@example.com",
       merchant_id: "merchant-admin",
       status: "payment_confirmed",
-      expires_at: "2026-07-08T00:00:00.000Z",
+      expires_at: "2099-01-01T00:00:00.000Z",
     },
   ]);
 

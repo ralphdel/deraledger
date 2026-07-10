@@ -79,6 +79,7 @@ export async function POST(request: Request) {
 
   const paymentRecord = await findPaymentRecordByReference(supabase, reference, verification.provider);
   const accountSetupStatus = paymentRecord?.account_setup_status || null;
+  const isSoloPlus = paymentRecord?.solo_plus_case_id != null;
 
   if (("needs_review" in result && result.needs_review) || accountSetupStatus === "manual_review") {
     return NextResponse.json({
@@ -91,9 +92,11 @@ export async function POST(request: Request) {
 
   return NextResponse.json({
     success: true,
-    status: accountSetupStatus || "paid_pending_setup",
+    status: accountSetupStatus || (isSoloPlus ? "verification_pending" : "paid_pending_setup"),
     message:
-      accountSetupStatus === "active"
+      isSoloPlus
+        ? "Payment confirmed. Your Solo Plus case is now awaiting verification review."
+        : accountSetupStatus === "active"
         ? "Payment already processed and account setup is complete."
         : "Payment received. Continue account setup from the email we sent you.",
     paymentReference: reference,
@@ -124,11 +127,14 @@ async function verifyProcessedBreetPlanPayment(reference: string) {
       processedStatuses.has(processingStatus) ||
       processedStatuses.has(accountSetupStatus)
     ) {
+      const isSoloPlus = paymentRecord.solo_plus_case_id != null;
       return {
         success: true,
-        status: paymentRecord.account_setup_status || paymentRecord.processing_status || "paid_pending_setup",
+        status: paymentRecord.account_setup_status || paymentRecord.processing_status || (isSoloPlus ? "verification_pending" : "paid_pending_setup"),
         message:
-          accountSetupStatus === "active" || accountSetupStatus === "account_setup_completed"
+          isSoloPlus
+            ? "Payment confirmed. Your Solo Plus case is now awaiting verification review."
+            : accountSetupStatus === "active" || accountSetupStatus === "account_setup_completed"
             ? "Payment already processed and account setup is complete."
             : "Payment received. Continue account setup from the email we sent you.",
         paymentReference: paymentRecord.internal_reference || reference,
@@ -266,36 +272,48 @@ async function recordUnsuccessfulVerificationAttempt(
     stringValue(payload.transactionReference) ||
     stringValue(payload.id) ||
     reference;
+  const merchantId = stringValue(metadata.merchant_id) || paymentRecord?.merchant_id || null;
 
-  await upsertWebhookAuditEvent(supabase, {
-    provider: verification.provider,
-    eventType: `${verification.provider}.verification.${verification.processingStatus}`,
-    paymentMethod,
-    paymentPurpose,
-    paymentReference: reference,
-    providerReference,
-    expectedAmount,
-    paidAmount,
-    currency: stringValue(payload.currency) || "NGN",
-    fee: normalizeOptionalKobo(payload.fees) !== null ? Number(payload.fees) / 100 : null,
-    planId: stringValue(metadata.new_plan) || stringValue(metadata.plan),
-    merchantId: stringValue(metadata.merchant_id) || paymentRecord?.merchant_id || null,
-    invoiceId: stringValue(metadata.invoice_id),
-    customerEmail:
-      stringValue(metadata.email) ||
-      stringValue(asRecord(payload.customer)?.email) ||
-      paymentRecord?.customer_email ||
-      null,
-    rawPayload: payload,
-    processingStatus: verification.processingStatus,
-    failureReason: getVerificationFailureReason(payload),
-    idempotencyKey: `${verification.provider}:${providerReference || reference}:verification:${verification.processingStatus}`,
-    settlementDestinationSource:
-      paymentPurpose === "plan_subscription" || paymentPurpose === "plan_upgrade"
-        ? "provider_dashboard"
-        : null,
-    reconciliationStatus: verification.processingStatus === "manual_review" ? "needs_review" : null,
-  });
+  if (merchantId) {
+    await upsertWebhookAuditEvent(supabase, {
+      provider: verification.provider,
+      eventType: `${verification.provider}.verification.${verification.processingStatus}`,
+      paymentMethod,
+      paymentPurpose,
+      paymentReference: reference,
+      providerReference,
+      expectedAmount,
+      paidAmount,
+      currency: stringValue(payload.currency) || "NGN",
+      fee: normalizeOptionalKobo(payload.fees) !== null ? Number(payload.fees) / 100 : null,
+      planId: stringValue(metadata.new_plan) || stringValue(metadata.plan),
+      merchantId,
+      invoiceId: stringValue(metadata.invoice_id),
+      customerEmail:
+        stringValue(metadata.email) ||
+        stringValue(asRecord(payload.customer)?.email) ||
+        paymentRecord?.customer_email ||
+        null,
+      rawPayload: payload,
+      processingStatus: verification.processingStatus,
+      failureReason: getVerificationFailureReason(payload),
+      idempotencyKey: `${verification.provider}:${providerReference || reference}:verification:${verification.processingStatus}`,
+      settlementDestinationSource:
+        paymentPurpose === "plan_subscription" || paymentPurpose === "plan_upgrade"
+          ? "provider_dashboard"
+          : null,
+      reconciliationStatus: verification.processingStatus === "manual_review" ? "needs_review" : null,
+    });
+  } else {
+    console.warn("Skipping payment_events audit without merchant_id during payment verification attempt.", {
+      provider: verification.provider,
+      reference,
+      paymentPurpose,
+      processingStatus: verification.processingStatus,
+      soloPlusCaseId: paymentRecord?.solo_plus_case_id || null,
+      onboardingSessionId: stringValue(metadata.session_id) || paymentRecord?.onboarding_session_id || null,
+    });
+  }
 
   if (
     verification.processingStatus === "manual_review" &&

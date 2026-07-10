@@ -29,10 +29,31 @@ type PendingPlanPaymentInput = {
   planId?: string | null;
   userId?: string | null;
   merchantId?: string | null;
+  onboardingSessionId?: string | null;
+  soloPlusCaseId?: string | null;
   businessId?: string | null;
   metadata?: Record<string, unknown>;
   passwordSetupRequired?: boolean;
   expiresAt?: string | null;
+};
+
+export type PendingPlanPaymentRecord = {
+  id: string;
+  internal_reference: string;
+  provider_name: SupportedProvider | null;
+  provider_reference: string | null;
+  payment_purpose: string;
+  payment_method: string | null;
+  payment_status: string;
+  processing_status: string | null;
+  account_setup_status: string | null;
+  merchant_id: string | null;
+  onboarding_session_id: string | null;
+  solo_plus_case_id: string | null;
+  expected_amount: number | null;
+  amount_paid: number | null;
+  currency: string | null;
+  customer_email: string | null;
 };
 
 type WebhookEventInput = {
@@ -70,6 +91,8 @@ type PaymentRecordLookup = {
   account_setup_status: string | null;
   password_setup_required: boolean | null;
   merchant_id: string | null;
+  onboarding_session_id: string | null;
+  solo_plus_case_id: string | null;
   customer_email: string | null;
   setup_recovery_email_sent_at: string | null;
 };
@@ -86,10 +109,12 @@ export async function createPendingPlanPaymentRecord(
   const expectedAmount = Number(input.expectedAmount || 0);
   const planName = input.planName;
 
-  const { error } = await supabase.from("payment_records").upsert(
+  const { data, error } = await supabase.from("payment_records").upsert(
     {
       user_id: input.userId || null,
       merchant_id: input.merchantId || null,
+      onboarding_session_id: input.onboardingSessionId || null,
+      solo_plus_case_id: input.soloPlusCaseId || null,
       business_id: input.businessId || null,
       payment_purpose: input.paymentPurpose,
       payment_method: input.paymentMethod,
@@ -113,20 +138,30 @@ export async function createPendingPlanPaymentRecord(
       raw_provider_payload: metadata,
     },
     { onConflict: "internal_reference" }
-  );
+  )
+    .select("id, internal_reference, provider_name, provider_reference, payment_purpose, payment_method, payment_status, processing_status, account_setup_status, merchant_id, onboarding_session_id, solo_plus_case_id, expected_amount, amount_paid, currency, customer_email")
+    .single<PendingPlanPaymentRecord>();
 
-  if (error) {
-    throw new Error(`Failed to create pending payment record: ${error.message}`);
+  if (error || !data) {
+    throw new Error(`Failed to create pending payment record: ${error?.message || "unknown error"}`);
   }
+
+  return data;
 }
 
 export async function upsertWebhookAuditEvent(
   supabase: SupabaseClient,
   input: WebhookEventInput
 ) {
+  if (!input.merchantId) {
+    throw new Error(
+      `Merchant-owned payment_events audit requires merchantId for ${input.provider}:${input.eventType}:${input.paymentReference || input.providerReference || "unknown-reference"}.`,
+    );
+  }
+
   const { error } = await supabase.from("payment_events").upsert(
     {
-      merchant_id: input.merchantId || null,
+      merchant_id: input.merchantId,
       invoice_id: input.invoiceId || null,
       event_type: input.eventType,
       processor: input.provider,
@@ -169,7 +204,7 @@ export async function findPaymentRecordByReference(
 ) {
   let query = supabase
     .from("payment_records")
-    .select("internal_reference, provider_name, provider_reference, payment_purpose, payment_status, processing_status, account_setup_status, password_setup_required, merchant_id, customer_email, setup_recovery_email_sent_at")
+    .select("internal_reference, provider_name, provider_reference, payment_purpose, payment_status, processing_status, account_setup_status, password_setup_required, merchant_id, onboarding_session_id, solo_plus_case_id, customer_email, setup_recovery_email_sent_at")
     .or(`internal_reference.eq.${reference},provider_reference.eq.${reference}`)
     .order("created_at", { ascending: false })
     .limit(1);
@@ -182,6 +217,49 @@ export async function findPaymentRecordByReference(
   if (error) {
     throw new Error(`Failed to load payment record: ${error.message}`);
   }
+  return data || null;
+}
+
+export async function findPendingSoloPlusPaymentByCaseId(
+  supabase: SupabaseClient,
+  soloPlusCaseId: string,
+) {
+  const { data, error } = await supabase
+    .from("payment_records")
+    .select("id, internal_reference, provider_name, provider_reference, payment_purpose, payment_method, payment_status, processing_status, account_setup_status, merchant_id, onboarding_session_id, solo_plus_case_id, expected_amount, amount_paid, currency, customer_email")
+    .eq("solo_plus_case_id", soloPlusCaseId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle<PendingPlanPaymentRecord>();
+
+  if (error) {
+    throw new Error(`Failed to load Solo Plus payment record: ${error.message}`);
+  }
+
+  return data || null;
+}
+
+export async function findFullPaymentRecordByReference(
+  supabase: SupabaseClient,
+  reference: string,
+  provider?: SupportedProvider,
+) {
+  let query = supabase
+    .from("payment_records")
+    .select("id, internal_reference, provider_name, provider_reference, payment_purpose, payment_method, payment_status, processing_status, account_setup_status, merchant_id, onboarding_session_id, solo_plus_case_id, expected_amount, amount_paid, currency, customer_email")
+    .or(`internal_reference.eq.${reference},provider_reference.eq.${reference}`)
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  if (provider) {
+    query = query.eq("provider_name", provider);
+  }
+
+  const { data, error } = await query.maybeSingle<PendingPlanPaymentRecord>();
+  if (error) {
+    throw new Error(`Failed to load payment record: ${error.message}`);
+  }
+
   return data || null;
 }
 

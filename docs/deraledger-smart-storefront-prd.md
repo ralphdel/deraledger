@@ -545,6 +545,11 @@ Important rule:
 ```txt
 Paying for Solo Plus does not automatically unlock Receivable Sale.
 Receivable Sale unlocks only after Enhanced verification approval.
+Payment confirmation moves the Solo Plus case only to verification_pending.
+Payment confirmation must not activate Solo Plus, change the merchant plan, clear setup mode, or enable capabilities.
+Solo Plus renewal remains deferred until post-approval renewal rules are implemented.
+Solo Plus may use only the existing DeraLedger platform-settled plan-payment paths.
+Breet customer invoice crypto collection and Breet platform plan payments must remain isolated.
 ```
 
 Allowed after Enhanced verification:
@@ -2612,6 +2617,10 @@ Acceptance criteria:
 
 ```txt
 Solo Plus can be subscribed to.
+Draft -> awaiting_payment -> payment confirmed -> verification_pending lifecycle is enforced for onboarding subscription and Solo Lite upgrade cases.
+Paystack, Monnify, and Breet platform plan payments may confirm payment without activating Solo Plus.
+Breet customer invoice crypto collection remains separate from Breet platform subscription and upgrade payments.
+Solo Plus renewal is not implemented in this phase.
 Receivable Sale remains locked until Enhanced verification is approved.
 Admin can approve/reject/request more information.
 Merchant sees clear status.

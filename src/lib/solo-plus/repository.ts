@@ -9,7 +9,7 @@ import type {
 export type SoloPlusFlowOrigin = "onboarding" | "upgrade";
 export type SoloPlusSourcePlan = "solo_lite" | null;
 export type SoloPlusTargetPlan = "solo_plus";
-export type SoloPlusPaymentProvider = "paystack" | "monnify" | null;
+export type SoloPlusPaymentProvider = "paystack" | "monnify" | "breet" | null;
 export type SoloPlusEventActorType = "merchant" | "admin" | "system" | "provider";
 
 export type SoloPlusSafeJsonPrimitive = string | number | boolean | null;

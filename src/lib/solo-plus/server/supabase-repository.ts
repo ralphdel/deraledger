@@ -286,7 +286,7 @@ function assertPaymentProvider(value: unknown): SoloPlusPaymentProvider {
     return null;
   }
 
-  if (value === "paystack" || value === "monnify") {
+  if (value === "paystack" || value === "monnify" || value === "breet") {
     return value;
   }
 

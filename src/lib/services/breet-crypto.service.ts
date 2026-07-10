@@ -844,7 +844,7 @@ export function mapBreetStatusToLocalStatus(status?: string | null) {
 
 export async function canUseBreetCryptoCheckout(input: {
   supabase: SupabaseClient;
-  purpose: "invoice_payment" | "payment_link" | "crypto_payment" | "plan_subscription" | "plan_upgrade";
+  purpose: "invoice_payment" | "payment_link" | "crypto_payment" | "plan_subscription" | "plan_upgrade" | "plan_renewal";
   merchantId?: string | null;
   environment: "sandbox" | "live";
   requireMerchantSettlementMapping?: boolean;
@@ -961,7 +961,11 @@ export async function canUseBreetCryptoCheckout(input: {
 
   }
 
-  if (input.purpose === "plan_subscription" || input.purpose === "plan_upgrade") {
+  if (
+    input.purpose === "plan_subscription" ||
+    input.purpose === "plan_upgrade" ||
+    input.purpose === "plan_renewal"
+  ) {
     if (!config.subscriptionCryptoEnabled) {
       return { allowed: false, reason: "Crypto payments are disabled for subscription checkout.", settlementMode: config.settlementMode, config, effectiveEnvironment } as const;
     }
@@ -1011,7 +1015,7 @@ export async function canUseBreetCryptoCheckout(input: {
 }
 
 export function resolveBreetSettlementModeForPurpose(
-  purpose: "invoice_payment" | "payment_link" | "crypto_payment" | "plan_subscription" | "plan_upgrade",
+  purpose: "invoice_payment" | "payment_link" | "crypto_payment" | "plan_subscription" | "plan_upgrade" | "plan_renewal",
   currentMode: BreetSettlementModeV2
 ) {
   if (currentMode === "treasury_manual" || currentMode === "disabled") return currentMode;
@@ -1024,7 +1028,7 @@ export function resolveBreetSettlementModeForPurpose(
 }
 
 export function getSettlementRecipientTypeForPurpose(
-  purpose: "invoice_payment" | "payment_link" | "crypto_payment" | "plan_subscription" | "plan_upgrade"
+  purpose: "invoice_payment" | "payment_link" | "crypto_payment" | "plan_subscription" | "plan_upgrade" | "plan_renewal"
 ) {
   return purpose === "invoice_payment" || purpose === "payment_link" || purpose === "crypto_payment"
     ? "merchant"

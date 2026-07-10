@@ -16,6 +16,10 @@ import { createPendingPlanPaymentRecord } from "@/lib/services/plan-payment-reco
 import { defaultNetworkForRail, rateSettingKeyForRail, resolveBreetCheckoutQuote } from "@/lib/treasury";
 import crypto from "crypto";
 import { assertPlanAvailable, getStoragePlanCode, normalizePlanCode } from "@/lib/plans";
+import {
+  prepareSoloPlusOnboardingPayment,
+  SoloPlusPaymentLifecycleError,
+} from "@/lib/solo-plus/server/payment-lifecycle";
 
 /**
  * POST /api/checkout/crypto-subscription
@@ -38,6 +42,9 @@ export async function POST(request: Request) {
     }
 
     const normalizedPlan = normalizePlanCode(plan);
+    if (normalizedPlan === "solo_plus" && checkoutContext === "renewal") {
+      return NextResponse.json({ error: "Solo Plus renewal remains deferred until post-approval renewal rules are implemented." }, { status: 409 });
+    }
     const availability = await assertPlanAvailable(supabase, normalizedPlan);
     if (!availability.ok) {
       return NextResponse.json({ error: "This plan is not available right now." }, { status: 403 });
@@ -116,7 +123,32 @@ export async function POST(request: Request) {
 
     const referencePrefix = checkoutContext === "renewal" ? "CRYPTO-RNW" : "CRYPTO-SUB";
     const reference = `${referencePrefix}-${storagePlan.toUpperCase()}-${crypto.randomBytes(5).toString("hex").toUpperCase()}`;
-    await createPendingPlanPaymentRecord(supabase, {
+    const paymentMetadata = {
+      email: resolvedEmail,
+      plan: storagePlan,
+      plan_display_code: normalizedPlan,
+      session_id: sessionId,
+      type: paymentType,
+      merchant_id: merchantId,
+      business_name: businessName,
+      owner_name: ownerName,
+      amount_expected_kobo: amountKobo,
+      payment_purpose: paymentPurpose,
+      checkout_context: checkoutContext,
+    };
+    const soloPlusPayment = normalizedPlan === "solo_plus"
+      ? await prepareSoloPlusOnboardingPayment({
+          onboardingSessionId: sessionId,
+          customerEmail: resolvedEmail,
+          amountKobo: Number(amountKobo),
+          paymentMethod: "crypto",
+          provider: "breet",
+          metadata: paymentMetadata,
+          serviceClient: supabase,
+        })
+      : null;
+    const resolvedReference = soloPlusPayment?.reference || reference;
+    const pendingPaymentRecord = soloPlusPayment?.paymentRecord || await createPendingPlanPaymentRecord(supabase, {
       internalReference: reference,
       provider: "breet",
       paymentMethod: "crypto",
@@ -127,24 +159,42 @@ export async function POST(request: Request) {
       planId: storagePlan,
       userId,
       merchantId,
+      onboardingSessionId: sessionId,
       passwordSetupRequired: checkoutContext === "onboarding",
-      metadata: {
-        email: resolvedEmail,
-        plan: storagePlan,
-        plan_display_code: normalizedPlan,
-        session_id: sessionId,
-        type: paymentType,
-        merchant_id: merchantId,
-        business_name: businessName,
-        owner_name: ownerName,
-        amount_expected_kobo: amountKobo,
-        payment_purpose: paymentPurpose,
-        checkout_context: checkoutContext,
-      },
+      metadata: paymentMetadata,
     });
+    const { data: existingSession } = await supabase
+      .from("crypto_payment_sessions")
+      .select("id, provider_reference, expected_ngn_amount, crypto_amount_expected, crypto_asset, crypto_network, settlement_mode, settlement_recipient_type, expires_at, metadata")
+      .eq("payment_record_id", pendingPaymentRecord.id)
+      .maybeSingle();
+
+    if (existingSession) {
+      const sessionMetadata = typeof existingSession.metadata === "object" && existingSession.metadata !== null
+        ? existingSession.metadata as Record<string, unknown>
+        : {};
+      return NextResponse.json({
+        success: true,
+        cryptoAddress: typeof sessionMetadata.wallet_address === "string" ? sessionMetadata.wallet_address : null,
+        cryptoNetwork: existingSession.crypto_network,
+        cryptoCoin: existingSession.crypto_asset,
+        fiatAmount: existingSession.expected_ngn_amount,
+        cryptoAmount: existingSession.crypto_amount_expected,
+        exchangeRate: typeof sessionMetadata.exchange_rate === "number" ? sessionMetadata.exchange_rate : Number(sessionMetadata.exchange_rate || 0),
+        quoteSource: typeof sessionMetadata.quote_source === "string" ? sessionMetadata.quote_source : "stored_session",
+        providerQuoteAvailable: sessionMetadata.provider_quote_available === true,
+        reference: resolvedReference,
+        paymentSessionId: existingSession.id,
+        providerReference: existingSession.provider_reference || resolvedReference,
+        settlementMode: existingSession.settlement_mode,
+        settlementRecipientType: existingSession.settlement_recipient_type,
+        minimumAutoSettlementNgn,
+        expiresAt: existingSession.expires_at,
+      });
+    }
     const settlementBankPayload = buildSettlementBankPayload(
       platformSettlementAccount,
-      `${checkoutContext === "renewal" ? "Renew" : "Sub"} ${plan.toUpperCase()} ${reference.slice(-12)}`
+      `${checkoutContext === "renewal" ? "Renew" : "Sub"} ${plan.toUpperCase()} ${resolvedReference.slice(-12)}`
     );
     if (!settlementBankPayload) {
       return NextResponse.json({ error: "Platform settlement account is not configured." }, { status: 403 });
@@ -160,7 +210,7 @@ export async function POST(request: Request) {
 
     const result = await PaymentService.generatePlatformPaymentAddress({
       assetId: "USDT",
-      label: reference,
+      label: resolvedReference,
       settlementBank: settlementBankPayload,
       settlementMode,
       settlementRecipientType,
@@ -179,11 +229,12 @@ export async function POST(request: Request) {
       merchant_id: merchantId,
       user_id: userId,
       business_id: null,
+      payment_record_id: pendingPaymentRecord.id,
       plan_id: storagePlan,
       payment_purpose: paymentPurpose,
       provider_name: "breet",
-      internal_reference: reference,
-      provider_reference: result.id || reference,
+      internal_reference: resolvedReference,
+      provider_reference: result.id || resolvedReference,
       payment_method: "crypto",
       expected_ngn_amount: fiatAmount,
       crypto_asset: result.asset || "USDT",
@@ -242,9 +293,9 @@ export async function POST(request: Request) {
       exchangeRate: quote.exchangeRate,
       quoteSource: quote.quoteSource,
       providerQuoteAvailable: quote.providerQuoteAvailable,
-      reference,
+      reference: resolvedReference,
       paymentSessionId: createdSession?.id || null,
-      providerReference: result.id || reference,
+      providerReference: result.id || resolvedReference,
       settlementMode,
       settlementRecipientType,
       minimumAutoSettlementNgn,
@@ -253,6 +304,12 @@ export async function POST(request: Request) {
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to generate crypto address.";
     console.error("Crypto subscription init error:", message);
-    return NextResponse.json({ error: message }, { status: 500 });
+    const status =
+      error instanceof SoloPlusPaymentLifecycleError &&
+      (error.code === "SOLO_PLUS_PAYMENT_INIT_CONFLICT" ||
+        error.code === "SOLO_PLUS_PAYMENT_ALREADY_CONFIRMED")
+        ? 409
+        : 500;
+    return NextResponse.json({ error: message }, { status });
   }
 }

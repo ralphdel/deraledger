@@ -16,6 +16,10 @@ import {
   getStoragePlanCode,
   normalizePlanCode,
 } from "@/lib/plans";
+import {
+  prepareSoloPlusUpgradePayment,
+  SoloPlusPaymentLifecycleError,
+} from "@/lib/solo-plus/server/payment-lifecycle";
 
 export async function POST(request: Request) {
   try {
@@ -88,54 +92,56 @@ export async function POST(request: Request) {
       deviceMetadata: { source: "upgrade_checkout" },
     });
 
-    await createPendingPlanPaymentRecord(supabase, {
-      internalReference: reference,
-      provider: route.provider,
-      paymentMethod: method,
-      paymentPurpose: "plan_upgrade",
-      customerEmail: user.email || merchant.email || "billing@deraledger.app",
-      expectedAmount: amountKobo / 100,
-      planName: normalizedPlan,
-      planId: storagePlan,
-      userId: user.id,
-      merchantId: merchant.id,
-      metadata: {
-        type: "subscription_upgrade",
-        merchant_id: merchant.id,
-        new_plan: storagePlan,
-        new_plan_display_code: normalizedPlan,
-        owner_name: ownerName || null,
-        business_type: businessType || null,
-        relationship_claim: (relationshipClaim as RelationshipClaim) || null,
-        verification_disclosure_accepted: verificationDisclosureAccepted === true,
-        verification_disclosure_version: disclosureVersionToStore,
-        amount_expected_kobo: amountKobo,
-        payment_method_requested: method,
-        resolved_provider: route.provider,
-        payment_purpose: "plan_upgrade",
-      },
-    });
+    const metadata = {
+      type: "subscription_upgrade",
+      merchant_id: merchant.id,
+      new_plan: storagePlan,
+      new_plan_display_code: normalizedPlan,
+      owner_name: ownerName || null,
+      business_type: businessType || null,
+      relationship_claim: (relationshipClaim as RelationshipClaim) || null,
+      verification_disclosure_accepted: verificationDisclosureAccepted === true,
+      verification_disclosure_version: disclosureVersionToStore,
+      amount_expected_kobo: amountKobo,
+      payment_method_requested: method,
+      resolved_provider: route.provider,
+      payment_purpose: "plan_upgrade",
+    };
+
+    const resolvedReference = normalizedPlan === "solo_plus"
+      ? (await prepareSoloPlusUpgradePayment({
+          merchantId: merchant.id,
+          customerEmail: user.email || merchant.email || "billing@deraledger.app",
+          amountKobo,
+          paymentMethod: method,
+          provider: route.provider,
+          metadata,
+          serviceClient: supabase,
+        })).reference
+      : reference;
+
+    if (normalizedPlan !== "solo_plus") {
+      await createPendingPlanPaymentRecord(supabase, {
+        internalReference: reference,
+        provider: route.provider,
+        paymentMethod: method,
+        paymentPurpose: "plan_upgrade",
+        customerEmail: user.email || merchant.email || "billing@deraledger.app",
+        expectedAmount: amountKobo / 100,
+        planName: normalizedPlan,
+        planId: storagePlan,
+        userId: user.id,
+        merchantId: merchant.id,
+        metadata,
+      });
+    }
 
     const result = await PaymentService.initializeTransaction({
       email: user.email || merchant.email || "billing@deraledger.app",
       amountKobo,
-      reference,
+      reference: resolvedReference,
       callbackUrl: callback.toString(),
-      metadata: {
-        type: "subscription_upgrade",
-        merchant_id: merchant.id,
-        new_plan: storagePlan,
-        new_plan_display_code: normalizedPlan,
-        owner_name: ownerName || null,
-        business_type: businessType || null,
-        relationship_claim: (relationshipClaim as RelationshipClaim) || null,
-        verification_disclosure_accepted: verificationDisclosureAccepted === true,
-        verification_disclosure_version: disclosureVersionToStore,
-        amount_expected_kobo: amountKobo,
-        payment_method_requested: method,
-        resolved_provider: route.provider,
-        payment_purpose: "plan_upgrade",
-      },
+      metadata,
       paymentMethod: method,
     }, route.provider === "monnify" ? "monnify" : "paystack");
 
@@ -143,11 +149,18 @@ export async function POST(request: Request) {
       success: true,
       authorizationUrl: result.authorizationUrl,
       accessCode: result.accessCode,
-      reference,
+      reference: resolvedReference,
       provider: route.provider,
     });
   } catch (error: unknown) {
     console.error("Upgrade initialization failed:", error);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    const message = error instanceof Error ? error.message : "Internal server error";
+    const status =
+      error instanceof SoloPlusPaymentLifecycleError &&
+      (error.code === "SOLO_PLUS_PAYMENT_INIT_CONFLICT" ||
+        error.code === "SOLO_PLUS_PAYMENT_ALREADY_CONFIRMED")
+        ? 409
+        : 500;
+    return NextResponse.json({ error: message }, { status });
   }
 }

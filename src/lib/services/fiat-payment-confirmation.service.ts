@@ -18,11 +18,17 @@ import { calculateProviderReportedSettlement } from "@/lib/services/provider-set
 import {
   buildSetupRecoveryToken,
   classifyAmountMismatch,
+  findFullPaymentRecordByReference,
   findPaymentRecordByReference,
   updatePlanPaymentRecord,
 } from "@/lib/services/plan-payment-recovery.service";
+import { confirmSoloPlusPayment } from "@/lib/solo-plus/server/payment-lifecycle";
 
 type FiatProvider = "paystack" | "monnify" | "breet";
+
+function stringValue(value: unknown) {
+  return typeof value === "string" && value.trim() ? value : null;
+}
 
 export type SuccessfulFiatPayment = {
   provider: FiatProvider;
@@ -41,6 +47,11 @@ export async function processSuccessfulFiatPayment(
   payment: SuccessfulFiatPayment
 ) {
   const paymentType = String(payment.metadata?.type || "invoice_payment");
+  const soloPlusResult = await confirmLinkedSoloPlusPayment(supabase, payment);
+
+  if (soloPlusResult) {
+    return soloPlusResult;
+  }
 
   if (paymentType === "subscription") {
     return confirmInitialSubscription(supabase, payment);
@@ -55,6 +66,71 @@ export async function processSuccessfulFiatPayment(
   }
 
   return confirmInvoicePayment(supabase, payment);
+}
+
+async function confirmLinkedSoloPlusPayment(
+  supabase: SupabaseClient,
+  payment: SuccessfulFiatPayment,
+) {
+  const paymentRecord = await findFullPaymentRecordByReference(
+    supabase,
+    payment.reference,
+    payment.provider,
+  );
+
+  if (!paymentRecord?.solo_plus_case_id) {
+    return null;
+  }
+
+  if (
+    paymentRecord.payment_purpose !== "plan_subscription" &&
+    paymentRecord.payment_purpose !== "plan_upgrade"
+  ) {
+    throw new Error("Solo Plus renewal remains deferred until post-approval renewal rules are implemented.");
+  }
+
+  const result = await confirmSoloPlusPayment({
+    provider: payment.provider,
+    internalReference: payment.reference,
+    providerReference: payment.providerReference || payment.reference,
+    paymentPurpose: paymentRecord.payment_purpose,
+    amountNgn: (payment.amountKobo / 100).toFixed(2),
+    currency: "NGN",
+    merchantId: paymentRecord.merchant_id || stringValue(payment.metadata?.merchant_id) || null,
+    onboardingSessionId:
+      paymentRecord.onboarding_session_id ||
+      stringValue(payment.metadata?.session_id) ||
+      null,
+    platformDirected: payment.provider === "breet" ? true : null,
+    rawProviderPayload: payment.rawProviderPayload || payment.metadata,
+    requestIdempotencyKey: `solo-plus:${payment.provider}:${payment.providerReference || payment.reference}:confirmed`,
+    serviceClient: supabase as unknown as SupabaseClient,
+  });
+
+  if (!result) {
+    return null;
+  }
+
+  const kind = String(result.kind || "");
+  if (kind === "confirmed") {
+    return {
+      received: true,
+      processed: true,
+      solo_plus: true,
+      status: "verification_pending",
+    };
+  }
+
+  if (kind === "idempotent_replay") {
+    return {
+      received: true,
+      already_processed: true,
+      solo_plus: true,
+      status: "verification_pending",
+    };
+  }
+
+  throw new Error(String(result.message || `Solo Plus payment confirmation failed with outcome ${kind || "unknown"}.`));
 }
 
 async function confirmSubscriptionRenewal(

@@ -43,28 +43,36 @@ export async function POST(request: Request) {
       ? getMonnifyAuditProcessingStatus(normalized)
       : "failed";
     try {
-      await upsertWebhookAuditEvent(supabase, {
-        provider: "monnify",
-        eventType: payload.eventType || "monnify.webhook",
-        paymentMethod: normalized.paymentMethod,
-        paymentPurpose: normalized.paymentPurpose,
-        paymentReference: normalized.reference,
-        providerReference: normalized.providerReference,
-        expectedAmount: normalized.expectedAmount,
-        paidAmount: normalized.amountKobo / 100,
-        currency: "NGN",
-        fee: normalized.feesKobo !== null ? normalized.feesKobo / 100 : null,
-        planId: normalized.planId,
-        merchantId: normalized.merchantId,
-        invoiceId: normalized.invoiceId,
-        customerEmail: normalized.customerEmail,
-        rawPayload: payload as Record<string, unknown>,
-        processingStatus,
-        failureReason: verification.valid ? null : verification.error || "Signature mismatch",
-        idempotencyKey: `monnify:${normalized.providerReference || normalized.reference}:${payload.eventType || "event"}:received`,
-        settlementDestinationSource: normalized.settlementDestinationSource,
-        reconciliationStatus: processingStatus === "manual_review" ? "needs_review" : null,
-      });
+      if (normalized.merchantId) {
+        await upsertWebhookAuditEvent(supabase, {
+          provider: "monnify",
+          eventType: payload.eventType || "monnify.webhook",
+          paymentMethod: normalized.paymentMethod,
+          paymentPurpose: normalized.paymentPurpose,
+          paymentReference: normalized.reference,
+          providerReference: normalized.providerReference,
+          expectedAmount: normalized.expectedAmount,
+          paidAmount: normalized.amountKobo / 100,
+          currency: "NGN",
+          fee: normalized.feesKobo !== null ? normalized.feesKobo / 100 : null,
+          planId: normalized.planId,
+          merchantId: normalized.merchantId,
+          invoiceId: normalized.invoiceId,
+          customerEmail: normalized.customerEmail,
+          rawPayload: payload as Record<string, unknown>,
+          processingStatus,
+          failureReason: verification.valid ? null : verification.error || "Signature mismatch",
+          idempotencyKey: `monnify:${normalized.providerReference || normalized.reference}:${payload.eventType || "event"}:received`,
+          settlementDestinationSource: normalized.settlementDestinationSource,
+          reconciliationStatus: processingStatus === "manual_review" ? "needs_review" : null,
+        });
+      } else {
+        console.warn("Skipping payment_events audit without merchant_id for Monnify webhook receipt.", {
+          eventType: payload.eventType || "monnify.webhook",
+          reference: normalized.reference,
+          paymentPurpose: normalized.paymentPurpose,
+        });
+      }
     } catch (error) {
       console.error("Failed to record Monnify webhook audit event:", error);
     }
@@ -106,39 +114,7 @@ export async function POST(request: Request) {
       rawProviderPayload: payload as Record<string, unknown>,
     });
     await recordWebhookHealth("success");
-    await upsertWebhookAuditEvent(supabase, {
-      provider: "monnify",
-      eventType: payload.eventType || "SUCCESSFUL_TRANSACTION",
-      paymentMethod: normalized.paymentMethod,
-      paymentPurpose: normalized.paymentPurpose,
-      paymentReference: normalized.reference,
-      providerReference: normalized.providerReference,
-      expectedAmount: normalized.expectedAmount,
-      paidAmount: normalized.amountKobo / 100,
-      currency: "NGN",
-      fee: normalized.feesKobo !== null ? normalized.feesKobo / 100 : null,
-      planId: normalized.planId,
-      merchantId: normalized.merchantId,
-      invoiceId: normalized.invoiceId,
-      customerEmail: normalized.customerEmail,
-      rawPayload: payload as Record<string, unknown>,
-      processingStatus: "needs_review" in result && result.needs_review ? "manual_review" : "processed",
-      failureReason: "needs_review" in result && result.needs_review ? "Amount mismatch requires manual review." : null,
-      idempotencyKey: `monnify:${normalized.providerReference || normalized.reference}:${payload.eventType || "event"}:processed`,
-      settlementDestinationSource: normalized.settlementDestinationSource,
-      reconciliationStatus: "needs_review" in result && result.needs_review ? "needs_review" : "pending_reconciliation",
-    });
-
-    return NextResponse.json({
-      ...result,
-      provider: "monnify",
-      reference: normalized.reference,
-    });
-  } catch (error) {
-    console.error("Monnify webhook processing failed:", error);
-    await recordWebhookHealth("failed");
-    if (normalized) {
-      const message = error instanceof Error ? error.message : "Webhook processing failed";
+    if (normalized.merchantId) {
       await upsertWebhookAuditEvent(supabase, {
         provider: "monnify",
         eventType: payload.eventType || "SUCCESSFUL_TRANSACTION",
@@ -155,12 +131,60 @@ export async function POST(request: Request) {
         invoiceId: normalized.invoiceId,
         customerEmail: normalized.customerEmail,
         rawPayload: payload as Record<string, unknown>,
-        processingStatus: "failed",
-        failureReason: message,
-        idempotencyKey: `monnify:${normalized.providerReference || normalized.reference}:${payload.eventType || "event"}:failed`,
+        processingStatus: "needs_review" in result && result.needs_review ? "manual_review" : "processed",
+        failureReason: "needs_review" in result && result.needs_review ? "Amount mismatch requires manual review." : null,
+        idempotencyKey: `monnify:${normalized.providerReference || normalized.reference}:${payload.eventType || "event"}:processed`,
         settlementDestinationSource: normalized.settlementDestinationSource,
-        reconciliationStatus: "needs_review",
+        reconciliationStatus: "needs_review" in result && result.needs_review ? "needs_review" : "pending_reconciliation",
       });
+    } else {
+      console.warn("Skipping payment_events audit without merchant_id for Monnify processed webhook.", {
+        eventType: payload.eventType || "SUCCESSFUL_TRANSACTION",
+        reference: normalized.reference,
+        paymentPurpose: normalized.paymentPurpose,
+      });
+    }
+
+    return NextResponse.json({
+      ...result,
+      provider: "monnify",
+      reference: normalized.reference,
+    });
+  } catch (error) {
+    console.error("Monnify webhook processing failed:", error);
+    await recordWebhookHealth("failed");
+    if (normalized) {
+      const message = error instanceof Error ? error.message : "Webhook processing failed";
+      if (normalized.merchantId) {
+        await upsertWebhookAuditEvent(supabase, {
+          provider: "monnify",
+          eventType: payload.eventType || "SUCCESSFUL_TRANSACTION",
+          paymentMethod: normalized.paymentMethod,
+          paymentPurpose: normalized.paymentPurpose,
+          paymentReference: normalized.reference,
+          providerReference: normalized.providerReference,
+          expectedAmount: normalized.expectedAmount,
+          paidAmount: normalized.amountKobo / 100,
+          currency: "NGN",
+          fee: normalized.feesKobo !== null ? normalized.feesKobo / 100 : null,
+          planId: normalized.planId,
+          merchantId: normalized.merchantId,
+          invoiceId: normalized.invoiceId,
+          customerEmail: normalized.customerEmail,
+          rawPayload: payload as Record<string, unknown>,
+          processingStatus: "failed",
+          failureReason: message,
+          idempotencyKey: `monnify:${normalized.providerReference || normalized.reference}:${payload.eventType || "event"}:failed`,
+          settlementDestinationSource: normalized.settlementDestinationSource,
+          reconciliationStatus: "needs_review",
+        });
+      } else {
+        console.warn("Skipping payment_events audit without merchant_id for Monnify failed webhook.", {
+          eventType: payload.eventType || "SUCCESSFUL_TRANSACTION",
+          reference: normalized.reference,
+          paymentPurpose: normalized.paymentPurpose,
+        });
+      }
       if (normalized.paymentPurpose === "plan_subscription" || normalized.paymentPurpose === "plan_upgrade") {
         await updatePlanPaymentRecord(supabase, normalized.reference, {
           provider_reference: normalized.providerReference,

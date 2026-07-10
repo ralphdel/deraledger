@@ -45,6 +45,7 @@ export async function POST(request: Request) {
     });
 
     const paymentRecord = await findPaymentRecordByReference(supabaseAdmin, reference, verification.provider);
+    const isSoloPlus = paymentRecord?.solo_plus_case_id != null;
     if (("needs_review" in result && result.needs_review) || paymentRecord?.account_setup_status === "manual_review") {
       return NextResponse.json({
         success: false,
@@ -55,7 +56,10 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       success: true,
-      status: paymentRecord?.account_setup_status || "paid_pending_setup",
+      status: paymentRecord?.account_setup_status || (isSoloPlus ? "verification_pending" : "paid_pending_setup"),
+      message: isSoloPlus
+        ? "Payment confirmed. The Solo Plus upgrade case is now awaiting verification review."
+        : undefined,
       already_updated: result?.already_processed === true,
     });
   } catch (error: unknown) {

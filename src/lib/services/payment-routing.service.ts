@@ -3,6 +3,7 @@ import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 export type PaymentPurpose =
   | "plan_subscription"
   | "plan_upgrade"
+  | "plan_renewal"
   | "invoice_payment"
   | "payment_link"
   | "crypto_payment";
