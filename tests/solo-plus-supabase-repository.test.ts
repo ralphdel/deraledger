@@ -69,6 +69,38 @@ class FakeQueryBuilder {
     };
   }
 
+  async upsert(
+    value: Record<string, unknown> | readonly Record<string, unknown>[],
+    options?: { onConflict?: string },
+  ): Promise<QueryResponse> {
+    const rows = Array.isArray(value) ? value : [value];
+    const sourceRows = (this.client.tables.get(this.table) ?? []) as Record<string, unknown>[];
+    const merged = sourceRows.map((row) => JSON.parse(JSON.stringify(row)) as Record<string, unknown>);
+    const conflictKeys = String(options?.onConflict || "")
+      .split(",")
+      .map((key) => key.trim())
+      .filter(Boolean);
+
+    for (const row of rows) {
+      const incoming = JSON.parse(JSON.stringify(row)) as Record<string, unknown>;
+      const existingIndex =
+        conflictKeys.length === 0
+          ? merged.findIndex((candidate) => candidate.id === incoming.id)
+          : merged.findIndex((candidate) =>
+              conflictKeys.every((key) => candidate[key] === incoming[key]),
+            );
+
+      if (existingIndex >= 0) {
+        merged[existingIndex] = { ...merged[existingIndex], ...incoming };
+      } else {
+        merged.push(incoming);
+      }
+    }
+
+    this.client.tables.set(this.table, merged);
+    return { data: null, error: null };
+  }
+
   then<TResult1 = QueryResponse, TResult2 = never>(
     onfulfilled?:
       | ((value: QueryResponse) => TResult1 | PromiseLike<TResult1>)
@@ -426,6 +458,34 @@ async function run() {
   );
   assert.equal(mappedEvents.length, 1);
   assert.equal(mappedEvents[0].eventType, "case_created");
+
+  const upsertedRequirements = await repository.upsertCaseRequirements(
+    "11111111-1111-4111-8111-111111111111",
+    [
+      {
+        ...mappedRequirement[0],
+        requirementState: "reused",
+        evidenceSourceType: "verification_log",
+        verificationLogId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        evidenceReference: "verification-log-1",
+        policyRuleApplied: "reuse_bvn_v1",
+        reuseDecisionAt: "2026-07-05T12:00:00.000Z",
+        reuseReason: "Eligible under reuse_bvn_v1.",
+        completedAt: "2026-07-05T12:00:00.000Z",
+        metadata: {
+          provenance: {
+            evaluatorOutcome: "reusable",
+          },
+        },
+        updatedAt: "2026-07-05T12:00:00.000Z",
+      },
+    ],
+  );
+  assert.equal(upsertedRequirements[0]?.requirementState, "reused");
+  assert.equal(
+    (client.tables.get("solo_plus_case_requirements")?.[0] as Record<string, unknown>)?.policy_rule_applied,
+    "reuse_bvn_v1",
+  );
 
   client.tables.set("solo_plus_cases", [buildCaseRow({ case_status: "not_real" })]);
   client.rpcResponses.set(soloPlusSupabaseRpcNames.caseBundlePayload, {

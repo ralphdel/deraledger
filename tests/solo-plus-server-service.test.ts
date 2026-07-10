@@ -146,6 +146,9 @@ class FakeSoloPlusRepository implements SoloPlusCaseRepository {
   lastCreateInput: SoloPlusCaseCreateAtomicInput | null = null;
   lastAttachInput: SoloPlusAttachMerchantAtomicParams | null = null;
   lastTransitionInput: SoloPlusCaseTransitionAtomicParams | null = null;
+  lastUpsertRequirements:
+    | { caseId: string; requirements: readonly SoloPlusCaseRequirementRecord[] }
+    | null = null;
   readonly requirements = new Map<string, readonly SoloPlusCaseRequirementRecord[]>();
   readonly events = new Map<string, readonly SoloPlusCaseEventRecord[]>();
 
@@ -227,6 +230,21 @@ class FakeSoloPlusRepository implements SoloPlusCaseRepository {
       event: input.event,
     };
   }
+
+  async upsertCaseRequirements(
+    caseId: string,
+    requirements: readonly SoloPlusCaseRequirementRecord[],
+  ): Promise<readonly SoloPlusCaseRequirementRecord[]> {
+    this.lastUpsertRequirements = {
+      caseId,
+      requirements: JSON.parse(JSON.stringify(requirements)) as SoloPlusCaseRequirementRecord[],
+    };
+    this.requirements.set(
+      caseId,
+      JSON.parse(JSON.stringify(requirements)) as SoloPlusCaseRequirementRecord[],
+    );
+    return this.requirements.get(caseId) ?? [];
+  }
 }
 
 function createEnv(): NodeJS.ProcessEnv {
@@ -279,6 +297,37 @@ function buildCaseRecord(
     rowVersion: overrides.rowVersion ?? 0,
     createdAt: "2026-07-07T00:00:00.000Z",
     updatedAt: "2026-07-07T00:00:00.000Z",
+  };
+}
+
+function buildRequirementRecord(
+  overrides: Partial<SoloPlusCaseRequirementRecord> & {
+    requirementCode: SoloPlusCaseRequirementRecord["requirementCode"];
+  },
+): SoloPlusCaseRequirementRecord {
+  return {
+    id: `${overrides.requirementCode}-requirement`,
+    caseId: "case-kyc-1",
+    requirementState: "not_started",
+    verificationLogId: null,
+    evidenceSourceType: null,
+    evidenceSourceId: null,
+    evidenceReference: null,
+    originalCompletedAt: null,
+    reuseDecisionAt: null,
+    reuseReason: null,
+    policyRuleApplied: null,
+    reviewedByAdminId: null,
+    reviewNote: null,
+    providerName: null,
+    providerReference: null,
+    failureReason: null,
+    completedAt: null,
+    metadata: {},
+    createdAt: "2026-07-07T00:00:00.000Z",
+    updatedAt: "2026-07-07T00:00:00.000Z",
+    ...overrides,
+    requirementCode: overrides.requirementCode,
   };
 }
 
@@ -805,6 +854,110 @@ async function run() {
   });
   assert.equal(attachRepository.lastTransitionInput?.requestIdempotencyKey, "awaiting-1");
   assert.equal(attachRepository.lastTransitionInput?.event.actorType, "admin");
+
+  attachRepository.seedCase(
+    buildCaseRecord({
+      id: "case-kyc-1",
+      merchantId: "merchant-admin",
+      flowOrigin: "upgrade",
+      sourcePlan: "solo_lite",
+      activePlanSnapshot: "solo_lite",
+      rowVersion: 1,
+    }),
+  );
+  attachRepository.requirements.set(
+    "case-kyc-1",
+    [
+      buildRequirementRecord({ requirementCode: "bvn" }),
+      buildRequirementRecord({ requirementCode: "selfie_liveness" }),
+      buildRequirementRecord({ requirementCode: "id_document" }),
+      buildRequirementRecord({ requirementCode: "proof_of_address" }),
+      buildRequirementRecord({ requirementCode: "settlement_account" }),
+      buildRequirementRecord({ requirementCode: "activity_profile" }),
+    ],
+  );
+  serviceClient.tables.set("merchants", [
+    {
+      id: "merchant-admin",
+      user_id: "admin-user",
+      email: "admin@example.test",
+      is_super_admin: false,
+      verification_step_state: {
+        valid_id_document: {
+          status: "verified",
+          provider: "manual_upload",
+          provider_reference: "doc-ref-1",
+          verified_at: "2026-07-05T00:00:00.000Z",
+        },
+      },
+      cac_document_url: "kyc-documents/id-existing.pdf",
+      utility_document_url: null,
+      business_type: "retail",
+    },
+  ]);
+  serviceClient.tables.set("verification_logs", [
+    {
+      id: "log-bvn-1",
+      merchant_id: "merchant-admin",
+      provider_name: "dojah",
+      verification_type: "bvn_selfie",
+      normalized_status: "verified",
+      provider_reference: "prov-bvn-1",
+      response_timestamp: "2026-07-06T00:00:00.000Z",
+      created_at: "2026-07-06T00:00:00.000Z",
+    },
+  ]);
+  serviceClient.tables.set("merchant_settlement_accounts", [
+    {
+      id: "settlement-1",
+      merchant_id: "merchant-admin",
+      bank_name: "Test Bank",
+      account_number: "0123456789",
+      account_name: "Merchant Admin",
+      currency: "NGN",
+      is_default: true,
+      verification_status: "verified",
+      status: "active",
+    },
+  ]);
+
+  const syncedRequirements = await attachService.syncCaseRequirements({
+    caseId: "case-kyc-1",
+    proofOfAddress: {
+      storageKey: "kyc-documents/address-latest.pdf",
+      checksumSha256: "address-hash-1",
+      uploadedAt: "2026-07-07T00:00:00.000Z",
+      contentType: "application/pdf",
+      providerName: "manual_upload",
+      providerReference: "address-ref-1",
+    },
+    activityProfile: {
+      businessActivityType: "retail",
+      expectedMonthlyTransactionValue: "500000",
+      expectedTransactionCount: 150,
+      typicalCustomerType: "consumers",
+      reasonForHigherCollectionNeed: "expanded inventory",
+      expectedSettlementBehaviour: "daily",
+      submittedAt: "2026-07-07T00:00:00.000Z",
+    },
+  });
+  assert.equal(syncedRequirements.merchantId, "merchant-admin");
+  assert.equal(attachRepository.lastUpsertRequirements?.caseId, "case-kyc-1");
+  const syncedBvn = attachRepository.lastUpsertRequirements?.requirements.find(
+    (requirement) => requirement.requirementCode === "bvn",
+  );
+  assert.equal(syncedBvn?.requirementState, "reused");
+  assert.equal(syncedBvn?.policyRuleApplied, "reuse_bvn_v1");
+  const syncedAddress = attachRepository.lastUpsertRequirements?.requirements.find(
+    (requirement) => requirement.requirementCode === "proof_of_address",
+  );
+  assert.equal(syncedAddress?.requirementState, "pending");
+  assert.equal(syncedAddress?.metadata.storageKey, "kyc-documents/address-latest.pdf");
+  const syncedActivity = attachRepository.lastUpsertRequirements?.requirements.find(
+    (requirement) => requirement.requirementCode === "activity_profile",
+  );
+  assert.equal(syncedActivity?.requirementState, "pending");
+  assert.equal("rawDocument" in (syncedActivity?.metadata || {}), false);
 
   const linkedMerchantService = await createSoloPlusServerService({
     requestedMode: "internal_test",

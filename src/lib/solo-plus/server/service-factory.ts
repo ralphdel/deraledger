@@ -26,6 +26,10 @@ import {
   createSoloPlusServiceRoleClient,
   type SoloPlusSupabaseClientLike,
 } from "./supabase-repository";
+import {
+  createSoloPlusRequirementsService,
+  type SyncSoloPlusCaseRequirementsInput,
+} from "./requirements";
 
 export type CreateSoloPlusServerServiceOptions = ResolveSoloPlusServerAccessOptions & {
   repository?: SoloPlusCaseRepository;
@@ -59,6 +63,14 @@ export type SoloPlusTrustedServerService = {
   markCaseAwaitingPayment(
     input: Omit<MarkSoloPlusCaseAwaitingPaymentInput, "accessContext">,
   ): Promise<SoloPlusCaseMutationResult>;
+  syncCaseRequirements(
+    input: SyncSoloPlusCaseRequirementsInput,
+  ): Promise<{
+    caseRecord: NonNullable<Awaited<ReturnType<SoloPlusCaseRepository["findCaseById"]>>>;
+    requirements: Awaited<ReturnType<SoloPlusCaseRepository["listRequirements"]>>;
+    decisions: Record<string, unknown>;
+    merchantId: string | null;
+  }>;
 };
 
 export class SoloPlusServerServiceFactoryError extends Error {
@@ -124,6 +136,17 @@ export async function createSoloPlusServerService(
     now: options.now,
     generateId: options.generateId,
   });
+  const requirementsService = createSoloPlusRequirementsService({
+    repository,
+    serviceClient,
+    now: options.now,
+    generateId: options.generateId || (() => {
+      throw new SoloPlusServerServiceFactoryError(
+        "SOLO_PLUS_SERVER_CONFIG_ERROR",
+        "Solo Plus KYC orchestration requires an ID generator.",
+      );
+    }),
+  });
 
   return {
     repository,
@@ -176,6 +199,19 @@ export async function createSoloPlusServerService(
         requestIdempotencyKey: input.requestIdempotencyKey,
         accessContext: resolvedAccess.accessContext,
       });
+    },
+    async syncCaseRequirements(input) {
+      const result = await requirementsService.syncCaseRequirements(input, {
+        merchantOwnership: resolvedAccess.merchantOwnership,
+        onboardingSessionOwnership: resolvedAccess.onboardingSessionOwnership,
+      });
+
+      return result as {
+        caseRecord: NonNullable<Awaited<ReturnType<SoloPlusCaseRepository["findCaseById"]>>>;
+        requirements: Awaited<ReturnType<SoloPlusCaseRepository["listRequirements"]>>;
+        decisions: Record<string, unknown>;
+        merchantId: string | null;
+      };
     },
   };
 }

@@ -277,6 +277,8 @@ export type SoloPlusCaseTransitionAtomicResult =
       currentCase: SoloPlusCaseRecord;
     };
 
+export type SoloPlusCaseRequirementUpsertResult = readonly SoloPlusCaseRequirementRecord[];
+
 export interface SoloPlusCaseRepository {
   findCaseById(caseId: string): Promise<SoloPlusCaseRecord | null>;
   findCaseByIdempotencyKey(idempotencyKey: string): Promise<SoloPlusCaseRecord | null>;
@@ -295,4 +297,8 @@ export interface SoloPlusCaseRepository {
   transitionCaseStatus(
     input: SoloPlusCaseTransitionAtomicParams,
   ): Promise<SoloPlusCaseTransitionAtomicResult>;
+  upsertCaseRequirements(
+    caseId: string,
+    requirements: readonly SoloPlusCaseRequirementRecord[],
+  ): Promise<SoloPlusCaseRequirementUpsertResult>;
 }

@@ -48,6 +48,10 @@ type SupabaseLikeQueryBuilder = {
   in(column: string, values: readonly unknown[]): SupabaseLikeQueryBuilder;
   order(column: string, options?: { ascending?: boolean }): SupabaseLikeQueryBuilder;
   limit(count: number): SupabaseLikeQueryBuilder;
+  upsert(
+    values: Record<string, unknown> | readonly Record<string, unknown>[],
+    options?: { onConflict?: string },
+  ): SupabaseLikeResponse<unknown>;
   maybeSingle(): SupabaseLikeResponse<unknown | null>;
   single(): SupabaseLikeResponse<unknown>;
   then?<TResult1 = { data: unknown; error: SupabaseLikeError | null }, TResult2 = never>(
@@ -471,6 +475,34 @@ function mapRequirementRow(row: unknown): SoloPlusCaseRequirementRecord {
     metadata: assertJsonObject(candidate.metadata, "metadata"),
     createdAt: assertTimestamp(candidate.created_at, "requirement.created_at")!,
     updatedAt: assertTimestamp(candidate.updated_at, "requirement.updated_at")!,
+  };
+}
+
+function mapRequirementRecordToRow(
+  record: SoloPlusCaseRequirementRecord,
+): Record<string, unknown> {
+  return {
+    id: record.id,
+    case_id: record.caseId,
+    requirement_code: record.requirementCode,
+    requirement_state: record.requirementState,
+    verification_log_id: record.verificationLogId,
+    evidence_source_type: record.evidenceSourceType,
+    evidence_source_id: record.evidenceSourceId,
+    evidence_reference: record.evidenceReference,
+    original_completed_at: record.originalCompletedAt,
+    reuse_decision_at: record.reuseDecisionAt,
+    reuse_reason: record.reuseReason,
+    policy_rule_applied: record.policyRuleApplied,
+    reviewed_by_admin_id: record.reviewedByAdminId,
+    review_note: record.reviewNote,
+    provider_name: record.providerName,
+    provider_reference: record.providerReference,
+    failure_reason: record.failureReason,
+    completed_at: record.completedAt,
+    metadata: record.metadata,
+    created_at: record.createdAt,
+    updated_at: record.updatedAt,
   };
 }
 
@@ -923,6 +955,33 @@ export function createSoloPlusSupabaseRepository(
       }
 
       return mapTransitionResult(data);
+    },
+
+    async upsertCaseRequirements(
+      caseId: string,
+      requirements: readonly SoloPlusCaseRequirementRecord[],
+    ): Promise<readonly SoloPlusCaseRequirementRecord[]> {
+      if (requirements.some((requirement) => requirement.caseId !== caseId)) {
+        throw new SoloPlusSupabaseRepositoryError(
+          "SOLO_PLUS_ATOMIC_PERSISTENCE_UNAVAILABLE",
+          "Solo Plus requirement persistence rejected a cross-case payload.",
+        );
+      }
+
+      if (requirements.length > 0) {
+        const { error } = await client
+          .from("solo_plus_case_requirements")
+          .upsert(
+            requirements.map((requirement) => mapRequirementRecordToRow(requirement)),
+            { onConflict: "case_id,requirement_code" },
+          );
+
+        if (error) {
+          wrapSupabaseError(error);
+        }
+      }
+
+      return this.listRequirements(caseId);
     },
   };
 }

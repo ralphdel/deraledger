@@ -219,6 +219,17 @@ class FakeSoloPlusRepository implements SoloPlusCaseRepository {
     return { kind: "updated", caseRecord: this.cloneCase(updated)!, event: this.cloneEvent(input.event) };
   }
 
+  async upsertCaseRequirements(
+    caseId: string,
+    requirements: readonly SoloPlusCaseRequirementRecord[],
+  ): Promise<readonly SoloPlusCaseRequirementRecord[]> {
+    this.requirements.set(
+      caseId,
+      JSON.parse(JSON.stringify(requirements)) as SoloPlusCaseRequirementRecord[],
+    );
+    return this.cloneRequirements(this.requirements.get(caseId) || []);
+  }
+
   seedCase(record: SoloPlusCaseRecord, requirements?: readonly SoloPlusCaseRequirementRecord[]) {
     this.cases.set(record.id, this.cloneCase(record)!);
     this.requirements.set(record.id, this.cloneRequirements(requirements || []));
