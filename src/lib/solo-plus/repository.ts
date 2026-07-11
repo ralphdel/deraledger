@@ -57,12 +57,16 @@ export type SoloPlusCaseRecord = {
   activePlanSnapshot: "starter" | "solo_lite" | "solo_plus" | "business" | null;
   rejectionReason: string | null;
   approvedAt: string | null;
+  approvedByAdminId: string | null;
   rejectedAt: string | null;
+  rejectedByAdminId: string | null;
   reopenedAt: string | null;
+  reopenedByAdminId: string | null;
   idempotencyKey: string;
   activationIdempotencyKey: string | null;
   refundIdempotencyKey: string | null;
   rowVersion: number;
+  auditMetadata: SoloPlusSafeJsonObject;
   createdAt: string;
   updatedAt: string;
 };
@@ -235,8 +239,12 @@ export type SoloPlusCaseTransitionPatch = Partial<
     | "refundIdempotencyKey"
     | "rejectionReason"
     | "approvedAt"
+    | "approvedByAdminId"
     | "rejectedAt"
+    | "rejectedByAdminId"
     | "reopenedAt"
+    | "reopenedByAdminId"
+    | "auditMetadata"
   >
 >;
 

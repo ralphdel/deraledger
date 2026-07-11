@@ -77,6 +77,8 @@ export type SoloPlusCaseStateSnapshot = {
   approvedByAdminId?: string | null;
   rejectedAt?: Date | string | null;
   rejectedByAdminId?: string | null;
+  reopenedAt?: Date | string | null;
+  reopenedByAdminId?: string | null;
   rejectionReason?: string | null;
 };
 

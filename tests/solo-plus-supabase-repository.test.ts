@@ -23,6 +23,8 @@ class FakeQueryBuilder {
   private filters: Array<{ type: "eq" | "in"; column: string; value: unknown }> = [];
   private orders: Array<{ column: string; ascending: boolean }> = [];
   private limitCount: number | null = null;
+  private pendingInsert: Record<string, unknown>[] | null = null;
+  private pendingUpdate: Record<string, unknown> | null = null;
 
   constructor(client: FakeSupabaseClient, table: string) {
     this.client = client;
@@ -53,6 +55,18 @@ class FakeQueryBuilder {
     return this;
   }
 
+  insert(value: Record<string, unknown> | readonly Record<string, unknown>[]): FakeQueryBuilder {
+    this.pendingInsert = (Array.isArray(value) ? value : [value]).map((row) =>
+      JSON.parse(JSON.stringify(row)) as Record<string, unknown>,
+    );
+    return this;
+  }
+
+  update(value: Record<string, unknown>): FakeQueryBuilder {
+    this.pendingUpdate = JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+    return this;
+  }
+
   async maybeSingle(): Promise<QueryResponse> {
     const rows = this.resolveRows();
     return {
@@ -64,7 +78,7 @@ class FakeQueryBuilder {
   async single(): Promise<QueryResponse> {
     const rows = this.resolveRows();
     return {
-      data: rows,
+      data: rows[0] ?? null,
       error: null,
     };
   }
@@ -114,7 +128,9 @@ class FakeQueryBuilder {
   }
 
   private resolveRows(): unknown[] {
-    const sourceRows = this.client.tables.get(this.table) ?? [];
+    const sourceRows = (this.client.tables.get(this.table) ?? []).map((row) =>
+      JSON.parse(JSON.stringify(row)),
+    );
     let rows = sourceRows.map((row) => JSON.parse(JSON.stringify(row)));
 
     for (const filter of this.filters) {
@@ -149,6 +165,37 @@ class FakeQueryBuilder {
 
     if (this.limitCount != null) {
       rows = rows.slice(0, this.limitCount);
+    }
+
+    if (this.pendingUpdate) {
+      const mergedSource = sourceRows.map((row) => JSON.parse(JSON.stringify(row)));
+      const updatedRows: unknown[] = [];
+
+      for (let index = 0; index < mergedSource.length; index += 1) {
+        const candidate = mergedSource[index] as Record<string, unknown>;
+        const shouldUpdate = rows.some((row) => (row as Record<string, unknown>).id === candidate.id);
+        if (!shouldUpdate) {
+          continue;
+        }
+
+        mergedSource[index] = {
+          ...candidate,
+          ...this.pendingUpdate,
+        };
+        updatedRows.push(JSON.parse(JSON.stringify(mergedSource[index])));
+      }
+
+      this.client.tables.set(this.table, mergedSource);
+      rows = updatedRows;
+    }
+
+    if (this.pendingInsert) {
+      const mergedSource = sourceRows.map((row) => JSON.parse(JSON.stringify(row)));
+      for (const row of this.pendingInsert) {
+        mergedSource.push(JSON.parse(JSON.stringify(row)));
+      }
+      this.client.tables.set(this.table, mergedSource);
+      rows = this.pendingInsert.map((row) => JSON.parse(JSON.stringify(row)));
     }
 
     return rows;
@@ -197,12 +244,16 @@ function buildCaseRow(overrides: Record<string, unknown> = {}) {
     active_plan_snapshot: "solo_lite",
     rejection_reason: null,
     approved_at: null,
+    approved_by_admin_id: null,
     rejected_at: null,
+    rejected_by_admin_id: null,
     reopened_at: null,
+    reopened_by_admin_id: null,
     idempotency_key: "idem-1",
     activation_idempotency_key: null,
     refund_idempotency_key: null,
     row_version: 0,
+    audit_metadata: {},
     created_at: "2026-07-05T10:00:00.000Z",
     updated_at: "2026-07-05T10:00:00.000Z",
     ...overrides,
@@ -291,12 +342,16 @@ function buildCreateInput(): SoloPlusCaseCreateAtomicInput {
       activePlanSnapshot: "solo_lite",
       rejectionReason: null,
       approvedAt: null,
+      approvedByAdminId: null,
       rejectedAt: null,
+      rejectedByAdminId: null,
       reopenedAt: null,
+      reopenedByAdminId: null,
       idempotencyKey: "idem-1",
       activationIdempotencyKey: null,
       refundIdempotencyKey: null,
       rowVersion: 0,
+      auditMetadata: {},
       createdAt: "2026-07-05T10:00:00.000Z",
       updatedAt: "2026-07-05T10:00:00.000Z",
     },
@@ -398,17 +453,18 @@ async function run() {
   assert.equal(mappedCase?.expectedAmount, "13000.50");
   assert.equal(mappedCase?.caseStatus, "draft");
   assert.equal(mappedCase?.createdAt, "2026-07-05T10:00:00.000Z");
-  assert.equal(client.rpcCalls.at(-1)?.name, soloPlusSupabaseRpcNames.caseBundlePayload);
+  assert.equal(mappedCase?.approvedByAdminId, null);
+  assert.deepEqual(mappedCase?.auditMetadata, {});
 
   const mappedByIdempotencyKey = await repository.findCaseByIdempotencyKey("idem-1");
   assert.equal(mappedByIdempotencyKey?.expectedAmount, "13000.50");
-  assert.equal(client.rpcCalls.at(-1)?.name, soloPlusSupabaseRpcNames.caseBundlePayload);
+  assert.equal(mappedByIdempotencyKey?.refundStatus, "none");
 
   const mappedByMerchant = await repository.findActiveCaseByMerchantId(
     "22222222-2222-4222-8222-222222222222",
   );
   assert.equal(mappedByMerchant?.expectedAmount, "13000.50");
-  assert.equal(client.rpcCalls.at(-1)?.name, soloPlusSupabaseRpcNames.caseBundlePayload);
+  assert.equal(mappedByMerchant?.merchantId, "22222222-2222-4222-8222-222222222222");
 
   client.tables.set("solo_plus_cases", [
     buildCaseRow({
@@ -435,7 +491,7 @@ async function run() {
     "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
   );
   assert.equal(mappedBySession?.expectedAmount, "13000.50");
-  assert.equal(client.rpcCalls.at(-1)?.name, soloPlusSupabaseRpcNames.caseBundlePayload);
+  assert.equal(mappedBySession?.flowOrigin, "onboarding");
 
   client.tables.set("solo_plus_cases", [buildCaseRow()]);
   client.rpcResponses.set(soloPlusSupabaseRpcNames.caseBundlePayload, {
@@ -586,14 +642,7 @@ async function run() {
   const mappedBoundaryCase = await repository.findCaseById("11111111-1111-4111-8111-111111111111");
   assert.equal(mappedBoundaryCase?.expectedAmount, "9999999999999999.99");
 
-  client.rpcResponses.set(soloPlusSupabaseRpcNames.caseBundlePayload, {
-    data: {
-      case: buildCaseRow({ expected_amount: 13000.5 }),
-      requirements: [buildRequirementRow()],
-      created_event: buildEventRow(),
-    },
-    error: null,
-  });
+  client.tables.set("solo_plus_cases", [buildCaseRow({ expected_amount: 13000.5 })]);
   await assert.rejects(
     async () => repository.findCaseById("11111111-1111-4111-8111-111111111111"),
     (error: unknown) => {
@@ -730,34 +779,149 @@ async function run() {
     assert.equal(result.kind, kind);
   }
 
-  await assert.rejects(
-    async () =>
-      repository.transitionCaseStatus({
-        ...buildTransitionInput(),
-        targetStatus: "manual_review",
+  client.rpcResponses.set(soloPlusSupabaseRpcNames.reviewCase, {
+    data: {
+      kind: "updated",
+      case: buildCaseRow({
+        case_status: "rejected",
+        payment_status: "paid",
+        refund_status: "review_required",
+        row_version: 5,
+        rejected_at: "2026-07-08T00:00:00.000Z",
+        rejected_by_admin_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        rejection_reason: "missing documents",
       }),
-    (error: unknown) => {
-      assert.ok(error instanceof SoloPlusSupabaseRepositoryError);
-      assert.equal(error.code, "SOLO_PLUS_ATOMIC_PERSISTENCE_UNAVAILABLE");
-      return true;
+      event: buildEventRow({
+        event_type: "case_rejected",
+        actor_type: "admin",
+        actor_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        request_idempotency_key: "reject-idem-1",
+        reason: "missing documents",
+        created_at: "2026-07-08T00:00:00.000Z",
+      }),
     },
-  );
+    error: null,
+  });
+  const rejectTransition = await repository.transitionCaseStatus({
+    caseId: "11111111-1111-4111-8111-111111111111",
+    expectedRowVersion: 4,
+    expectedCurrentStatus: "manual_review",
+    targetStatus: "rejected",
+    requestIdempotencyKey: "reject-idem-1",
+    patch: {
+      caseStatus: "rejected",
+      refundStatus: "review_required",
+      rejectionReason: "missing documents",
+      rejectedAt: "2026-07-08T00:00:00.000Z",
+      rejectedByAdminId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    },
+    event: {
+      id: "88888888-8888-4888-8888-888888888888",
+      caseId: "11111111-1111-4111-8111-111111111111",
+      eventType: "case_rejected",
+      previousState: { caseStatus: "manual_review" },
+      newState: { caseStatus: "rejected", refundStatus: "review_required" },
+      actorType: "admin",
+      actorId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      requestIdempotencyKey: "reject-idem-1",
+      reason: "missing documents",
+      policyVersion: "solo-plus-policy-v1",
+      createdAt: "2026-07-08T00:00:00.000Z",
+    },
+  });
+  assert.equal(rejectTransition.kind, "updated");
+  assert.equal(rejectTransition.caseRecord.caseStatus, "rejected");
+  assert.equal(rejectTransition.caseRecord.rejectedByAdminId, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+  assert.equal(rejectTransition.caseRecord.refundStatus, "review_required");
+  assert.equal(client.rpcCalls.at(-1)?.name, soloPlusSupabaseRpcNames.reviewCase);
 
-  await assert.rejects(
-    async () =>
-      repository.transitionCaseStatus({
-        ...buildTransitionInput(),
-        patch: {
-          ...buildTransitionInput().patch,
-          refundStatus: "review_required",
-        },
+  client.rpcResponses.set(soloPlusSupabaseRpcNames.reviewCase, {
+    data: {
+      kind: "idempotent_replay",
+      case: buildCaseRow({
+        case_status: "rejected",
+        payment_status: "paid",
+        refund_status: "review_required",
+        row_version: 5,
       }),
-    (error: unknown) => {
-      assert.ok(error instanceof SoloPlusSupabaseRepositoryError);
-      assert.equal(error.code, "SOLO_PLUS_ATOMIC_PERSISTENCE_UNAVAILABLE");
-      return true;
+      event: buildEventRow({
+        event_type: "case_rejected",
+        actor_type: "admin",
+        actor_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        request_idempotency_key: "reject-idem-1",
+        reason: "missing documents",
+      }),
     },
-  );
+    error: null,
+  });
+  const rejectReplay = await repository.transitionCaseStatus({
+    caseId: "11111111-1111-4111-8111-111111111111",
+    expectedRowVersion: 4,
+    expectedCurrentStatus: "manual_review",
+    targetStatus: "rejected",
+    requestIdempotencyKey: "reject-idem-1",
+    patch: {
+      caseStatus: "rejected",
+      refundStatus: "review_required",
+      rejectionReason: "missing documents",
+      rejectedAt: "2026-07-08T00:00:00.000Z",
+      rejectedByAdminId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    },
+    event: {
+      id: "99999999-9999-4999-8999-999999999999",
+      caseId: "11111111-1111-4111-8111-111111111111",
+      eventType: "case_rejected",
+      previousState: { caseStatus: "manual_review" },
+      newState: { caseStatus: "rejected", refundStatus: "review_required" },
+      actorType: "admin",
+      actorId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      requestIdempotencyKey: "reject-idem-1",
+      reason: "missing documents",
+      policyVersion: "solo-plus-policy-v1",
+      createdAt: "2026-07-08T00:00:01.000Z",
+    },
+  });
+  assert.equal(rejectReplay.kind, "idempotent_replay");
+
+  client.rpcResponses.set(soloPlusSupabaseRpcNames.reviewCase, {
+    data: {
+      kind: "idempotency_conflict",
+      case: buildCaseRow({
+        case_status: "rejected",
+        payment_status: "paid",
+        refund_status: "review_required",
+        row_version: 5,
+      }),
+    },
+    error: null,
+  });
+  const rejectConflict = await repository.transitionCaseStatus({
+    caseId: "11111111-1111-4111-8111-111111111111",
+    expectedRowVersion: 4,
+    expectedCurrentStatus: "manual_review",
+    targetStatus: "approved",
+    requestIdempotencyKey: "reject-idem-1",
+    patch: {
+      caseStatus: "approved",
+      approvedAt: "2026-07-08T00:00:02.000Z",
+      approvedByAdminId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      refundStatus: "none",
+    },
+    event: {
+      id: "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      caseId: "11111111-1111-4111-8111-111111111111",
+      eventType: "case_approved",
+      previousState: { caseStatus: "manual_review" },
+      newState: { caseStatus: "approved" },
+      actorType: "admin",
+      actorId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      requestIdempotencyKey: "reject-idem-1",
+      reason: "conflict",
+      policyVersion: "solo-plus-policy-v1",
+      createdAt: "2026-07-08T00:00:02.000Z",
+    },
+  });
+  assert.equal(rejectConflict.kind, "idempotency_conflict");
 
   client.rpcResponses.set(soloPlusSupabaseRpcNames.createCaseBundle, {
     data: null,

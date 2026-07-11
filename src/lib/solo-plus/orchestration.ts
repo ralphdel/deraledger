@@ -29,10 +29,19 @@ import {
   isTerminalSoloPlusCaseStatus,
 } from "./state";
 
+type SoloPlusReviewerAccessContext = {
+  mode: "internal_test";
+  authenticatedAdminId: string;
+  isAuthorizedAdmin: true;
+  isSandboxMerchant: false;
+  sandboxMerchantId?: string;
+};
+
 export type SoloPlusOrchestrationErrorCode =
   | "SOLO_PLUS_ACCESS_DENIED"
   | "SOLO_PLUS_FEATURE_DISABLED"
   | "SOLO_PLUS_INVALID_CREATION_INPUT"
+  | "SOLO_PLUS_INVALID_REVIEW_INPUT"
   | "SOLO_PLUS_CASE_NOT_FOUND"
   | "SOLO_PLUS_ACTIVE_CASE_CONFLICT"
   | "SOLO_PLUS_IDEMPOTENCY_CONFLICT"
@@ -102,6 +111,38 @@ export type MarkSoloPlusCaseAwaitingPaymentInput = {
   accessContext: SoloPlusAccessContext;
 };
 
+export type RequestMoreInformationSoloPlusCaseInput = {
+  caseId: string;
+  expectedRowVersion: number;
+  requestIdempotencyKey: string;
+  reason: string;
+  accessContext: SoloPlusAccessContext;
+};
+
+export type ApproveSoloPlusCaseInput = {
+  caseId: string;
+  expectedRowVersion: number;
+  requestIdempotencyKey: string;
+  reason?: string | null;
+  accessContext: SoloPlusAccessContext;
+};
+
+export type RejectSoloPlusCaseInput = {
+  caseId: string;
+  expectedRowVersion: number;
+  requestIdempotencyKey: string;
+  reason: string;
+  accessContext: SoloPlusAccessContext;
+};
+
+export type ReopenSoloPlusCaseInput = {
+  caseId: string;
+  expectedRowVersion: number;
+  requestIdempotencyKey: string;
+  reason?: string | null;
+  accessContext: SoloPlusAccessContext;
+};
+
 export type SoloPlusOrchestrationDependencies = {
   repository: SoloPlusCaseRepository;
   now?: () => Date;
@@ -120,6 +161,18 @@ export type SoloPlusOrchestrationService = {
   ): Promise<SoloPlusCaseMutationResult>;
   markSoloPlusCaseAwaitingPayment(
     input: MarkSoloPlusCaseAwaitingPaymentInput,
+  ): Promise<SoloPlusCaseMutationResult>;
+  requestMoreInformationForSoloPlusCase(
+    input: RequestMoreInformationSoloPlusCaseInput,
+  ): Promise<SoloPlusCaseMutationResult>;
+  approveSoloPlusCase(
+    input: ApproveSoloPlusCaseInput,
+  ): Promise<SoloPlusCaseMutationResult>;
+  rejectSoloPlusCase(
+    input: RejectSoloPlusCaseInput,
+  ): Promise<SoloPlusCaseMutationResult>;
+  reopenSoloPlusCase(
+    input: ReopenSoloPlusCaseInput,
   ): Promise<SoloPlusCaseMutationResult>;
 };
 
@@ -162,6 +215,62 @@ function assertIdentifier(value: unknown, field: string): string {
   }
 
   return value.trim();
+}
+
+function assertReviewIdentifier(value: unknown, field: string): string {
+  if (!hasNonEmptyString(value)) {
+    throw createIssuesError(
+      "SOLO_PLUS_INVALID_REVIEW_INPUT",
+      `${field} must be a non-empty string.`,
+      field,
+    );
+  }
+
+  return value.trim();
+}
+
+function assertReviewReason(
+  value: unknown,
+  field: string,
+  required: boolean,
+): string | null {
+  if (value == null) {
+    if (!required) {
+      return null;
+    }
+
+    throw createIssuesError(
+      "SOLO_PLUS_INVALID_REVIEW_INPUT",
+      `${field} must be a non-empty string.`,
+      field,
+    );
+  }
+
+  if (!hasNonEmptyString(value)) {
+    if (!required && typeof value === "string" && value.trim() === "") {
+      return null;
+    }
+
+    throw createIssuesError(
+      "SOLO_PLUS_INVALID_REVIEW_INPUT",
+      `${field} must be a non-empty string.`,
+      field,
+    );
+  }
+
+  return value.trim();
+}
+
+function assertExpectedRowVersion(value: unknown): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw createIssuesError(
+      "SOLO_PLUS_INVALID_REVIEW_INPUT",
+      "expectedRowVersion must be a non-negative integer.",
+      "expectedRowVersion",
+    );
+  }
+
+  return value;
 }
 
 function assertCanonicalAmount(value: unknown): SoloPlusAmount {
@@ -458,6 +567,93 @@ function buildAwaitingPaymentEvent(params: {
   };
 }
 
+function assertReviewerAccessContext(accessContext: unknown): SoloPlusReviewerAccessContext {
+  if (!isSoloPlusAccessContext(accessContext)) {
+    throw createIssuesError(
+      "SOLO_PLUS_INVALID_REVIEW_INPUT",
+      "accessContext is malformed.",
+      "accessContext",
+    );
+  }
+
+  if (
+    accessContext.mode !== "internal_test" ||
+    accessContext.isAuthorizedAdmin !== true ||
+    !hasNonEmptyString(accessContext.authenticatedAdminId)
+  ) {
+    throw new SoloPlusOrchestrationError(
+      "SOLO_PLUS_ACCESS_DENIED",
+      "Solo Plus review decisions require a trusted authenticated reviewer.",
+    );
+  }
+
+  return accessContext as SoloPlusReviewerAccessContext;
+}
+
+function buildReviewEvent(params: {
+  caseRecord: SoloPlusCaseRecord;
+  eventType:
+    | "case_review_requested_more_information"
+    | "case_approved"
+    | "case_rejected"
+    | "case_reopened";
+  requestIdempotencyKey: string;
+  reason: string | null;
+  nowIso: string;
+  generateId: () => string;
+  accessContext: SoloPlusAccessContext;
+  targetStatus: SoloPlusCaseRecord["caseStatus"];
+  targetRefundStatus: SoloPlusCaseRecord["refundStatus"];
+  approvedAt?: string | null;
+  approvedByAdminId?: string | null;
+  rejectedAt?: string | null;
+  rejectedByAdminId?: string | null;
+  reopenedAt?: string | null;
+  reopenedByAdminId?: string | null;
+  rejectionReason?: string | null;
+}): SoloPlusCaseEventRecord {
+  const actor = resolveSoloPlusEventActor(params.accessContext);
+
+  return {
+    id: params.generateId(),
+    caseId: params.caseRecord.id,
+    eventType: params.eventType,
+    previousState: {
+      caseStatus: params.caseRecord.caseStatus,
+      refundStatus: params.caseRecord.refundStatus,
+      approvedAt: params.caseRecord.approvedAt,
+      approvedByAdminId: params.caseRecord.approvedByAdminId,
+      rejectedAt: params.caseRecord.rejectedAt,
+      rejectedByAdminId: params.caseRecord.rejectedByAdminId,
+      reopenedAt: params.caseRecord.reopenedAt,
+      reopenedByAdminId: params.caseRecord.reopenedByAdminId,
+      rejectionReason: params.caseRecord.rejectionReason,
+      rowVersion: params.caseRecord.rowVersion,
+    },
+    newState: {
+      caseStatus: params.targetStatus,
+      refundStatus: params.targetRefundStatus,
+      approvedAt: params.approvedAt ?? params.caseRecord.approvedAt,
+      approvedByAdminId: params.approvedByAdminId ?? params.caseRecord.approvedByAdminId,
+      rejectedAt: params.rejectedAt ?? params.caseRecord.rejectedAt,
+      rejectedByAdminId: params.rejectedByAdminId ?? params.caseRecord.rejectedByAdminId,
+      reopenedAt: params.reopenedAt ?? params.caseRecord.reopenedAt,
+      reopenedByAdminId: params.reopenedByAdminId ?? params.caseRecord.reopenedByAdminId,
+      rejectionReason:
+        params.rejectionReason !== undefined
+          ? params.rejectionReason
+          : params.caseRecord.rejectionReason,
+      rowVersion: params.caseRecord.rowVersion + 1,
+    },
+    actorType: actor.actorType,
+    actorId: actor.actorId,
+    requestIdempotencyKey: params.requestIdempotencyKey,
+    reason: params.reason,
+    policyVersion: params.caseRecord.requirementsPolicyVersion,
+    createdAt: params.nowIso,
+  };
+}
+
 function assertCaseCreationAccess(
   featureFlags: unknown,
   accessContext: unknown,
@@ -718,12 +914,16 @@ export function createSoloPlusOrchestration(
       activePlanSnapshot: intent.activePlanSnapshot,
       rejectionReason: null,
       approvedAt: null,
+      approvedByAdminId: null,
       rejectedAt: null,
+      rejectedByAdminId: null,
       reopenedAt: null,
+      reopenedByAdminId: null,
       idempotencyKey,
       activationIdempotencyKey: null,
       refundIdempotencyKey: null,
       rowVersion: 0,
+      auditMetadata: {},
       createdAt: nowIso,
       updatedAt: nowIso,
     };
@@ -1012,6 +1212,250 @@ export function createSoloPlusOrchestration(
           nowIso,
           generateId,
           accessContext: input.accessContext,
+        }),
+      });
+
+      if (result.kind !== "updated" && result.kind !== "idempotent_replay") {
+        mapCreateConflict(result);
+      }
+
+      return {
+        outcome: result.kind === "updated" ? "updated" : "idempotent_replay",
+        caseRecord: result.caseRecord,
+        event: result.event,
+      };
+    },
+
+    async requestMoreInformationForSoloPlusCase(
+      input: RequestMoreInformationSoloPlusCaseInput,
+    ): Promise<SoloPlusCaseMutationResult> {
+      const caseId = assertReviewIdentifier(input.caseId, "caseId");
+      const requestIdempotencyKey = assertReviewIdentifier(
+        input.requestIdempotencyKey,
+        "requestIdempotencyKey",
+      );
+      const reason = assertReviewReason(input.reason, "reason", true)!;
+      const accessContext = assertReviewerAccessContext(input.accessContext);
+      const expectedRowVersion = assertExpectedRowVersion(input.expectedRowVersion);
+
+      const currentCase = await repository.findCaseById(caseId);
+      if (!currentCase) {
+        throw new SoloPlusOrchestrationError(
+          "SOLO_PLUS_CASE_NOT_FOUND",
+          "Solo Plus case not found.",
+        );
+      }
+
+      const nowIso = now().toISOString();
+      const result = await repository.transitionCaseStatus({
+        caseId,
+        expectedRowVersion,
+        expectedCurrentStatus: "manual_review",
+        targetStatus: "verification_pending",
+        requestIdempotencyKey,
+        patch: {
+          caseStatus: "verification_pending",
+        },
+        event: buildReviewEvent({
+          caseRecord: currentCase,
+          eventType: "case_review_requested_more_information",
+          requestIdempotencyKey,
+          reason,
+          nowIso,
+          generateId,
+          accessContext,
+          targetStatus: "verification_pending",
+          targetRefundStatus: currentCase.refundStatus,
+        }),
+      });
+
+      if (result.kind !== "updated" && result.kind !== "idempotent_replay") {
+        mapCreateConflict(result);
+      }
+
+      return {
+        outcome: result.kind === "updated" ? "updated" : "idempotent_replay",
+        caseRecord: result.caseRecord,
+        event: result.event,
+      };
+    },
+
+    async approveSoloPlusCase(
+      input: ApproveSoloPlusCaseInput,
+    ): Promise<SoloPlusCaseMutationResult> {
+      const caseId = assertReviewIdentifier(input.caseId, "caseId");
+      const requestIdempotencyKey = assertReviewIdentifier(
+        input.requestIdempotencyKey,
+        "requestIdempotencyKey",
+      );
+      const reason = assertReviewReason(input.reason, "reason", false);
+      const accessContext = assertReviewerAccessContext(input.accessContext);
+      const expectedRowVersion = assertExpectedRowVersion(input.expectedRowVersion);
+
+      const currentCase = await repository.findCaseById(caseId);
+      if (!currentCase) {
+        throw new SoloPlusOrchestrationError(
+          "SOLO_PLUS_CASE_NOT_FOUND",
+          "Solo Plus case not found.",
+        );
+      }
+
+      const nowIso = now().toISOString();
+      const adminActorId = accessContext.authenticatedAdminId ?? null;
+      const result = await repository.transitionCaseStatus({
+        caseId,
+        expectedRowVersion,
+        expectedCurrentStatus: "manual_review",
+        targetStatus: "approved",
+        requestIdempotencyKey,
+        patch: {
+          caseStatus: "approved",
+          approvedAt: nowIso,
+          approvedByAdminId: adminActorId,
+          refundStatus: "none",
+        },
+        event: buildReviewEvent({
+          caseRecord: currentCase,
+          eventType: "case_approved",
+          requestIdempotencyKey,
+          reason,
+          nowIso,
+          generateId,
+          accessContext,
+          targetStatus: "approved",
+          targetRefundStatus: "none",
+          approvedAt: nowIso,
+          approvedByAdminId: adminActorId,
+        }),
+      });
+
+      if (result.kind !== "updated" && result.kind !== "idempotent_replay") {
+        mapCreateConflict(result);
+      }
+
+      return {
+        outcome: result.kind === "updated" ? "updated" : "idempotent_replay",
+        caseRecord: result.caseRecord,
+        event: result.event,
+      };
+    },
+
+    async rejectSoloPlusCase(
+      input: RejectSoloPlusCaseInput,
+    ): Promise<SoloPlusCaseMutationResult> {
+      const caseId = assertReviewIdentifier(input.caseId, "caseId");
+      const requestIdempotencyKey = assertReviewIdentifier(
+        input.requestIdempotencyKey,
+        "requestIdempotencyKey",
+      );
+      const reason = assertReviewReason(input.reason, "reason", true)!;
+      const accessContext = assertReviewerAccessContext(input.accessContext);
+      const expectedRowVersion = assertExpectedRowVersion(input.expectedRowVersion);
+
+      const currentCase = await repository.findCaseById(caseId);
+      if (!currentCase) {
+        throw new SoloPlusOrchestrationError(
+          "SOLO_PLUS_CASE_NOT_FOUND",
+          "Solo Plus case not found.",
+        );
+      }
+
+      const nowIso = now().toISOString();
+      const adminActorId = accessContext.authenticatedAdminId ?? null;
+      const targetRefundStatus = currentCase.paymentStatus === "paid" ? "review_required" : "none";
+      const result = await repository.transitionCaseStatus({
+        caseId,
+        expectedRowVersion,
+        expectedCurrentStatus: "manual_review",
+        targetStatus: "rejected",
+        requestIdempotencyKey,
+        patch: {
+          caseStatus: "rejected",
+          rejectionReason: reason,
+          rejectedAt: nowIso,
+          rejectedByAdminId: adminActorId,
+          refundStatus: targetRefundStatus,
+        },
+        event: buildReviewEvent({
+          caseRecord: currentCase,
+          eventType: "case_rejected",
+          requestIdempotencyKey,
+          reason,
+          nowIso,
+          generateId,
+          accessContext,
+          targetStatus: "rejected",
+          targetRefundStatus,
+          rejectedAt: nowIso,
+          rejectedByAdminId: adminActorId,
+          rejectionReason: reason,
+        }),
+      });
+
+      if (result.kind !== "updated" && result.kind !== "idempotent_replay") {
+        mapCreateConflict(result);
+      }
+
+      return {
+        outcome: result.kind === "updated" ? "updated" : "idempotent_replay",
+        caseRecord: result.caseRecord,
+        event: result.event,
+      };
+    },
+
+    async reopenSoloPlusCase(
+      input: ReopenSoloPlusCaseInput,
+    ): Promise<SoloPlusCaseMutationResult> {
+      const caseId = assertReviewIdentifier(input.caseId, "caseId");
+      const requestIdempotencyKey = assertReviewIdentifier(
+        input.requestIdempotencyKey,
+        "requestIdempotencyKey",
+      );
+      const reason = assertReviewReason(input.reason, "reason", false);
+      const accessContext = assertReviewerAccessContext(input.accessContext);
+      const expectedRowVersion = assertExpectedRowVersion(input.expectedRowVersion);
+
+      const currentCase = await repository.findCaseById(caseId);
+      if (!currentCase) {
+        throw new SoloPlusOrchestrationError(
+          "SOLO_PLUS_CASE_NOT_FOUND",
+          "Solo Plus case not found.",
+        );
+      }
+
+      const nowIso = now().toISOString();
+      const adminActorId = accessContext.authenticatedAdminId ?? null;
+      const result = await repository.transitionCaseStatus({
+        caseId,
+        expectedRowVersion,
+        expectedCurrentStatus: "rejected",
+        targetStatus: "verification_pending",
+        requestIdempotencyKey,
+        patch: {
+          caseStatus: "verification_pending",
+          refundStatus: "none",
+          rejectionReason: null,
+          rejectedAt: null,
+          rejectedByAdminId: null,
+          reopenedAt: nowIso,
+          reopenedByAdminId: adminActorId,
+          refundIdempotencyKey: null,
+        },
+        event: buildReviewEvent({
+          caseRecord: currentCase,
+          eventType: "case_reopened",
+          requestIdempotencyKey,
+          reason,
+          nowIso,
+          generateId,
+          accessContext,
+          targetStatus: "verification_pending",
+          targetRefundStatus: "none",
+          rejectedAt: null,
+          rejectedByAdminId: null,
+          rejectionReason: null,
+          reopenedAt: nowIso,
+          reopenedByAdminId: adminActorId,
         }),
       });
 

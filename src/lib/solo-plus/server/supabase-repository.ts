@@ -30,6 +30,7 @@ const CREATE_CASE_BUNDLE_RPC = "create_solo_plus_case_bundle_v1";
 const ATTACH_ONBOARDING_MERCHANT_RPC = "attach_solo_plus_onboarding_merchant_v1";
 const MARK_AWAITING_PAYMENT_RPC = "mark_solo_plus_case_awaiting_payment_v1";
 const CASE_BUNDLE_PAYLOAD_RPC = "solo_plus_case_bundle_payload_v1";
+const REVIEW_CASE_RPC = "review_solo_plus_case_v1";
 
 const UUID_LIKE_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -43,11 +44,15 @@ type SupabaseLikeResponse<T> = Promise<{
 }>;
 
 type SupabaseLikeQueryBuilder = {
-  select(columns: string): SupabaseLikeQueryBuilder;
+  select(columns?: string): SupabaseLikeQueryBuilder;
   eq(column: string, value: unknown): SupabaseLikeQueryBuilder;
   in(column: string, values: readonly unknown[]): SupabaseLikeQueryBuilder;
   order(column: string, options?: { ascending?: boolean }): SupabaseLikeQueryBuilder;
   limit(count: number): SupabaseLikeQueryBuilder;
+  insert(
+    values: Record<string, unknown> | readonly Record<string, unknown>[],
+  ): SupabaseLikeQueryBuilder;
+  update(values: Record<string, unknown>): SupabaseLikeQueryBuilder;
   upsert(
     values: Record<string, unknown> | readonly Record<string, unknown>[],
     options?: { onConflict?: string },
@@ -386,8 +391,11 @@ function mapCaseRow(row: unknown): SoloPlusCaseRecord {
     activePlanSnapshot: (activePlanSnapshot ?? null) as SoloPlusCaseRecord["activePlanSnapshot"],
     rejectionReason: assertText(candidate.rejection_reason, "rejection_reason", true),
     approvedAt: assertTimestamp(candidate.approved_at, "approved_at", true),
+    approvedByAdminId: assertUuidLike(candidate.approved_by_admin_id, "approved_by_admin_id", true),
     rejectedAt: assertTimestamp(candidate.rejected_at, "rejected_at", true),
+    rejectedByAdminId: assertUuidLike(candidate.rejected_by_admin_id, "rejected_by_admin_id", true),
     reopenedAt: assertTimestamp(candidate.reopened_at, "reopened_at", true),
+    reopenedByAdminId: assertUuidLike(candidate.reopened_by_admin_id, "reopened_by_admin_id", true),
     idempotencyKey: assertText(candidate.idempotency_key, "idempotency_key")!,
     activationIdempotencyKey: assertText(
       candidate.activation_idempotency_key,
@@ -400,6 +408,7 @@ function mapCaseRow(row: unknown): SoloPlusCaseRecord {
       true,
     ),
     rowVersion: assertNonNegativeInteger(candidate.row_version, "row_version"),
+    auditMetadata: assertJsonObject(candidate.audit_metadata ?? {}, "audit_metadata"),
     createdAt: assertTimestamp(candidate.created_at, "created_at")!,
     updatedAt: assertTimestamp(candidate.updated_at, "updated_at")!,
   };
@@ -729,6 +738,45 @@ function assertAwaitingPaymentTransitionInput(
   }
 }
 
+function assertReviewTransitionInput(
+  input: SoloPlusCaseTransitionAtomicParams,
+): "request_more_information" | "approve" | "reject" | "reopen" {
+  if (input.event.actorType !== "admin" || !hasNonEmptyString(input.event.actorId)) {
+    throw new SoloPlusSupabaseRepositoryError(
+      "SOLO_PLUS_ATOMIC_PERSISTENCE_UNAVAILABLE",
+      "Solo Plus repository review transitions require an authenticated admin actor.",
+    );
+  }
+
+  const supportedDecision =
+    input.expectedCurrentStatus === "manual_review" &&
+    input.targetStatus === "verification_pending" &&
+    input.event.eventType === "case_review_requested_more_information"
+      ? "request_more_information"
+      : input.expectedCurrentStatus === "manual_review" &&
+          input.targetStatus === "approved" &&
+          input.event.eventType === "case_approved"
+        ? "approve"
+        : input.expectedCurrentStatus === "manual_review" &&
+            input.targetStatus === "rejected" &&
+            input.event.eventType === "case_rejected"
+          ? "reject"
+          : input.expectedCurrentStatus === "rejected" &&
+              input.targetStatus === "verification_pending" &&
+              input.event.eventType === "case_reopened"
+            ? "reopen"
+            : null;
+
+  if (supportedDecision == null) {
+    throw new SoloPlusSupabaseRepositoryError(
+      "SOLO_PLUS_ATOMIC_PERSISTENCE_UNAVAILABLE",
+      "Solo Plus repository rejected an unsupported review transition payload.",
+    );
+  }
+
+  return supportedDecision;
+}
+
 async function maybeSingle(
   query: SupabaseLikeQueryBuilder,
 ): Promise<unknown | null> {
@@ -770,6 +818,17 @@ async function readCaseThroughBundlePayload(
   return mapCaseRow(payload.case);
 }
 
+async function readCaseDirectly(
+  client: SoloPlusSupabaseClientLike,
+  caseId: string,
+): Promise<SoloPlusCaseRecord | null> {
+  const row = await maybeSingle(
+    client.from("solo_plus_cases").select("*").eq("id", caseId),
+  );
+
+  return row == null ? null : mapCaseRow(row);
+}
+
 async function many(
   promiseLike: SupabaseLikeQueryBuilder,
 ): Promise<unknown[]> {
@@ -798,48 +857,32 @@ export function createSoloPlusSupabaseRepository(
 
   return {
     async findCaseById(caseId: string): Promise<SoloPlusCaseRecord | null> {
-      const row = await maybeSingle(
-        client.from("solo_plus_cases").select("id").eq("id", caseId),
-      );
-
-      if (row == null) {
-        return null;
-      }
-
-      return readCaseThroughBundlePayload(client, assertUuidLike((row as SoloPlusCaseRow).id, "id")!);
+      return readCaseDirectly(client, caseId);
     },
 
     async findCaseByIdempotencyKey(idempotencyKey: string): Promise<SoloPlusCaseRecord | null> {
       const row = await maybeSingle(
         client
           .from("solo_plus_cases")
-          .select("id")
+          .select("*")
           .eq("idempotency_key", idempotencyKey),
       );
 
-      if (row == null) {
-        return null;
-      }
-
-      return readCaseThroughBundlePayload(client, assertUuidLike((row as SoloPlusCaseRow).id, "id")!);
+      return row == null ? null : mapCaseRow(row);
     },
 
     async findActiveCaseByMerchantId(merchantId: string): Promise<SoloPlusCaseRecord | null> {
       const row = await maybeSingle(
         client
           .from("solo_plus_cases")
-          .select("id")
+          .select("*")
           .eq("merchant_id", merchantId)
           .in("case_status", SOLO_PLUS_ACTIVE_CASE_STATUSES)
           .order("created_at", { ascending: true })
           .limit(1),
       );
 
-      if (row == null) {
-        return null;
-      }
-
-      return readCaseThroughBundlePayload(client, assertUuidLike((row as SoloPlusCaseRow).id, "id")!);
+      return row == null ? null : mapCaseRow(row);
     },
 
     async findActiveCaseByOnboardingSessionId(
@@ -848,7 +891,7 @@ export function createSoloPlusSupabaseRepository(
       const row = await maybeSingle(
         client
           .from("solo_plus_cases")
-          .select("id")
+          .select("*")
           .eq("flow_origin", "onboarding")
           .eq("onboarding_session_id", onboardingSessionId)
           .in("case_status", SOLO_PLUS_ACTIVE_CASE_STATUSES)
@@ -856,11 +899,7 @@ export function createSoloPlusSupabaseRepository(
           .limit(1),
       );
 
-      if (row == null) {
-        return null;
-      }
-
-      return readCaseThroughBundlePayload(client, assertUuidLike((row as SoloPlusCaseRow).id, "id")!);
+      return row == null ? null : mapCaseRow(row);
     },
 
     async listRequirements(caseId: string): Promise<readonly SoloPlusCaseRequirementRecord[]> {
@@ -940,14 +979,36 @@ export function createSoloPlusSupabaseRepository(
     async transitionCaseStatus(
       input: SoloPlusCaseTransitionAtomicParams,
     ): Promise<SoloPlusCaseTransitionAtomicResult> {
-      assertAwaitingPaymentTransitionInput(input);
+      if (
+        input.expectedCurrentStatus === "draft" &&
+        input.targetStatus === "awaiting_payment"
+      ) {
+        assertAwaitingPaymentTransitionInput(input);
 
-      const { data, error } = await client.rpc(MARK_AWAITING_PAYMENT_RPC, {
+        const { data, error } = await client.rpc(MARK_AWAITING_PAYMENT_RPC, {
+          p_case_id: input.caseId,
+          p_expected_row_version: input.expectedRowVersion,
+          p_request_idempotency_key: input.requestIdempotencyKey,
+          p_actor_type: input.event.actorType,
+          p_actor_id: input.event.actorId,
+        });
+
+        if (error) {
+          wrapSupabaseError(error);
+        }
+
+        return mapTransitionResult(data);
+      }
+
+      const reviewDecision = assertReviewTransitionInput(input);
+      const { data, error } = await client.rpc(REVIEW_CASE_RPC, {
         p_case_id: input.caseId,
         p_expected_row_version: input.expectedRowVersion,
         p_request_idempotency_key: input.requestIdempotencyKey,
-        p_actor_type: input.event.actorType,
-        p_actor_id: input.event.actorId,
+        p_decision: reviewDecision,
+        p_reviewer_admin_id: input.event.actorId,
+        p_reason: input.event.reason,
+        p_policy_version: input.event.policyVersion,
       });
 
       if (error) {
@@ -991,4 +1052,5 @@ export const soloPlusSupabaseRpcNames = {
   createCaseBundle: CREATE_CASE_BUNDLE_RPC,
   attachOnboardingMerchant: ATTACH_ONBOARDING_MERCHANT_RPC,
   markAwaitingPayment: MARK_AWAITING_PAYMENT_RPC,
+  reviewCase: REVIEW_CASE_RPC,
 } as const;

@@ -15,6 +15,7 @@ type SupabaseLikeError = {
 type SoloPlusAuthUserLike = {
   id: string;
   email?: string | null;
+  user_metadata?: Record<string, unknown> | null;
   app_metadata?: Record<string, unknown> | null;
   email_confirmed_at?: string | null;
 };
@@ -281,7 +282,9 @@ export async function resolveSoloPlusAuthenticatedUser(
   return {
     id: user.id,
     email: normalizeOptionalEmail(user.email),
-    isSuperAdmin: user.app_metadata?.is_super_admin === true,
+    isSuperAdmin:
+      user.app_metadata?.is_super_admin === true ||
+      user.user_metadata?.is_super_admin === true,
     hasVerifiedEmail: hasVerifiedEmail(user),
   };
 }

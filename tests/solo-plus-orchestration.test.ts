@@ -195,6 +195,17 @@ class FakeSoloPlusRepository implements SoloPlusCaseRepository {
       return { kind: "not_found" };
     }
 
+    const existingEvent = (this.events.get(input.caseId) || []).find(
+      (event) => event.requestIdempotencyKey === input.requestIdempotencyKey,
+    );
+    if (existingEvent) {
+      if (existingEvent.eventType === input.event.eventType && current.caseStatus === input.targetStatus) {
+        return { kind: "idempotent_replay", caseRecord: this.cloneCase(current)!, event: this.cloneEvent(existingEvent) };
+      }
+
+      return { kind: "idempotency_conflict", currentCase: this.cloneCase(current)! };
+    }
+
     if (current.rowVersion !== input.expectedRowVersion) {
       return { kind: "version_conflict", currentCase: this.cloneCase(current)! };
     }
@@ -398,12 +409,16 @@ function createHistoricalCase(
     activePlanSnapshot: overrides.activePlanSnapshot ?? "solo_lite",
     rejectionReason: overrides.rejectionReason ?? null,
     approvedAt: overrides.approvedAt ?? null,
+    approvedByAdminId: overrides.approvedByAdminId ?? null,
     rejectedAt: overrides.rejectedAt ?? null,
+    rejectedByAdminId: overrides.rejectedByAdminId ?? null,
     reopenedAt: null,
+    reopenedByAdminId: null,
     idempotencyKey: overrides.idempotencyKey || `idem-${overrides.id || "historical"}`,
     activationIdempotencyKey: null,
     refundIdempotencyKey: null,
     rowVersion: overrides.rowVersion ?? 0,
+    auditMetadata: {},
     createdAt: "2026-07-01T00:00:00.000Z",
     updatedAt: "2026-07-01T00:00:00.000Z",
   };
@@ -863,6 +878,185 @@ async function run() {
     "SOLO_PLUS_CASE_STATE_CONFLICT",
   );
 
+  const reviewRepo = new FakeSoloPlusRepository();
+  const reviewService = buildService(reviewRepo);
+  reviewRepo.seedCase(
+    createHistoricalCase({
+      id: "manual-review-case",
+      merchantId: "merchant-review",
+      caseStatus: "manual_review",
+      paymentStatus: "paid",
+      refundStatus: "none",
+      approvedAt: null,
+      sourcePlan: "solo_lite",
+      activePlanSnapshot: "solo_lite",
+      idempotencyKey: "idem-manual-review",
+      rowVersion: 5,
+    }),
+  );
+
+  const moreInfo = await reviewService.requestMoreInformationForSoloPlusCase({
+    caseId: "manual-review-case",
+    expectedRowVersion: 5,
+    requestIdempotencyKey: "review-more-info-1",
+    reason: "Please clarify settlement behaviour.",
+    accessContext: buildInternalAdminContext(),
+  });
+  assert.equal(moreInfo.outcome, "updated");
+  assert.equal(moreInfo.caseRecord.caseStatus, "verification_pending");
+  assert.equal(moreInfo.event?.eventType, "case_review_requested_more_information");
+
+  reviewRepo.seedCase(
+    createHistoricalCase({
+      id: "approve-case",
+      merchantId: "merchant-approve",
+      caseStatus: "manual_review",
+      paymentStatus: "paid",
+      refundStatus: "none",
+      approvedAt: null,
+      sourcePlan: "solo_lite",
+      activePlanSnapshot: "solo_lite",
+      idempotencyKey: "idem-approve",
+      rowVersion: 2,
+    }),
+  );
+  const approved = await reviewService.approveSoloPlusCase({
+    caseId: "approve-case",
+    expectedRowVersion: 2,
+    requestIdempotencyKey: "approve-1",
+    reason: "Evidence reviewed.",
+    accessContext: buildInternalAdminContext(),
+  });
+  assert.equal(approved.caseRecord.caseStatus, "approved");
+  assert.equal(approved.caseRecord.approvedByAdminId, "admin-1");
+  assert.equal(approved.caseRecord.refundStatus, "none");
+
+  reviewRepo.seedCase(
+    createHistoricalCase({
+      id: "reject-case",
+      merchantId: "merchant-reject",
+      caseStatus: "manual_review",
+      paymentStatus: "paid",
+      refundStatus: "none",
+      approvedAt: null,
+      sourcePlan: "solo_lite",
+      activePlanSnapshot: "solo_lite",
+      idempotencyKey: "idem-reject",
+      rowVersion: 3,
+    }),
+  );
+  const rejected = await reviewService.rejectSoloPlusCase({
+    caseId: "reject-case",
+    expectedRowVersion: 3,
+    requestIdempotencyKey: "reject-1",
+    reason: "Identity mismatch requires rejection.",
+    accessContext: buildInternalAdminContext(),
+  });
+  assert.equal(rejected.caseRecord.caseStatus, "rejected");
+  assert.equal(rejected.caseRecord.refundStatus, "review_required");
+  assert.equal(rejected.caseRecord.rejectedByAdminId, "admin-1");
+
+  const rejectReplay = await reviewService.rejectSoloPlusCase({
+    caseId: "reject-case",
+    expectedRowVersion: 3,
+    requestIdempotencyKey: "reject-1",
+    reason: "Identity mismatch requires rejection.",
+    accessContext: buildInternalAdminContext(),
+  });
+  assert.equal(rejectReplay.outcome, "idempotent_replay");
+
+  await expectCode(
+    async () =>
+      reviewService.approveSoloPlusCase({
+        caseId: "reject-case",
+        expectedRowVersion: 4,
+        requestIdempotencyKey: "reject-1",
+        reason: "conflict",
+        accessContext: buildInternalAdminContext(),
+      }),
+    "SOLO_PLUS_IDEMPOTENCY_CONFLICT",
+  );
+
+  const unpaidRejectRepo = new FakeSoloPlusRepository();
+  const unpaidRejectService = buildService(unpaidRejectRepo);
+  unpaidRejectRepo.seedCase(
+    createHistoricalCase({
+      id: "reject-case-unpaid",
+      merchantId: "merchant-reject-unpaid",
+      caseStatus: "manual_review",
+      paymentStatus: "pending",
+      refundStatus: "none",
+      approvedAt: null,
+      sourcePlan: "solo_lite",
+      activePlanSnapshot: "solo_lite",
+      idempotencyKey: "idem-reject-unpaid",
+      rowVersion: 1,
+    }),
+  );
+  const unpaidRejected = await unpaidRejectService.rejectSoloPlusCase({
+    caseId: "reject-case-unpaid",
+    expectedRowVersion: 1,
+    requestIdempotencyKey: "reject-unpaid-1",
+    reason: "Manual review failed.",
+    accessContext: buildInternalAdminContext(),
+  });
+  assert.equal(unpaidRejected.caseRecord.refundStatus, "none");
+
+  const reopenRepo = new FakeSoloPlusRepository();
+  const reopenService = buildService(reopenRepo);
+  reopenRepo.seedCase(
+    createHistoricalCase({
+      id: "reopen-case",
+      merchantId: "merchant-reopen",
+      caseStatus: "rejected",
+      paymentStatus: "paid",
+      refundStatus: "review_required",
+      rejectedAt: "2026-07-02T00:00:00.000Z",
+      rejectedByAdminId: "admin-0",
+      rejectionReason: "prior rejection",
+      approvedAt: null,
+      sourcePlan: "solo_lite",
+      activePlanSnapshot: "solo_lite",
+      idempotencyKey: "idem-reopen",
+      rowVersion: 2,
+    }),
+  );
+  const reopened = await reopenService.reopenSoloPlusCase({
+    caseId: "reopen-case",
+    expectedRowVersion: 2,
+    requestIdempotencyKey: "reopen-1",
+    reason: "Reopened for updated evidence.",
+    accessContext: buildInternalAdminContext(),
+  });
+  assert.equal(reopened.caseRecord.caseStatus, "verification_pending");
+  assert.equal(reopened.caseRecord.reopenedByAdminId, "admin-1");
+  assert.equal(reopened.caseRecord.rejectionReason, null);
+  assert.equal(reopened.caseRecord.refundStatus, "none");
+
+  await expectCode(
+    async () =>
+      reviewService.rejectSoloPlusCase({
+        caseId: "approve-case",
+        expectedRowVersion: 3,
+        requestIdempotencyKey: "reject-empty",
+        reason: "   ",
+        accessContext: buildInternalAdminContext(),
+      }),
+    "SOLO_PLUS_INVALID_REVIEW_INPUT",
+  );
+
+  await expectCode(
+    async () =>
+      reviewService.requestMoreInformationForSoloPlusCase({
+        caseId: "approve-case",
+        expectedRowVersion: 3,
+        requestIdempotencyKey: "review-public",
+        reason: "more info",
+        accessContext: buildPublicContext() as never,
+      }),
+    "SOLO_PLUS_ACCESS_DENIED",
+  );
+
   const repoConflict = new FakeSoloPlusRepository();
   const conflictService = buildService(repoConflict);
   repoConflict.forceNextCreateResult = {
@@ -982,8 +1176,6 @@ async function run() {
   );
   assert.equal(errorMessage, undefined);
 
-  assert.equal(typeof (serviceA as Record<string, unknown>).approveSoloPlusCase, "undefined");
-  assert.equal(typeof (serviceA as Record<string, unknown>).rejectSoloPlusCase, "undefined");
   assert.equal(typeof (serviceA as Record<string, unknown>).activateSoloPlusCapabilities, "undefined");
 
   console.log("solo-plus-orchestration.test.ts passed");

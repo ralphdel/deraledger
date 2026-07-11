@@ -256,14 +256,21 @@ function Initialize-HostileBrowserDefaultTableGrants {
 ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM PUBLIC;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM anon;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON FUNCTIONS FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON FUNCTIONS FROM anon;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON FUNCTIONS FROM authenticated;
 
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLES TO anon;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLES TO authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT EXECUTE ON FUNCTIONS TO anon;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT EXECUTE ON FUNCTIONS TO authenticated;
 "@
 
-  Invoke-PsqlSql -Sql $sql -Description "Seed hostile Supabase-style default browser grants"
+  Invoke-PsqlSql -Sql $sql -Description "Seed hostile Supabase-style default browser table/function grants"
 }
 
 function Initialize-PaymentRecordsCanonicalSecurityPrerequisite {
@@ -390,6 +397,33 @@ END
   Invoke-PsqlSql -Sql $sql -Description "Seed canonical payment_events prerequisite"
 }
 
+function Initialize-SoloPlusReviewSecurityDriftFixture {
+  $sql = @"
+ALTER TABLE public.solo_plus_cases DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.solo_plus_case_requirements DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.solo_plus_case_events DISABLE ROW LEVEL SECURITY;
+
+REVOKE ALL ON TABLE public.solo_plus_cases FROM PUBLIC;
+REVOKE ALL ON TABLE public.solo_plus_cases FROM anon;
+REVOKE ALL ON TABLE public.solo_plus_cases FROM authenticated;
+REVOKE ALL ON TABLE public.solo_plus_case_requirements FROM PUBLIC;
+REVOKE ALL ON TABLE public.solo_plus_case_requirements FROM anon;
+REVOKE ALL ON TABLE public.solo_plus_case_requirements FROM authenticated;
+REVOKE ALL ON TABLE public.solo_plus_case_events FROM PUBLIC;
+REVOKE ALL ON TABLE public.solo_plus_case_events FROM anon;
+REVOKE ALL ON TABLE public.solo_plus_case_events FROM authenticated;
+
+GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE public.solo_plus_cases TO anon;
+GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE public.solo_plus_cases TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE public.solo_plus_case_requirements TO anon;
+GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE public.solo_plus_case_requirements TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE public.solo_plus_case_events TO anon;
+GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE public.solo_plus_case_events TO authenticated;
+"@
+
+  Invoke-PsqlSql -Sql $sql -Description "Seed staging-like Solo Plus review table security drift"
+}
+
 function Assert-RelationAbsent {
   param(
     [Parameter(Mandatory = $true)][string]$QualifiedName
@@ -431,6 +465,32 @@ END
 "@
 
   Invoke-PsqlSql -Sql $sql -Description "Assert column absent: public.$TableName.$ColumnName"
+}
+
+function Assert-FunctionAbsent {
+  param(
+    [Parameter(Mandatory = $true)][string]$FunctionName,
+    [Parameter(Mandatory = $true)][string]$TypeArguments
+  )
+
+  $sql = @"
+DO `$`$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public'
+      AND p.proname = '$FunctionName'
+      AND oidvectortypes(p.proargtypes) = '$TypeArguments'
+  ) THEN
+    RAISE EXCEPTION 'expected public.%(%) to remain absent after rollback', '$FunctionName', '$TypeArguments';
+  END IF;
+END
+`$`$;
+"@
+
+  Invoke-PsqlSql -Sql $sql -Description "Assert function absent: public.$FunctionName($TypeArguments)"
 }
 
 function Invoke-InjectedFailureMigration {
@@ -495,6 +555,68 @@ function Run-Harness {
   Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_02_solo_plus_payment_lifecycle.sql" -Description "Rerun Migration B"
   Invoke-PsqlFile -RelativePath "supabase/tests/phase2_solo_plus_payment_lifecycle.sql" -Description "Rerun Migration B SQL assertions"
   Add-PassResult -Results $results -Message "Migration B clean + rerun"
+
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260710_01_solo_plus_review_decision_rpc.sql" -Description "Run Commit 9 review RPC migration"
+  Invoke-PsqlFile -RelativePath "supabase/tests/phase2_solo_plus_review_decision_rpc.sql" -Description "Run Commit 9 review RPC SQL assertions"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260710_01_solo_plus_review_decision_rpc.sql" -Description "Rerun Commit 9 review RPC migration"
+  Invoke-PsqlFile -RelativePath "supabase/tests/phase2_solo_plus_review_decision_rpc.sql" -Description "Rerun Commit 9 review RPC SQL assertions"
+  Add-PassResult -Results $results -Message "Commit 9 review RPC clean + rerun"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-PsqlSql -Description "Create missing Commit 9 prerequisite table state" -Sql @"
+DROP TABLE public.solo_plus_case_requirements;
+"@
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260710_01_solo_plus_review_decision_rpc.sql" -Description "Expect Commit 9 review RPC migration to fail on missing prerequisite tables" -ExpectFailure
+  Assert-FunctionAbsent -FunctionName "review_solo_plus_case_v1" -TypeArguments "uuid, bigint, text, text, uuid, text, text"
+  Add-PassResult -Results $results -Message "Commit 9 blocks missing prerequisite tables before DDL"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-PsqlSql -Description "Create incompatible Commit 9 prerequisite index state" -Sql @"
+DROP INDEX public.idx_solo_plus_case_events_request_idempotency;
+"@
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260710_01_solo_plus_review_decision_rpc.sql" -Description "Expect Commit 9 review RPC migration to fail on incompatible prerequisite tables" -ExpectFailure
+  Assert-FunctionAbsent -FunctionName "review_solo_plus_case_v1" -TypeArguments "uuid, bigint, text, text, uuid, text, text"
+  Add-PassResult -Results $results -Message "Commit 9 blocks incompatible prerequisite tables before DDL"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Initialize-SoloPlusReviewSecurityDriftFixture
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260710_01_solo_plus_review_decision_rpc.sql" -Description "Run Commit 9 review RPC migration with staging-like Solo Plus security drift"
+  Invoke-PsqlFile -RelativePath "supabase/tests/phase2_solo_plus_review_decision_rpc.sql" -Description "Run Commit 9 review RPC SQL assertions after security drift repair"
+  Add-PassResult -Results $results -Message "Commit 9 repairs staging-like Solo Plus table security drift"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-PsqlSql -Description "Create unexpected Commit 9 RPC overload fixture" -Sql @'
+CREATE FUNCTION public.review_solo_plus_case_v1(
+  p_case_id uuid,
+  p_expected_row_version integer,
+  p_request_idempotency_key text,
+  p_decision text,
+  p_reviewer_admin_id uuid,
+  p_reason text default null,
+  p_policy_version text default null
+)
+RETURNS jsonb
+LANGUAGE sql
+AS $$ SELECT jsonb_build_object('kind', 'unexpected_overload'); $$;
+'@
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260710_01_solo_plus_review_decision_rpc.sql" -Description "Expect Commit 9 review RPC migration to fail on unexpected overload" -ExpectFailure
+  Assert-FunctionAbsent -FunctionName "review_solo_plus_case_v1" -TypeArguments "uuid, bigint, text, text, uuid, text, text"
+  Add-PassResult -Results $results -Message "Commit 9 blocks unexpected RPC overload before DDL"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260710_01_solo_plus_review_decision_rpc.sql" -Description "Prepare exact-signature Commit 9 RPC for privilege drift repair"
+  Invoke-PsqlSql -Description "Create unsafe Commit 9 RPC execute grants" -Sql @"
+GRANT EXECUTE ON FUNCTION public.review_solo_plus_case_v1(uuid, bigint, text, text, uuid, text, text) TO anon;
+GRANT EXECUTE ON FUNCTION public.review_solo_plus_case_v1(uuid, bigint, text, text, uuid, text, text) TO authenticated;
+"@
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260710_01_solo_plus_review_decision_rpc.sql" -Description "Rerun Commit 9 review RPC migration to repair unsafe execute grants"
+  Invoke-PsqlFile -RelativePath "supabase/tests/phase2_solo_plus_review_decision_rpc.sql" -Description "Run Commit 9 review RPC SQL assertions after privilege repair"
+  Add-PassResult -Results $results -Message "Commit 9 repairs unsafe exact-signature RPC execute drift"
 
   Reset-DisposableDatabase
   Initialize-CoreFixture
@@ -615,6 +737,14 @@ CREATE UNIQUE INDEX idx_payment_records_solo_plus_provider_reference
   Invoke-InjectedFailureMigration -RelativePath "supabase/migrations/20260707_02_solo_plus_payment_lifecycle.sql" -Description "Run Migration B with injected late failure"
   Assert-ColumnAbsent -TableName "payment_records" -ColumnName "onboarding_session_id"
   Add-PassResult -Results $results -Message "Migration B rolls back on injected late failure"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Prepare substrate for Commit 9 review RPC rollback test"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_02_solo_plus_payment_lifecycle.sql" -Description "Prepare payment lifecycle substrate for Commit 9 review RPC rollback test"
+  Invoke-InjectedFailureMigration -RelativePath "supabase/migrations/20260710_01_solo_plus_review_decision_rpc.sql" -Description "Run Commit 9 review RPC migration with injected late failure"
+  Assert-FunctionAbsent -FunctionName "review_solo_plus_case_v1" -TypeArguments "uuid, bigint, text, text, uuid, text, text"
+  Add-PassResult -Results $results -Message "Commit 9 review RPC migration rolls back on injected late failure"
 
   Write-Host ""
   Write-Host "Harness summary"
