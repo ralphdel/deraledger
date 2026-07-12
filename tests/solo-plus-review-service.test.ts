@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { createRequire, Module } from "node:module";
 
 import type {
+  SoloPlusCaseActivationAtomicParams,
+  SoloPlusCaseActivationAtomicResult,
   SoloPlusCaseEventRecord,
   SoloPlusCaseCreateAtomicResult,
   SoloPlusCaseRecord,
@@ -154,6 +156,20 @@ class FakeSoloPlusRepository implements SoloPlusCaseRepository {
 
   async upsertCaseRequirements(): Promise<readonly SoloPlusCaseRequirementRecord[]> {
     return [];
+  }
+
+  async activateSoloPlusCase(
+    input: SoloPlusCaseActivationAtomicParams,
+  ): Promise<SoloPlusCaseActivationAtomicResult> {
+    const current = this.cases.get(input.caseId);
+    if (!current) {
+      return { kind: "not_found" };
+    }
+
+    return {
+      kind: "feature_disabled",
+      currentCase: this.cloneCase(current),
+    };
   }
 
   private cloneCase(caseRecord: SoloPlusCaseRecord | null): SoloPlusCaseRecord | null {

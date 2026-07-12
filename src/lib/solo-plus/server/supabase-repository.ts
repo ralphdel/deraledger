@@ -2,6 +2,11 @@ import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import {
   normalizeSoloPlusAmount,
   type SoloPlusAmount,
+  type SoloPlusActivationMerchantRecord,
+  type SoloPlusActivationWorkspaceRecord,
+  type SoloPlusActivationWorkspaceSubscriptionRecord,
+  type SoloPlusCaseActivationAtomicParams,
+  type SoloPlusCaseActivationAtomicResult,
   type SoloPlusCaseCreateAtomicInput,
   type SoloPlusCaseCreateAtomicResult,
   type SoloPlusCaseEventRecord,
@@ -31,6 +36,7 @@ const ATTACH_ONBOARDING_MERCHANT_RPC = "attach_solo_plus_onboarding_merchant_v1"
 const MARK_AWAITING_PAYMENT_RPC = "mark_solo_plus_case_awaiting_payment_v1";
 const CASE_BUNDLE_PAYLOAD_RPC = "solo_plus_case_bundle_payload_v1";
 const REVIEW_CASE_RPC = "review_solo_plus_case_v1";
+const ACTIVATE_CASE_RPC = "activate_solo_plus_case_v1";
 
 const UUID_LIKE_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -89,6 +95,9 @@ export class SoloPlusSupabaseRepositoryError extends Error {
 type SoloPlusCaseRow = Record<string, unknown>;
 type SoloPlusRequirementRow = Record<string, unknown>;
 type SoloPlusEventRow = Record<string, unknown>;
+type SoloPlusActivationMerchantRow = Record<string, unknown>;
+type SoloPlusActivationWorkspaceRow = Record<string, unknown>;
+type SoloPlusActivationWorkspaceSubscriptionRow = Record<string, unknown>;
 type SoloPlusRpcPayload = Record<string, unknown>;
 
 export function createSoloPlusServiceRoleClient(): SoloPlusSupabaseClientLike {
@@ -173,6 +182,70 @@ function assertAmount(value: unknown, field: string): SoloPlusAmount {
     return normalizeSoloPlusAmount(value);
   } catch {
     // fall through to the same safe mapping error shape
+  }
+
+  throw new SoloPlusSupabaseRepositoryError(
+    "SOLO_PLUS_REPOSITORY_MAPPING_ERROR",
+    `Solo Plus repository mapping rejected ${field}.`,
+  );
+}
+
+function assertOptionalAmount(value: unknown, field: string): SoloPlusAmount | null {
+  if (value == null) {
+    return null;
+  }
+
+  if (typeof value === "string") {
+    return assertAmount(value, field);
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return assertAmount(value.toString(), field);
+  }
+
+  throw new SoloPlusSupabaseRepositoryError(
+    "SOLO_PLUS_REPOSITORY_MAPPING_ERROR",
+    `Solo Plus repository mapping rejected ${field}.`,
+  );
+}
+
+function assertOptionalNumber(value: unknown, field: string): number | null {
+  if (value == null) {
+    return null;
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  throw new SoloPlusSupabaseRepositoryError(
+    "SOLO_PLUS_REPOSITORY_MAPPING_ERROR",
+    `Solo Plus repository mapping rejected ${field}.`,
+  );
+}
+
+function assertOptionalBoolean(value: unknown, field: string): boolean | null {
+  if (value == null) {
+    return null;
+  }
+
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") return true;
+    if (normalized === "false") return false;
+    if (normalized === "1") return true;
+    if (normalized === "0") return false;
   }
 
   throw new SoloPlusSupabaseRepositoryError(
@@ -551,6 +624,70 @@ function mapEventRow(row: unknown): SoloPlusCaseEventRecord {
   };
 }
 
+function mapActivationMerchantRow(row: unknown): SoloPlusActivationMerchantRecord {
+  const candidate = row as SoloPlusActivationMerchantRow;
+  return {
+    id: assertUuidLike(candidate.id, "merchant.id")!,
+    subscriptionPlan: assertText(candidate.subscription_plan, "subscription_plan", true),
+    merchantTier: assertText(candidate.merchant_tier, "merchant_tier", true),
+    monthlyCollectionLimit: assertOptionalNumber(
+      candidate.monthly_collection_limit,
+      "monthly_collection_limit",
+    ),
+    setupMode: assertOptionalBoolean(candidate.setup_mode, "setup_mode"),
+    liveFeaturesEnabled: assertOptionalBoolean(
+      candidate.live_features_enabled,
+      "live_features_enabled",
+    ),
+    liveFeaturesActivatedAt: assertTimestamp(
+      candidate.live_features_activated_at,
+      "live_features_activated_at",
+      true,
+    ),
+    onboardingStatus: assertText(candidate.onboarding_status, "onboarding_status", true),
+    workspaceId: assertUuidLike(candidate.workspace_id, "workspace_id", true),
+    verificationStatus: assertText(candidate.verification_status, "verification_status", true),
+    updatedAt: assertTimestamp(candidate.updated_at, "merchant.updated_at")!,
+  };
+}
+
+function mapActivationWorkspaceRow(row: unknown): SoloPlusActivationWorkspaceRecord {
+  const candidate = row as SoloPlusActivationWorkspaceRow;
+  return {
+    id: assertUuidLike(candidate.id, "workspace.id")!,
+    merchantId: assertUuidLike(candidate.merchant_id, "merchant_id", true),
+    ownerUserId: assertUuidLike(candidate.owner_user_id, "owner_user_id", true),
+    workspaceType: assertText(candidate.workspace_type, "workspace_type", true),
+    displayName: assertText(candidate.display_name, "display_name", true),
+    planType: assertText(candidate.plan_type, "plan_type", true),
+    onboardingStatus: assertText(candidate.onboarding_status, "onboarding_status", true),
+    setupMode: assertOptionalBoolean(candidate.setup_mode, "setup_mode"),
+    liveFeaturesEnabled: assertOptionalBoolean(
+      candidate.live_features_enabled,
+      "live_features_enabled",
+    ),
+    updatedAt: assertTimestamp(candidate.updated_at, "workspace.updated_at")!,
+  };
+}
+
+function mapActivationWorkspaceSubscriptionRow(
+  row: unknown,
+): SoloPlusActivationWorkspaceSubscriptionRecord {
+  const candidate = row as SoloPlusActivationWorkspaceSubscriptionRow;
+  return {
+    id: assertUuidLike(candidate.id, "workspace_subscription.id")!,
+    workspaceId: assertUuidLike(candidate.workspace_id, "workspace_id", true),
+    merchantId: assertUuidLike(candidate.merchant_id, "merchant_id", true),
+    planType: assertText(candidate.plan_type, "plan_type", true),
+    subscriptionStatus: assertText(candidate.subscription_status, "subscription_status", true),
+    paymentReference: assertText(candidate.payment_reference, "payment_reference", true),
+    amountPaid: assertOptionalAmount(candidate.amount_paid, "amount_paid"),
+    periodStart: assertTimestamp(candidate.period_start, "period_start", true),
+    periodEnd: assertTimestamp(candidate.period_end, "period_end", true),
+    updatedAt: assertTimestamp(candidate.updated_at, "workspace_subscription.updated_at")!,
+  };
+}
+
 function assertRpcPayload(value: unknown): SoloPlusRpcPayload {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new SoloPlusSupabaseRepositoryError(
@@ -690,6 +827,70 @@ function mapTransitionResult(value: unknown): SoloPlusCaseTransitionAtomicResult
   );
 }
 
+function mapActivationResult(value: unknown): SoloPlusCaseActivationAtomicResult {
+  const payload = assertRpcPayload(value);
+  const kind = assertText(payload.kind, "rpc.kind");
+
+  if (kind === "applied" || kind === "idempotent_replay") {
+    const caseRow = payload.case;
+    const eventRow = payload.event;
+
+    if (caseRow == null || eventRow == null) {
+      throw new SoloPlusSupabaseRepositoryError(
+        "SOLO_PLUS_REPOSITORY_MAPPING_ERROR",
+        "Solo Plus repository received a malformed activation RPC payload.",
+      );
+    }
+
+    return {
+      kind,
+      caseRecord: mapCaseRow(caseRow),
+      event: mapEventRow(eventRow),
+      merchant: payload.merchant == null ? null : mapActivationMerchantRow(payload.merchant),
+      workspace: payload.workspace == null ? null : mapActivationWorkspaceRow(payload.workspace),
+      workspaceSubscription:
+        payload.workspace_subscription == null
+          ? null
+          : mapActivationWorkspaceSubscriptionRow(payload.workspace_subscription),
+    };
+  }
+
+  if (kind === "not_found") {
+    return { kind };
+  }
+
+  if (
+    kind === "idempotency_conflict" ||
+    kind === "version_conflict" ||
+    kind === "state_conflict"
+  ) {
+    return {
+      kind,
+      currentCase: mapCaseRow(payload.case),
+    } as SoloPlusCaseActivationAtomicResult;
+  }
+
+  if (kind === "prerequisite_conflict") {
+    return {
+      kind,
+      currentCase: mapCaseRow(payload.case),
+      reason: assertText(payload.reason, "reason", true) ?? undefined,
+    };
+  }
+
+  if (kind === "feature_disabled") {
+    return {
+      kind,
+      currentCase: payload.case == null ? undefined : mapCaseRow(payload.case),
+    };
+  }
+
+  throw new SoloPlusSupabaseRepositoryError(
+    "SOLO_PLUS_REPOSITORY_MAPPING_ERROR",
+    "Solo Plus repository received an unknown activation RPC outcome.",
+  );
+}
+
 function wrapSupabaseError(error: SupabaseLikeError | null): never {
   throw new SoloPlusSupabaseRepositoryError(
     "SOLO_PLUS_ATOMIC_PERSISTENCE_UNAVAILABLE",
@@ -775,6 +976,48 @@ function assertReviewTransitionInput(
   }
 
   return supportedDecision;
+}
+
+function assertActivationInput(input: SoloPlusCaseActivationAtomicParams): void {
+  if (!hasNonEmptyString(input.caseId) || !UUID_LIKE_PATTERN.test(input.caseId.trim())) {
+    throw new SoloPlusSupabaseRepositoryError(
+      "SOLO_PLUS_ATOMIC_PERSISTENCE_UNAVAILABLE",
+      "Solo Plus repository rejected an invalid activation caseId.",
+    );
+  }
+
+  if (
+    typeof input.expectedRowVersion !== "number" ||
+    !Number.isInteger(input.expectedRowVersion) ||
+    input.expectedRowVersion < 0 ||
+    !Number.isSafeInteger(input.expectedRowVersion)
+  ) {
+    throw new SoloPlusSupabaseRepositoryError(
+      "SOLO_PLUS_ATOMIC_PERSISTENCE_UNAVAILABLE",
+      "Solo Plus repository rejected an invalid activation row version.",
+    );
+  }
+
+  if (!hasNonEmptyString(input.requestIdempotencyKey)) {
+    throw new SoloPlusSupabaseRepositoryError(
+      "SOLO_PLUS_ATOMIC_PERSISTENCE_UNAVAILABLE",
+      "Solo Plus repository rejected an invalid activation idempotency key.",
+    );
+  }
+
+  if (!hasNonEmptyString(input.activatorAdminId) || !UUID_LIKE_PATTERN.test(input.activatorAdminId.trim())) {
+    throw new SoloPlusSupabaseRepositoryError(
+      "SOLO_PLUS_ATOMIC_PERSISTENCE_UNAVAILABLE",
+      "Solo Plus repository rejected an invalid activation admin id.",
+    );
+  }
+
+  if (input.policyVersion != null && !hasNonEmptyString(input.policyVersion)) {
+    throw new SoloPlusSupabaseRepositoryError(
+      "SOLO_PLUS_ATOMIC_PERSISTENCE_UNAVAILABLE",
+      "Solo Plus repository rejected an invalid activation policy version.",
+    );
+  }
 }
 
 async function maybeSingle(
@@ -1018,6 +1261,26 @@ export function createSoloPlusSupabaseRepository(
       return mapTransitionResult(data);
     },
 
+    async activateSoloPlusCase(
+      input: SoloPlusCaseActivationAtomicParams,
+    ): Promise<SoloPlusCaseActivationAtomicResult> {
+      assertActivationInput(input);
+
+      const { data, error } = await client.rpc(ACTIVATE_CASE_RPC, {
+        p_case_id: input.caseId,
+        p_expected_row_version: input.expectedRowVersion,
+        p_request_idempotency_key: input.requestIdempotencyKey,
+        p_activator_admin_id: input.activatorAdminId,
+        p_policy_version: input.policyVersion ?? null,
+      });
+
+      if (error) {
+        wrapSupabaseError(error);
+      }
+
+      return mapActivationResult(data);
+    },
+
     async upsertCaseRequirements(
       caseId: string,
       requirements: readonly SoloPlusCaseRequirementRecord[],
@@ -1053,4 +1316,5 @@ export const soloPlusSupabaseRpcNames = {
   attachOnboardingMerchant: ATTACH_ONBOARDING_MERCHANT_RPC,
   markAwaitingPayment: MARK_AWAITING_PAYMENT_RPC,
   reviewCase: REVIEW_CASE_RPC,
+  activateCase: ACTIVATE_CASE_RPC,
 } as const;

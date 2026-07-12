@@ -564,12 +564,56 @@ function Run-Harness {
 
   Reset-DisposableDatabase
   Initialize-CoreFixture
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260710_01_solo_plus_review_decision_rpc.sql" -Description "Prepare Commit 9 substrate before Commit 10 preflight"
+  Invoke-PsqlFile -RelativePath "supabase/staging/preflight/012_solo_plus_activation_rpc_snapshot.sql" -Description "Run Commit 10 staging preflight snapshot"
+  Add-PassResult -Results $results -Message "Commit 10 staging preflight snapshot"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260710_01_solo_plus_review_decision_rpc.sql" -Description "Prepare Commit 9 substrate before Commit 10 wrapper apply"
+  Invoke-PsqlFile -RelativePath "supabase/staging/012_solo_plus_activation_rpc.sql" -Description "Run Commit 10 staging wrapper"
+  Add-PassResult -Results $results -Message "Commit 10 staging wrapper apply"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260710_01_solo_plus_review_decision_rpc.sql" -Description "Prepare Commit 9 substrate before Commit 10 postflight"
+  Invoke-PsqlFile -RelativePath "supabase/staging/012_solo_plus_activation_rpc.sql" -Description "Run Commit 10 staging wrapper before postflight"
+  Invoke-PsqlFile -RelativePath "supabase/staging/postflight/012_solo_plus_activation_rpc_verify.sql" -Description "Run Commit 10 staging postflight verify"
+  Add-PassResult -Results $results -Message "Commit 10 staging postflight verify"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260710_01_solo_plus_review_decision_rpc.sql" -Description "Prepare Commit 9 substrate before Commit 10 wrapper rerun"
+  Invoke-PsqlFile -RelativePath "supabase/staging/012_solo_plus_activation_rpc.sql" -Description "Run Commit 10 staging wrapper first apply"
+  Invoke-PsqlFile -RelativePath "supabase/staging/012_solo_plus_activation_rpc.sql" -Description "Run Commit 10 staging wrapper rerun"
+  Invoke-PsqlFile -RelativePath "supabase/staging/postflight/012_solo_plus_activation_rpc_verify.sql" -Description "Run Commit 10 staging postflight verify after rerun"
+  Add-PassResult -Results $results -Message "Commit 10 staging wrapper rerun + postflight verify"
+
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260711_01_solo_plus_activation_rpc.sql" -Description "Run Commit 10 activation RPC migration"
+  Invoke-PsqlFile -RelativePath "supabase/tests/phase2_solo_plus_review_decision_rpc.sql" -Description "Run Commit 9 regression assertions after Commit 10 activation RPC migration"
+  Invoke-PsqlFile -RelativePath "supabase/tests/phase2_solo_plus_activation_rpc.sql" -Description "Run Commit 10 activation RPC SQL assertions"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260711_01_solo_plus_activation_rpc.sql" -Description "Rerun Commit 10 activation RPC migration"
+  Invoke-PsqlFile -RelativePath "supabase/tests/phase2_solo_plus_activation_rpc.sql" -Description "Rerun Commit 10 activation RPC SQL assertions"
+  Add-PassResult -Results $results -Message "Commit 10 activation RPC clean + rerun"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
   Invoke-PsqlSql -Description "Create missing Commit 9 prerequisite table state" -Sql @"
 DROP TABLE public.solo_plus_case_requirements;
 "@
   Invoke-PsqlFile -RelativePath "supabase/migrations/20260710_01_solo_plus_review_decision_rpc.sql" -Description "Expect Commit 9 review RPC migration to fail on missing prerequisite tables" -ExpectFailure
   Assert-FunctionAbsent -FunctionName "review_solo_plus_case_v1" -TypeArguments "uuid, bigint, text, text, uuid, text, text"
   Add-PassResult -Results $results -Message "Commit 9 blocks missing prerequisite tables before DDL"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260710_01_solo_plus_review_decision_rpc.sql" -Description "Prepare Commit 9 substrate for Commit 10 missing prerequisite table test"
+  Invoke-PsqlSql -Description "Create missing Commit 10 prerequisite table state" -Sql @"
+DROP TABLE public.workspace_subscriptions;
+"@
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260711_01_solo_plus_activation_rpc.sql" -Description "Expect Commit 10 activation RPC migration to fail on missing prerequisite tables" -ExpectFailure
+  Assert-FunctionAbsent -FunctionName "activate_solo_plus_case_v1" -TypeArguments "uuid, bigint, text, uuid, text"
+  Add-PassResult -Results $results -Message "Commit 10 blocks missing prerequisite tables before DDL"
 
   Reset-DisposableDatabase
   Initialize-CoreFixture
@@ -582,10 +626,28 @@ DROP INDEX public.idx_solo_plus_case_events_request_idempotency;
 
   Reset-DisposableDatabase
   Initialize-CoreFixture
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260710_01_solo_plus_review_decision_rpc.sql" -Description "Prepare Commit 9 substrate for Commit 10 incompatible prerequisite column test"
+  Invoke-PsqlSql -Description "Create incompatible Commit 10 prerequisite column state" -Sql @"
+ALTER TABLE public.merchants DROP COLUMN live_features_enabled;
+"@
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260711_01_solo_plus_activation_rpc.sql" -Description "Expect Commit 10 activation RPC migration to fail on incompatible prerequisite columns" -ExpectFailure
+  Assert-FunctionAbsent -FunctionName "activate_solo_plus_case_v1" -TypeArguments "uuid, bigint, text, uuid, text"
+  Add-PassResult -Results $results -Message "Commit 10 blocks incompatible prerequisite columns before DDL"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
   Initialize-SoloPlusReviewSecurityDriftFixture
   Invoke-PsqlFile -RelativePath "supabase/migrations/20260710_01_solo_plus_review_decision_rpc.sql" -Description "Run Commit 9 review RPC migration with staging-like Solo Plus security drift"
   Invoke-PsqlFile -RelativePath "supabase/tests/phase2_solo_plus_review_decision_rpc.sql" -Description "Run Commit 9 review RPC SQL assertions after security drift repair"
   Add-PassResult -Results $results -Message "Commit 9 repairs staging-like Solo Plus table security drift"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Initialize-SoloPlusReviewSecurityDriftFixture
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260710_01_solo_plus_review_decision_rpc.sql" -Description "Prepare canonical Commit 9 substrate for Commit 10 security drift repair"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260711_01_solo_plus_activation_rpc.sql" -Description "Run Commit 10 activation RPC migration with staging-like Solo Plus table security drift"
+  Invoke-PsqlFile -RelativePath "supabase/tests/phase2_solo_plus_activation_rpc.sql" -Description "Run Commit 10 activation RPC SQL assertions after security drift repair"
+  Add-PassResult -Results $results -Message "Commit 10 repairs canonical Solo Plus table security drift"
 
   Reset-DisposableDatabase
   Initialize-CoreFixture
@@ -609,6 +671,25 @@ AS $$ SELECT jsonb_build_object('kind', 'unexpected_overload'); $$;
 
   Reset-DisposableDatabase
   Initialize-CoreFixture
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260710_01_solo_plus_review_decision_rpc.sql" -Description "Prepare Commit 9 substrate for Commit 10 overload test"
+  Invoke-PsqlSql -Description "Create unexpected Commit 10 RPC overload fixture" -Sql @'
+CREATE FUNCTION public.activate_solo_plus_case_v1(
+  p_case_id uuid,
+  p_expected_row_version integer,
+  p_request_idempotency_key text,
+  p_activator_admin_id uuid,
+  p_policy_version text default null
+)
+RETURNS jsonb
+LANGUAGE sql
+AS $$ SELECT jsonb_build_object('kind', 'unexpected_overload'); $$;
+'@
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260711_01_solo_plus_activation_rpc.sql" -Description "Expect Commit 10 activation RPC migration to fail on unexpected overload" -ExpectFailure
+  Assert-FunctionAbsent -FunctionName "activate_solo_plus_case_v1" -TypeArguments "uuid, bigint, text, uuid, text"
+  Add-PassResult -Results $results -Message "Commit 10 blocks unexpected RPC overload before DDL"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
   Invoke-PsqlFile -RelativePath "supabase/migrations/20260710_01_solo_plus_review_decision_rpc.sql" -Description "Prepare exact-signature Commit 9 RPC for privilege drift repair"
   Invoke-PsqlSql -Description "Create unsafe Commit 9 RPC execute grants" -Sql @"
 GRANT EXECUTE ON FUNCTION public.review_solo_plus_case_v1(uuid, bigint, text, text, uuid, text, text) TO anon;
@@ -617,6 +698,22 @@ GRANT EXECUTE ON FUNCTION public.review_solo_plus_case_v1(uuid, bigint, text, te
   Invoke-PsqlFile -RelativePath "supabase/migrations/20260710_01_solo_plus_review_decision_rpc.sql" -Description "Rerun Commit 9 review RPC migration to repair unsafe execute grants"
   Invoke-PsqlFile -RelativePath "supabase/tests/phase2_solo_plus_review_decision_rpc.sql" -Description "Run Commit 9 review RPC SQL assertions after privilege repair"
   Add-PassResult -Results $results -Message "Commit 9 repairs unsafe exact-signature RPC execute drift"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260710_01_solo_plus_review_decision_rpc.sql" -Description "Prepare Commit 9 substrate for Commit 10 privilege drift repair"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260711_01_solo_plus_activation_rpc.sql" -Description "Prepare exact-signature Commit 10 activation RPC for privilege drift repair"
+  Invoke-PsqlSql -Description "Create unsafe Commit 10 activation RPC execute/search_path drift" -Sql @"
+GRANT EXECUTE ON FUNCTION public.activate_solo_plus_case_v1(uuid, bigint, text, uuid, text) TO PUBLIC;
+GRANT EXECUTE ON FUNCTION public.activate_solo_plus_case_v1(uuid, bigint, text, uuid, text) TO anon;
+GRANT EXECUTE ON FUNCTION public.activate_solo_plus_case_v1(uuid, bigint, text, uuid, text) TO authenticated;
+ALTER FUNCTION public.activate_solo_plus_case_v1(uuid, bigint, text, uuid, text) RESET ALL;
+ALTER FUNCTION public.activate_solo_plus_case_v1(uuid, bigint, text, uuid, text)
+  SET search_path = public;
+"@
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260711_01_solo_plus_activation_rpc.sql" -Description "Rerun Commit 10 activation RPC migration to repair unsafe execute/search_path drift"
+  Invoke-PsqlFile -RelativePath "supabase/tests/phase2_solo_plus_activation_rpc.sql" -Description "Run Commit 10 activation RPC SQL assertions after privilege repair"
+  Add-PassResult -Results $results -Message "Commit 10 repairs unsafe exact-signature RPC execute drift"
 
   Reset-DisposableDatabase
   Initialize-CoreFixture
@@ -745,6 +842,13 @@ CREATE UNIQUE INDEX idx_payment_records_solo_plus_provider_reference
   Invoke-InjectedFailureMigration -RelativePath "supabase/migrations/20260710_01_solo_plus_review_decision_rpc.sql" -Description "Run Commit 9 review RPC migration with injected late failure"
   Assert-FunctionAbsent -FunctionName "review_solo_plus_case_v1" -TypeArguments "uuid, bigint, text, text, uuid, text, text"
   Add-PassResult -Results $results -Message "Commit 9 review RPC migration rolls back on injected late failure"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260710_01_solo_plus_review_decision_rpc.sql" -Description "Prepare Commit 9 substrate for Commit 10 activation RPC rollback test"
+  Invoke-InjectedFailureMigration -RelativePath "supabase/migrations/20260711_01_solo_plus_activation_rpc.sql" -Description "Run Commit 10 activation RPC migration with injected late failure"
+  Assert-FunctionAbsent -FunctionName "activate_solo_plus_case_v1" -TypeArguments "uuid, bigint, text, uuid, text"
+  Add-PassResult -Results $results -Message "Commit 10 activation RPC migration rolls back on injected late failure"
 
   Write-Host ""
   Write-Host "Harness summary"

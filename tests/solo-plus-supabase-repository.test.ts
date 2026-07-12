@@ -307,6 +307,55 @@ function buildEventRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function buildActivationMerchantRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "66666666-6666-4666-8666-666666666666",
+    subscription_plan: "solo_plus",
+    merchant_tier: "individual",
+    monthly_collection_limit: 5000000,
+    setup_mode: false,
+    live_features_enabled: true,
+    live_features_activated_at: "2026-07-11T00:00:00.000Z",
+    onboarding_status: "active",
+    workspace_id: "77777777-7777-4777-8777-777777777777",
+    verification_status: "verified",
+    updated_at: "2026-07-11T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function buildActivationWorkspaceRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "77777777-7777-4777-8777-777777777777",
+    merchant_id: "66666666-6666-4666-8666-666666666666",
+    owner_user_id: "55555555-5555-4555-8555-555555555555",
+    workspace_type: "personal",
+    display_name: "Solo Plus Workspace",
+    plan_type: "solo_plus",
+    onboarding_status: "active",
+    setup_mode: false,
+    live_features_enabled: true,
+    updated_at: "2026-07-11T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function buildActivationWorkspaceSubscriptionRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "88888888-8888-4888-8888-888888888888",
+    workspace_id: "77777777-7777-4777-8777-777777777777",
+    merchant_id: "66666666-6666-4666-8666-666666666666",
+    plan_type: "solo_plus",
+    subscription_status: "active",
+    payment_reference: "activation-payment-ref",
+    amount_paid: "13000.00",
+    period_start: "2026-07-11T00:00:00.000Z",
+    period_end: null,
+    updated_at: "2026-07-11T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
 function buildCreateInput(): SoloPlusCaseCreateAtomicInput {
   const caseRecord = buildCaseRow();
   return {
@@ -951,6 +1000,123 @@ async function run() {
   });
   await repository.createCaseWithRequirementsAndEvent(createInput);
   assert.equal(JSON.stringify(createInput), beforeCreateInput);
+
+  client.rpcResponses.set(soloPlusSupabaseRpcNames.activateCase, {
+    data: {
+      kind: "applied",
+      case: buildCaseRow({
+        case_status: "approved",
+        payment_status: "paid",
+        activation_idempotency_key: "activation-idem-1",
+        row_version: 8,
+      }),
+      event: buildEventRow({
+        event_type: "case_activated",
+        actor_type: "admin",
+        actor_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        request_idempotency_key: "activation-idem-1",
+        reason: "Solo Plus activation completed.",
+        created_at: "2026-07-11T00:00:00.000Z",
+      }),
+      merchant: buildActivationMerchantRow(),
+      workspace: buildActivationWorkspaceRow(),
+      workspace_subscription: buildActivationWorkspaceSubscriptionRow(),
+    },
+    error: null,
+  });
+  const activationApplied = await repository.activateSoloPlusCase({
+    caseId: "11111111-1111-4111-8111-111111111111",
+    expectedRowVersion: 7,
+    requestIdempotencyKey: "activation-idem-1",
+    activatorAdminId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    policyVersion: "solo-plus-activation-policy-v1",
+  });
+  assert.equal(activationApplied.kind, "applied");
+  assert.equal(client.rpcCalls.at(-1)?.name, soloPlusSupabaseRpcNames.activateCase);
+  assert.deepEqual(client.rpcCalls.at(-1)?.args, {
+    p_case_id: "11111111-1111-4111-8111-111111111111",
+    p_expected_row_version: 7,
+    p_request_idempotency_key: "activation-idem-1",
+    p_activator_admin_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    p_policy_version: "solo-plus-activation-policy-v1",
+  });
+
+  client.rpcResponses.set(soloPlusSupabaseRpcNames.activateCase, {
+    data: {
+      kind: "idempotent_replay",
+      case: buildCaseRow({
+        case_status: "approved",
+        payment_status: "paid",
+        activation_idempotency_key: "activation-idem-1",
+        row_version: 8,
+      }),
+      event: buildEventRow({
+        event_type: "case_activated",
+        actor_type: "admin",
+        actor_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        request_idempotency_key: "activation-idem-1",
+      }),
+      merchant: buildActivationMerchantRow(),
+      workspace: buildActivationWorkspaceRow(),
+      workspace_subscription: buildActivationWorkspaceSubscriptionRow(),
+    },
+    error: null,
+  });
+  const activationReplay = await repository.activateSoloPlusCase({
+    caseId: "11111111-1111-4111-8111-111111111111",
+    expectedRowVersion: 7,
+    requestIdempotencyKey: "activation-idem-1",
+    activatorAdminId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    policyVersion: null,
+  });
+  assert.equal(activationReplay.kind, "idempotent_replay");
+
+  client.rpcResponses.set(soloPlusSupabaseRpcNames.activateCase, {
+    data: {
+      kind: "applied",
+      case: buildCaseRow({
+        case_status: "approved",
+        payment_status: "paid",
+        activation_idempotency_key: "activation-idem-2",
+        row_version: 9,
+      }),
+      merchant: buildActivationMerchantRow(),
+      workspace: buildActivationWorkspaceRow(),
+      workspace_subscription: buildActivationWorkspaceSubscriptionRow(),
+    },
+    error: null,
+  });
+  await assert.rejects(
+    async () =>
+      repository.activateSoloPlusCase({
+        caseId: "11111111-1111-4111-8111-111111111111",
+        expectedRowVersion: 8,
+        requestIdempotencyKey: "activation-idem-2",
+        activatorAdminId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        policyVersion: "solo-plus-activation-policy-v1",
+      }),
+    (error: unknown) => {
+      assert.ok(error instanceof SoloPlusSupabaseRepositoryError);
+      assert.equal(error.code, "SOLO_PLUS_REPOSITORY_MAPPING_ERROR");
+      return true;
+    },
+  );
+
+  await assert.rejects(
+    async () =>
+      repository.activateSoloPlusCase({
+        caseId: "11111111-1111-4111-8111-111111111111",
+        expectedRowVersion: Number.MAX_SAFE_INTEGER + 1,
+        requestIdempotencyKey: "activation-idem-overflow",
+        activatorAdminId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        policyVersion: "solo-plus-activation-policy-v1",
+      }),
+    (error: unknown) => {
+      assert.ok(error instanceof SoloPlusSupabaseRepositoryError);
+      assert.equal(error.code, "SOLO_PLUS_ATOMIC_PERSISTENCE_UNAVAILABLE");
+      return true;
+    },
+  );
 
   console.log("solo-plus-supabase-repository.test.ts passed");
 }

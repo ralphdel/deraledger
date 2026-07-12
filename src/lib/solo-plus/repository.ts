@@ -140,6 +140,96 @@ export type SoloPlusCaseMutationResult = {
   event: SoloPlusCaseEventRecord | null;
 };
 
+export type SoloPlusActivationMerchantRecord = {
+  id: string;
+  subscriptionPlan: string | null;
+  merchantTier: string | null;
+  monthlyCollectionLimit: number | null;
+  setupMode: boolean | null;
+  liveFeaturesEnabled: boolean | null;
+  liveFeaturesActivatedAt: string | null;
+  onboardingStatus: string | null;
+  workspaceId: string | null;
+  verificationStatus: string | null;
+  updatedAt: string;
+};
+
+export type SoloPlusActivationWorkspaceRecord = {
+  id: string;
+  merchantId: string | null;
+  ownerUserId: string | null;
+  workspaceType: string | null;
+  displayName: string | null;
+  planType: string | null;
+  onboardingStatus: string | null;
+  setupMode: boolean | null;
+  liveFeaturesEnabled: boolean | null;
+  updatedAt: string;
+};
+
+export type SoloPlusActivationWorkspaceSubscriptionRecord = {
+  id: string;
+  workspaceId: string | null;
+  merchantId: string | null;
+  planType: string | null;
+  subscriptionStatus: string | null;
+  paymentReference: string | null;
+  amountPaid: string | null;
+  periodStart: string | null;
+  periodEnd: string | null;
+  updatedAt: string;
+};
+
+export type SoloPlusCaseActivationAtomicParams = {
+  caseId: string;
+  expectedRowVersion: number;
+  requestIdempotencyKey: string;
+  activatorAdminId: string;
+  policyVersion?: string | null;
+};
+
+export type SoloPlusCaseActivationAtomicResult =
+  | {
+      kind: "applied";
+      caseRecord: SoloPlusCaseRecord;
+      event: SoloPlusCaseEventRecord;
+      merchant: SoloPlusActivationMerchantRecord | null;
+      workspace: SoloPlusActivationWorkspaceRecord | null;
+      workspaceSubscription: SoloPlusActivationWorkspaceSubscriptionRecord | null;
+    }
+  | {
+      kind: "idempotent_replay";
+      caseRecord: SoloPlusCaseRecord;
+      event: SoloPlusCaseEventRecord;
+      merchant: SoloPlusActivationMerchantRecord | null;
+      workspace: SoloPlusActivationWorkspaceRecord | null;
+      workspaceSubscription: SoloPlusActivationWorkspaceSubscriptionRecord | null;
+    }
+  | {
+      kind: "not_found";
+    }
+  | {
+      kind: "idempotency_conflict";
+      currentCase: SoloPlusCaseRecord;
+    }
+  | {
+      kind: "version_conflict";
+      currentCase: SoloPlusCaseRecord;
+    }
+  | {
+      kind: "state_conflict";
+      currentCase: SoloPlusCaseRecord;
+    }
+  | {
+      kind: "prerequisite_conflict";
+      currentCase: SoloPlusCaseRecord;
+      reason?: string;
+    }
+  | {
+      kind: "feature_disabled";
+      currentCase?: SoloPlusCaseRecord | null;
+    };
+
 export const SOLO_PLUS_ACTIVE_CASE_STATUSES: readonly SoloPlusCaseStatus[] = [
   "draft",
   "awaiting_payment",
@@ -309,4 +399,7 @@ export interface SoloPlusCaseRepository {
     caseId: string,
     requirements: readonly SoloPlusCaseRequirementRecord[],
   ): Promise<SoloPlusCaseRequirementUpsertResult>;
+  activateSoloPlusCase(
+    input: SoloPlusCaseActivationAtomicParams,
+  ): Promise<SoloPlusCaseActivationAtomicResult>;
 }

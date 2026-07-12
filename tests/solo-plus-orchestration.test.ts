@@ -11,6 +11,8 @@ import {
 import {
   normalizeSoloPlusAmount,
   SOLO_PLUS_ACTIVE_CASE_STATUSES,
+  type SoloPlusCaseActivationAtomicParams,
+  type SoloPlusCaseActivationAtomicResult,
   type SoloPlusCaseCreateAtomicInput,
   type SoloPlusCaseCreateAtomicResult,
   type SoloPlusCaseEventRecord,
@@ -239,6 +241,20 @@ class FakeSoloPlusRepository implements SoloPlusCaseRepository {
       JSON.parse(JSON.stringify(requirements)) as SoloPlusCaseRequirementRecord[],
     );
     return this.cloneRequirements(this.requirements.get(caseId) || []);
+  }
+
+  async activateSoloPlusCase(
+    input: SoloPlusCaseActivationAtomicParams,
+  ): Promise<SoloPlusCaseActivationAtomicResult> {
+    const current = this.cases.get(input.caseId);
+    if (!current) {
+      return { kind: "not_found" };
+    }
+
+    return {
+      kind: "feature_disabled",
+      currentCase: this.cloneCase(current)!,
+    };
   }
 
   seedCase(record: SoloPlusCaseRecord, requirements?: readonly SoloPlusCaseRequirementRecord[]) {

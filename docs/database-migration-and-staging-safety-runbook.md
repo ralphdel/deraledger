@@ -762,6 +762,148 @@ A migration is ready for commit only when:
 
 # 15. Mandatory agent response format
 
+## 14.4 Batch Failure Discovery and Full Validation Gate
+
+Every migration-backed feature must use a batch failure-discovery gate before repair work continues after the first failed validation.
+
+### 14.4.1 No whack-a-mole validation
+
+Run the complete applicable validation matrix and collect all independent failures before repairing implementation code or SQL.
+
+Do not repeatedly:
+
+* run one long pipeline;
+* stop at the first failure;
+* patch one symptom;
+* rerun the entire pipeline only to expose the next failure.
+
+### 14.4.2 One canonical command
+
+Each migration-backed commit must expose one documented repository command that runs the full local validation gate, including:
+
+* application tests;
+* focused feature tests;
+* typecheck;
+* build;
+* migration manifest checks;
+* disposable bootstrap;
+* SQL regression suites;
+* hostile grant/default-privilege scenarios;
+* rerun checks;
+* rollback checks;
+* final git checks.
+
+Example:
+
+```powershell
+npm run validate:solo-plus:commit
+```
+
+### 14.4.3 Failure classifications
+
+Every check in the gate must report exactly one of:
+
+* `PASS`
+* `FAIL`
+* `BLOCKED`
+* `SKIPPED`
+
+Blocked checks must never be reported as passing.
+
+### 14.4.4 Dependency-aware continuation
+
+The orchestrator must continue after independent failures.
+
+When a prerequisite fails:
+
+* dependent checks must not run against unreliable state;
+* dependent checks must be marked `BLOCKED`;
+* the final summary must still include them.
+
+Within one SQL scenario, keep `ON_ERROR_STOP=1` so that unreliable scenario state fails fast. Across scenarios, continue collecting failures.
+
+### 14.4.5 Fresh-state isolation
+
+Every major SQL regression or hostile scenario must run in:
+
+* a fresh disposable database;
+* a fresh disposable schema;
+* or a transaction with proven rollback isolation.
+
+Shared fixture state must not leak between scenarios.
+
+### 14.4.6 Root-cause batching
+
+After the first full gate run:
+
+1. group failures by likely root cause;
+2. fix root causes in batches;
+3. rerun the full gate;
+4. repeat only when a subsequent full run exposes genuinely new failures.
+
+### 14.4.7 Local-only proof
+
+Destructive, reset-based and hostile validation must reject non-local database targets.
+
+Validation must:
+
+* parse the real connection string;
+* prove the host is local/disposable;
+* redact credentials in output;
+* refuse staging or production URLs;
+* fail closed before reset operations when locality is uncertain.
+
+### 14.4.8 Evidence handling
+
+Validation logs should default to temporary or explicitly designated evidence directories, for example:
+
+```text
+$env:TEMP\deraledger-validation\<run-id>\
+```
+
+Generated logs must not silently enter commits.
+
+### 14.4.9 Final gate requirement
+
+A migration-backed change is not ready for review, staging or commit until the full validation gate returns:
+
+* zero `FAIL`;
+* zero unexpected `BLOCKED`;
+* and a final non-zero exit is used whenever either condition is not met.
+
+### 14.4.10 Exception reporting
+
+When an environment limitation prevents a check:
+
+* record the exact command;
+* mark the result `BLOCKED` or `SKIPPED`;
+* state the exact environment reason;
+* do not claim full validation succeeded.
+
+Expected summary format:
+
+```text
+PASS    APP-001  Solo Plus TypeScript tests
+FAIL    DB-004   Commit 10 activation SQL assertions
+BLOCKED DB-007   Commit 10 rollback harness
+SKIPPED ENV-009  psql not available
+```
+
+Include:
+
+* total checks;
+* pass count;
+* fail count;
+* blocked count;
+* skipped count;
+* grouped root causes;
+* exact failed commands;
+* first relevant error excerpt;
+* paths to full temporary logs;
+* final exit status.
+
+The full local validation gate supplements, but does not replace, migration-specific read-only staging preflight and postflight artifacts.
+
 After local implementation, the agent must report:
 
 1. source-of-truth documents reviewed;
