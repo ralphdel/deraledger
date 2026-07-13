@@ -21,6 +21,7 @@ class FakeQueryBuilder {
   private readonly client: FakeSupabaseClient;
   private readonly table: string;
   private filters: Array<{ type: "eq" | "in"; column: string; value: unknown }> = [];
+  private orClauses: string[] = [];
   private orders: Array<{ column: string; ascending: boolean }> = [];
   private limitCount: number | null = null;
   private pendingInsert: Record<string, unknown>[] | null = null;
@@ -42,6 +43,11 @@ class FakeQueryBuilder {
 
   in(column: string, values: readonly unknown[]): FakeQueryBuilder {
     this.filters.push({ type: "in", column, value: [...values] });
+    return this;
+  }
+
+  or(filters: string): FakeQueryBuilder {
+    this.orClauses.push(filters);
     return this;
   }
 
@@ -144,22 +150,30 @@ class FakeQueryBuilder {
       });
     }
 
-    for (const order of this.orders) {
+    for (const clause of this.orClauses) {
+      rows = rows.filter((row) => this.matchesOrClause(row as Record<string, unknown>, clause));
+    }
+
+    if (this.orders.length > 0) {
       rows.sort((left, right) => {
-        const leftValue = (left as Record<string, unknown>)[order.column];
-        const rightValue = (right as Record<string, unknown>)[order.column];
-        if (leftValue === rightValue) {
-          return 0;
+        for (const order of this.orders) {
+          const leftValue = (left as Record<string, unknown>)[order.column];
+          const rightValue = (right as Record<string, unknown>)[order.column];
+          if (leftValue === rightValue) {
+            continue;
+          }
+          if (leftValue == null) {
+            return order.ascending ? -1 : 1;
+          }
+          if (rightValue == null) {
+            return order.ascending ? 1 : -1;
+          }
+          return leftValue < rightValue
+            ? (order.ascending ? -1 : 1)
+            : (order.ascending ? 1 : -1);
         }
-        if (leftValue == null) {
-          return order.ascending ? -1 : 1;
-        }
-        if (rightValue == null) {
-          return order.ascending ? 1 : -1;
-        }
-        return leftValue < rightValue
-          ? (order.ascending ? -1 : 1)
-          : (order.ascending ? 1 : -1);
+
+        return 0;
       });
     }
 
@@ -199,6 +213,40 @@ class FakeQueryBuilder {
     }
 
     return rows;
+  }
+
+  private matchesOrClause(row: Record<string, unknown>, clause: string): boolean {
+    if (clause.includes(".ilike.")) {
+      return clause.split(",").some((entry) => {
+        const match = /^([a-z_]+)\.ilike\.%(.*)%$/i.exec(entry.trim());
+        if (!match) {
+          return false;
+        }
+
+        const column = match[1];
+        const needle = match[2].toLowerCase();
+        const value = row[column];
+        return typeof value === "string" && value.toLowerCase().includes(needle);
+      });
+    }
+
+    const cursorMatch = /^([a-z_]+)\.lt\.([^,]+),and\(\1\.eq\.([^,]+),id\.lt\.([^)]+)\)$/i.exec(
+      clause,
+    );
+    if (cursorMatch) {
+      const column = cursorMatch[1];
+      const lessThanValue = cursorMatch[2];
+      const equalValue = cursorMatch[3];
+      const idLessThan = cursorMatch[4];
+      const rawValue = row[column];
+      const idValue = row.id;
+      return (
+        (typeof rawValue === "string" && rawValue < lessThanValue) ||
+        (rawValue === equalValue && typeof idValue === "string" && idValue < idLessThan)
+      );
+    }
+
+    return false;
   }
 }
 
@@ -563,6 +611,142 @@ async function run() {
   );
   assert.equal(mappedEvents.length, 1);
   assert.equal(mappedEvents[0].eventType, "case_created");
+
+  client.tables.set("merchants", [
+    {
+      id: "22222222-2222-4222-8222-222222222222",
+      business_name: "Acme Retail",
+      owner_name: "Ada Owner",
+      email: "owner@example.test",
+      subscription_plan: "solo_lite",
+    },
+  ]);
+  client.tables.set("solo_plus_cases", [
+    buildCaseRow({
+      id: "11111111-1111-4111-8111-111111111111",
+      merchant_id: "22222222-2222-4222-8222-222222222222",
+      case_status: "verification_pending",
+      payment_status: "paid",
+      updated_at: "2026-07-12T01:00:00.000Z",
+      created_at: "2026-07-10T00:00:00.000Z",
+      row_version: 6,
+    }),
+    buildCaseRow({
+      id: "99999999-9999-4999-8999-999999999999",
+      merchant_id: "22222222-2222-4222-8222-222222222222",
+      case_status: "manual_review",
+      payment_status: "paid",
+      updated_at: "2026-07-12T01:00:00.000Z",
+      created_at: "2026-07-09T00:00:00.000Z",
+      row_version: 5,
+    }),
+  ]);
+  client.tables.set("solo_plus_case_requirements", [
+    buildRequirementRow({
+      case_id: "11111111-1111-4111-8111-111111111111",
+      requirement_code: "bvn",
+      requirement_state: "passed",
+    }),
+    buildRequirementRow({
+      id: "55555555-5555-4555-8555-555555555555",
+      case_id: "11111111-1111-4111-8111-111111111111",
+      requirement_code: "proof_of_address",
+      requirement_state: "failed",
+      evidence_source_type: "merchant_document",
+      evidence_reference: "kyc-documents/proof.pdf",
+      metadata: {
+        uploadedAt: "2026-07-12T04:00:00.000Z",
+        contentType: "application/pdf",
+        fileSizeBytes: 2048,
+        storageKey: "kyc-documents/proof.pdf",
+      },
+    }),
+  ]);
+  client.tables.set("solo_plus_case_events", [
+    buildEventRow({
+      case_id: "11111111-1111-4111-8111-111111111111",
+      event_type: "case_review_requested_more_information",
+      reason: "Need updated address document.",
+      created_at: "2026-07-12T02:00:00.000Z",
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      actor_type: "admin",
+      actor_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    }),
+    buildEventRow({
+      case_id: "11111111-1111-4111-8111-111111111111",
+      event_type: "case_created",
+      created_at: "2026-07-10T00:00:00.000Z",
+      id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    }),
+    buildEventRow({
+      case_id: "99999999-9999-4999-8999-999999999999",
+      event_type: "case_approved",
+      created_at: "2026-07-11T00:00:00.000Z",
+      id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      actor_type: "admin",
+      actor_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    }),
+  ]);
+
+  const adminQueue = await repository.listAdminCases({
+    caseStatus: "verification_pending",
+    flowOrigin: null,
+    paymentStatus: "paid",
+    refundStatus: null,
+    merchantSearch: "Acme",
+    cursor: null,
+    limit: 1,
+  });
+  assert.equal(adminQueue.items.length, 1);
+  assert.equal(adminQueue.items[0].merchant?.businessName, "Acme Retail");
+  assert.equal(adminQueue.items[0].requirements.length, 2);
+  assert.equal(
+    adminQueue.items[0].latestReviewDecisionEvent?.eventType,
+    "case_review_requested_more_information",
+  );
+  assert.equal(adminQueue.nextCursor, null);
+
+  const adminQueueNextPage = await repository.listAdminCases({
+    caseStatus: null,
+    flowOrigin: null,
+    paymentStatus: "paid",
+    refundStatus: null,
+    merchantSearch: null,
+    cursor: {
+      updatedAt: "2026-07-12T01:00:00.000Z",
+      caseId: "99999999-9999-4999-8999-999999999999",
+    },
+    limit: 10,
+  });
+  assert.equal(adminQueueNextPage.items.length, 1);
+  assert.equal(
+    adminQueueNextPage.items[0].caseRecord.id,
+    "11111111-1111-4111-8111-111111111111",
+  );
+
+  const adminDetail = await repository.getAdminCaseDetail(
+    "11111111-1111-4111-8111-111111111111",
+  );
+  assert.equal(adminDetail?.merchant?.email, "owner@example.test");
+  assert.equal(adminDetail?.requirements[1]?.evidenceReference, "kyc-documents/proof.pdf");
+  assert.equal(
+    adminDetail?.latestReviewDecisionEvent?.eventType,
+    "case_review_requested_more_information",
+  );
+
+  const adminEvents = await repository.listAdminCaseEvents(
+    "11111111-1111-4111-8111-111111111111",
+    {
+      cursor: null,
+      limit: 1,
+    },
+  );
+  assert.equal(adminEvents.items.length, 1);
+  assert.equal(adminEvents.items[0].eventType, "case_review_requested_more_information");
+  assert.deepEqual(adminEvents.nextCursor, {
+    createdAt: "2026-07-12T02:00:00.000Z",
+    eventId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  });
 
   const upsertedRequirements = await repository.upsertCaseRequirements(
     "11111111-1111-4111-8111-111111111111",

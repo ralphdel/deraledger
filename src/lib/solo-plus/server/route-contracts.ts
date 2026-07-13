@@ -6,7 +6,15 @@ import type {
 } from "../repository";
 import { normalizeSoloPlusAmount } from "../repository";
 import { getPlanPriceKobo } from "@/lib/plans";
-import { SOLO_PLUS_REQUIRED_REQUIREMENTS } from "../state";
+import {
+  SOLO_PLUS_CASE_STATUSES,
+  SOLO_PLUS_PAYMENT_STATUSES,
+  SOLO_PLUS_REFUND_STATUSES,
+  type SoloPlusCaseStatus,
+  type SoloPlusPaymentStatus,
+  type SoloPlusRefundStatus,
+  SOLO_PLUS_REQUIRED_REQUIREMENTS,
+} from "../state";
 
 export const SOLO_PLUS_BROWSER_CREATE_REQUIREMENTS_POLICY_VERSION = "solo-plus-payment-init-v1";
 export const SOLO_PLUS_BROWSER_CREATE_MAX_BODY_BYTES = 64 * 1024;
@@ -70,6 +78,124 @@ export type SoloPlusBrowserRequirementSummaryDto = {
 
 export type SoloPlusBrowserCaseDto = SoloPlusBrowserCaseSummaryDto & {
   requirements: SoloPlusBrowserRequirementSummaryDto[];
+};
+
+export type SoloPlusAdminCasesCursor = {
+  updatedAt: string;
+  caseId: string;
+};
+
+export type SoloPlusAdminCaseEventsCursor = {
+  createdAt: string;
+  eventId: string;
+};
+
+export type SoloPlusAdminCasesQuery = {
+  status: SoloPlusCaseStatus | null;
+  flowOrigin: SoloPlusCaseRecord["flowOrigin"] | null;
+  paymentStatus: SoloPlusPaymentStatus | null;
+  refundStatus: SoloPlusRefundStatus | null;
+  merchantSearch: string | null;
+  cursor: SoloPlusAdminCasesCursor | null;
+  limit: number;
+};
+
+export type SoloPlusAdminQueueRequirementSummaryDto = {
+  total: number;
+  satisfied: number;
+  actionable: number;
+  inProgress: number;
+};
+
+export type SoloPlusAdminQueueItemDto = {
+  caseId: string;
+  merchantDisplayName: string | null;
+  ownerEmail: string | null;
+  flowOrigin: SoloPlusCaseRecord["flowOrigin"];
+  caseStatus: SoloPlusCaseRecord["caseStatus"];
+  reviewState: SoloPlusMerchantReviewState;
+  paymentStatus: SoloPlusCaseRecord["paymentStatus"];
+  refundStatus: SoloPlusCaseRecord["refundStatus"];
+  rowVersion: number;
+  requirementSummary: SoloPlusAdminQueueRequirementSummaryDto;
+  createdAt: string;
+  updatedAt: string;
+  statusChangedAt: string | null;
+};
+
+export type SoloPlusAdminQueueResponseDto = {
+  items: SoloPlusAdminQueueItemDto[];
+  nextCursor: string | null;
+};
+
+export type SoloPlusAdminEvidenceReferenceSummaryDto = {
+  sourceType: NonNullable<SoloPlusCaseRequirementRecord["evidenceSourceType"]>;
+  label: string;
+  capturedAt: string | null;
+  fileType: string | null;
+  fileSizeBytes: number | null;
+};
+
+export type SoloPlusAdminRequirementDetailDto = {
+  requirementCode: SoloPlusCaseRequirementRecord["requirementCode"];
+  requirementState: SoloPlusCaseRequirementRecord["requirementState"];
+  evidenceSourceType: SoloPlusCaseRequirementRecord["evidenceSourceType"];
+  evidenceReferenceSummary: SoloPlusAdminEvidenceReferenceSummaryDto | null;
+  completedAt: string | null;
+  updatedAt: string;
+};
+
+export type SoloPlusAdminPaymentSummaryDto = {
+  provider: SoloPlusCaseRecord["paymentProvider"];
+  amount: string;
+  currency: SoloPlusCaseRecord["paymentCurrency"];
+  status: SoloPlusCaseRecord["paymentStatus"];
+  providerReference: string | null;
+  confirmedAt: string | null;
+};
+
+export type SoloPlusAdminRefundSummaryDto = {
+  status: SoloPlusCaseRecord["refundStatus"];
+  reasonSummary: string | null;
+  requestedAt: string | null;
+  approvedAt: string | null;
+  processingAt: string | null;
+  completedAt: string | null;
+  failedAt: string | null;
+};
+
+export type SoloPlusAdminReviewHistoryEventDto = {
+  eventType: string;
+  decision: "request_more_information" | "approve" | "reject" | "reopen" | null;
+  reason: string | null;
+  actorType: SoloPlusCaseEventRecord["actorType"];
+  reviewerDisplayName: string | null;
+  policyVersion: string | null;
+  createdAt: string;
+};
+
+export type SoloPlusAdminCaseDetailDto = {
+  case: {
+    caseId: string;
+    merchantId: string | null;
+    merchantDisplayName: string | null;
+    ownerEmail: string | null;
+    currentPlan: string | null;
+    flowOrigin: SoloPlusCaseRecord["flowOrigin"];
+    caseStatus: SoloPlusCaseRecord["caseStatus"];
+    reviewState: SoloPlusMerchantReviewState;
+    paymentStatus: SoloPlusCaseRecord["paymentStatus"];
+    refundStatus: SoloPlusCaseRecord["refundStatus"];
+    activationState: "inactive" | "approved_pending_activation" | "activated";
+    rowVersion: number;
+    createdAt: string;
+    updatedAt: string;
+    statusChangedAt: string | null;
+  };
+  requirements: SoloPlusAdminRequirementDetailDto[];
+  payment: SoloPlusAdminPaymentSummaryDto | null;
+  refund: SoloPlusAdminRefundSummaryDto | null;
+  reviewHistory: SoloPlusAdminReviewHistoryEventDto[];
 };
 
 type MerchantReviewContext = {
@@ -268,7 +394,7 @@ function hasActionableOutstandingRequirement(
   );
 }
 
-function sanitizeMerchantVisibleReason(rawReason: string | null | undefined): string | null {
+export function sanitizeMerchantVisibleReason(rawReason: string | null | undefined): string | null {
   if (!hasNonEmptyString(rawReason)) {
     return null;
   }
@@ -464,4 +590,157 @@ export function getSoloPlusCreationExpectedAmount(): string {
 
 export function getSoloPlusCreationExpectedAmountKobo(): number {
   return getPlanPriceKobo("solo_plus");
+}
+
+function isAllowedCaseStatus(value: string): value is SoloPlusCaseStatus {
+  return (SOLO_PLUS_CASE_STATUSES as readonly string[]).includes(value);
+}
+
+function isAllowedPaymentStatus(value: string): value is SoloPlusPaymentStatus {
+  return (SOLO_PLUS_PAYMENT_STATUSES as readonly string[]).includes(value);
+}
+
+function isAllowedRefundStatus(value: string): value is SoloPlusRefundStatus {
+  return (SOLO_PLUS_REFUND_STATUSES as readonly string[]).includes(value);
+}
+
+function normalizeAdminQueryParam(
+  value: string | null,
+  field: string,
+  maxLength: number,
+): string | null {
+  if (value == null) {
+    return null;
+  }
+
+  return assertBoundedText(value, field, maxLength, false);
+}
+
+function parseBase64Json<T>(value: string, field: string): T {
+  try {
+    const decoded = Buffer.from(value, "base64url").toString("utf8");
+    return JSON.parse(decoded) as T;
+  } catch {
+    throw new Error(`${field} is invalid.`);
+  }
+}
+
+export function serializeSoloPlusAdminCasesCursor(
+  cursor: SoloPlusAdminCasesCursor | null,
+): string | null {
+  if (!cursor) {
+    return null;
+  }
+
+  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+}
+
+export function parseSoloPlusAdminCasesCursor(
+  value: string | null,
+): SoloPlusAdminCasesCursor | null {
+  if (value == null) {
+    return null;
+  }
+
+  const parsed = parseBase64Json<Record<string, unknown>>(value, "cursor");
+  return {
+    updatedAt: assertIsoTimestamp(parsed.updatedAt, "cursor.updatedAt"),
+    caseId: assertUuid(parsed.caseId, "cursor.caseId"),
+  };
+}
+
+export function serializeSoloPlusAdminCaseEventsCursor(
+  cursor: SoloPlusAdminCaseEventsCursor | null,
+): string | null {
+  if (!cursor) {
+    return null;
+  }
+
+  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+}
+
+export function parseSoloPlusAdminCaseEventsCursor(
+  value: string | null,
+): SoloPlusAdminCaseEventsCursor | null {
+  if (value == null) {
+    return null;
+  }
+
+  const parsed = parseBase64Json<Record<string, unknown>>(value, "historyCursor");
+  return {
+    createdAt: assertIsoTimestamp(parsed.createdAt, "historyCursor.createdAt"),
+    eventId: assertUuid(parsed.eventId, "historyCursor.eventId"),
+  };
+}
+
+export function parseSoloPlusAdminCasesQuery(request: Request): SoloPlusAdminCasesQuery {
+  const url = new URL(request.url);
+  const statusValue = normalizeAdminQueryParam(url.searchParams.get("status"), "status", 32);
+  const flowOriginValue = normalizeAdminQueryParam(
+    url.searchParams.get("flowOrigin"),
+    "flowOrigin",
+    16,
+  );
+  const paymentStatusValue = normalizeAdminQueryParam(
+    url.searchParams.get("paymentStatus"),
+    "paymentStatus",
+    16,
+  );
+  const refundStatusValue = normalizeAdminQueryParam(
+    url.searchParams.get("refundStatus"),
+    "refundStatus",
+    32,
+  );
+  const merchantSearch = normalizeAdminQueryParam(url.searchParams.get("q"), "q", 128);
+  const limitRaw = url.searchParams.get("limit");
+  const limit =
+    limitRaw == null ? 25 : assertNonNegativeSafeInteger(Number(limitRaw), "limit");
+
+  if (limit < 1 || limit > 50) {
+    throw new Error("limit must be between 1 and 50.");
+  }
+
+  if (statusValue && !isAllowedCaseStatus(statusValue)) {
+    throw new Error("status must be a supported Solo Plus case status.");
+  }
+  if (flowOriginValue && flowOriginValue !== "onboarding" && flowOriginValue !== "upgrade") {
+    throw new Error("flowOrigin must be onboarding or upgrade.");
+  }
+  if (paymentStatusValue && !isAllowedPaymentStatus(paymentStatusValue)) {
+    throw new Error("paymentStatus must be a supported Solo Plus payment status.");
+  }
+  if (refundStatusValue && !isAllowedRefundStatus(refundStatusValue)) {
+    throw new Error("refundStatus must be a supported Solo Plus refund status.");
+  }
+
+  return {
+    status: (statusValue as SoloPlusCaseStatus | null) ?? null,
+    flowOrigin: flowOriginValue as SoloPlusCaseRecord["flowOrigin"] | null,
+    paymentStatus: (paymentStatusValue as SoloPlusPaymentStatus | null) ?? null,
+    refundStatus: (refundStatusValue as SoloPlusRefundStatus | null) ?? null,
+    merchantSearch,
+    cursor: parseSoloPlusAdminCasesCursor(url.searchParams.get("cursor")),
+    limit,
+  };
+}
+
+export function parseSoloPlusAdminCaseDetailQuery(request: Request): {
+  historyCursor: SoloPlusAdminCaseEventsCursor | null;
+  historyLimit: number;
+} {
+  const url = new URL(request.url);
+  const historyLimitRaw = url.searchParams.get("historyLimit");
+  const historyLimit =
+    historyLimitRaw == null
+      ? 25
+      : assertNonNegativeSafeInteger(Number(historyLimitRaw), "historyLimit");
+
+  if (historyLimit < 1 || historyLimit > 50) {
+    throw new Error("historyLimit must be between 1 and 50.");
+  }
+
+  return {
+    historyCursor: parseSoloPlusAdminCaseEventsCursor(url.searchParams.get("historyCursor")),
+    historyLimit,
+  };
 }

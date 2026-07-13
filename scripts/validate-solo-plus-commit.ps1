@@ -841,7 +841,10 @@ $checks = @(
         'supabase/staging/postflight/012_solo_plus_activation_rpc_verify.sql',
         'supabase/tests/phase2_solo_plus_activation_rpc.sql'
       )
-      $missing = @($required | Where-Object { -not (Test-Path (Join-Path $ctx.RepoRoot $_)) })
+      $missing = @($required | Where-Object {
+          $fullPath = Join-Path $ctx.RepoRoot $_
+          -not (Test-Path -LiteralPath $fullPath)
+        })
       if ($missing.Count -gt 0) {
         return [pscustomobject]@{ Status = 'FAIL'; ExitCode = 1; Stdout = ''; Stderr = ('Missing required files:' + [Environment]::NewLine + ($missing -join [Environment]::NewLine)) }
       }
@@ -908,13 +911,22 @@ $checks = @(
       $required = @(
         'src/lib/server/browser-origin.ts',
         'src/lib/solo-plus/server/browser-case-service.ts',
+        'src/lib/solo-plus/server/admin-read-service.ts',
         'src/app/api/solo-plus/case/route.ts',
         'src/app/api/solo-plus/case/requirements/evidence/route.ts',
+        'src/app/api/admin/solo-plus/cases/route.ts',
+        'src/app/api/admin/solo-plus/cases/[caseId]/route.ts',
         'tests/solo-plus-browser-origin.test.ts',
         'tests/solo-plus-case-route.test.ts',
-        'tests/solo-plus-case-evidence-route.test.ts'
+        'tests/solo-plus-case-evidence-route.test.ts',
+        'tests/solo-plus-admin-read-service.test.ts',
+        'tests/solo-plus-admin-cases-route.test.ts',
+        'tests/solo-plus-admin-case-detail-route.test.ts'
       )
-      $missing = @($required | Where-Object { -not (Test-Path (Join-Path $ctx.RepoRoot $_)) })
+      $missing = @($required | Where-Object {
+          $fullPath = Join-Path $ctx.RepoRoot $_
+          -not (Test-Path -LiteralPath $fullPath)
+        })
       if ($missing.Count -gt 0) {
         return [pscustomobject]@{ Status = 'FAIL'; ExitCode = 1; Stdout = ''; Stderr = ('Missing Commit 11 artifacts:' + [Environment]::NewLine + ($missing -join [Environment]::NewLine)) }
       }
@@ -1098,6 +1110,9 @@ $checks = @(
   (New-CommandCheck -Id 'APP-011' -Name 'Plan availability flag alignment test' -Phase 'B' -RootCauseCategory 'application-validation' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-Command',"Set-Location '$($script:RepoRoot)'; npx tsx tests/plans.test.ts") -TimeoutSeconds 600),
   (New-CommandCheck -Id 'APP-005' -Name 'Solo Plus case route test' -Phase 'B' -RootCauseCategory 'application-validation' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-Command',"Set-Location '$($script:RepoRoot)'; npx tsx tests/solo-plus-case-route.test.ts") -TimeoutSeconds 1200),
   (New-CommandCheck -Id 'APP-006' -Name 'Solo Plus evidence route test' -Phase 'B' -RootCauseCategory 'application-validation' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-Command',"Set-Location '$($script:RepoRoot)'; npx tsx tests/solo-plus-case-evidence-route.test.ts") -TimeoutSeconds 1200),
+  (New-CommandCheck -Id 'APP-012' -Name 'Admin read service test' -Phase 'B' -RootCauseCategory 'application-validation' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-Command',"Set-Location '$($script:RepoRoot)'; npx tsx tests/solo-plus-admin-read-service.test.ts") -TimeoutSeconds 900),
+  (New-CommandCheck -Id 'APP-013' -Name 'Admin cases route test' -Phase 'B' -RootCauseCategory 'application-validation' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-Command',"Set-Location '$($script:RepoRoot)'; npx tsx tests/solo-plus-admin-cases-route.test.ts") -TimeoutSeconds 900),
+  (New-CommandCheck -Id 'APP-014' -Name 'Admin case detail route test' -Phase 'B' -RootCauseCategory 'application-validation' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-Command',"Set-Location '$($script:RepoRoot)'; npx tsx tests/solo-plus-admin-case-detail-route.test.ts") -TimeoutSeconds 900),
   (New-CommandCheck -Id 'APP-007' -Name 'TypeScript compile' -Phase 'B' -RootCauseCategory 'application-validation' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-Command',"Set-Location '$($script:RepoRoot)'; npx tsc --noEmit") -TimeoutSeconds 2400),
   (New-CommandCheck -Id 'APP-008' -Name 'Next.js build' -Phase 'B' -RootCauseCategory 'application-validation' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-Command',"Set-Location '$($script:RepoRoot)'; npm run build") -TimeoutSeconds 3600),
   (New-CommandCheck -Id 'APP-009' -Name 'git diff --check' -Phase 'B' -RootCauseCategory 'repository-state' -FilePath 'git' -Arguments @('diff', '--check') -TimeoutSeconds 120),

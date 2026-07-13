@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import { createRequire, Module } from "node:module";
 
 import type {
+  SoloPlusAdminCaseDetailRecord,
+  SoloPlusAdminCaseEventListInput,
+  SoloPlusAdminCaseEventListResult,
+  SoloPlusAdminCaseListInput,
+  SoloPlusAdminCaseListResult,
   SoloPlusCaseActivationAtomicParams,
   SoloPlusCaseActivationAtomicResult,
   SoloPlusCaseEventRecord,
@@ -88,6 +93,21 @@ class FakeSoloPlusRepository implements SoloPlusCaseRepository {
     return latest == null
       ? null
       : (JSON.parse(JSON.stringify(latest)) as SoloPlusCaseEventRecord);
+  }
+
+  async listAdminCases(_: SoloPlusAdminCaseListInput): Promise<SoloPlusAdminCaseListResult> {
+    return { items: [], nextCursor: null };
+  }
+
+  async getAdminCaseDetail(_: string): Promise<SoloPlusAdminCaseDetailRecord | null> {
+    return null;
+  }
+
+  async listAdminCaseEvents(
+    __: string,
+    ___: SoloPlusAdminCaseEventListInput,
+  ): Promise<SoloPlusAdminCaseEventListResult> {
+    return { items: [], nextCursor: null };
   }
 
   async createCaseWithRequirementsAndEvent(): Promise<SoloPlusCaseCreateAtomicResult> {

@@ -2,6 +2,15 @@ import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import {
   normalizeSoloPlusAmount,
   type SoloPlusAmount,
+  type SoloPlusAdminCaseCursor,
+  type SoloPlusAdminCaseDetailRecord,
+  type SoloPlusAdminCaseEventCursor,
+  type SoloPlusAdminCaseEventListInput,
+  type SoloPlusAdminCaseEventListResult,
+  type SoloPlusAdminCaseListInput,
+  type SoloPlusAdminCaseListRecord,
+  type SoloPlusAdminCaseListResult,
+  type SoloPlusAdminCaseMerchantRecord,
   type SoloPlusActivationMerchantRecord,
   type SoloPlusActivationWorkspaceRecord,
   type SoloPlusActivationWorkspaceSubscriptionRecord,
@@ -59,6 +68,10 @@ type SupabaseLikeQueryBuilder = {
   select(columns?: string): SupabaseLikeQueryBuilder;
   eq(column: string, value: unknown): SupabaseLikeQueryBuilder;
   in(column: string, values: readonly unknown[]): SupabaseLikeQueryBuilder;
+  or?(filters: string): SupabaseLikeQueryBuilder;
+  lt?(column: string, value: unknown): SupabaseLikeQueryBuilder;
+  lte?(column: string, value: unknown): SupabaseLikeQueryBuilder;
+  ilike?(column: string, value: string): SupabaseLikeQueryBuilder;
   order(column: string, options?: { ascending?: boolean }): SupabaseLikeQueryBuilder;
   limit(count: number): SupabaseLikeQueryBuilder;
   insert(
@@ -101,6 +114,7 @@ export class SoloPlusSupabaseRepositoryError extends Error {
 type SoloPlusCaseRow = Record<string, unknown>;
 type SoloPlusRequirementRow = Record<string, unknown>;
 type SoloPlusEventRow = Record<string, unknown>;
+type SoloPlusMerchantRow = Record<string, unknown>;
 type SoloPlusActivationMerchantRow = Record<string, unknown>;
 type SoloPlusActivationWorkspaceRow = Record<string, unknown>;
 type SoloPlusActivationWorkspaceSubscriptionRow = Record<string, unknown>;
@@ -406,6 +420,14 @@ function assertText(value: unknown, field: string, nullable = false): string | n
   return value.trim();
 }
 
+function assertOptionalUuidLike(value: unknown, field: string): string | null {
+  return assertUuidLike(value, field, true);
+}
+
+function assertOptionalIsoTimestamp(value: unknown, field: string): string | null {
+  return assertTimestamp(value, field, true);
+}
+
 function mapCaseRow(row: unknown): SoloPlusCaseRecord {
   const candidate = row as SoloPlusCaseRow;
   const caseStatusValue = assertText(candidate.case_status, "case_status")!;
@@ -628,6 +650,41 @@ function mapEventRow(row: unknown): SoloPlusCaseEventRecord {
     policyVersion: assertText(candidate.policy_version, "policy_version")!,
     createdAt: assertTimestamp(candidate.created_at, "event.created_at")!,
   };
+}
+
+function mapAdminMerchantRow(row: unknown): SoloPlusAdminCaseMerchantRecord {
+  const candidate = row as SoloPlusMerchantRow;
+  return {
+    merchantId: assertUuidLike(candidate.id, "merchant.id")!,
+    businessName: assertText(candidate.business_name, "business_name", true),
+    ownerName: assertText(candidate.owner_name, "owner_name", true),
+    email: assertText(candidate.email, "email", true),
+    subscriptionPlan: assertText(candidate.subscription_plan, "subscription_plan", true),
+  };
+}
+
+function compareAdminCaseCursor(
+  caseRecord: SoloPlusCaseRecord,
+  cursor: SoloPlusAdminCaseCursor,
+): number {
+  const updatedAtComparison = caseRecord.updatedAt.localeCompare(cursor.updatedAt);
+  if (updatedAtComparison !== 0) {
+    return updatedAtComparison;
+  }
+
+  return caseRecord.id.localeCompare(cursor.caseId);
+}
+
+function compareAdminEventCursor(
+  eventRecord: SoloPlusCaseEventRecord,
+  cursor: SoloPlusAdminCaseEventCursor,
+): number {
+  const createdAtComparison = eventRecord.createdAt.localeCompare(cursor.createdAt);
+  if (createdAtComparison !== 0) {
+    return createdAtComparison;
+  }
+
+  return eventRecord.id.localeCompare(cursor.eventId);
 }
 
 function mapActivationMerchantRow(row: unknown): SoloPlusActivationMerchantRecord {
@@ -1099,6 +1156,112 @@ async function many(
   return data;
 }
 
+async function loadAdminMerchantsById(
+  client: SoloPlusSupabaseClientLike,
+  merchantIds: readonly string[],
+): Promise<Map<string, SoloPlusAdminCaseMerchantRecord>> {
+  if (merchantIds.length === 0) {
+    return new Map();
+  }
+
+  const rows = await many(
+    client
+      .from("merchants")
+      .select("id, business_name, owner_name, email, subscription_plan")
+      .in("id", merchantIds),
+  );
+
+  return new Map(
+    rows.map((row) => {
+      const merchant = mapAdminMerchantRow(row);
+      return [merchant.merchantId, merchant] as const;
+    }),
+  );
+}
+
+async function loadAdminRequirementsByCaseId(
+  client: SoloPlusSupabaseClientLike,
+  caseIds: readonly string[],
+): Promise<Map<string, readonly SoloPlusCaseRequirementRecord[]>> {
+  if (caseIds.length === 0) {
+    return new Map();
+  }
+
+  const rows = await many(
+    client
+      .from("solo_plus_case_requirements")
+      .select("*")
+      .in("case_id", caseIds)
+      .order("requirement_code", { ascending: true }),
+  );
+
+  const mappedRows = rows.map((row) => mapRequirementRow(row));
+  const grouped = new Map<string, SoloPlusCaseRequirementRecord[]>();
+  for (const row of mappedRows) {
+    const current = grouped.get(row.caseId) ?? [];
+    current.push(row);
+    grouped.set(row.caseId, current);
+  }
+
+  return grouped;
+}
+
+async function loadLatestReviewDecisionEventsByCaseId(
+  client: SoloPlusSupabaseClientLike,
+  caseIds: readonly string[],
+): Promise<Map<string, SoloPlusCaseEventRecord | null>> {
+  if (caseIds.length === 0) {
+    return new Map();
+  }
+
+  const rows = await many(
+    client
+      .from("solo_plus_case_events")
+      .select("*")
+      .in("case_id", caseIds)
+      .in("event_type", [...REVIEW_DECISION_EVENT_TYPES])
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false }),
+  );
+
+  const mappedRows = rows.map((row) => mapEventRow(row));
+  const latestByCase = new Map<string, SoloPlusCaseEventRecord | null>();
+  for (const row of mappedRows) {
+    if (!latestByCase.has(row.caseId)) {
+      latestByCase.set(row.caseId, row);
+    }
+  }
+
+  for (const caseId of caseIds) {
+    if (!latestByCase.has(caseId)) {
+      latestByCase.set(caseId, null);
+    }
+  }
+
+  return latestByCase;
+}
+
+async function loadAdminListRecords(
+  client: SoloPlusSupabaseClientLike,
+  caseRows: readonly unknown[],
+): Promise<readonly SoloPlusAdminCaseListRecord[]> {
+  const caseRecords = caseRows.map((row) => mapCaseRow(row));
+  const merchantIds = [...new Set(caseRecords.map((record) => record.merchantId).filter(hasNonEmptyString))];
+  const caseIds = caseRecords.map((record) => record.id);
+  const [merchantMap, requirementsMap, latestReviewMap] = await Promise.all([
+    loadAdminMerchantsById(client, merchantIds),
+    loadAdminRequirementsByCaseId(client, caseIds),
+    loadLatestReviewDecisionEventsByCaseId(client, caseIds),
+  ]);
+
+  return caseRecords.map((caseRecord) => ({
+    caseRecord,
+    merchant: caseRecord.merchantId ? merchantMap.get(caseRecord.merchantId) ?? null : null,
+    requirements: requirementsMap.get(caseRecord.id) ?? [],
+    latestReviewDecisionEvent: latestReviewMap.get(caseRecord.id) ?? null,
+  }));
+}
+
 export function createSoloPlusSupabaseRepository(
   options: { client?: SoloPlusSupabaseClientLike } = {},
 ): SoloPlusCaseRepository {
@@ -1183,10 +1346,148 @@ export function createSoloPlusSupabaseRepository(
           .eq("case_id", caseId)
           .in("event_type", [...REVIEW_DECISION_EVENT_TYPES])
           .order("created_at", { ascending: false })
+          .order("id", { ascending: false })
           .limit(1),
       );
 
       return row == null ? null : mapEventRow(row);
+    },
+
+    async listAdminCases(input: SoloPlusAdminCaseListInput): Promise<SoloPlusAdminCaseListResult> {
+      let merchantIdsFilter: readonly string[] | null = null;
+      if (hasNonEmptyString(input.merchantSearch)) {
+        const normalizedSearch = input.merchantSearch.trim();
+        const merchantQuery = client
+          .from("merchants")
+          .select("id, business_name, owner_name, email, subscription_plan");
+
+        if (typeof merchantQuery.or === "function") {
+          merchantQuery.or(
+            [
+              `business_name.ilike.%${normalizedSearch}%`,
+              `owner_name.ilike.%${normalizedSearch}%`,
+              `email.ilike.%${normalizedSearch}%`,
+            ].join(","),
+          );
+        }
+
+        merchantQuery.limit(100);
+        const merchantRows = await many(merchantQuery);
+        const merchantIds = merchantRows
+          .map((row) => mapAdminMerchantRow(row))
+          .map((merchant) => merchant.merchantId);
+
+        if (merchantIds.length === 0) {
+          return { items: [], nextCursor: null };
+        }
+
+        merchantIdsFilter = merchantIds;
+      }
+
+      const caseQuery = client
+        .from("solo_plus_cases")
+        .select("*")
+        .order("updated_at", { ascending: false })
+        .order("id", { ascending: false });
+
+      if (input.caseStatus) {
+        caseQuery.eq("case_status", input.caseStatus);
+      }
+      if (input.flowOrigin) {
+        caseQuery.eq("flow_origin", input.flowOrigin);
+      }
+      if (input.paymentStatus) {
+        caseQuery.eq("payment_status", input.paymentStatus);
+      }
+      if (input.refundStatus) {
+        caseQuery.eq("refund_status", input.refundStatus);
+      }
+      if (merchantIdsFilter) {
+        caseQuery.in("merchant_id", merchantIdsFilter);
+      }
+      if (input.cursor) {
+        if (typeof caseQuery.or === "function") {
+          caseQuery.or(
+            `updated_at.lt.${input.cursor.updatedAt},and(updated_at.eq.${input.cursor.updatedAt},id.lt.${input.cursor.caseId})`,
+          );
+        }
+      }
+
+      caseQuery.limit(input.limit + 1);
+
+      const caseRows = await many(caseQuery);
+      const pageRows = caseRows.slice(0, input.limit);
+      const items = await loadAdminListRecords(client, pageRows);
+      const lastItem = items.at(-1)?.caseRecord ?? null;
+
+      return {
+        items,
+        nextCursor:
+          caseRows.length > input.limit && lastItem
+            ? {
+                updatedAt: lastItem.updatedAt,
+                caseId: lastItem.id,
+              }
+            : null,
+      };
+    },
+
+    async getAdminCaseDetail(caseId: string): Promise<SoloPlusAdminCaseDetailRecord | null> {
+      const caseRecord = await readCaseDirectly(client, caseId);
+      if (!caseRecord) {
+        return null;
+      }
+
+      const [merchantMap, requirementsMap, latestReviewMap] = await Promise.all([
+        loadAdminMerchantsById(
+          client,
+          caseRecord.merchantId ? [caseRecord.merchantId] : [],
+        ),
+        loadAdminRequirementsByCaseId(client, [caseRecord.id]),
+        loadLatestReviewDecisionEventsByCaseId(client, [caseRecord.id]),
+      ]);
+
+      return {
+        caseRecord,
+        merchant: caseRecord.merchantId ? merchantMap.get(caseRecord.merchantId) ?? null : null,
+        requirements: requirementsMap.get(caseRecord.id) ?? [],
+        latestReviewDecisionEvent: latestReviewMap.get(caseRecord.id) ?? null,
+      };
+    },
+
+    async listAdminCaseEvents(
+      caseId: string,
+      input: SoloPlusAdminCaseEventListInput,
+    ): Promise<SoloPlusAdminCaseEventListResult> {
+      const eventsQuery = client
+        .from("solo_plus_case_events")
+        .select("*")
+        .eq("case_id", caseId)
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: false });
+
+      if (input.cursor && typeof eventsQuery.or === "function") {
+        eventsQuery.or(
+          `created_at.lt.${input.cursor.createdAt},and(created_at.eq.${input.cursor.createdAt},id.lt.${input.cursor.eventId})`,
+        );
+      }
+
+      eventsQuery.limit(input.limit + 1);
+
+      const rows = await many(eventsQuery);
+      const eventRecords = rows.slice(0, input.limit).map((row) => mapEventRow(row));
+      const lastItem = eventRecords.at(-1) ?? null;
+
+      return {
+        items: eventRecords,
+        nextCursor:
+          rows.length > input.limit && lastItem
+            ? {
+                createdAt: lastItem.createdAt,
+                eventId: lastItem.id,
+              }
+            : null,
+      };
     },
 
     async createCaseWithRequirementsAndEvent(

@@ -3,6 +3,11 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import {
   normalizeSoloPlusAmount,
+  type SoloPlusAdminCaseDetailRecord,
+  type SoloPlusAdminCaseEventListInput,
+  type SoloPlusAdminCaseEventListResult,
+  type SoloPlusAdminCaseListInput,
+  type SoloPlusAdminCaseListResult,
   type SoloPlusCaseCreateAtomicInput,
   type SoloPlusCaseCreateAtomicResult,
   type SoloPlusCaseActivationAtomicParams,
@@ -187,6 +192,21 @@ class FakeSoloPlusRepository implements SoloPlusCaseRepository {
   ): Promise<SoloPlusCaseEventRecord | null> {
     const events = this.events.get(caseId) ?? [];
     return events.at(-1) ?? null;
+  }
+
+  async listAdminCases(_: SoloPlusAdminCaseListInput): Promise<SoloPlusAdminCaseListResult> {
+    return { items: [], nextCursor: null };
+  }
+
+  async getAdminCaseDetail(_: string): Promise<SoloPlusAdminCaseDetailRecord | null> {
+    return null;
+  }
+
+  async listAdminCaseEvents(
+    __: string,
+    ___: SoloPlusAdminCaseEventListInput,
+  ): Promise<SoloPlusAdminCaseEventListResult> {
+    return { items: [], nextCursor: null };
   }
 
   async createCaseWithRequirementsAndEvent(

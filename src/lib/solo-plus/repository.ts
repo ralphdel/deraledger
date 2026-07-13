@@ -377,6 +377,66 @@ export type SoloPlusCaseTransitionAtomicResult =
 
 export type SoloPlusCaseRequirementUpsertResult = readonly SoloPlusCaseRequirementRecord[];
 
+export type SoloPlusAdminCaseCursor = {
+  updatedAt: string;
+  caseId: string;
+};
+
+export type SoloPlusAdminCaseEventCursor = {
+  createdAt: string;
+  eventId: string;
+};
+
+export type SoloPlusAdminCaseMerchantRecord = {
+  merchantId: string;
+  businessName: string | null;
+  ownerName: string | null;
+  email: string | null;
+  subscriptionPlan: string | null;
+};
+
+export type SoloPlusAdminCaseListFilters = {
+  caseStatus?: SoloPlusCaseStatus | null;
+  flowOrigin?: SoloPlusFlowOrigin | null;
+  paymentStatus?: SoloPlusPaymentStatus | null;
+  refundStatus?: SoloPlusRefundStatus | null;
+  merchantSearch?: string | null;
+};
+
+export type SoloPlusAdminCaseListInput = SoloPlusAdminCaseListFilters & {
+  cursor?: SoloPlusAdminCaseCursor | null;
+  limit: number;
+};
+
+export type SoloPlusAdminCaseListRecord = {
+  caseRecord: SoloPlusCaseRecord;
+  merchant: SoloPlusAdminCaseMerchantRecord | null;
+  requirements: readonly SoloPlusCaseRequirementRecord[];
+  latestReviewDecisionEvent: SoloPlusCaseEventRecord | null;
+};
+
+export type SoloPlusAdminCaseListResult = {
+  items: readonly SoloPlusAdminCaseListRecord[];
+  nextCursor: SoloPlusAdminCaseCursor | null;
+};
+
+export type SoloPlusAdminCaseDetailRecord = {
+  caseRecord: SoloPlusCaseRecord;
+  merchant: SoloPlusAdminCaseMerchantRecord | null;
+  requirements: readonly SoloPlusCaseRequirementRecord[];
+  latestReviewDecisionEvent: SoloPlusCaseEventRecord | null;
+};
+
+export type SoloPlusAdminCaseEventListInput = {
+  cursor?: SoloPlusAdminCaseEventCursor | null;
+  limit: number;
+};
+
+export type SoloPlusAdminCaseEventListResult = {
+  items: readonly SoloPlusCaseEventRecord[];
+  nextCursor: SoloPlusAdminCaseEventCursor | null;
+};
+
 export interface SoloPlusCaseRepository {
   findCaseById(caseId: string): Promise<SoloPlusCaseRecord | null>;
   findCaseByIdempotencyKey(idempotencyKey: string): Promise<SoloPlusCaseRecord | null>;
@@ -387,6 +447,12 @@ export interface SoloPlusCaseRepository {
   listRequirements(caseId: string): Promise<readonly SoloPlusCaseRequirementRecord[]>;
   listSafeEvents(caseId: string): Promise<readonly SoloPlusCaseEventRecord[]>;
   findLatestReviewDecisionEvent(caseId: string): Promise<SoloPlusCaseEventRecord | null>;
+  listAdminCases(input: SoloPlusAdminCaseListInput): Promise<SoloPlusAdminCaseListResult>;
+  getAdminCaseDetail(caseId: string): Promise<SoloPlusAdminCaseDetailRecord | null>;
+  listAdminCaseEvents(
+    caseId: string,
+    input: SoloPlusAdminCaseEventListInput,
+  ): Promise<SoloPlusAdminCaseEventListResult>;
   createCaseWithRequirementsAndEvent(
     input: SoloPlusCaseCreateAtomicInput,
   ): Promise<SoloPlusCaseCreateAtomicResult>;
