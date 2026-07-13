@@ -176,6 +176,96 @@ function Redact-ConnectionString {
   }
 }
 
+function Get-ConnectionStringQueryParameterValue {
+  param(
+    [Parameter(Mandatory = $true)][Uri]$Uri,
+    [Parameter(Mandatory = $true)][string]$Name
+  )
+
+  if ([string]::IsNullOrWhiteSpace($Uri.Query)) {
+    return $null
+  }
+
+  $pattern = '(?:^|[?&])' + [regex]::Escape($Name) + '=([^&]*)'
+  $match = [regex]::Match($Uri.Query, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+  if (-not $match.Success) {
+    return $null
+  }
+
+  return [Uri]::UnescapeDataString($match.Groups[1].Value)
+}
+
+function Get-LibpqEnvironmentSnapshot {
+  param([string[]]$VariableNames)
+
+  $snapshot = @{}
+  foreach ($name in $VariableNames) {
+    $entry = Get-Item -Path "Env:$name" -ErrorAction SilentlyContinue
+    $snapshot[$name] = if ($null -ne $entry) { [pscustomobject]@{ Present = $true; Value = [string]$entry.Value } } else { [pscustomobject]@{ Present = $false; Value = $null } }
+  }
+
+  return $snapshot
+}
+
+function Restore-LibpqEnvironment {
+  param([hashtable]$Snapshot)
+
+  foreach ($entry in $Snapshot.GetEnumerator()) {
+    if ($entry.Value.Present) {
+      Set-Item -Path "Env:$($entry.Key)" -Value $entry.Value.Value
+    } else {
+      Remove-Item -Path "Env:$($entry.Key)" -ErrorAction SilentlyContinue
+    }
+  }
+}
+
+function Invoke-WithLocalDisposableDatabaseEnvironment {
+  param(
+    [Parameter(Mandatory = $true)][string]$ConnectionString,
+    [Parameter(Mandatory = $true)][scriptblock]$Operation
+  )
+
+  $variableNames = @(
+    "PGSSLMODE",
+    "PGHOST",
+    "PGPORT",
+    "PGUSER",
+    "PGDATABASE",
+    "PGPASSWORD",
+    "PGSERVICE",
+    "PGSERVICEFILE"
+  )
+
+  $snapshot = Get-LibpqEnvironmentSnapshot -VariableNames $variableNames
+  $originalSslMode = Get-Item -Path "Env:PGSSLMODE" -ErrorAction SilentlyContinue
+
+  try {
+    Remove-Item -Path "Env:PGHOST" -ErrorAction SilentlyContinue
+    Remove-Item -Path "Env:PGPORT" -ErrorAction SilentlyContinue
+    Remove-Item -Path "Env:PGUSER" -ErrorAction SilentlyContinue
+    Remove-Item -Path "Env:PGDATABASE" -ErrorAction SilentlyContinue
+    Remove-Item -Path "Env:PGPASSWORD" -ErrorAction SilentlyContinue
+    Remove-Item -Path "Env:PGSERVICE" -ErrorAction SilentlyContinue
+    Remove-Item -Path "Env:PGSERVICEFILE" -ErrorAction SilentlyContinue
+
+    $uri = [Uri]$ConnectionString
+    $explicitSslMode = Get-ConnectionStringQueryParameterValue -Uri $uri -Name "sslmode"
+    if ($explicitSslMode -and $explicitSslMode.Trim().ToLowerInvariant() -ne "disable") {
+      throw "TEST_DATABASE_URL must not request a contradictory SSL mode for local disposable validation."
+    }
+
+    Set-Item -Path "Env:PGSSLMODE" -Value "disable"
+
+    return & $Operation
+  }
+  finally {
+    Restore-LibpqEnvironment -Snapshot $snapshot
+    if ($null -eq $originalSslMode) {
+      Remove-Item -Path "Env:PGSSLMODE" -ErrorAction SilentlyContinue
+    }
+  }
+}
+
 function Get-DatabaseSafety {
   param([string]$ConnectionString)
 
@@ -211,6 +301,10 @@ function Get-DatabaseSafety {
   $result.Host = $uri.Host
   $result.DatabaseName = $dbName
   $result.Port = if ($uri.IsDefaultPort) { $null } else { $uri.Port }
+  $explicitSslMode = Get-ConnectionStringQueryParameterValue -Uri $uri -Name "sslmode"
+  if ($explicitSslMode -and $explicitSslMode.Trim().ToLowerInvariant() -ne "disable") {
+    $result.Errors.Add("TEST_DATABASE_URL must not request a contradictory SSL mode for local disposable validation.")
+  }
 
   $isLoopback = $false
   if ($uri.Host -in @('localhost', '127.0.0.1', '::1')) {
@@ -286,6 +380,23 @@ function New-BlockedResult {
   return $result
 }
 
+function Test-NeedsSanitizedLibpqEnvironment {
+  param([pscustomobject]$Check)
+
+  return (
+    $Check.Id -like 'SQL-*' -or
+    $Check.RootCauseCategory -in @(
+      'sql-suite-foundation',
+      'sql-suite-commit7',
+      'sql-suite-commit9',
+      'sql-suite-commit10',
+      'migration-rerun',
+      'harness-safety',
+      'hostile-harness'
+    )
+  )
+}
+
 function Invoke-ManifestCheck {
   param(
     [pscustomobject]$Check,
@@ -303,49 +414,55 @@ function Invoke-ManifestCheck {
   $logPaths = New-CheckLogPaths -CheckId $Check.Id
   $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
   try {
-    if ($Check.Type -eq 'command') {
-      $commandResult = Invoke-CapturedProcess -FilePath $Check.FilePath -Arguments $Check.Arguments -WorkingDirectory $Check.WorkingDirectory -TimeoutSeconds $Check.TimeoutSeconds
-      $status = if ($commandResult.ExitCode -eq 0) { 'PASS' } else { 'FAIL' }
-      $result = [pscustomobject]@{
+    $operation = {
+      if ($Check.Type -eq 'command') {
+        $commandResult = Invoke-CapturedProcess -FilePath $Check.FilePath -Arguments $Check.Arguments -WorkingDirectory $Check.WorkingDirectory -TimeoutSeconds $Check.TimeoutSeconds
+        $status = if ($commandResult.ExitCode -eq 0) { 'PASS' } else { 'FAIL' }
+        return [pscustomobject]@{
+          Id                = $Check.Id
+          Name              = $Check.Name
+          Phase             = $Check.Phase
+          Status            = $status
+          ExitCode          = $commandResult.ExitCode
+          DurationMs        = $commandResult.DurationMs
+          RootCauseCategory = $Check.RootCauseCategory
+          Command           = $commandResult.Command
+          Stdout            = $commandResult.Stdout
+          Stderr            = $commandResult.Stderr
+          ErrorExcerpt      = Get-ErrorExcerpt -Stdout $commandResult.Stdout -Stderr $commandResult.Stderr
+          StdoutLog         = $logPaths.Stdout
+          StderrLog         = $logPaths.Stderr
+          MetaLog           = $logPaths.Meta
+        }
+      }
+
+      $callbackResult = & $Check.Callback $Context
+      $stdout = if ($null -ne $callbackResult.Stdout) { [string]$callbackResult.Stdout } else { '' }
+      $stderr = if ($null -ne $callbackResult.Stderr) { [string]$callbackResult.Stderr } else { '' }
+      $status = if ($null -ne $callbackResult.Status) { [string]$callbackResult.Status } else { 'FAIL' }
+      $exitCode = $callbackResult.ExitCode
+      return [pscustomobject]@{
         Id                = $Check.Id
         Name              = $Check.Name
         Phase             = $Check.Phase
         Status            = $status
-        ExitCode          = $commandResult.ExitCode
-        DurationMs        = $commandResult.DurationMs
+        ExitCode          = $exitCode
+        DurationMs        = [int][Math]::Round($stopwatch.Elapsed.TotalMilliseconds)
         RootCauseCategory = $Check.RootCauseCategory
-        Command           = $commandResult.Command
-        Stdout            = $commandResult.Stdout
-        Stderr            = $commandResult.Stderr
-        ErrorExcerpt      = Get-ErrorExcerpt -Stdout $commandResult.Stdout -Stderr $commandResult.Stderr
+        Command           = $Check.CommandDisplay
+        Stdout            = $stdout
+        Stderr            = $stderr
+        ErrorExcerpt      = Get-ErrorExcerpt -Stdout $stdout -Stderr $stderr
         StdoutLog         = $logPaths.Stdout
         StderrLog         = $logPaths.Stderr
         MetaLog           = $logPaths.Meta
       }
-      Write-CheckResultArtifacts -Result $result -LogPaths $logPaths
-      return $result
     }
 
-    $callbackResult = & $Check.Callback $Context
-    $stdout = if ($null -ne $callbackResult.Stdout) { [string]$callbackResult.Stdout } else { '' }
-    $stderr = if ($null -ne $callbackResult.Stderr) { [string]$callbackResult.Stderr } else { '' }
-    $status = if ($null -ne $callbackResult.Status) { [string]$callbackResult.Status } else { 'FAIL' }
-    $exitCode = $callbackResult.ExitCode
-    $result = [pscustomobject]@{
-      Id                = $Check.Id
-      Name              = $Check.Name
-      Phase             = $Check.Phase
-      Status            = $status
-      ExitCode          = $exitCode
-      DurationMs        = [int][Math]::Round($stopwatch.Elapsed.TotalMilliseconds)
-      RootCauseCategory = $Check.RootCauseCategory
-      Command           = $Check.CommandDisplay
-      Stdout            = $stdout
-      Stderr            = $stderr
-      ErrorExcerpt      = Get-ErrorExcerpt -Stdout $stdout -Stderr $stderr
-      StdoutLog         = $logPaths.Stdout
-      StderrLog         = $logPaths.Stderr
-      MetaLog           = $logPaths.Meta
+    $result = if (Test-NeedsSanitizedLibpqEnvironment -Check $Check) {
+      Invoke-WithLocalDisposableDatabaseEnvironment -ConnectionString $Context.TestDatabaseUrl -Operation $operation
+    } else {
+      & $operation
     }
     Write-CheckResultArtifacts -Result $result -LogPaths $logPaths
     return $result
@@ -760,19 +877,19 @@ $checks = @(
       }
       return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = 'Solo Plus feature-flag defaults remain false in committed source.'; Stderr = '' }
     }),
-  (New-CallbackCheck -Id 'ENV-012' -Name 'No Commit 10 route, server action, or UI additions' -Phase 'A' -RootCauseCategory 'scope-boundary' -CommandDisplay 'Inspect current working tree for app-boundary additions' -Callback {
+  (New-CallbackCheck -Id 'ENV-012' -Name 'No activation route, server action, or UI additions' -Phase 'A' -RootCauseCategory 'scope-boundary' -CommandDisplay 'Inspect current working tree for forbidden app-boundary additions' -Callback {
       param($ctx)
       $statusLines = Get-GitStatusLines
       $forbidden = @($statusLines | Where-Object {
-        $_ -match '^\?\?\s+src/app/' -or
-        $_ -match '^\?\?\s+app/' -or
-        $_ -match '^[ MARCUD?]{2}\s+src/app/' -or
-        $_ -match '^[ MARCUD?]{2}\s+app/'
+        $_ -match '(^|/)activate(/|\.|$)' -or
+        $_ -match '(^|/)actions(/|\.|$)' -or
+        $_ -match '(^|/)page\.(ts|tsx|js|jsx)$' -or
+        $_ -match '(^|/)layout\.(ts|tsx|js|jsx)$'
       })
       if ($forbidden.Count -gt 0) {
-        return [pscustomobject]@{ Status = 'FAIL'; ExitCode = 1; Stdout = ($forbidden -join [Environment]::NewLine); Stderr = 'Commit 10 must not add routes, server actions, or UI files.' }
+        return [pscustomobject]@{ Status = 'FAIL'; ExitCode = 1; Stdout = ($forbidden -join [Environment]::NewLine); Stderr = 'Commit 11 must not add activation routes, server actions, or UI files.' }
       }
-      return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = 'No uncommitted src/app or app route/UI additions detected for Commit 10.'; Stderr = '' }
+      return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = 'No forbidden activation-route, server-action, or UI additions detected.'; Stderr = '' }
     }),
   (New-CallbackCheck -Id 'ENV-013' -Name 'No plan_migrations writes added in Commit 10 diff' -Phase 'A' -RootCauseCategory 'scope-boundary' -CommandDisplay 'Search uncommitted diff for plan_migrations writes' -Callback {
       param($ctx)
@@ -785,6 +902,164 @@ $checks = @(
         return [pscustomobject]@{ Status = 'FAIL'; ExitCode = 1; Stdout = ($matchingLines -join [Environment]::NewLine); Stderr = 'Commit 10 must not write to public.plan_migrations.' }
       }
       return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = 'No uncommitted plan_migrations writes detected.'; Stderr = '' }
+    }),
+  (New-CallbackCheck -Id 'ENV-016' -Name 'Commit 11 route and test artifacts exist' -Phase 'A' -RootCauseCategory 'migration-manifest' -CommandDisplay 'Check Commit 11 route, service, helper, and test files' -Callback {
+      param($ctx)
+      $required = @(
+        'src/lib/server/browser-origin.ts',
+        'src/lib/solo-plus/server/browser-case-service.ts',
+        'src/app/api/solo-plus/case/route.ts',
+        'src/app/api/solo-plus/case/requirements/evidence/route.ts',
+        'tests/solo-plus-browser-origin.test.ts',
+        'tests/solo-plus-case-route.test.ts',
+        'tests/solo-plus-case-evidence-route.test.ts'
+      )
+      $missing = @($required | Where-Object { -not (Test-Path (Join-Path $ctx.RepoRoot $_)) })
+      if ($missing.Count -gt 0) {
+        return [pscustomobject]@{ Status = 'FAIL'; ExitCode = 1; Stdout = ''; Stderr = ('Missing Commit 11 artifacts:' + [Environment]::NewLine + ($missing -join [Environment]::NewLine)) }
+      }
+      return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = ($required -join [Environment]::NewLine); Stderr = '' }
+    }),
+  (New-CallbackCheck -Id 'ENV-017' -Name 'No Commit 11 migration added' -Phase 'A' -RootCauseCategory 'migration-manifest' -CommandDisplay 'Inspect current working tree for unexpected migration additions' -Callback {
+      param($ctx)
+      $statusLines = Get-GitStatusLines
+      $unexpected = @($statusLines | Where-Object {
+        $_ -match '^\?\?\s+supabase/migrations/' -or
+        $_ -match '^[ MARCUD?]{2}\s+supabase/migrations/'
+      } | Where-Object {
+        $_ -notmatch '20260711_01_solo_plus_activation_rpc\.sql'
+      })
+      if ($unexpected.Count -gt 0) {
+        return [pscustomobject]@{ Status = 'FAIL'; ExitCode = 1; Stdout = ($unexpected -join [Environment]::NewLine); Stderr = 'Commit 11 must not add any migration file.' }
+      }
+      return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = 'No unexpected migration additions detected.'; Stderr = '' }
+    }),
+  (New-CallbackCheck -Id 'ENV-018' -Name 'Local libpq environment isolation self-test' -Phase 'A' -RootCauseCategory 'database-safety' -CommandDisplay 'Verify local disposable validation restores and isolates libpq environment' -DependsOn @('ENV-009') -Callback {
+      param($ctx)
+
+      $savedSslMode = Get-Item -Path 'Env:PGSSLMODE' -ErrorAction SilentlyContinue
+      $savedHost = Get-Item -Path 'Env:PGHOST' -ErrorAction SilentlyContinue
+      $savedPort = Get-Item -Path 'Env:PGPORT' -ErrorAction SilentlyContinue
+      $savedUser = Get-Item -Path 'Env:PGUSER' -ErrorAction SilentlyContinue
+      $savedDatabase = Get-Item -Path 'Env:PGDATABASE' -ErrorAction SilentlyContinue
+      $savedPassword = Get-Item -Path 'Env:PGPASSWORD' -ErrorAction SilentlyContinue
+      $savedService = Get-Item -Path 'Env:PGSERVICE' -ErrorAction SilentlyContinue
+      $savedServiceFile = Get-Item -Path 'Env:PGSERVICEFILE' -ErrorAction SilentlyContinue
+
+      try {
+        $childResult = Invoke-WithLocalDisposableDatabaseEnvironment -ConnectionString $ctx.TestDatabaseUrl -Operation {
+          $childSnapshot = @{
+            PGHOST        = $env:PGHOST
+            PGPORT        = $env:PGPORT
+            PGUSER        = $env:PGUSER
+            PGDATABASE    = $env:PGDATABASE
+            PGPASSWORD    = $env:PGPASSWORD
+            PGSERVICE     = $env:PGSERVICE
+            PGSERVICEFILE = $env:PGSERVICEFILE
+          }
+
+          try {
+            $env:PGHOST = 'staging.example.invalid'
+            $env:PGPORT = '55432'
+            $env:PGUSER = 'staging-user'
+            $env:PGDATABASE = 'staging-db'
+            $env:PGPASSWORD = 'staging-secret'
+            $env:PGSERVICE = 'staging-service'
+            $env:PGSERVICEFILE = 'C:\staging\pg_service.conf'
+            Invoke-CapturedProcess -FilePath 'powershell.exe' -Arguments @('-NoProfile', '-Command', '$env:PGSSLMODE') -WorkingDirectory $ctx.RepoRoot -TimeoutSeconds 60
+          }
+          finally {
+            $env:PGHOST = $childSnapshot.PGHOST
+            $env:PGPORT = $childSnapshot.PGPORT
+            $env:PGUSER = $childSnapshot.PGUSER
+            $env:PGDATABASE = $childSnapshot.PGDATABASE
+            $env:PGPASSWORD = $childSnapshot.PGPASSWORD
+            $env:PGSERVICE = $childSnapshot.PGSERVICE
+            $env:PGSERVICEFILE = $childSnapshot.PGSERVICEFILE
+          }
+        }
+
+        if ($childResult.ExitCode -ne 0) {
+          return [pscustomobject]@{
+            Status = 'FAIL'
+            ExitCode = $childResult.ExitCode
+            Stdout = $childResult.Stdout
+            Stderr = $childResult.Stderr
+          }
+        }
+
+        if ($childResult.Stdout.Trim() -ne 'disable') {
+          return [pscustomobject]@{
+            Status = 'FAIL'
+            ExitCode = 1
+            Stdout = $childResult.Stdout
+            Stderr = "Local disposable validation did not force PGSSLMODE=disable for child processes."
+          }
+        }
+
+        $restoredValues = @{
+          PGSSLMODE = (Get-Item -Path 'Env:PGSSLMODE' -ErrorAction SilentlyContinue)
+          PGHOST = (Get-Item -Path 'Env:PGHOST' -ErrorAction SilentlyContinue)
+          PGPORT = (Get-Item -Path 'Env:PGPORT' -ErrorAction SilentlyContinue)
+          PGUSER = (Get-Item -Path 'Env:PGUSER' -ErrorAction SilentlyContinue)
+          PGDATABASE = (Get-Item -Path 'Env:PGDATABASE' -ErrorAction SilentlyContinue)
+          PGPASSWORD = (Get-Item -Path 'Env:PGPASSWORD' -ErrorAction SilentlyContinue)
+          PGSERVICE = (Get-Item -Path 'Env:PGSERVICE' -ErrorAction SilentlyContinue)
+          PGSERVICEFILE = (Get-Item -Path 'Env:PGSERVICEFILE' -ErrorAction SilentlyContinue)
+        }
+
+        $restorationFailures = @()
+        foreach ($entry in @(
+          @{ Name = 'PGSSLMODE'; Original = $savedSslMode },
+          @{ Name = 'PGHOST'; Original = $savedHost },
+          @{ Name = 'PGPORT'; Original = $savedPort },
+          @{ Name = 'PGUSER'; Original = $savedUser },
+          @{ Name = 'PGDATABASE'; Original = $savedDatabase },
+          @{ Name = 'PGPASSWORD'; Original = $savedPassword },
+          @{ Name = 'PGSERVICE'; Original = $savedService },
+          @{ Name = 'PGSERVICEFILE'; Original = $savedServiceFile }
+        )) {
+          $name = $entry.Name
+          $original = $entry.Original
+          $current = $restoredValues[$name]
+
+          if ($null -eq $original) {
+            if ($current) {
+              $restorationFailures += "$name was not restored to an unset state."
+            }
+          } else {
+            if (-not $current -or [string]$current.Value -ne [string]$original.Value) {
+              $restorationFailures += "$name was not restored to its original value."
+            }
+          }
+        }
+
+        if ($restorationFailures.Count -gt 0) {
+          return [pscustomobject]@{
+            Status = 'FAIL'
+            ExitCode = 1
+            Stdout = ''
+            Stderr = ($restorationFailures -join [Environment]::NewLine)
+          }
+        }
+
+        return [pscustomobject]@{
+          Status = 'PASS'
+          ExitCode = 0
+          Stdout = 'Local libpq environment isolation restores caller settings and forces PGSSLMODE=disable for local disposable child processes.'
+          Stderr = ''
+        }
+      }
+      finally {
+        if ($null -ne $savedSslMode) { Set-Item -Path 'Env:PGSSLMODE' -Value $savedSslMode.Value } else { Remove-Item -Path 'Env:PGSSLMODE' -ErrorAction SilentlyContinue }
+        if ($null -ne $savedHost) { Set-Item -Path 'Env:PGHOST' -Value $savedHost.Value } else { Remove-Item -Path 'Env:PGHOST' -ErrorAction SilentlyContinue }
+        if ($null -ne $savedPort) { Set-Item -Path 'Env:PGPORT' -Value $savedPort.Value } else { Remove-Item -Path 'Env:PGPORT' -ErrorAction SilentlyContinue }
+        if ($null -ne $savedUser) { Set-Item -Path 'Env:PGUSER' -Value $savedUser.Value } else { Remove-Item -Path 'Env:PGUSER' -ErrorAction SilentlyContinue }
+        if ($null -ne $savedDatabase) { Set-Item -Path 'Env:PGDATABASE' -Value $savedDatabase.Value } else { Remove-Item -Path 'Env:PGDATABASE' -ErrorAction SilentlyContinue }
+        if ($null -ne $savedPassword) { Set-Item -Path 'Env:PGPASSWORD' -Value $savedPassword.Value } else { Remove-Item -Path 'Env:PGPASSWORD' -ErrorAction SilentlyContinue }
+        if ($null -ne $savedService) { Set-Item -Path 'Env:PGSERVICE' -Value $savedService.Value } else { Remove-Item -Path 'Env:PGSERVICE' -ErrorAction SilentlyContinue }
+        if ($null -ne $savedServiceFile) { Set-Item -Path 'Env:PGSERVICEFILE' -Value $savedServiceFile.Value } else { Remove-Item -Path 'Env:PGSERVICEFILE' -ErrorAction SilentlyContinue }
+      }
     }),
   (New-CallbackCheck -Id 'ENV-014' -Name 'No merge-conflict markers' -Phase 'A' -RootCauseCategory 'repository-state' -CommandDisplay 'rg merge conflict markers' -Callback {
       param($ctx)
@@ -817,9 +1092,13 @@ $checks = @(
     }),
   (New-CommandCheck -Id 'APP-001' -Name 'Solo Plus TypeScript test chain' -Phase 'B' -RootCauseCategory 'application-validation' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-Command',"Set-Location '$($script:RepoRoot)'; npm run test:solo-plus") -TimeoutSeconds 2400),
   (New-CommandCheck -Id 'APP-002' -Name 'Focused activation service test' -Phase 'B' -RootCauseCategory 'application-validation' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-Command',"Set-Location '$($script:RepoRoot)'; npx tsx tests/solo-plus-activation-service.test.ts") -TimeoutSeconds 600),
-  (New-CommandCheck -Id 'APP-003' -Name 'TypeScript compile' -Phase 'B' -RootCauseCategory 'application-validation' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-Command',"Set-Location '$($script:RepoRoot)'; npx tsc --noEmit") -TimeoutSeconds 2400),
-  (New-CommandCheck -Id 'APP-004' -Name 'Next.js build' -Phase 'B' -RootCauseCategory 'application-validation' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-Command',"Set-Location '$($script:RepoRoot)'; npm run build") -TimeoutSeconds 3600),
-  (New-CommandCheck -Id 'APP-005' -Name 'git diff --check' -Phase 'B' -RootCauseCategory 'repository-state' -FilePath 'git' -Arguments @('diff', '--check') -TimeoutSeconds 120),
+  (New-CommandCheck -Id 'APP-003' -Name 'Focused review route regression' -Phase 'B' -RootCauseCategory 'application-validation' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-Command',"Set-Location '$($script:RepoRoot)'; npx tsx tests/solo-plus-review-route.test.ts") -TimeoutSeconds 1200),
+  (New-CommandCheck -Id 'APP-004' -Name 'Browser origin guard test' -Phase 'B' -RootCauseCategory 'application-validation' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-Command',"Set-Location '$($script:RepoRoot)'; npx tsx tests/solo-plus-browser-origin.test.ts") -TimeoutSeconds 600),
+  (New-CommandCheck -Id 'APP-005' -Name 'Solo Plus case route test' -Phase 'B' -RootCauseCategory 'application-validation' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-Command',"Set-Location '$($script:RepoRoot)'; npx tsx tests/solo-plus-case-route.test.ts") -TimeoutSeconds 1200),
+  (New-CommandCheck -Id 'APP-006' -Name 'Solo Plus evidence route test' -Phase 'B' -RootCauseCategory 'application-validation' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-Command',"Set-Location '$($script:RepoRoot)'; npx tsx tests/solo-plus-case-evidence-route.test.ts") -TimeoutSeconds 1200),
+  (New-CommandCheck -Id 'APP-007' -Name 'TypeScript compile' -Phase 'B' -RootCauseCategory 'application-validation' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-Command',"Set-Location '$($script:RepoRoot)'; npx tsc --noEmit") -TimeoutSeconds 2400),
+  (New-CommandCheck -Id 'APP-008' -Name 'Next.js build' -Phase 'B' -RootCauseCategory 'application-validation' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-Command',"Set-Location '$($script:RepoRoot)'; npm run build") -TimeoutSeconds 3600),
+  (New-CommandCheck -Id 'APP-009' -Name 'git diff --check' -Phase 'B' -RootCauseCategory 'repository-state' -FilePath 'git' -Arguments @('diff', '--check') -TimeoutSeconds 120),
   (New-CallbackCheck -Id 'SQL-001' -Name 'Phase 2 Solo Plus case foundation SQL' -Phase 'E' -RootCauseCategory 'sql-suite-foundation' -CommandDisplay 'Bootstrap foundation-only and run phase2_solo_plus_case_foundation.sql' -DependsOn @('ENV-006','ENV-009') -Callback {
       param($ctx)
       Bootstrap-FoundationOnly -Context $ctx

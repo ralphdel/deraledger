@@ -5,6 +5,7 @@ import type {
   ReviewSoloPlusCaseInput,
   SoloPlusReviewerDecision,
 } from "@/lib/solo-plus/server/review-service";
+import { assertSameOriginBrowserMutationRequest } from "@/lib/server/browser-origin";
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -47,6 +48,7 @@ type CreateSoloPlusReviewerServiceFn =
 type SoloPlusReviewRouteDependencies = {
   requireSuperAdminSession: RequireSuperAdminSessionFn;
   createReviewerService: CreateSoloPlusReviewerServiceFn;
+  assertBrowserMutationOriginRequest?: typeof assertSameOriginBrowserMutationRequest;
   onUnexpectedError?: (error: unknown) => void;
 };
 
@@ -251,6 +253,13 @@ export function createSoloPlusReviewRouteHandler(
       );
     }
 
+    try {
+      dependencies.assertBrowserMutationOriginRequest?.(request);
+    } catch (error) {
+      const message = getErrorMessage(error, "Browser mutation request origin is required.");
+      return buildErrorResponse(403, message, "FORBIDDEN");
+    }
+
     let input: ReviewRouteInput;
     try {
       input = parseReviewRouteInput(await request.json());
@@ -292,6 +301,8 @@ export async function POST(request: Request): Promise<NextResponse> {
   const handler = createSoloPlusReviewRouteHandler({
     requireSuperAdminSession,
     createReviewerService: createSoloPlusReviewerService,
+    assertBrowserMutationOriginRequest: (req) =>
+      assertSameOriginBrowserMutationRequest(req, { env: process.env }),
     onUnexpectedError: (error) => {
       console.error("Solo Plus review route failed:", error);
     },

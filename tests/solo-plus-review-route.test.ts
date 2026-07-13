@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 
 import { createSoloPlusReviewRouteHandler } from "../src/app/api/admin/solo-plus/review/route";
+import { assertSameOriginBrowserMutationRequest } from "../src/lib/server/browser-origin";
 import type {
   SoloPlusCaseEventRecord,
   SoloPlusCaseMutationResult,
@@ -95,9 +96,14 @@ async function readJson(response: Response): Promise<unknown> {
 }
 
 function createJsonOnlyRequest(payload: unknown): Request {
-  return {
-    json: async () => payload,
-  } as unknown as Request;
+  return new Request("http://localhost/api/admin/solo-plus/review", {
+    method: "POST",
+    headers: {
+      origin: "http://localhost",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
 }
 
 function createHandler(options: {
@@ -105,6 +111,7 @@ function createHandler(options: {
   serviceResult?: SoloPlusCaseMutationResult;
   serviceError?: unknown;
   serviceFactoryError?: unknown;
+  originGuard?: (request: Request) => { origin: string; requestOrigin: string };
   onUnexpectedError?: (error: unknown) => void;
 }) {
   const calls: {
@@ -146,6 +153,12 @@ function createHandler(options: {
         },
       };
     },
+    assertBrowserMutationOriginRequest:
+      options.originGuard ||
+      ((request: Request) => ({
+        origin: new URL(request.url).origin,
+        requestOrigin: new URL(request.url).origin,
+      })),
     onUnexpectedError: options.onUnexpectedError,
   });
 
@@ -606,6 +619,35 @@ async function run() {
     const body = (await readJson(response)) as Record<string, unknown>;
     assert.equal(response.status, 400);
     assert.equal(body.code, "INVALID_REQUEST");
+    assert.equal(calls.serviceFactory, 0);
+    assert.equal(calls.reviewCase, 0);
+  }
+
+  {
+    const { handler, calls } = createHandler({
+      originGuard: (request) =>
+        assertSameOriginBrowserMutationRequest(request, {
+          env: { CANONICAL_APP_URL: "https://app.example.test" } as unknown as NodeJS.ProcessEnv,
+        }),
+    });
+    const response = await handler(
+      new Request("https://app.example.test/api/admin/solo-plus/review", {
+        method: "POST",
+        headers: {
+          origin: "https://user:password@app.example.test",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          caseId: "11111111-1111-4111-8111-111111111111",
+          expectedRowVersion: 4,
+          requestIdempotencyKey: "review-credential-origin-1",
+          decision: "approve",
+        }),
+      }),
+    );
+    const body = (await readJson(response)) as Record<string, unknown>;
+    assert.equal(response.status, 403);
+    assert.equal(body.code, "FORBIDDEN");
     assert.equal(calls.serviceFactory, 0);
     assert.equal(calls.reviewCase, 0);
   }

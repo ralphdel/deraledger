@@ -852,6 +852,7 @@ Validation must:
 * redact credentials in output;
 * refuse staging or production URLs;
 * fail closed before reset operations when locality is uncertain.
+* isolate and restore inherited libpq environment variables, including staging-only SSL settings, so local disposable validation does not depend on the operator manually clearing a previous session.
 
 ### 14.4.8 Evidence handling
 

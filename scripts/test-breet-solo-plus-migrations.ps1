@@ -52,6 +52,25 @@ function Normalize-Sql {
   return ([regex]::Replace($Value.ToLowerInvariant(), "\s+", " ")).Trim()
 }
 
+function Get-ConnectionStringQueryParameterValue {
+  param(
+    [Parameter(Mandatory = $true)][Uri]$Uri,
+    [Parameter(Mandatory = $true)][string]$Name
+  )
+
+  if ([string]::IsNullOrWhiteSpace($Uri.Query)) {
+    return $null
+  }
+
+  $pattern = '(?:^|[?&])' + [regex]::Escape($Name) + '=([^&]*)'
+  $match = [regex]::Match($Uri.Query, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+  if (-not $match.Success) {
+    return $null
+  }
+
+  return [Uri]::UnescapeDataString($match.Groups[1].Value)
+}
+
 function Assert-SafeDisposableDatabase {
   param(
     [string]$ConnectionString,
@@ -71,6 +90,7 @@ function Assert-SafeDisposableDatabase {
   $uri = [System.Uri]$ConnectionString
   $dbName = $uri.AbsolutePath.Trim("/")
   $dbHost = $uri.Host.ToLowerInvariant()
+  $explicitSslMode = Get-ConnectionStringQueryParameterValue -Uri $uri -Name "sslmode"
 
   if ([string]::IsNullOrWhiteSpace($dbName)) {
     throw "TEST_DATABASE_URL must include an explicit disposable database name."
@@ -82,6 +102,69 @@ function Assert-SafeDisposableDatabase {
 
   if (-not [regex]::IsMatch($dbName, $disposableDatabasePattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
     throw "Refusing to run against non-disposable database name '$dbName' on host '$dbHost'. Use an explicitly disposable database name."
+  }
+
+  if ($explicitSslMode -and $explicitSslMode.Trim().ToLowerInvariant() -ne "disable") {
+    throw "TEST_DATABASE_URL must not request a contradictory SSL mode for local disposable validation."
+  }
+}
+
+function Get-LibpqEnvironmentSnapshot {
+  param([string[]]$VariableNames)
+
+  $snapshot = @{}
+  foreach ($name in $VariableNames) {
+    $entry = Get-Item -Path "Env:$name" -ErrorAction SilentlyContinue
+    $snapshot[$name] = if ($null -ne $entry) { [pscustomobject]@{ Present = $true; Value = [string]$entry.Value } } else { [pscustomobject]@{ Present = $false; Value = $null } }
+  }
+
+  return $snapshot
+}
+
+function Restore-LibpqEnvironment {
+  param([hashtable]$Snapshot)
+
+  foreach ($entry in $Snapshot.GetEnumerator()) {
+    if ($entry.Value.Present) {
+      Set-Item -Path "Env:$($entry.Key)" -Value $entry.Value.Value
+    } else {
+      Remove-Item -Path "Env:$($entry.Key)" -ErrorAction SilentlyContinue
+    }
+  }
+}
+
+function Invoke-WithLocalDisposableDatabaseEnvironment {
+  param(
+    [Parameter(Mandatory = $true)][scriptblock]$Operation
+  )
+
+  $variableNames = @(
+    "PGSSLMODE",
+    "PGHOST",
+    "PGPORT",
+    "PGUSER",
+    "PGDATABASE",
+    "PGPASSWORD",
+    "PGSERVICE",
+    "PGSERVICEFILE"
+  )
+
+  $snapshot = Get-LibpqEnvironmentSnapshot -VariableNames $variableNames
+
+  try {
+    Remove-Item -Path "Env:PGHOST" -ErrorAction SilentlyContinue
+    Remove-Item -Path "Env:PGPORT" -ErrorAction SilentlyContinue
+    Remove-Item -Path "Env:PGUSER" -ErrorAction SilentlyContinue
+    Remove-Item -Path "Env:PGDATABASE" -ErrorAction SilentlyContinue
+    Remove-Item -Path "Env:PGPASSWORD" -ErrorAction SilentlyContinue
+    Remove-Item -Path "Env:PGSERVICE" -ErrorAction SilentlyContinue
+    Remove-Item -Path "Env:PGSERVICEFILE" -ErrorAction SilentlyContinue
+    Set-Item -Path "Env:PGSSLMODE" -Value "disable"
+
+    return & $Operation
+  }
+  finally {
+    Restore-LibpqEnvironment -Snapshot $snapshot
   }
 }
 
@@ -140,7 +223,9 @@ function Invoke-Psql {
   )
 
   Write-Host "==> $Description"
-  & $PsqlPath @Arguments
+  Invoke-WithLocalDisposableDatabaseEnvironment {
+    & $PsqlPath @Arguments
+  }
   $exitCode = $LASTEXITCODE
 
   if ($ExpectFailure) {
