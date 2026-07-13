@@ -1,4 +1,5 @@
 import type {
+  SoloPlusCaseEventRecord,
   SoloPlusCaseRecord,
   SoloPlusCaseRequirementRecord,
   SoloPlusSafeJsonObject,
@@ -22,6 +23,22 @@ const CHECKSUM_SHA256_PATTERN = /^[a-f0-9]{64}$/i;
 const STORAGE_KEY_PATTERN =
   /^(?!\/)(?!.*\/\/)(?!.*(?:^|\/)\.{1,2}(?:\/|$))[A-Za-z0-9][A-Za-z0-9._/-]{0,511}$/;
 const PROVIDER_REFERENCE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const MERCHANT_VISIBLE_REASON_MAX_LENGTH = 500;
+
+export type SoloPlusMerchantReviewState =
+  | "not_started"
+  | "verification_pending"
+  | "under_review"
+  | "more_information_required"
+  | "approved"
+  | "rejected"
+  | "cancelled";
+
+export type SoloPlusMerchantActionRequired =
+  | "none"
+  | "complete_requirements"
+  | "resubmit_information"
+  | "contact_support";
 
 export type SoloPlusBrowserCaseSummaryDto = {
   caseId: string;
@@ -30,6 +47,12 @@ export type SoloPlusBrowserCaseSummaryDto = {
   paymentStatus: SoloPlusCaseRecord["paymentStatus"];
   refundStatus: SoloPlusCaseRecord["refundStatus"];
   rowVersion: number;
+  reviewState: SoloPlusMerchantReviewState;
+  actionRequired: SoloPlusMerchantActionRequired;
+  merchantVisibleReason: string | null;
+  statusChangedAt: string | null;
+  // reviewOutcome is preserved for Commit 11 compatibility; reviewState is the
+  // explicit merchant-safe UI contract for Commit 12 and later.
   reviewOutcome: "pending_review" | "approved" | "rejected" | "verification_pending" | "draft" | "awaiting_payment" | "cancelled";
   activationState: "inactive" | "approved_pending_activation" | "activated";
   createdAt: string;
@@ -47,6 +70,13 @@ export type SoloPlusBrowserRequirementSummaryDto = {
 
 export type SoloPlusBrowserCaseDto = SoloPlusBrowserCaseSummaryDto & {
   requirements: SoloPlusBrowserRequirementSummaryDto[];
+};
+
+type MerchantReviewContext = {
+  reviewState: SoloPlusMerchantReviewState;
+  actionRequired: SoloPlusMerchantActionRequired;
+  merchantVisibleReason: string | null;
+  statusChangedAt: string | null;
 };
 
 function hasNonEmptyString(value: unknown): value is string {
@@ -228,9 +258,148 @@ export async function readBoundedJsonBody(
   }
 }
 
+function hasActionableOutstandingRequirement(
+  requirements: readonly SoloPlusCaseRequirementRecord[],
+): boolean {
+  return requirements.some(
+    (requirement) =>
+      requirement.requirementState === "not_started" ||
+      requirement.requirementState === "failed",
+  );
+}
+
+function sanitizeMerchantVisibleReason(rawReason: string | null | undefined): string | null {
+  if (!hasNonEmptyString(rawReason)) {
+    return null;
+  }
+
+  const withoutControlCharacters = rawReason.replace(/[\u0000-\u001F\u007F]/g, " ");
+  const withoutHtmlTags = withoutControlCharacters.replace(/<[^>]*>/g, " ");
+  const normalizedWhitespace = withoutHtmlTags.replace(/\s+/g, " ").trim();
+  if (normalizedWhitespace === "") {
+    return null;
+  }
+
+  return normalizedWhitespace.slice(0, MERCHANT_VISIBLE_REASON_MAX_LENGTH);
+}
+
+function getReviewOutcome(
+  caseRecord: SoloPlusCaseRecord,
+): SoloPlusBrowserCaseSummaryDto["reviewOutcome"] {
+  return caseRecord.caseStatus === "approved"
+    ? "approved"
+    : caseRecord.caseStatus === "rejected"
+    ? "rejected"
+    : caseRecord.caseStatus === "verification_pending"
+    ? "verification_pending"
+    : caseRecord.caseStatus === "manual_review"
+    ? "pending_review"
+    : caseRecord.caseStatus === "awaiting_payment"
+    ? "awaiting_payment"
+    : caseRecord.caseStatus === "cancelled"
+    ? "cancelled"
+    : "draft";
+}
+
+function getActivationState(
+  caseRecord: SoloPlusCaseRecord,
+): SoloPlusBrowserCaseSummaryDto["activationState"] {
+  return caseRecord.activationIdempotencyKey != null
+    ? "activated"
+    : caseRecord.caseStatus === "approved"
+    ? "approved_pending_activation"
+    : "inactive";
+}
+
+function deriveMerchantReviewContext(
+  caseRecord: SoloPlusCaseRecord,
+  requirements: readonly SoloPlusCaseRequirementRecord[],
+  latestReviewDecisionEvent: SoloPlusCaseEventRecord | null,
+): MerchantReviewContext {
+  switch (caseRecord.caseStatus) {
+    case "draft":
+    case "awaiting_payment":
+      return {
+        reviewState: "not_started",
+        actionRequired: "none",
+        merchantVisibleReason: null,
+        statusChangedAt: caseRecord.updatedAt,
+      };
+    case "verification_pending":
+      if (
+        latestReviewDecisionEvent?.eventType === "case_review_requested_more_information"
+      ) {
+        return {
+          reviewState: "more_information_required",
+          actionRequired: "resubmit_information",
+          merchantVisibleReason:
+            sanitizeMerchantVisibleReason(latestReviewDecisionEvent.reason) ??
+            "Additional information is required before Solo Plus review can continue.",
+          statusChangedAt: latestReviewDecisionEvent.createdAt,
+        };
+      }
+
+      return {
+        reviewState: "verification_pending",
+        actionRequired: hasActionableOutstandingRequirement(requirements)
+          ? "complete_requirements"
+          : "none",
+        merchantVisibleReason: null,
+        statusChangedAt: caseRecord.updatedAt,
+      };
+    case "manual_review":
+      return {
+        reviewState: "under_review",
+        actionRequired: "none",
+        merchantVisibleReason: null,
+        statusChangedAt: caseRecord.updatedAt,
+      };
+    case "approved":
+      return {
+        reviewState: "approved",
+        actionRequired: "none",
+        merchantVisibleReason: null,
+        statusChangedAt:
+          latestReviewDecisionEvent?.eventType === "case_approved"
+            ? latestReviewDecisionEvent.createdAt
+            : caseRecord.approvedAt ?? caseRecord.updatedAt,
+      };
+    case "rejected":
+      return {
+        reviewState: "rejected",
+        actionRequired: "none",
+        merchantVisibleReason:
+          sanitizeMerchantVisibleReason(
+            latestReviewDecisionEvent?.eventType === "case_rejected"
+              ? latestReviewDecisionEvent.reason
+              : caseRecord.rejectionReason,
+          ) ?? "Solo Plus verification was rejected.",
+        statusChangedAt:
+          latestReviewDecisionEvent?.eventType === "case_rejected"
+            ? latestReviewDecisionEvent.createdAt
+            : caseRecord.rejectedAt ?? caseRecord.updatedAt,
+      };
+    case "cancelled":
+      return {
+        reviewState: "cancelled",
+        actionRequired: "none",
+        merchantVisibleReason: null,
+        statusChangedAt: caseRecord.updatedAt,
+      };
+  }
+}
+
 export function buildSoloPlusBrowserCaseSummaryDto(
   caseRecord: SoloPlusCaseRecord,
+  requirements: readonly SoloPlusCaseRequirementRecord[],
+  latestReviewDecisionEvent: SoloPlusCaseEventRecord | null = null,
 ): SoloPlusBrowserCaseSummaryDto {
+  const reviewContext = deriveMerchantReviewContext(
+    caseRecord,
+    requirements,
+    latestReviewDecisionEvent,
+  );
+
   return {
     caseId: caseRecord.id,
     flowOrigin: caseRecord.flowOrigin,
@@ -238,26 +407,12 @@ export function buildSoloPlusBrowserCaseSummaryDto(
     paymentStatus: caseRecord.paymentStatus,
     refundStatus: caseRecord.refundStatus,
     rowVersion: caseRecord.rowVersion,
-    reviewOutcome:
-      caseRecord.caseStatus === "approved"
-        ? "approved"
-        : caseRecord.caseStatus === "rejected"
-        ? "rejected"
-        : caseRecord.caseStatus === "verification_pending"
-        ? "verification_pending"
-        : caseRecord.caseStatus === "manual_review"
-        ? "pending_review"
-        : caseRecord.caseStatus === "awaiting_payment"
-        ? "awaiting_payment"
-        : caseRecord.caseStatus === "cancelled"
-        ? "cancelled"
-        : "draft",
-    activationState:
-      caseRecord.activationIdempotencyKey != null
-        ? "activated"
-        : caseRecord.caseStatus === "approved"
-        ? "approved_pending_activation"
-        : "inactive",
+    reviewState: reviewContext.reviewState,
+    actionRequired: reviewContext.actionRequired,
+    merchantVisibleReason: reviewContext.merchantVisibleReason,
+    statusChangedAt: reviewContext.statusChangedAt,
+    reviewOutcome: getReviewOutcome(caseRecord),
+    activationState: getActivationState(caseRecord),
     createdAt: caseRecord.createdAt,
     updatedAt: caseRecord.updatedAt,
   };
@@ -279,9 +434,14 @@ export function buildSoloPlusBrowserRequirementSummaryDto(
 export function buildSoloPlusBrowserCaseDto(
   caseRecord: SoloPlusCaseRecord,
   requirements: readonly SoloPlusCaseRequirementRecord[],
+  latestReviewDecisionEvent: SoloPlusCaseEventRecord | null = null,
 ): SoloPlusBrowserCaseDto {
   return {
-    ...buildSoloPlusBrowserCaseSummaryDto(caseRecord),
+    ...buildSoloPlusBrowserCaseSummaryDto(
+      caseRecord,
+      requirements,
+      latestReviewDecisionEvent,
+    ),
     requirements: requirements.map((requirement) =>
       buildSoloPlusBrowserRequirementSummaryDto(requirement),
     ),

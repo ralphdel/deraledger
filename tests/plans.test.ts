@@ -29,8 +29,22 @@ async function run() {
   assert.equal(getStoragePlanCode("solo_plus"), "solo_plus");
 
   assert.equal(isPlanAvailable("starter", { solo_plus: false }), true);
-  assert.equal(isPlanAvailable("solo_plus", { solo_plus: false }), false);
-  assert.equal(isPlanAvailable("solo_plus", { solo_plus: true }), true);
+  assert.equal(
+    isPlanAvailable("solo_plus", { solo_plus: false, solo_plus_kyc: false }),
+    false,
+  );
+  assert.equal(
+    isPlanAvailable("solo_plus", { solo_plus: true, solo_plus_kyc: false }),
+    false,
+  );
+  assert.equal(
+    isPlanAvailable("solo_plus", { solo_plus: false, solo_plus_kyc: true }),
+    false,
+  );
+  assert.equal(
+    isPlanAvailable("solo_plus", { solo_plus: true, solo_plus_kyc: true }),
+    true,
+  );
 
   const upserts: Array<{ payload: Record<string, unknown>; options: Record<string, unknown> }> = [];
   const adminClient = {

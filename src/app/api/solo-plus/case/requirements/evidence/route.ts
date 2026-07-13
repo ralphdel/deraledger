@@ -249,7 +249,11 @@ function mapSuccessResponse(result: Awaited<ReturnType<SoloPlusBrowserCaseServic
   return NextResponse.json(
     {
       kind: "updated",
-      case: buildSoloPlusBrowserCaseDto(result.caseRecord, result.requirements),
+      case: buildSoloPlusBrowserCaseDto(
+        result.caseRecord,
+        result.requirements,
+        result.latestReviewDecisionEvent,
+      ),
     },
     { status: 200 },
   );

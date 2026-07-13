@@ -76,6 +76,9 @@ export const PLAN_CATALOG: Record<
 };
 
 const TRUE_VALUES = new Set(["true", "1", "yes", "on"]);
+export type PlanAvailabilityFlags = Partial<Record<CanonicalPlanCode, boolean>> & {
+  solo_plus_kyc?: boolean;
+};
 
 export function normalizePlanCode(plan: string | null | undefined): CanonicalPlanCode {
   const normalized = String(plan || "").trim().toLowerCase();
@@ -122,28 +125,31 @@ export function requiresPlanVerificationDisclosure(plan: string | null | undefin
 
 export function isPlanAvailable(
   plan: string | null | undefined,
-  flags?: Partial<Record<CanonicalPlanCode, boolean>>,
+  flags?: PlanAvailabilityFlags,
 ): boolean {
   const normalized = normalizePlanCode(plan);
   if (normalized === "solo_plus") {
-    return flags?.solo_plus === true;
+    return flags?.solo_plus === true && flags.solo_plus_kyc === true;
   }
   return true;
 }
 
 export async function getPlanAvailabilityFlags(
   adminClient: SupabaseClient,
-): Promise<Record<CanonicalPlanCode, boolean>> {
+): Promise<Record<CanonicalPlanCode, boolean> & { solo_plus_kyc: boolean }> {
   const { data } = await adminClient
     .from("platform_settings")
     .select("key, value")
-    .in("key", ["solo_plus_enabled"]);
+    .in("key", ["solo_plus_enabled", "solo_plus_kyc_enabled"]);
 
   const map = new Map((data || []).map((row: { key: string; value: string }) => [row.key, row.value]));
   return {
     starter: true,
     solo_lite: true,
     solo_plus: TRUE_VALUES.has(String(map.get("solo_plus_enabled") || "").toLowerCase()),
+    solo_plus_kyc: TRUE_VALUES.has(
+      String(map.get("solo_plus_kyc_enabled") || "").toLowerCase(),
+    ),
     business: true,
   };
 }

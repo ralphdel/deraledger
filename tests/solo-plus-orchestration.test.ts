@@ -91,6 +91,14 @@ class FakeSoloPlusRepository implements SoloPlusCaseRepository {
     return this.cloneEvents(this.events.get(caseId) || []);
   }
 
+  async findLatestReviewDecisionEvent(
+    caseId: string,
+  ): Promise<SoloPlusCaseEventRecord | null> {
+    const events = this.events.get(caseId) || [];
+    const latestEvent = events.at(-1) ?? null;
+    return latestEvent == null ? null : this.cloneEvent(latestEvent);
+  }
+
   async createCaseWithRequirementsAndEvent(
     input: SoloPlusCaseCreateAtomicInput,
   ): Promise<SoloPlusCaseCreateAtomicResult> {

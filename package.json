@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-   "test:solo-plus": "tsx tests/solo-plus-evidence-reuse.test.ts && tsx tests/solo-plus-requirement-orchestration.test.ts && tsx tests/solo-plus-orchestration.test.ts && tsx tests/solo-plus-supabase-repository.test.ts && tsx tests/solo-plus-server-service.test.ts && tsx tests/solo-plus-review-service.test.ts && tsx tests/solo-plus-browser-origin.test.ts && tsx tests/solo-plus-review-route.test.ts && tsx tests/solo-plus-case-route.test.ts && tsx tests/solo-plus-case-evidence-route.test.ts && tsx tests/solo-plus-activation-service.test.ts && tsx tests/solo-plus-payment-lifecycle.test.ts",
+   "test:solo-plus": "tsx tests/plans.test.ts && tsx tests/solo-plus-evidence-reuse.test.ts && tsx tests/solo-plus-requirement-orchestration.test.ts && tsx tests/solo-plus-orchestration.test.ts && tsx tests/solo-plus-supabase-repository.test.ts && tsx tests/solo-plus-server-service.test.ts && tsx tests/solo-plus-review-service.test.ts && tsx tests/solo-plus-browser-origin.test.ts && tsx tests/solo-plus-browser-case-contract.test.ts && tsx tests/solo-plus-review-route.test.ts && tsx tests/solo-plus-case-route.test.ts && tsx tests/solo-plus-case-evidence-route.test.ts && tsx tests/solo-plus-activation-service.test.ts && tsx tests/solo-plus-payment-lifecycle.test.ts",
    "validate:solo-plus:commit": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\validate-solo-plus-commit.ps1"
   },
   "dependencies": {

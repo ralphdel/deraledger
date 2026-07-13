@@ -37,6 +37,12 @@ const MARK_AWAITING_PAYMENT_RPC = "mark_solo_plus_case_awaiting_payment_v1";
 const CASE_BUNDLE_PAYLOAD_RPC = "solo_plus_case_bundle_payload_v1";
 const REVIEW_CASE_RPC = "review_solo_plus_case_v1";
 const ACTIVATE_CASE_RPC = "activate_solo_plus_case_v1";
+const REVIEW_DECISION_EVENT_TYPES = [
+  "case_review_requested_more_information",
+  "case_approved",
+  "case_rejected",
+  "case_reopened",
+] as const;
 
 const UUID_LIKE_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -1167,6 +1173,20 @@ export function createSoloPlusSupabaseRepository(
       );
 
       return rows.map((row) => mapEventRow(row));
+    },
+
+    async findLatestReviewDecisionEvent(caseId: string): Promise<SoloPlusCaseEventRecord | null> {
+      const row = await maybeSingle(
+        client
+          .from("solo_plus_case_events")
+          .select("*")
+          .eq("case_id", caseId)
+          .in("event_type", [...REVIEW_DECISION_EVENT_TYPES])
+          .order("created_at", { ascending: false })
+          .limit(1),
+      );
+
+      return row == null ? null : mapEventRow(row);
     },
 
     async createCaseWithRequirementsAndEvent(

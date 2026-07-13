@@ -73,6 +73,10 @@ class FakeSoloPlusRepository implements SoloPlusCaseRepository {
     return [];
   }
 
+  async findLatestReviewDecisionEvent(): Promise<null> {
+    return null;
+  }
+
   async createCaseWithRequirementsAndEvent(): Promise<never> {
     throw new Error("createCaseWithRequirementsAndEvent should not be called");
   }

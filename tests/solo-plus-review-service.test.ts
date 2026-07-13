@@ -80,6 +80,16 @@ class FakeSoloPlusRepository implements SoloPlusCaseRepository {
     );
   }
 
+  async findLatestReviewDecisionEvent(
+    caseId: string,
+  ): Promise<SoloPlusCaseEventRecord | null> {
+    const events = this.events.get(caseId) || [];
+    const latest = events.at(-1) ?? null;
+    return latest == null
+      ? null
+      : (JSON.parse(JSON.stringify(latest)) as SoloPlusCaseEventRecord);
+  }
+
   async createCaseWithRequirementsAndEvent(): Promise<SoloPlusCaseCreateAtomicResult> {
     throw new Error("createCaseWithRequirementsAndEvent should not be called");
   }

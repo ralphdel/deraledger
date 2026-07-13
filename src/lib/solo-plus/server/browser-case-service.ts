@@ -2,6 +2,7 @@ import "server-only";
 
 import type {
   SoloPlusCaseCreationResult,
+  SoloPlusCaseEventRecord,
   SoloPlusCaseRecord,
   SoloPlusCaseRequirementRecord,
   SoloPlusCaseRepository,
@@ -61,16 +62,20 @@ export type SubmitSoloPlusCaseEvidenceInput = {
 export type SoloPlusBrowserCaseLookupResult = {
   caseRecord: SoloPlusCaseRecord;
   requirements: readonly SoloPlusCaseRequirementRecord[];
+  latestReviewDecisionEvent: SoloPlusCaseEventRecord | null;
 };
 
 export type SoloPlusBrowserCaseService = {
-  createOrResumeCase(input: CreateOrResumeSoloPlusCaseInput): Promise<SoloPlusCaseCreationResult>;
+  createOrResumeCase(
+    input: CreateOrResumeSoloPlusCaseInput,
+  ): Promise<SoloPlusCaseCreationResult & { latestReviewDecisionEvent: SoloPlusCaseEventRecord | null }>;
   readCurrentCase(input: ReadSoloPlusCaseInput): Promise<SoloPlusBrowserCaseLookupResult | null>;
   submitEvidence(input: SubmitSoloPlusCaseEvidenceInput): Promise<{
     caseRecord: SoloPlusCaseRecord;
     requirements: readonly SoloPlusCaseRequirementRecord[];
     decisions: Record<string, unknown>;
     merchantId: string | null;
+    latestReviewDecisionEvent: SoloPlusCaseEventRecord | null;
   }>;
 };
 
@@ -181,6 +186,18 @@ function resolveRepository(
   );
 }
 
+async function loadBrowserCaseLookupResult(
+  repository: SoloPlusCaseRepository,
+  caseRecord: SoloPlusCaseRecord,
+  requirements?: readonly SoloPlusCaseRequirementRecord[],
+): Promise<SoloPlusBrowserCaseLookupResult> {
+  return {
+    caseRecord,
+    requirements: requirements ?? (await repository.listRequirements(caseRecord.id)),
+    latestReviewDecisionEvent: await repository.findLatestReviewDecisionEvent(caseRecord.id),
+  };
+}
+
 export async function createSoloPlusBrowserCaseService(
   options: CreateSoloPlusBrowserCaseServiceOptions = {},
 ): Promise<SoloPlusBrowserCaseService> {
@@ -213,13 +230,20 @@ export async function createSoloPlusBrowserCaseService(
           env: options.env,
         });
 
-        return service.createOnboardingCase({
+        const result = await service.createOnboardingCase({
           idempotencyKey: input.requestIdempotencyKey,
           expectedAmount: getSoloPlusCreationExpectedAmount(),
           paymentCurrency: "NGN",
           requirementsPolicyVersion: "solo-plus-payment-init-v1",
           requirementsSnapshot: buildSoloPlusCreationRequirementsSnapshot("onboarding"),
         });
+
+        return {
+          ...result,
+          latestReviewDecisionEvent: await repository.findLatestReviewDecisionEvent(
+            result.caseRecord.id,
+          ),
+        };
       }
 
       const merchant = await loadOwnerMerchantForUser(serviceClient, authenticatedUser.id);
@@ -239,7 +263,7 @@ export async function createSoloPlusBrowserCaseService(
         env: options.env,
       });
 
-      return service.createUpgradeCase({
+      const result = await service.createUpgradeCase({
         currentPlan: "solo_lite",
         idempotencyKey: input.requestIdempotencyKey,
         expectedAmount: getSoloPlusCreationExpectedAmount(),
@@ -247,6 +271,13 @@ export async function createSoloPlusBrowserCaseService(
         requirementsPolicyVersion: "solo-plus-payment-init-v1",
         requirementsSnapshot: buildSoloPlusCreationRequirementsSnapshot("upgrade"),
       });
+
+      return {
+        ...result,
+        latestReviewDecisionEvent: await repository.findLatestReviewDecisionEvent(
+          result.caseRecord.id,
+        ),
+      };
     },
 
     async readCurrentCase(input) {
@@ -269,10 +300,7 @@ export async function createSoloPlusBrowserCaseService(
         }
 
         assertCaseOwnership(caseRecord, merchant?.id || null, onboardingSessionId);
-        return {
-          caseRecord,
-          requirements: await repository.listRequirements(caseRecord.id),
-        };
+        return loadBrowserCaseLookupResult(repository, caseRecord);
       }
 
       if (input.onboardingSessionId) {
@@ -288,10 +316,7 @@ export async function createSoloPlusBrowserCaseService(
           return null;
         }
 
-        return {
-          caseRecord,
-          requirements: await repository.listRequirements(caseRecord.id),
-        };
+        return loadBrowserCaseLookupResult(repository, caseRecord);
       }
 
       const merchant = await loadOwnerMerchantForUser(serviceClient, authenticatedUser.id);
@@ -304,10 +329,7 @@ export async function createSoloPlusBrowserCaseService(
         return null;
       }
 
-      return {
-        caseRecord,
-        requirements: await repository.listRequirements(caseRecord.id),
-      };
+      return loadBrowserCaseLookupResult(repository, caseRecord);
     },
 
     async submitEvidence(input) {
@@ -362,7 +384,10 @@ export async function createSoloPlusBrowserCaseService(
         proofOfAddress: input.proofOfAddress || undefined,
       });
 
-      return result;
+      return {
+        ...result,
+        latestReviewDecisionEvent: await repository.findLatestReviewDecisionEvent(result.caseRecord.id),
+      };
     },
   };
 }

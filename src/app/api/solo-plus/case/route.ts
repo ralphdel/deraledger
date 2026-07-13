@@ -196,11 +196,17 @@ function mapDomainError(error: unknown): NextResponse | null {
   }
 }
 
-function mapCreateResponse(result: SoloPlusCaseCreationResult): NextResponse {
+function mapCreateResponse(
+  result: Awaited<ReturnType<SoloPlusBrowserCaseService["createOrResumeCase"]>>,
+): NextResponse {
   return NextResponse.json(
     {
       kind: result.outcome,
-      case: buildSoloPlusBrowserCaseDto(result.caseRecord, result.requirements),
+      case: buildSoloPlusBrowserCaseDto(
+        result.caseRecord,
+        result.requirements,
+        "latestReviewDecisionEvent" in result ? result.latestReviewDecisionEvent : null,
+      ),
       event: mapEventRecord(result.createdEvent),
     },
     { status: 200 },
@@ -232,6 +238,7 @@ export function createSoloPlusCaseRouteHandler(dependencies: SoloPlusCaseRouteDe
             case: buildSoloPlusBrowserCaseDto(
               result.caseRecord,
               result.requirements as SoloPlusCaseRequirementRecord[],
+              result.latestReviewDecisionEvent,
             ),
           },
           {

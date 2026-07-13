@@ -121,6 +121,25 @@ function buildCreationResult(
   };
 }
 
+function buildReviewDecisionEvent(
+  overrides: Partial<SoloPlusCaseEventRecord> = {},
+): SoloPlusCaseEventRecord {
+  return {
+    id: overrides.id || "44444444-4444-4444-8444-444444444444",
+    caseId: overrides.caseId || "11111111-1111-4111-8111-111111111111",
+    eventType: overrides.eventType || "case_review_requested_more_information",
+    previousState: overrides.previousState || { caseStatus: "manual_review" },
+    newState: overrides.newState || { caseStatus: "verification_pending" },
+    actorType: overrides.actorType || "admin",
+    actorId: overrides.actorId ?? "reviewer-admin-id",
+    requestIdempotencyKey:
+      overrides.requestIdempotencyKey ?? "latest-review-idem-1",
+    reason: overrides.reason ?? "Need clearer proof of address.",
+    policyVersion: overrides.policyVersion ?? "solo-plus-policy-v1",
+    createdAt: overrides.createdAt ?? "2026-07-11T00:00:00.000Z",
+  };
+}
+
 async function readJson(response: Response): Promise<Record<string, unknown>> {
   return JSON.parse(await response.text()) as Record<string, unknown>;
 }
@@ -155,16 +174,20 @@ function createCasePostRequest(options: {
 
 function assertSafeCaseDto(caseDto: Record<string, unknown>) {
   assert.deepEqual(Object.keys(caseDto).sort(), [
+    "actionRequired",
     "activationState",
     "caseId",
     "caseStatus",
     "createdAt",
     "flowOrigin",
+    "merchantVisibleReason",
     "paymentStatus",
     "refundStatus",
     "requirements",
     "reviewOutcome",
+    "reviewState",
     "rowVersion",
+    "statusChangedAt",
     "updatedAt",
   ]);
 
@@ -195,10 +218,13 @@ function createHandler(options: {
   authenticated?: boolean;
   userId?: string;
   email?: string | null;
-  serviceResult?: SoloPlusCaseCreationResult;
+  serviceResult?: SoloPlusCaseCreationResult & {
+    latestReviewDecisionEvent?: SoloPlusCaseEventRecord | null;
+  };
   readResult?: {
     caseRecord: SoloPlusCaseRecord;
     requirements: readonly SoloPlusCaseRequirementRecord[];
+    latestReviewDecisionEvent?: SoloPlusCaseEventRecord | null;
   } | null;
   createServiceError?: unknown;
   readServiceError?: unknown;
@@ -228,7 +254,13 @@ function createHandler(options: {
         if (options.createServiceError) {
           throw options.createServiceError;
         }
-        return options.serviceResult || buildCreationResult();
+        const baseResult: SoloPlusCaseCreationResult & {
+          latestReviewDecisionEvent?: SoloPlusCaseEventRecord | null;
+        } = options.serviceResult || buildCreationResult();
+        return {
+          ...baseResult,
+          latestReviewDecisionEvent: baseResult.latestReviewDecisionEvent ?? null,
+        };
       },
       readCurrentCase: async (input) => {
         calls.readCurrentCase += 1;
@@ -236,19 +268,28 @@ function createHandler(options: {
         if (options.readServiceError) {
           throw options.readServiceError;
         }
-        return options.readResult === undefined
-          ? {
-              caseRecord: buildCaseRecord(),
-              requirements: [
-                buildRequirementRecord({
-                  requirementCode: "bvn",
-                  requirementState: "passed",
-                  evidenceSourceType: "verification_log",
-                  evidenceReference: "safe-ref-1",
-                }),
-              ],
-            }
-          : options.readResult;
+        if (options.readResult === undefined) {
+          return {
+            caseRecord: buildCaseRecord(),
+            requirements: [
+              buildRequirementRecord({
+                requirementCode: "bvn",
+                requirementState: "passed",
+                evidenceSourceType: "verification_log",
+                evidenceReference: "safe-ref-1",
+              }),
+            ],
+            latestReviewDecisionEvent: null,
+          };
+        }
+
+        return options.readResult == null
+          ? null
+          : {
+              ...options.readResult,
+              latestReviewDecisionEvent:
+                options.readResult.latestReviewDecisionEvent ?? null,
+            };
       },
       submitEvidence: async () => {
         calls.submitEvidence += 1;
@@ -289,6 +330,9 @@ async function run() {
       requestIdempotencyKey: "create-case-1",
     });
     assertSafeCaseDto(body.case as Record<string, unknown>);
+    assert.equal((body.case as Record<string, unknown>).reviewState, "not_started");
+    assert.equal((body.case as Record<string, unknown>).actionRequired, "none");
+    assert.equal((body.case as Record<string, unknown>).merchantVisibleReason, null);
   }
 
   {
@@ -307,6 +351,65 @@ async function run() {
     const body = await readJson(response);
     assert.equal(response.status, 200);
     assert.equal(body.kind, "existing_active_case");
+  }
+
+  {
+    const { handler } = createHandler({
+      readResult: {
+        caseRecord: buildCaseRecord({
+          caseStatus: "verification_pending",
+          updatedAt: "2026-07-12T00:00:00.000Z",
+        }),
+        requirements: [
+          buildRequirementRecord({
+            requirementCode: "proof_of_address",
+            requirementState: "failed",
+          }),
+        ],
+        latestReviewDecisionEvent: buildReviewDecisionEvent({
+          eventType: "case_review_requested_more_information",
+          reason: "  <b>Need clearer</b>\nproof of address.\u0000  ",
+        }),
+      },
+    });
+    const response = await handler.GET(
+      new Request(
+        "https://app.example.test/api/solo-plus/case?caseId=11111111-1111-4111-8111-111111111111",
+      ),
+    );
+    const body = await readJson(response);
+    assert.equal(response.status, 200);
+    assertSafeCaseDto(body.case as Record<string, unknown>);
+    assert.equal((body.case as Record<string, unknown>).reviewState, "more_information_required");
+    assert.equal((body.case as Record<string, unknown>).actionRequired, "resubmit_information");
+    assert.equal((body.case as Record<string, unknown>).merchantVisibleReason, "Need clearer proof of address.");
+    assert.equal((body.case as Record<string, unknown>).reviewOutcome, "verification_pending");
+  }
+
+  {
+    const { handler } = createHandler({
+      readResult: {
+        caseRecord: buildCaseRecord({
+          caseStatus: "verification_pending",
+          updatedAt: "2026-07-12T00:00:00.000Z",
+        }),
+        requirements: [
+          buildRequirementRecord({
+            requirementCode: "id_document",
+            requirementState: "not_started",
+          }),
+        ],
+        latestReviewDecisionEvent: null,
+      },
+    });
+    const response = await handler.GET(
+      new Request("https://app.example.test/api/solo-plus/case"),
+    );
+    const body = await readJson(response);
+    assert.equal(response.status, 200);
+    assert.equal((body.case as Record<string, unknown>).reviewState, "verification_pending");
+    assert.equal((body.case as Record<string, unknown>).actionRequired, "complete_requirements");
+    assert.equal((body.case as Record<string, unknown>).merchantVisibleReason, null);
   }
 
   {

@@ -386,6 +386,7 @@ export interface SoloPlusCaseRepository {
   ): Promise<SoloPlusCaseRecord | null>;
   listRequirements(caseId: string): Promise<readonly SoloPlusCaseRequirementRecord[]>;
   listSafeEvents(caseId: string): Promise<readonly SoloPlusCaseEventRecord[]>;
+  findLatestReviewDecisionEvent(caseId: string): Promise<SoloPlusCaseEventRecord | null>;
   createCaseWithRequirementsAndEvent(
     input: SoloPlusCaseCreateAtomicInput,
   ): Promise<SoloPlusCaseCreateAtomicResult>;

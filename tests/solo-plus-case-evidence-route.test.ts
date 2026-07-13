@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createSoloPlusCaseEvidenceRouteHandler } from "../src/app/api/solo-plus/case/requirements/evidence/route";
 import { assertSameOriginBrowserMutationRequest } from "../src/lib/server/browser-origin";
 import type {
+  SoloPlusCaseEventRecord,
   SoloPlusCaseRecord,
   SoloPlusCaseRequirementRecord,
 } from "../src/lib/solo-plus/repository";
@@ -73,6 +74,25 @@ function buildRequirementRecord(
   };
 }
 
+function buildReviewDecisionEvent(
+  overrides: Partial<SoloPlusCaseEventRecord> = {},
+): SoloPlusCaseEventRecord {
+  return {
+    id: overrides.id || "55555555-5555-4555-8555-555555555555",
+    caseId: overrides.caseId || "11111111-1111-4111-8111-111111111111",
+    eventType: overrides.eventType || "case_review_requested_more_information",
+    previousState: overrides.previousState || { caseStatus: "manual_review" },
+    newState: overrides.newState || { caseStatus: "verification_pending" },
+    actorType: overrides.actorType || "admin",
+    actorId: overrides.actorId ?? "reviewer-admin-id",
+    requestIdempotencyKey:
+      overrides.requestIdempotencyKey ?? "review-event-idem-1",
+    reason: overrides.reason ?? "Need clearer proof of address.",
+    policyVersion: overrides.policyVersion ?? "solo-plus-policy-v1",
+    createdAt: overrides.createdAt ?? "2026-07-11T00:00:00.000Z",
+  };
+}
+
 async function readJson(response: Response): Promise<Record<string, unknown>> {
   return JSON.parse(await response.text()) as Record<string, unknown>;
 }
@@ -110,16 +130,20 @@ function createEvidencePostRequest(options: {
 
 function assertSafeCaseDto(caseDto: Record<string, unknown>) {
   assert.deepEqual(Object.keys(caseDto).sort(), [
+    "actionRequired",
     "activationState",
     "caseId",
     "caseStatus",
     "createdAt",
     "flowOrigin",
+    "merchantVisibleReason",
     "paymentStatus",
     "refundStatus",
     "requirements",
     "reviewOutcome",
+    "reviewState",
     "rowVersion",
+    "statusChangedAt",
     "updatedAt",
   ]);
 
@@ -152,6 +176,7 @@ function createHandler(options: {
     requirements: readonly SoloPlusCaseRequirementRecord[];
     decisions: Record<string, unknown>;
     merchantId: string | null;
+    latestReviewDecisionEvent?: SoloPlusCaseEventRecord | null;
   };
   serviceError?: unknown;
   originGuard?: (request: Request) => { origin: string; requestOrigin: string };
@@ -187,7 +212,7 @@ function createHandler(options: {
         if (options.serviceError) {
           throw options.serviceError;
         }
-        return (
+        const baseResult =
           options.serviceResult || {
             caseRecord: buildCaseRecord(),
             requirements: [
@@ -200,8 +225,12 @@ function createHandler(options: {
             ],
             decisions: { activity_profile: null },
             merchantId: "22222222-2222-4222-8222-222222222222",
-          }
-        );
+            latestReviewDecisionEvent: null,
+          };
+        return {
+          ...baseResult,
+          latestReviewDecisionEvent: baseResult.latestReviewDecisionEvent ?? null,
+        };
       },
     }),
     assertBrowserMutationOriginRequest: options.originGuard,
@@ -273,6 +302,7 @@ async function run() {
     assert.equal(calls.createOrResumeCase, 0);
     assert.equal(calls.readCurrentCase, 0);
     assertSafeCaseDto(body.case as Record<string, unknown>);
+    assert.equal((body.case as Record<string, unknown>).reviewState, "verification_pending");
   }
 
   {
@@ -290,6 +320,10 @@ async function run() {
         ],
         decisions: { proof_of_address: { outcome: "reusable" } },
         merchantId: "22222222-2222-4222-8222-222222222222",
+        latestReviewDecisionEvent: buildReviewDecisionEvent({
+          eventType: "case_review_requested_more_information",
+          reason: "  Need updated address document.\n ",
+        }),
       },
     });
     const response = await handler(
@@ -308,6 +342,9 @@ async function run() {
     assert.equal(response.status, 200);
     assert.equal(body.kind, "updated");
     assertSafeCaseDto(body.case as Record<string, unknown>);
+    assert.equal((body.case as Record<string, unknown>).reviewState, "more_information_required");
+    assert.equal((body.case as Record<string, unknown>).actionRequired, "resubmit_information");
+    assert.equal((body.case as Record<string, unknown>).merchantVisibleReason, "Need updated address document.");
   }
 
   {
