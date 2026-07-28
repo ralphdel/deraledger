@@ -24,6 +24,10 @@ type PlanPaymentRecoveryModule = typeof import("../src/lib/services/plan-payment
 let confirmSoloPlusPayment: PaymentLifecycleModule["confirmSoloPlusPayment"];
 let processSuccessfulFiatPayment: FiatConfirmationModule["processSuccessfulFiatPayment"];
 let upsertWebhookAuditEvent: PlanPaymentRecoveryModule["upsertWebhookAuditEvent"];
+let buildSoloPlusPaymentReference: PlanPaymentRecoveryModule["buildSoloPlusPaymentReference"];
+let createPendingPlanPaymentRecord: PlanPaymentRecoveryModule["createPendingPlanPaymentRecord"];
+let hasReusablePaymentInitialization: PlanPaymentRecoveryModule["hasReusablePaymentInitialization"];
+let readPaymentInitializationSnapshot: PlanPaymentRecoveryModule["readPaymentInitializationSnapshot"];
 
 type QueryResponse = {
   data: unknown;
@@ -145,7 +149,60 @@ function seedPaymentRecord(overrides: Record<string, unknown> = {}) {
 async function loadModules() {
   ({ confirmSoloPlusPayment } = await import(new URL("../src/lib/solo-plus/server/payment-lifecycle.ts", import.meta.url).href));
   ({ processSuccessfulFiatPayment } = await import(new URL("../src/lib/services/fiat-payment-confirmation.service.ts", import.meta.url).href));
-  ({ upsertWebhookAuditEvent } = await import(new URL("../src/lib/services/plan-payment-recovery.service.ts", import.meta.url).href));
+  ({
+    upsertWebhookAuditEvent,
+    buildSoloPlusPaymentReference,
+    createPendingPlanPaymentRecord,
+    hasReusablePaymentInitialization,
+    readPaymentInitializationSnapshot,
+  } = await import(new URL("../src/lib/services/plan-payment-recovery.service.ts", import.meta.url).href));
+}
+
+class PendingPaymentWriteClient {
+  readonly records = new Map<string, Record<string, unknown>>();
+
+  from(table: string) {
+    assert.equal(table, "payment_records");
+    const client = this;
+
+    return {
+      upsert(value: Record<string, unknown>) {
+        const recordId = "425fa617-d714-4d1c-9db8-4f46cb98bff1";
+        const stored = {
+          id: recordId,
+          ...JSON.parse(JSON.stringify(value)),
+          metadata: JSON.parse(JSON.stringify(value.metadata ?? {})),
+          raw_provider_payload: JSON.parse(JSON.stringify(value.raw_provider_payload ?? {})),
+          failure_reason: null,
+        };
+        client.records.set(recordId, stored);
+
+        return {
+          select() {
+            return {
+              async single() {
+                return { data: JSON.parse(JSON.stringify(stored)), error: null };
+              },
+            };
+          },
+        };
+      },
+      update(updates: Record<string, unknown>) {
+        return {
+          async eq(column: string, id: string) {
+            assert.equal(column, "id");
+            const existing = client.records.get(id);
+            assert.ok(existing, "expected pending payment record to exist");
+            client.records.set(id, {
+              ...existing,
+              ...JSON.parse(JSON.stringify(updates)),
+            });
+            return { error: null };
+          },
+        };
+      },
+    };
+  }
 }
 
 async function main() {
@@ -225,6 +282,70 @@ async function main() {
     assert.equal((result as { solo_plus?: boolean }).solo_plus, true);
     assert.equal((result as { status?: string }).status, "verification_pending");
     assert.equal(client.rpcCalls.length, 1);
+  }
+
+  {
+    assert.equal(
+      buildSoloPlusPaymentReference(
+        "425fa617-d714-4d1c-9db8-4f46cb98bff1",
+        "plan_upgrade",
+      ),
+      "SPL-UPG-425FA617D7144D1C9DB84F46CB98BFF1",
+    );
+
+    const client = new PendingPaymentWriteClient();
+    const created = await createPendingPlanPaymentRecord(client as never, {
+      internalReference: "SPL-UPG-TMP-8B32FB1C144D4013A80C6A8E146754F9",
+      provider: "paystack",
+      paymentMethod: "card",
+      paymentPurpose: "plan_upgrade",
+      customerEmail: "merchant@example.test",
+      expectedAmount: 13000,
+      planName: "solo_plus",
+      planId: "solo_plus",
+      merchantId: "11111111-1111-1111-1111-111111111111",
+      soloPlusCaseId: "8b32fb1c-144d-4013-a80c-6a8e146754f9",
+      metadata: { type: "subscription_upgrade" },
+    });
+
+    assert.equal(created.internal_reference, "SPL-UPG-425FA617D7144D1C9DB84F46CB98BFF1");
+    assert.equal(created.provider_reference, "SPL-UPG-425FA617D7144D1C9DB84F46CB98BFF1");
+    assert.equal(
+      readPaymentInitializationSnapshot(created.metadata)?.status,
+      "created",
+    );
+    assert.equal(
+      readPaymentInitializationSnapshot(created.metadata)?.providerReference,
+      "SPL-UPG-425FA617D7144D1C9DB84F46CB98BFF1",
+    );
+  }
+
+  {
+    const reusable = hasReusablePaymentInitialization(
+      {
+        provider_reference: "SPL-UPG-425FA617D7144D1C9DB84F46CB98BFF1",
+        metadata: {
+          payment_initialization: {
+            status: "initialized",
+            provider: "paystack",
+            completionMode: "paystack_resume",
+            providerReference: "SPL-UPG-425FA617D7144D1C9DB84F46CB98BFF1",
+            authorizationUrl: "https://checkout.paystack.test/abc",
+            accessCode: "ACCESS_CODE",
+            checkoutUrl: null,
+            providerTransactionReference: null,
+            failureCode: null,
+            failureMessage: null,
+            initializedAt: "2026-07-17T10:00:00.000Z",
+            lastUpdatedAt: "2026-07-17T10:00:00.000Z",
+          },
+        },
+      },
+      "paystack",
+    );
+
+    assert.equal(reusable?.authorizationUrl, "https://checkout.paystack.test/abc");
+    assert.equal(reusable?.accessCode, "ACCESS_CODE");
   }
 
   await assert.rejects(

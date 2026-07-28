@@ -855,6 +855,98 @@ async function run() {
   assert.equal(upgradeRepository.lastCreateInput?.intent.merchantId, "merchant-admin");
   assert.equal(upgradeRepository.lastCreateInput?.intent.expectedAmount, "9999999999999999.99");
 
+  const runtimeAuthClient = new FakeSupabaseClient();
+  const runtimeServiceClient = new FakeSupabaseClient();
+  seedBaseTables(runtimeAuthClient);
+  seedBaseTables(runtimeServiceClient);
+  runtimeAuthClient.currentUser = {
+    id: "runtime-user",
+    email: "runtime@example.com",
+    user_metadata: {},
+    app_metadata: {},
+    email_confirmed_at: "2026-07-07T00:00:00.000Z",
+  };
+  runtimeAuthClient.tables.set("merchants", [
+    {
+      id: "merchant-runtime",
+      user_id: "runtime-user",
+      email: "runtime@example.com",
+      is_super_admin: false,
+    },
+  ]);
+  runtimeServiceClient.tables.set("platform_settings", [
+    { key: "plan_migration_solo_lite_enabled", value: "false" },
+    { key: "solo_plus_enabled", value: "true" },
+    { key: "solo_plus_kyc_enabled", value: "true" },
+  ]);
+
+  const runtimeRepository = new FakeSoloPlusRepository();
+  const runtimeService = await createSoloPlusServerService({
+    requestedMode: "public",
+    merchantId: "merchant-runtime",
+    authClient: runtimeAuthClient,
+    serviceClient: runtimeServiceClient,
+    repository: runtimeRepository,
+    env: createEnv(),
+    now: () => new Date("2026-07-07T00:00:00.000Z"),
+  });
+
+  const runtimeResult = await runtimeService.createUpgradeCase({
+    currentPlan: "solo_lite",
+    idempotencyKey: "solo-plus-upgrade-runtime",
+    expectedAmount: "13000.00",
+    paymentCurrency: "NGN",
+    requirementsPolicyVersion: "solo-plus-policy-v1",
+    requirementsSnapshot: { safe: "runtime" },
+  });
+  assert.ok(runtimeResult.createdEvent);
+  assert.match(runtimeResult.caseRecord.id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  assert.match(runtimeResult.createdEvent.id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  assert.equal(
+    runtimeResult.requirements.every((requirement) =>
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requirement.id),
+    ),
+    true,
+  );
+
+  const deterministicRepository = new FakeSoloPlusRepository();
+  const deterministicService = await createSoloPlusServerService({
+    requestedMode: "public",
+    merchantId: "merchant-runtime",
+    authClient: runtimeAuthClient,
+    serviceClient: runtimeServiceClient,
+    repository: deterministicRepository,
+    env: createEnv(),
+    now: () => new Date("2026-07-07T00:00:00.000Z"),
+    generateId: (() => {
+      let index = 0;
+      const ids = [
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222",
+        "33333333-3333-4333-8333-333333333333",
+        "44444444-4444-4444-8444-444444444444",
+        "55555555-5555-4555-8555-555555555555",
+        "66666666-6666-4666-8666-666666666666",
+        "77777777-7777-4777-8777-777777777777",
+        "88888888-8888-4888-8888-888888888888",
+      ];
+      return () => ids[index++] || `99999999-9999-4999-8999-${String(index).padStart(12, "0")}`;
+    })(),
+  });
+
+  const deterministicResult = await deterministicService.createUpgradeCase({
+    currentPlan: "solo_lite",
+    idempotencyKey: "solo-plus-upgrade-deterministic",
+    expectedAmount: "13000.00",
+    paymentCurrency: "NGN",
+    requirementsPolicyVersion: "solo-plus-policy-v1",
+    requirementsSnapshot: { safe: "deterministic" },
+  });
+  assert.ok(deterministicResult.createdEvent);
+  assert.equal(deterministicResult.caseRecord.id, "11111111-1111-4111-8111-111111111111");
+  assert.equal(deterministicResult.requirements[0]?.id, "22222222-2222-4222-8222-222222222222");
+  assert.equal(deterministicResult.createdEvent.id, "88888888-8888-4888-8888-888888888888");
+
   const attachRepository = new FakeSoloPlusRepository();
   attachRepository.seedCase(
     buildCaseRecord({

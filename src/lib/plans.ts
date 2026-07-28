@@ -10,6 +10,7 @@ export type LegacyPlanCode =
   | "corporate"
   | "business";
 export type CapabilityPlanCode = "starter" | "individual" | "corporate";
+export type RoutePlanCode = "starter" | "individual" | "solo_plus" | "business";
 
 export const PLAN_ALIASES: Record<string, CanonicalPlanCode> = {
   starter: "starter",
@@ -29,7 +30,7 @@ export const PLAN_CATALOG: Record<
     monthlyPriceLabel: string;
     storageCode: LegacyPlanCode;
     capabilityCode: CapabilityPlanCode;
-    routeSegment: string;
+    routeSegment: RoutePlanCode;
     requiresVerificationDisclosure: boolean;
   }
 > = {
@@ -68,9 +69,9 @@ export const PLAN_CATALOG: Record<
     priceNgn: 20000,
     priceLabel: "NGN 20,000",
     monthlyPriceLabel: "₦20,000/month",
-    storageCode: "corporate",
+    storageCode: "business",
     capabilityCode: "corporate",
-    routeSegment: "corporate",
+    routeSegment: "business",
     requiresVerificationDisclosure: true,
   },
 };
@@ -115,7 +116,7 @@ export function getPlanMonthlyPriceLabel(plan: string | null | undefined): strin
   return PLAN_CATALOG[normalizePlanCode(plan)].monthlyPriceLabel;
 }
 
-export function getPlanRouteSegment(plan: string | null | undefined): string {
+export function getPlanRouteSegment(plan: string | null | undefined): RoutePlanCode {
   return PLAN_CATALOG[normalizePlanCode(plan)].routeSegment;
 }
 

@@ -54,7 +54,7 @@ const REVIEW_DECISION_EVENT_TYPES = [
 ] as const;
 
 const UUID_LIKE_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 type SupabaseLikeError = {
   message: string;
 };
@@ -100,6 +100,12 @@ export type SoloPlusSupabaseClientLike = {
 export type SoloPlusSupabaseRepositoryErrorCode =
   | "SOLO_PLUS_ATOMIC_PERSISTENCE_UNAVAILABLE"
   | "SOLO_PLUS_REPOSITORY_MAPPING_ERROR";
+
+export type SoloPlusCaseBundleRecord = {
+  caseRecord: SoloPlusCaseRecord;
+  requirements: readonly SoloPlusCaseRequirementRecord[];
+  createdEvent: SoloPlusCaseEventRecord | null;
+};
 
 export class SoloPlusSupabaseRepositoryError extends Error {
   readonly code: SoloPlusSupabaseRepositoryErrorCode;
@@ -190,24 +196,38 @@ function assertTimestamp(value: unknown, field: string, nullable = false): strin
   return parsed.toISOString();
 }
 
+function mappingError(field: string): SoloPlusSupabaseRepositoryError {
+  return new SoloPlusSupabaseRepositoryError(
+    "SOLO_PLUS_REPOSITORY_MAPPING_ERROR",
+    `Solo Plus repository mapping rejected ${field}.`,
+  );
+}
+
 function assertAmount(value: unknown, field: string): SoloPlusAmount {
-  if (typeof value !== "string") {
-    throw new SoloPlusSupabaseRepositoryError(
-      "SOLO_PLUS_REPOSITORY_MAPPING_ERROR",
-      `Solo Plus repository mapping rejected ${field}.`,
-    );
+  let amountCandidate: string;
+
+  if (typeof value === "string") {
+    amountCandidate = value;
+  } else if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    const cents = value * 100;
+    const roundedCents = Math.round(cents);
+    const isTwoDecimalNumber =
+      Math.abs(cents - roundedCents) <= Number.EPSILON * Math.max(1, Math.abs(cents));
+    if (!isTwoDecimalNumber || !Number.isSafeInteger(roundedCents)) {
+      throw mappingError(field);
+    }
+    amountCandidate = (roundedCents / 100).toFixed(2);
+  } else {
+    throw mappingError(field);
   }
 
   try {
-    return normalizeSoloPlusAmount(value);
+    return normalizeSoloPlusAmount(amountCandidate);
   } catch {
     // fall through to the same safe mapping error shape
   }
 
-  throw new SoloPlusSupabaseRepositoryError(
-    "SOLO_PLUS_REPOSITORY_MAPPING_ERROR",
-    `Solo Plus repository mapping rejected ${field}.`,
-  );
+  throw mappingError(field);
 }
 
 function assertOptionalAmount(value: unknown, field: string): SoloPlusAmount | null {
@@ -215,18 +235,7 @@ function assertOptionalAmount(value: unknown, field: string): SoloPlusAmount | n
     return null;
   }
 
-  if (typeof value === "string") {
-    return assertAmount(value, field);
-  }
-
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return assertAmount(value.toString(), field);
-  }
-
-  throw new SoloPlusSupabaseRepositoryError(
-    "SOLO_PLUS_REPOSITORY_MAPPING_ERROR",
-    `Solo Plus repository mapping rejected ${field}.`,
-  );
+  return assertAmount(value, field);
 }
 
 function assertOptionalNumber(value: unknown, field: string): number | null {
@@ -275,14 +284,25 @@ function assertOptionalBoolean(value: unknown, field: string): boolean | null {
 }
 
 function assertNonNegativeInteger(value: unknown, field: string): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
-    throw new SoloPlusSupabaseRepositoryError(
-      "SOLO_PLUS_REPOSITORY_MAPPING_ERROR",
-      `Solo Plus repository mapping rejected ${field}.`,
-    );
+  if (typeof value === "number") {
+    if (Number.isSafeInteger(value) && value >= 0) {
+      return value;
+    }
+
+    throw mappingError(field);
   }
 
-  return value;
+  if (typeof value === "string") {
+    const normalized = value.trim();
+    if (/^(0|[1-9][0-9]*)$/.test(normalized)) {
+      const parsed = Number(normalized);
+      if (Number.isSafeInteger(parsed)) {
+        return parsed;
+      }
+    }
+  }
+
+  throw mappingError(field);
 }
 
 function assertJsonValue(value: unknown): value is string | number | boolean | null | unknown[] | Record<string, unknown> {
@@ -752,22 +772,75 @@ function mapActivationWorkspaceSubscriptionRow(
 }
 
 function assertRpcPayload(value: unknown): SoloPlusRpcPayload {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  const singleValue =
+    Array.isArray(value) && value.length === 1
+      ? value[0]
+      : value;
+
+  if (typeof singleValue !== "object" || singleValue === null || Array.isArray(singleValue)) {
     throw new SoloPlusSupabaseRepositoryError(
       "SOLO_PLUS_REPOSITORY_MAPPING_ERROR",
       "Solo Plus repository received a malformed RPC payload.",
     );
   }
 
-  return value as SoloPlusRpcPayload;
+  const payloadCandidate =
+    "payload" in (singleValue as Record<string, unknown>) &&
+    typeof (singleValue as Record<string, unknown>).payload === "object" &&
+    (singleValue as Record<string, unknown>).payload !== null &&
+    !Array.isArray((singleValue as Record<string, unknown>).payload)
+      ? (singleValue as Record<string, unknown>).payload
+      : singleValue;
+
+  return payloadCandidate as SoloPlusRpcPayload;
+}
+
+function isCaseBundleEnvelope(value: unknown): value is SoloPlusRpcPayload {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "case" in (value as Record<string, unknown>) &&
+    ("requirements" in (value as Record<string, unknown>) ||
+      "created_event" in (value as Record<string, unknown>) ||
+      "event" in (value as Record<string, unknown>))
+  );
+}
+
+function extractCaseBundleEnvelope(payload: SoloPlusRpcPayload): {
+  caseRow: unknown | null;
+  requirements: unknown[] | null;
+  createdEvent: unknown | null;
+} {
+  const nestedEnvelope = isCaseBundleEnvelope(payload.case) ? payload.case : null;
+  const effectivePayload = nestedEnvelope ?? payload;
+  const requirements =
+    Array.isArray(payload.requirements)
+      ? payload.requirements
+      : Array.isArray(effectivePayload.requirements)
+        ? effectivePayload.requirements
+        : null;
+  const createdEvent =
+    payload.created_event ??
+    payload.event ??
+    effectivePayload.created_event ??
+    effectivePayload.event ??
+    null;
+
+  return {
+    caseRow: effectivePayload.case ?? null,
+    requirements,
+    createdEvent,
+  };
 }
 
 function mapCreateResult(value: unknown): SoloPlusCaseCreateAtomicResult {
   const payload = assertRpcPayload(value);
   const kind = assertText(payload.kind, "rpc.kind");
+  const bundle = extractCaseBundleEnvelope(payload);
 
   if (kind === "created") {
-    const event = payload.event;
+    const event = bundle.createdEvent;
     if (event == null) {
       throw new SoloPlusSupabaseRepositoryError(
         "SOLO_PLUS_REPOSITORY_MAPPING_ERROR",
@@ -775,7 +848,7 @@ function mapCreateResult(value: unknown): SoloPlusCaseCreateAtomicResult {
       );
     }
 
-    if (!Array.isArray(payload.requirements)) {
+    if (!Array.isArray(bundle.requirements)) {
       throw new SoloPlusSupabaseRepositoryError(
         "SOLO_PLUS_REPOSITORY_MAPPING_ERROR",
         "Solo Plus repository received a malformed RPC payload.",
@@ -784,8 +857,8 @@ function mapCreateResult(value: unknown): SoloPlusCaseCreateAtomicResult {
 
     return {
       kind,
-      caseRecord: mapCaseRow(payload.case),
-      requirements: payload.requirements.map((row) => mapRequirementRow(row)),
+      caseRecord: mapCaseRow(bundle.caseRow),
+      requirements: bundle.requirements.map((row) => mapRequirementRow(row)),
       event: mapEventRow(event),
     };
   }
@@ -793,14 +866,14 @@ function mapCreateResult(value: unknown): SoloPlusCaseCreateAtomicResult {
   if (kind === "idempotent_replay" || kind === "existing_active_case") {
     return {
       kind,
-      existingCase: mapCaseRow(payload.case),
+      existingCase: mapCaseRow(bundle.caseRow),
     };
   }
 
   if (kind === "idempotency_conflict" || kind === "active_case_conflict") {
     return {
       kind,
-      existingCase: mapCaseRow(payload.case),
+      existingCase: mapCaseRow(bundle.caseRow),
     };
   }
 
@@ -813,20 +886,21 @@ function mapCreateResult(value: unknown): SoloPlusCaseCreateAtomicResult {
 function mapAttachResult(value: unknown): SoloPlusAttachMerchantAtomicResult {
   const payload = assertRpcPayload(value);
   const kind = assertText(payload.kind, "rpc.kind");
+  const bundle = extractCaseBundleEnvelope(payload);
 
   if (kind === "updated") {
     return {
       kind,
-      caseRecord: mapCaseRow(payload.case),
-      event: mapEventRow(payload.event),
+      caseRecord: mapCaseRow(bundle.caseRow),
+      event: mapEventRow(bundle.createdEvent),
     };
   }
 
   if (kind === "idempotent_replay") {
     return {
       kind,
-      caseRecord: mapCaseRow(payload.case),
-      event: payload.event == null ? null : mapEventRow(payload.event),
+      caseRecord: mapCaseRow(bundle.caseRow),
+      event: bundle.createdEvent == null ? null : mapEventRow(bundle.createdEvent),
     };
   }
 
@@ -843,7 +917,7 @@ function mapAttachResult(value: unknown): SoloPlusAttachMerchantAtomicResult {
   ) {
     return {
       kind,
-      currentCase: mapCaseRow(payload.case),
+      currentCase: mapCaseRow(bundle.caseRow),
     } as SoloPlusAttachMerchantAtomicResult;
   }
 
@@ -856,20 +930,21 @@ function mapAttachResult(value: unknown): SoloPlusAttachMerchantAtomicResult {
 function mapTransitionResult(value: unknown): SoloPlusCaseTransitionAtomicResult {
   const payload = assertRpcPayload(value);
   const kind = assertText(payload.kind, "rpc.kind");
+  const bundle = extractCaseBundleEnvelope(payload);
 
   if (kind === "updated") {
     return {
       kind,
-      caseRecord: mapCaseRow(payload.case),
-      event: mapEventRow(payload.event),
+      caseRecord: mapCaseRow(bundle.caseRow),
+      event: mapEventRow(bundle.createdEvent),
     };
   }
 
   if (kind === "idempotent_replay") {
     return {
       kind,
-      caseRecord: mapCaseRow(payload.case),
-      event: payload.event == null ? null : mapEventRow(payload.event),
+      caseRecord: mapCaseRow(bundle.caseRow),
+      event: bundle.createdEvent == null ? null : mapEventRow(bundle.createdEvent),
     };
   }
 
@@ -880,7 +955,7 @@ function mapTransitionResult(value: unknown): SoloPlusCaseTransitionAtomicResult
   if (kind === "idempotency_conflict" || kind === "version_conflict" || kind === "state_conflict") {
     return {
       kind,
-      currentCase: mapCaseRow(payload.case),
+      currentCase: mapCaseRow(bundle.caseRow),
     } as SoloPlusCaseTransitionAtomicResult;
   }
 
@@ -893,10 +968,11 @@ function mapTransitionResult(value: unknown): SoloPlusCaseTransitionAtomicResult
 function mapActivationResult(value: unknown): SoloPlusCaseActivationAtomicResult {
   const payload = assertRpcPayload(value);
   const kind = assertText(payload.kind, "rpc.kind");
+  const bundle = extractCaseBundleEnvelope(payload);
 
   if (kind === "applied" || kind === "idempotent_replay") {
-    const caseRow = payload.case;
-    const eventRow = payload.event;
+    const caseRow = bundle.caseRow;
+    const eventRow = bundle.createdEvent;
 
     if (caseRow == null || eventRow == null) {
       throw new SoloPlusSupabaseRepositoryError(
@@ -929,14 +1005,14 @@ function mapActivationResult(value: unknown): SoloPlusCaseActivationAtomicResult
   ) {
     return {
       kind,
-      currentCase: mapCaseRow(payload.case),
+      currentCase: mapCaseRow(bundle.caseRow),
     } as SoloPlusCaseActivationAtomicResult;
   }
 
   if (kind === "prerequisite_conflict") {
     return {
       kind,
-      currentCase: mapCaseRow(payload.case),
+      currentCase: mapCaseRow(bundle.caseRow),
       reason: assertText(payload.reason, "reason", true) ?? undefined,
     };
   }
@@ -944,7 +1020,7 @@ function mapActivationResult(value: unknown): SoloPlusCaseActivationAtomicResult
   if (kind === "feature_disabled") {
     return {
       kind,
-      currentCase: payload.case == null ? undefined : mapCaseRow(payload.case),
+      currentCase: bundle.caseRow == null ? undefined : mapCaseRow(bundle.caseRow),
     };
   }
 
@@ -952,6 +1028,26 @@ function mapActivationResult(value: unknown): SoloPlusCaseActivationAtomicResult
     "SOLO_PLUS_REPOSITORY_MAPPING_ERROR",
     "Solo Plus repository received an unknown activation RPC outcome.",
   );
+}
+
+function mapCaseBundlePayload(payload: SoloPlusRpcPayload): SoloPlusCaseBundleRecord | null {
+  const bundle = extractCaseBundleEnvelope(payload);
+  if (bundle.caseRow == null) {
+    return null;
+  }
+
+  if (!Array.isArray(bundle.requirements)) {
+    throw new SoloPlusSupabaseRepositoryError(
+      "SOLO_PLUS_REPOSITORY_MAPPING_ERROR",
+      "Solo Plus repository received a malformed RPC payload.",
+    );
+  }
+
+  return {
+    caseRecord: mapCaseRow(bundle.caseRow),
+    requirements: bundle.requirements.map((row) => mapRequirementRow(row)),
+    createdEvent: bundle.createdEvent == null ? null : mapEventRow(bundle.createdEvent),
+  };
 }
 
 function wrapSupabaseError(error: SupabaseLikeError | null): never {
@@ -1090,7 +1186,71 @@ async function maybeSingle(
   if (error) {
     wrapSupabaseError(error);
   }
+  return normalizeZeroOrOneResult(data);
+}
+
+function normalizeZeroOrOneResult(data: unknown): unknown | null {
+  if (data == null) {
+    return null;
+  }
+
+  if (Array.isArray(data)) {
+    if (data.length === 0) {
+      return null;
+    }
+
+    if (data.length === 1) {
+      return data[0] ?? null;
+    }
+
+    throw new SoloPlusSupabaseRepositoryError(
+      "SOLO_PLUS_REPOSITORY_MAPPING_ERROR",
+      "Solo Plus repository expected at most one row.",
+    );
+  }
+
   return data;
+}
+
+type ZeroOrOneQueryResponse = {
+  data: unknown;
+  error: SupabaseLikeError | null;
+  count?: unknown;
+  status?: unknown;
+  statusText?: unknown;
+};
+
+function assertCaseMerchantMatches(
+  caseRecord: SoloPlusCaseRecord,
+  merchantId: string,
+): SoloPlusCaseRecord {
+  if (caseRecord.merchantId !== merchantId) {
+    throw new SoloPlusSupabaseRepositoryError(
+      "SOLO_PLUS_REPOSITORY_MAPPING_ERROR",
+      "Solo Plus repository rejected a cross-merchant active case.",
+    );
+  }
+
+  return caseRecord;
+}
+
+function assertActiveCaseRowHasMerchantId(row: unknown): unknown {
+  if (typeof row !== "object" || row === null || Array.isArray(row)) {
+    throw new SoloPlusSupabaseRepositoryError(
+      "SOLO_PLUS_REPOSITORY_MAPPING_ERROR",
+      "Solo Plus repository mapping rejected merchant_id.",
+    );
+  }
+
+  const candidate = row as Record<string, unknown>;
+  if (!hasNonEmptyString(candidate.merchant_id)) {
+    throw new SoloPlusSupabaseRepositoryError(
+      "SOLO_PLUS_REPOSITORY_MAPPING_ERROR",
+      "Solo Plus repository mapping rejected merchant_id.",
+    );
+  }
+
+  return row;
 }
 
 async function callBundlePayloadRpc(
@@ -1117,11 +1277,8 @@ async function readCaseThroughBundlePayload(
   caseId: string,
 ): Promise<SoloPlusCaseRecord | null> {
   const payload = await callBundlePayloadRpc(client, caseId);
-  if (payload == null || payload.case == null) {
-    return null;
-  }
-
-  return mapCaseRow(payload.case);
+  const bundle = payload == null ? null : mapCaseBundlePayload(payload);
+  return bundle?.caseRecord ?? null;
 }
 
 async function readCaseDirectly(
@@ -1133,6 +1290,22 @@ async function readCaseDirectly(
   );
 
   return row == null ? null : mapCaseRow(row);
+}
+
+export async function readSoloPlusCaseBundle(
+  client: SoloPlusSupabaseClientLike,
+  caseId: string,
+): Promise<SoloPlusCaseBundleRecord | null> {
+  const payload = await callBundlePayloadRpc(client, caseId);
+  return payload == null ? null : mapCaseBundlePayload(payload);
+}
+
+async function readSoloPlusRequirementsThroughBundle(
+  client: SoloPlusSupabaseClientLike,
+  caseId: string,
+): Promise<readonly SoloPlusCaseRequirementRecord[] | null> {
+  const bundle = await readSoloPlusCaseBundle(client, caseId);
+  return bundle?.requirements ?? null;
 }
 
 async function many(
@@ -1284,17 +1457,23 @@ export function createSoloPlusSupabaseRepository(
     },
 
     async findActiveCaseByMerchantId(merchantId: string): Promise<SoloPlusCaseRecord | null> {
-      const row = await maybeSingle(
-        client
+      const query = client
           .from("solo_plus_cases")
           .select("*")
           .eq("merchant_id", merchantId)
           .in("case_status", SOLO_PLUS_ACTIVE_CASE_STATUSES)
           .order("created_at", { ascending: true })
-          .limit(1),
-      );
+          .limit(1);
+      const result = await (query as unknown as Promise<ZeroOrOneQueryResponse>);
+      if (result.error) {
+        wrapSupabaseError(result.error);
+      }
 
-      return row == null ? null : mapCaseRow(row);
+      const row = normalizeZeroOrOneResult(result.data);
+
+      return row == null
+        ? null
+        : assertCaseMerchantMatches(mapCaseRow(assertActiveCaseRowHasMerchantId(row)), merchantId);
     },
 
     async findActiveCaseByOnboardingSessionId(
@@ -1315,15 +1494,29 @@ export function createSoloPlusSupabaseRepository(
     },
 
     async listRequirements(caseId: string): Promise<readonly SoloPlusCaseRequirementRecord[]> {
-      const rows = await many(
-        client
-          .from("solo_plus_case_requirements")
-          .select("*")
-          .eq("case_id", caseId)
-          .order("requirement_code", { ascending: true }),
-      );
+      try {
+        const rows = await many(
+          client
+            .from("solo_plus_case_requirements")
+            .select("*")
+            .eq("case_id", caseId)
+            .order("requirement_code", { ascending: true }),
+        );
 
-      return rows.map((row) => mapRequirementRow(row));
+        return rows.map((row) => mapRequirementRow(row));
+      } catch (error) {
+        if (
+          error instanceof SoloPlusSupabaseRepositoryError &&
+          error.code === "SOLO_PLUS_ATOMIC_PERSISTENCE_UNAVAILABLE"
+        ) {
+          const requirements = await readSoloPlusRequirementsThroughBundle(client, caseId);
+          if (requirements) {
+            return requirements;
+          }
+        }
+
+        throw error;
+      }
     },
 
     async listSafeEvents(caseId: string): Promise<readonly SoloPlusCaseEventRecord[]> {

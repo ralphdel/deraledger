@@ -23,9 +23,6 @@ function supabase() {
   return createClient();
 }
 
-let cachedMerchantId: string | null = null;
-let activeMerchantPromise: Promise<string> | null = null;
-
 async function getActiveMerchantId(): Promise<string> {
   // 1. URL workspace path (e.g. /w/<id>) takes highest priority
   if (typeof window !== "undefined") {
@@ -33,56 +30,43 @@ async function getActiveMerchantId(): Promise<string> {
     if (match) return match[2];
   }
 
-  // 2. Read the workspace cookie set during team-member login.
-  //    This is the primary mechanism for team members who don't own a merchant row.
+  const sb = supabase();
+  const { data: { session } } = await sb.auth.getSession();
+  const user = session?.user;
+
+  if (user) {
+    // 2. Owner: merchant row is linked by user_id.
+    const { data } = await sb.from("merchants").select("id").eq("user_id", user.id).single();
+    if (data?.id) {
+      return data.id;
+    }
+
+    // 3. Team member fallback: look up the active merchant_team row for this user.
+    const { data: teamRow } = await sb
+      .from("merchant_team")
+      .select("merchant_id")
+      .eq("user_id", user.id)
+      .eq("is_active", true)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .single();
+    if (teamRow?.merchant_id) {
+      return teamRow.merchant_id;
+    }
+
+    return "00000000-0000-0000-0000-000000000001"; // Fallback to demo layout
+  }
+
+  // 4. Read the workspace cookie set during team-member login.
+  //    This is a fallback when no authenticated user is available yet.
   if (typeof window !== "undefined") {
     const cookieMatch = document.cookie.match(/(?:^|;\s*)purpledger_workspace_id=([^;]+)/);
     if (cookieMatch?.[1]) {
-      const cookieId = cookieMatch[1];
-      // Don't cache cookie-sourced IDs globally — they can change between sessions
-      return cookieId;
+      return cookieMatch[1];
     }
   }
 
-  if (cachedMerchantId) return cachedMerchantId;
-  if (activeMerchantPromise) return activeMerchantPromise;
-
-  activeMerchantPromise = (async () => {
-    try {
-      const sb = supabase();
-      const { data: { session } } = await sb.auth.getSession();
-      const user = session?.user;
-      
-      if (user) {
-        // 3. Owner: merchant row is linked by user_id
-        const { data } = await sb.from("merchants").select("id").eq("user_id", user.id).single();
-        if (data?.id) {
-          cachedMerchantId = data.id;
-          return data.id;
-        }
-
-        // 4. Team member fallback: look up the merchant_team row for this user.
-        //    This handles SSR/server contexts where cookies may be present but not readable via document.cookie.
-        const { data: teamRow } = await sb
-          .from("merchant_team")
-          .select("merchant_id")
-          .eq("user_id", user.id)
-          .eq("is_active", true)
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .single();
-        if (teamRow?.merchant_id) {
-          cachedMerchantId = teamRow.merchant_id;
-          return teamRow.merchant_id;
-        }
-      }
-      return "00000000-0000-0000-0000-000000000001"; // Fallback to demo layout
-    } finally {
-      activeMerchantPromise = null;
-    }
-  })();
-
-  return activeMerchantPromise;
+  return "00000000-0000-0000-0000-000000000001"; // Fallback to demo layout
 }
 
 // ── Merchant ────────────────────────────────────────────────────────────────
@@ -107,13 +91,17 @@ export async function getMerchant(id?: string): Promise<(Merchant & { currentUse
   // CRITICAL: Must order by created_at DESC (not expiry_date) so the most recently
   // created subscription (the new active one after renewal/upgrade) is always returned first.
   // Ordering by expiry_date can return an old expired row that has a later date than the new active one.
-  const { data: subData } = await sb
+  const { data: subData, error: subError } = await sb
     .from("subscriptions")
     .select("status, expiry_date")
     .eq("merchant_id", mId)
     .order("created_at", { ascending: false })
     .limit(1)
-    .single();
+    .maybeSingle();
+
+  if (subError) {
+    console.error("getMerchant subscription lookup:", subError);
+  }
 
   const isCancelled = subData?.status === "cancelled";
   const isExpired = subData?.status === "expired";
@@ -290,9 +278,9 @@ export async function getActiveSubscription(id?: string): Promise<Subscription |
     .eq("merchant_id", mId)
     .order("created_at", { ascending: false }) // Always get the most recently created subscription
     .limit(1)
-    .single();
+    .maybeSingle();
 
-  if (error && error.code !== "PGRST116") {
+  if (error) {
     console.error("getActiveSubscription:", error);
   }
   return data as Subscription | null;

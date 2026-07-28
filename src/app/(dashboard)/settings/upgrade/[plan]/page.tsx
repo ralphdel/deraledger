@@ -18,9 +18,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { getMerchant } from "@/lib/data";
+import { isSoloPlusOwnerEligible } from "@/lib/solo-plus/ui";
 import type { Merchant } from "@/lib/types";
 
-type UpgradePlanId = "individual" | "corporate";
+type UpgradePlanId = "individual" | "solo_plus" | "business" | "corporate";
 
 // CAMA 2020 Nigeria — 7 official business registration structures
 const CAMA_TYPES = [
@@ -34,7 +35,7 @@ const CAMA_TYPES = [
 ];
 
 function getOwnerLabel(businessType: string, plan: string, relationshipClaim?: string): string {
-  if (plan !== "corporate") return "Business Owner Full Name";
+  if (plan !== "business" && plan !== "corporate") return "Business Owner Full Name";
   if (relationshipClaim === "representative_claim") return "Account Representative Full Name";
   return CAMA_TYPES.find(t => t.value === businessType)?.ownerLabel ?? "Director or Shareholder Full Name";
 }
@@ -81,9 +82,57 @@ const PLAN_CONFIG: Record<UpgradePlanId, UpgradePlanConfig> = {
       "A valid settlement bank account.",
     ],
   },
+  solo_plus: {
+    label: "Solo Plus",
+    routeLabel: "solo_plus",
+    price: "NGN 13,000",
+    interval: "/month",
+    workflow: "For higher reviewed collection capacity without immediate activation",
+    collectionLimit: "Higher reviewed collection capacity",
+    verification: "Identity verification required",
+    icon: User,
+    features: [
+      "Higher reviewed collection capacity",
+      "Structured activity profile submission",
+      "Requirement checklist and review-state tracking",
+      "Read-only approval and activation status",
+      "Evidence reuse only in this controlled launch",
+      "No document upload or activation controls in this step",
+    ],
+    requirements: [
+      "Payment must be confirmed before review can continue.",
+      "Complete the Solo Plus requirements checklist from the status page.",
+      "Approval and activation remain separate steps.",
+    ],
+  },
+  business: {
+    label: "Business",
+    routeLabel: "business",
+    price: "NGN 20,000",
+    interval: "/month",
+    workflow: "Operational collections infrastructure for growing businesses",
+    collectionLimit: "Unlimited monthly collections",
+    verification: "Business & authority checks required",
+    icon: Building2,
+    features: [
+      "Unlimited collections",
+      "Unlimited collection invoices",
+      "Custom Role-Based Access (RBAC)",
+      "Grouped receivables",
+      "Advanced analytics",
+      "No watermark",
+      "White-label invoices",
+      "Advanced operational workflows",
+    ],
+    requirements: [
+      "Business registration details and supporting business documents.",
+      "Director or highest shareholder verification.",
+      "A valid business settlement bank account.",
+    ],
+  },
   corporate: {
     label: "Business",
-    routeLabel: "corporate",
+    routeLabel: "business",
     price: "NGN 20,000",
     interval: "/month",
     workflow: "Operational collections infrastructure for growing businesses",
@@ -109,14 +158,14 @@ const PLAN_CONFIG: Record<UpgradePlanId, UpgradePlanConfig> = {
 };
 
 function isUpgradePlanId(value: string): value is UpgradePlanId {
-  return value === "individual" || value === "corporate";
+  return value === "individual" || value === "solo_plus" || value === "business" || value === "corporate";
 }
 
 export default function UpgradePlanPage({ params }: UpgradePageProps) {
   const { plan } = use(params);
   const [loadingMerchant, setLoadingMerchant] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [merchant, setMerchant] = useState<Merchant | null>(null);
+  const [merchant, setMerchant] = useState<(Merchant & { currentUserRole?: string }) | null>(null);
   const [ownerName, setOwnerName] = useState("");
   const [sameOwner, setSameOwner] = useState(true);
   // Business type — relevant for corporate plan, defaults to sole_proprietorship
@@ -176,13 +225,24 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
 
   const config = PLAN_CONFIG[plan];
   const Icon = config.icon;
+  const isSoloPlusPlan = plan === "solo_plus";
+  const soloPlusEligible = isSoloPlusPlan
+    ? isSoloPlusOwnerEligible({
+        currentUserRole: merchant?.currentUserRole ?? null,
+        subscriptionPlan: merchant?.subscription_plan ?? null,
+      })
+    : true;
 
   const handleUpgrade = async () => {
+  if (isSoloPlusPlan && !soloPlusEligible) {
+      setError("This upgrade is available only to the account owner.");
+      return;
+    }
     if (!ownerName.trim()) {
       setError("Please provide the owner or representative name before upgrading.");
       return;
     }
-    if (plan === "corporate" && !businessType) {
+    if ((plan === "business" || plan === "corporate") && !businessType) {
       setError("Please select your business registration type before upgrading.");
       return;
     }
@@ -195,14 +255,46 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
       "upgradeCheckout",
       JSON.stringify({
         ownerName: ownerName.trim(),
-        businessType: plan === "corporate" ? businessType : null,
-        relationshipClaim: plan === "corporate" ? relationshipClaim : "owner_affiliated_claim",
+        businessType: plan === "business" || plan === "corporate" ? businessType : null,
+        relationshipClaim:
+          plan === "business" || plan === "corporate"
+            ? relationshipClaim
+            : "owner_affiliated_claim",
         verificationDisclosureAccepted,
         disclosureVersion: "1.0",
       })
     );
-    router.push(`/checkout/upgrade/${plan}`);
+    router.push(
+      isSoloPlusPlan
+        ? "/settings/upgrade/solo_plus/status"
+        : `/checkout/upgrade/${config.routeLabel}`,
+    );
   };
+
+  if (!loadingMerchant && isSoloPlusPlan && !soloPlusEligible) {
+    return (
+      <div className="mx-auto max-w-3xl space-y-6 rounded-2xl border border-border bg-background p-8 text-foreground shadow-xl dark:bg-[#10081D] dark:text-white">
+        <Link
+          href="/settings/billing"
+          className="inline-flex items-center text-sm font-medium text-muted-foreground transition-colors hover:text-foreground dark:hover:text-white"
+        >
+          <ArrowLeft className="mr-1 h-4 w-4" />
+          Back to Billing
+        </Link>
+        <Card className="border-0 bg-card backdrop-blur-sm shadow-none dark:bg-white/5">
+          <CardContent className="space-y-4 p-8">
+            <h1 className="text-2xl font-bold text-foreground dark:text-white">Solo Plus is owner only</h1>
+            <p className="text-sm text-muted-foreground dark:text-white/70">
+              This upgrade is available only to the account owner.
+            </p>
+            <Link href="/settings/billing">
+              <Button variant="outline">Return to billing</Button>
+            </Link>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 rounded-2xl border border-border bg-background p-6 text-foreground shadow-[0_0_40px_rgba(123,47,247,0.07)] md:p-10 dark:bg-[#20112F]">
@@ -217,7 +309,9 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
       <div>
         <h1 className="text-3xl font-bold text-foreground dark:text-white">Upgrade to {config.label}</h1>
         <p className="mt-2 text-sm text-muted-foreground dark:text-white/72">
-          Review the workflow, collection access, and verification requirements before subscribing.
+          {isSoloPlusPlan
+            ? "Review the Solo Plus payment, requirements, review, and activation flow before continuing."
+            : "Review the workflow, collection access, and verification requirements before subscribing."}
         </p>
       </div>
 
@@ -263,7 +357,9 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
             </CardHeader>
             <CardContent>
               <p className="mb-4 text-sm leading-relaxed text-muted-foreground dark:text-white/70">
-                Payment collection is activated after the required checks for this workflow.
+                {isSoloPlusPlan
+                  ? "Solo Plus keeps payment, requirements, approval, and activation separate so the next step always stays clear."
+                  : "Payment collection is activated after the required checks for this workflow."}
               </p>
               <ul className="space-y-3">
                 {config.requirements.map((requirement) => (
@@ -286,7 +382,7 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
               ) : (
                 <>
                   {/* ── Business Type Selector (Corporate only) ── */}
-                  {plan === "corporate" && (
+                  {(plan === "business" || plan === "corporate") && (
                     <div className="space-y-2">
                       <Label className="text-sm font-medium text-white">
                         Business Registration Type <span className="text-red-400">*</span>
@@ -307,7 +403,7 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
                   )}
 
                   {/* ── Owner / Director Name — ALWAYS editable during upgrade ── */}
-                  {plan === "corporate" && (
+                  {(plan === "business" || plan === "corporate") && (
                     <div className="space-y-3">
                       <Label className="text-sm font-medium text-white">
                         What is your relationship with this business? <span className="text-red-400">*</span>
@@ -367,7 +463,7 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
                     </div>
 
                     {/* For individual→corporate: quick checkbox to reuse existing owner */}
-                    {(merchant?.subscription_plan === "individual" || merchant?.subscription_plan === "solo_plus") && plan === "corporate" && merchant.owner_name && (
+                    {(merchant?.subscription_plan === "individual" || merchant?.subscription_plan === "solo_plus") && (plan === "business" || plan === "corporate") && merchant.owner_name && (
                       <label className="flex items-center gap-3 rounded-xl border border-white/10 bg-[#12061F]/50 px-4 py-3 cursor-pointer">
                         <input
                           type="checkbox"
@@ -389,15 +485,15 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
                       onChange={(e) => {
                         setOwnerName(e.target.value);
                         // Uncheck "same owner" if user starts typing a different name
-                        if ((merchant?.subscription_plan === "individual" || merchant?.subscription_plan === "solo_plus") && plan === "corporate") {
+                        if ((merchant?.subscription_plan === "individual" || merchant?.subscription_plan === "solo_plus") && (plan === "business" || plan === "corporate")) {
                           setSameOwner(e.target.value === (merchant?.owner_name || ""));
                         }
                       }}
-                      placeholder={`e.g. ${plan === "corporate" ? "Adebayo Olanrewaju (Director)" : "Adebayo Olanrewaju"}`}
+                      placeholder={`e.g. ${plan === "business" || plan === "corporate" ? "Adebayo Olanrewaju (Director)" : "Adebayo Olanrewaju"}`}
                       className="h-11 border-white/10 bg-[#12061F] text-white focus:border-[#7B2FF7] placeholder:text-white/30"
                     />
                     <p className="text-xs text-white/50">
-                      {plan === "corporate"
+                      {plan === "business" || plan === "corporate"
                         ? relationshipClaim === "representative_claim"
                           ? "Enter your own legal name. A listed director or owner will verify and approve the business separately."
                           : `This name will be used for ${getOwnerLabel(businessType, plan, relationshipClaim).toLowerCase()} verification against official business and identity records.`
@@ -406,7 +502,7 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
                   </div>
 
                   {/* ── Registered Business Name (display only for corporate) ── */}
-                  {plan === "corporate" && (
+                  {(plan === "business" || plan === "corporate") && (
                     <div className="space-y-2 pt-2">
                       <Label className="text-sm font-medium text-white">Registered Business Name</Label>
                       <Input
@@ -437,7 +533,7 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
                   className="mt-1 h-4 w-4 accent-[#7B2FF7]"
                 />
                 <span className="text-sm leading-relaxed text-amber-100">
-                  I understand that my subscription gives setup access only, and live payment collection will remain disabled until successful verification.
+                  I understand that this request moves the workspace into review, and live payment collection remains disabled until verification is complete.
                 </span>
               </label>
 
@@ -448,12 +544,14 @@ export default function UpgradePlanPage({ params }: UpgradePageProps) {
               >
                 <span className="flex items-center gap-2">
                   <CreditCard className="h-5 w-5" />
-                  Continue to Checkout
+                  {isSoloPlusPlan ? "Continue to Solo Plus Review" : "Continue to Checkout"}
                   <ArrowRight className="h-4 w-4 ml-1" />
                 </span>
               </Button>
               <p className="text-center text-xs text-white/40 pt-2">
-                Secure checkout. You will be redirected to complete payment.
+                {isSoloPlusPlan
+                  ? "You will move to the Solo Plus status page, which safely resumes payment, requirements, and review."
+                  : "Secure checkout. You will be redirected to complete payment."}
               </p>
             </CardContent>
           </Card>

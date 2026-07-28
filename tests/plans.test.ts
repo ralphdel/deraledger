@@ -25,7 +25,8 @@ async function run() {
   assert.equal(getPlanPrice("corporate"), 20000);
 
   assert.equal(getStoragePlanCode("solo_lite"), "individual");
-  assert.equal(getStoragePlanCode("business"), "corporate");
+  assert.equal(getStoragePlanCode("business"), "business");
+  assert.equal(getStoragePlanCode("corporate"), "business");
   assert.equal(getStoragePlanCode("solo_plus"), "solo_plus");
 
   assert.equal(isPlanAvailable("starter", { solo_plus: false }), true);

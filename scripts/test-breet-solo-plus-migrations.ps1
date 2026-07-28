@@ -2,7 +2,9 @@
 param(
   [string]$TestDatabaseUrl = $env:TEST_DATABASE_URL,
   [string]$PsqlPath = "psql",
-  [switch]$RunSafetySelfTests
+  [int]$PsqlTimeoutSeconds = 120,
+  [switch]$RunSafetySelfTests,
+  [switch]$RunHarnessSelfTests
 )
 
 $ErrorActionPreference = "Stop"
@@ -11,6 +13,104 @@ $knownBlockedProjectRefs = New-Object System.Collections.Generic.HashSet[string]
 [void]$knownBlockedProjectRefs.Add("fsjljliiyfchkwbjifzw")
 $disposableDatabasePattern = '^(test_.+|.+_test|tmp_.+|.+_tmp|disposable_.+|.+_disposable|scratch_.+|.+_scratch|ci_.+|.+_ci)$'
 $standardForbiddenDatabaseNames = @("postgres", "template0", "template1", "app", "production", "staging", "deraledger")
+$script:HarnessStepCounter = 0
+$script:HarnessProgressMessages = [System.Collections.Generic.List[string]]::new()
+$script:JobObjectInteropLoaded = $false
+
+function Ensure-JobObjectInterop {
+  if ($script:JobObjectInteropLoaded -or $env:OS -ne "Windows_NT") {
+    return
+  }
+
+  Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class DeraLedgerJobObject
+{
+    private const int JobObjectExtendedLimitInformation = 9;
+    private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct JOBOBJECT_BASIC_LIMIT_INFORMATION
+    {
+        public long PerProcessUserTimeLimit;
+        public long PerJobUserTimeLimit;
+        public uint LimitFlags;
+        public UIntPtr MinimumWorkingSetSize;
+        public UIntPtr MaximumWorkingSetSize;
+        public uint ActiveProcessLimit;
+        public UIntPtr Affinity;
+        public uint PriorityClass;
+        public uint SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct IO_COUNTERS
+    {
+        public ulong ReadOperationCount;
+        public ulong WriteOperationCount;
+        public ulong OtherOperationCount;
+        public ulong ReadTransferCount;
+        public ulong WriteTransferCount;
+        public ulong OtherTransferCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+    {
+        public JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;
+        public IO_COUNTERS IoInfo;
+        public UIntPtr ProcessMemoryLimit;
+        public UIntPtr JobMemoryLimit;
+        public UIntPtr PeakProcessMemoryUsed;
+        public UIntPtr PeakJobMemoryUsed;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr CreateJobObject(IntPtr lpJobAttributes, string lpName);
+
+    [DllImport("kernel32.dll")]
+    private static extern bool SetInformationJobObject(IntPtr hJob, int JobObjectInfoClass, IntPtr lpJobObjectInfo, uint cbJobObjectInfoLength);
+
+    [DllImport("kernel32.dll")]
+    public static extern bool AssignProcessToJobObject(IntPtr hJob, IntPtr hProcess);
+
+    [DllImport("kernel32.dll")]
+    public static extern bool CloseHandle(IntPtr hObject);
+
+    public static IntPtr CreateKillOnCloseJob()
+    {
+        IntPtr job = CreateJobObject(IntPtr.Zero, null);
+        if (job == IntPtr.Zero)
+        {
+            return IntPtr.Zero;
+        }
+
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION info = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+
+        int length = Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
+        IntPtr infoPtr = Marshal.AllocHGlobal(length);
+        try
+        {
+            Marshal.StructureToPtr(info, infoPtr, false);
+            if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, infoPtr, (uint)length))
+            {
+                CloseHandle(job);
+                return IntPtr.Zero;
+            }
+            return job;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(infoPtr);
+        }
+    }
+}
+"@
+  $script:JobObjectInteropLoaded = $true
+}
 
 function Add-BlockedProjectRefsFromCsv {
   param([string]$Csv)
@@ -52,6 +152,191 @@ function Normalize-Sql {
   return ([regex]::Replace($Value.ToLowerInvariant(), "\s+", " ")).Trim()
 }
 
+function Redact-SensitiveText {
+  param([AllowNull()][string]$Value)
+
+  if ($null -eq $Value) {
+    return ""
+  }
+
+  $redacted = [string]$Value
+  $password = Get-Item -Path "Env:PGPASSWORD" -ErrorAction SilentlyContinue
+  if ($password -and -not [string]::IsNullOrEmpty([string]$password.Value)) {
+    $redacted = $redacted -replace [regex]::Escape([string]$password.Value), "<redacted-password>"
+  }
+
+  return [regex]::Replace(
+    $redacted,
+    "(postgres(?:ql)?://)([^/\s:@]+):([^@\s/]*)@",
+    '$1$2:***@',
+    [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+  )
+}
+
+function Convert-ArgumentListToCommandLine {
+  param([string[]]$Arguments)
+
+  return (($Arguments | ForEach-Object {
+        if ($_ -match '[\s"]') {
+          '"' + ($_ -replace '"', '\"') + '"'
+        } else {
+          $_
+        }
+      }) -join " ")
+}
+
+function Stop-ProcessTree {
+  param([Parameter(Mandatory = $true)][int]$ProcessId)
+
+  if ($env:OS -eq "Windows_NT") {
+    try {
+      & taskkill.exe /PID $ProcessId /T /F 2>$null | Out-Null
+    } catch {
+    }
+    if (-not (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) {
+      return
+    }
+  }
+
+  $children = @()
+  try {
+    $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId = $ProcessId" -ErrorAction SilentlyContinue)
+  } catch {
+    try {
+      $children = @(Get-WmiObject Win32_Process -Filter "ParentProcessId = $ProcessId" -ErrorAction SilentlyContinue)
+    } catch {
+      $children = @()
+    }
+  }
+
+  foreach ($child in $children) {
+    Stop-ProcessTree -ProcessId ([int]$child.ProcessId)
+    try {
+      if ($child.PSObject.Methods.Name -contains "Terminate") {
+        [void]$child.Terminate()
+      }
+    } catch {
+    }
+  }
+
+  try {
+    $self = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
+    if ($self) {
+      [void]$self.Terminate()
+    }
+  } catch {
+    try {
+      $self = Get-WmiObject Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
+      if ($self) {
+        [void]$self.Terminate()
+      }
+    } catch {
+    }
+  }
+  Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+}
+
+function Invoke-CapturedProcess {
+  param(
+    [Parameter(Mandatory = $true)][string]$FilePath,
+    [Parameter(Mandatory = $true)][string[]]$Arguments,
+    [Parameter(Mandatory = $true)][string]$WorkingDirectory,
+    [int]$TimeoutSeconds = 120
+  )
+
+  $resolvedFilePath = $FilePath
+  if (-not ($FilePath -match '[\\/]') -and -not (Test-Path $FilePath)) {
+    $resolvedCommand = Get-Command $FilePath -ErrorAction SilentlyContinue
+    if ($resolvedCommand) {
+      $resolvedFilePath = $resolvedCommand.Source
+    }
+  }
+
+  $joinedArguments = Convert-ArgumentListToCommandLine -Arguments $Arguments
+  $effectiveFilePath = $resolvedFilePath
+  $effectiveArguments = $joinedArguments
+  if ($resolvedFilePath -match '\.(cmd|bat)$') {
+    $cmdTail = if ([string]::IsNullOrWhiteSpace($joinedArguments)) { "" } else { " " + $joinedArguments }
+    $effectiveFilePath = $env:ComSpec
+    $effectiveArguments = '/d /c ""' + $resolvedFilePath + '"' + $cmdTail + '"'
+  }
+
+  $psi = [System.Diagnostics.ProcessStartInfo]::new()
+  $psi.FileName = $effectiveFilePath
+  $psi.Arguments = $effectiveArguments
+  $psi.WorkingDirectory = $WorkingDirectory
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $psi.UseShellExecute = $false
+  $psi.CreateNoWindow = $true
+
+  $process = [System.Diagnostics.Process]::new()
+  $process.StartInfo = $psi
+  $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+  $jobHandle = [IntPtr]::Zero
+  $jobOwnsProcessTree = $false
+
+  try {
+    [void]$process.Start()
+    if ($env:OS -eq "Windows_NT") {
+      try {
+        Ensure-JobObjectInterop
+        $jobHandle = [DeraLedgerJobObject]::CreateKillOnCloseJob()
+        if ($jobHandle -ne [IntPtr]::Zero) {
+          $jobOwnsProcessTree = [DeraLedgerJobObject]::AssignProcessToJobObject($jobHandle, $process.Handle)
+        }
+      } catch {
+        $jobHandle = [IntPtr]::Zero
+        $jobOwnsProcessTree = $false
+      }
+    }
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+
+    $timedOut = -not $process.WaitForExit($TimeoutSeconds * 1000)
+    if ($timedOut) {
+      try {
+        if ($jobOwnsProcessTree -and $jobHandle -ne [IntPtr]::Zero) {
+          [void][DeraLedgerJobObject]::CloseHandle($jobHandle)
+          $jobHandle = [IntPtr]::Zero
+        } else {
+          Stop-ProcessTree -ProcessId $process.Id
+        }
+      } catch {
+        try {
+          $process.Kill()
+        } catch {
+        }
+      }
+      $process.WaitForExit()
+    }
+
+    $stdout = Redact-SensitiveText ($stdoutTask.GetAwaiter().GetResult())
+    $stderr = Redact-SensitiveText ($stderrTask.GetAwaiter().GetResult())
+
+    return [pscustomobject]@{
+      ExitCode   = if ($timedOut) { 124 } else { $process.ExitCode }
+      TimedOut   = $timedOut
+      Stdout     = $stdout
+      Stderr     = $stderr
+      DurationMs = [int][Math]::Round($stopwatch.Elapsed.TotalMilliseconds)
+      Command    = Redact-SensitiveText ((@($effectiveFilePath) + @($effectiveArguments)) -join " ")
+    }
+  }
+  finally {
+    $stopwatch.Stop()
+    if ($jobHandle -ne [IntPtr]::Zero) {
+      try {
+        [void][DeraLedgerJobObject]::CloseHandle($jobHandle)
+      } catch {
+      }
+    }
+    if ($process) {
+      $process.Dispose()
+    }
+  }
+}
+
 function Get-ConnectionStringQueryParameterValue {
   param(
     [Parameter(Mandatory = $true)][Uri]$Uri,
@@ -91,9 +376,18 @@ function Assert-SafeDisposableDatabase {
   $dbName = $uri.AbsolutePath.Trim("/")
   $dbHost = $uri.Host.ToLowerInvariant()
   $explicitSslMode = Get-ConnectionStringQueryParameterValue -Uri $uri -Name "sslmode"
+  $parsedIp = $null
+  $isLoopback = $dbHost -in @("localhost", "127.0.0.1", "::1")
+  if (-not $isLoopback -and [System.Net.IPAddress]::TryParse($uri.Host, [ref]$parsedIp)) {
+    $isLoopback = [System.Net.IPAddress]::IsLoopback($parsedIp)
+  }
 
   if ([string]::IsNullOrWhiteSpace($dbName)) {
     throw "TEST_DATABASE_URL must include an explicit disposable database name."
+  }
+
+  if (-not $isLoopback) {
+    throw "Refusing to run against non-local database host '$dbHost'. The harness only supports disposable local databases."
   }
 
   if ($dbName.ToLowerInvariant() -in $standardForbiddenDatabaseNames) {
@@ -145,6 +439,7 @@ function Invoke-WithLocalDisposableDatabaseEnvironment {
     "PGUSER",
     "PGDATABASE",
     "PGPASSWORD",
+    "PGCONNECT_TIMEOUT",
     "PGSERVICE",
     "PGSERVICEFILE"
   )
@@ -156,10 +451,10 @@ function Invoke-WithLocalDisposableDatabaseEnvironment {
     Remove-Item -Path "Env:PGPORT" -ErrorAction SilentlyContinue
     Remove-Item -Path "Env:PGUSER" -ErrorAction SilentlyContinue
     Remove-Item -Path "Env:PGDATABASE" -ErrorAction SilentlyContinue
-    Remove-Item -Path "Env:PGPASSWORD" -ErrorAction SilentlyContinue
     Remove-Item -Path "Env:PGSERVICE" -ErrorAction SilentlyContinue
     Remove-Item -Path "Env:PGSERVICEFILE" -ErrorAction SilentlyContinue
     Set-Item -Path "Env:PGSSLMODE" -Value "disable"
+    Set-Item -Path "Env:PGCONNECT_TIMEOUT" -Value "10"
 
     return & $Operation
   }
@@ -199,7 +494,7 @@ function Run-SafetySelfTests {
   [void]$blockedRefs.Add("prodrefexample123")
 
   Assert-SafetyGateCase -Name "accept disposable localhost name" -ConnectionString "postgresql://user:password@localhost/test_commit7" -ShouldPass $true -BlockedRefs $blockedRefs
-  Assert-SafetyGateCase -Name "accept disposable remote name" -ConnectionString "postgresql://user:password@db.example.com/ci_commit7" -ShouldPass $true -BlockedRefs $blockedRefs
+  Assert-SafetyGateCase -Name "reject disposable remote name" -ConnectionString "postgresql://user:password@db.example.com/ci_commit7" -ShouldPass $false -BlockedRefs $blockedRefs
   Assert-SafetyGateCase -Name "reject localhost non-disposable name" -ConnectionString "postgresql://user:password@localhost/app" -ShouldPass $false -BlockedRefs $blockedRefs
   Assert-SafetyGateCase -Name "reject standard postgres database" -ConnectionString "postgresql://user:password@127.0.0.1/postgres" -ShouldPass $false -BlockedRefs $blockedRefs
   Assert-SafetyGateCase -Name "reject staging project reference" -ConnectionString "postgresql://user:password@db.example.com/test_commit7?project_ref=fsjljliiyfchkwbjifzw" -ShouldPass $false -BlockedRefs $blockedRefs
@@ -215,6 +510,197 @@ function Add-PassResult {
   Write-Host "PASS: $Message"
 }
 
+function Assert-HarnessSelfTest {
+  param(
+    [Parameter(Mandatory = $true)][bool]$Condition,
+    [Parameter(Mandatory = $true)][string]$Message
+  )
+
+  if (-not $Condition) {
+    throw "Harness self-test failed: $Message"
+  }
+}
+
+function New-FakeBatchCommand {
+  param(
+    [Parameter(Mandatory = $true)][string]$Directory,
+    [Parameter(Mandatory = $true)][string]$Name,
+    [Parameter(Mandatory = $true)][string]$Content
+  )
+
+  $path = Join-Path $Directory "$Name.cmd"
+  Set-Content -Path $path -Value $Content -Encoding ASCII
+  return $path
+}
+
+function Assert-LibpqEnvironmentRestored {
+  param([hashtable]$Snapshot)
+
+  foreach ($entry in $Snapshot.GetEnumerator()) {
+    $current = Get-Item -Path "Env:$($entry.Key)" -ErrorAction SilentlyContinue
+    if ($entry.Value.Present) {
+      Assert-HarnessSelfTest -Condition ($current -and $current.Value -eq $entry.Value.Value) -Message "$($entry.Key) was not restored."
+    } else {
+      Assert-HarnessSelfTest -Condition ($null -eq $current) -Message "$($entry.Key) should have been removed again."
+    }
+  }
+}
+
+function Run-HarnessSelfTests {
+  $tempDir = Join-Path $env:TEMP ("deraledger-harness-selftest-" + [System.Guid]::NewGuid().ToString("N"))
+  New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+  $oldPsqlPath = $PsqlPath
+  $oldTimeout = $PsqlTimeoutSeconds
+  $oldTestDatabaseUrl = $TestDatabaseUrl
+  $libpqNames = @("PGSSLMODE", "PGHOST", "PGPORT", "PGUSER", "PGDATABASE", "PGPASSWORD", "PGCONNECT_TIMEOUT", "PGSERVICE", "PGSERVICEFILE")
+  $outerSnapshot = Get-LibpqEnvironmentSnapshot -VariableNames $libpqNames
+
+  try {
+    $script:HarnessStepCounter = 0
+    $script:HarnessProgressMessages.Clear()
+    $script:TestDatabaseUrl = "postgresql://postgres@127.0.0.1/test_commit12_harness_selftest?sslmode=disable"
+    Set-Item -Path "Env:PGPASSWORD" -Value "self-test-secret"
+
+    $successPsql = New-FakeBatchCommand -Directory $tempDir -Name "fake-psql-success" -Content @"
+@echo off
+if "%PGPASSWORD%"=="" (
+  echo missing-password 1>&2
+  exit /b 9
+)
+echo has-password
+echo %PGPASSWORD%
+echo %PGPASSWORD% 1>&2
+exit /b 0
+"@
+    $script:PsqlPath = $successPsql
+    $result = Invoke-Psql -Arguments @("-X", "-w", "-d", $script:TestDatabaseUrl, "-c", "select 1") -Description "Self-test successful psql"
+    Assert-HarnessSelfTest -Condition ($result.ExitCode -eq 0) -Message "successful fake psql should exit 0."
+    Assert-HarnessSelfTest -Condition ($result.Stdout -match "has-password") -Message "fake psql child did not receive caller PGPASSWORD."
+    Assert-HarnessSelfTest -Condition ($result.Stdout -notmatch "self-test-secret") -Message "PGPASSWORD leaked in stdout."
+    Assert-HarnessSelfTest -Condition ($result.Stderr -notmatch "self-test-secret") -Message "PGPASSWORD leaked in stderr."
+    Assert-HarnessSelfTest -Condition ($result.Command -notmatch "self-test-secret") -Message "PGPASSWORD leaked in command display."
+    Assert-HarnessSelfTest -Condition ($script:HarnessProgressMessages[0] -match "^RUNNING SQL-012\.001 Self-test successful psql$") -Message "substep progress message was not recorded."
+
+    $failurePsql = New-FakeBatchCommand -Directory $tempDir -Name "fake-psql-failure" -Content @"
+@echo off
+echo controlled failure 1>&2
+exit /b 7
+"@
+    $script:PsqlPath = $failurePsql
+    $threw = $false
+    try {
+      Invoke-Psql -Arguments @("-X", "-w", "-d", $script:TestDatabaseUrl, "-c", "select 1") -Description "Self-test failing psql" | Out-Null
+    } catch {
+      $threw = $_.Exception.Message -match "psql exited with code 7 during: Self-test failing psql"
+    }
+    Assert-HarnessSelfTest -Condition $threw -Message "failing fake psql did not produce a bounded failure."
+
+    Remove-Item -Path "Env:PGPASSWORD" -ErrorAction SilentlyContinue
+    $authPsql = New-FakeBatchCommand -Directory $tempDir -Name "fake-psql-auth" -Content @"
+@echo off
+if "%PGPASSWORD%"=="" (
+  echo missing authentication 1>&2
+  exit /b 2
+)
+exit /b 0
+"@
+    $script:PsqlPath = $authPsql
+    $authTimer = [System.Diagnostics.Stopwatch]::StartNew()
+    $authFailed = $false
+    try {
+      Invoke-Psql -Arguments @("-X", "-w", "-d", $script:TestDatabaseUrl, "-c", "select 1") -Description "Self-test missing auth" | Out-Null
+    } catch {
+      $authFailed = $_.Exception.Message -match "psql exited with code 2 during: Self-test missing auth"
+    } finally {
+      $authTimer.Stop()
+    }
+    Assert-HarnessSelfTest -Condition $authFailed -Message "missing authentication should fail without prompting."
+    Assert-HarnessSelfTest -Condition ($authTimer.Elapsed.TotalSeconds -lt 5) -Message "missing authentication did not fail quickly."
+
+    Set-Item -Path "Env:PGPASSWORD" -Value "self-test-secret"
+    $script:PsqlTimeoutSeconds = 1
+    $hungPsql = New-FakeBatchCommand -Directory $tempDir -Name "fake-psql-hung" -Content @"
+@echo off
+ping -n 6 127.0.0.1 >nul
+exit /b 0
+"@
+    $script:PsqlPath = $hungPsql
+    $timedOut = $false
+    try {
+      Invoke-Psql -Arguments @("-X", "-w", "-d", $script:TestDatabaseUrl, "-c", "select 1") -Description "Self-test hung psql" | Out-Null
+    } catch {
+      $timedOut = $_.Exception.Message -match "psql timed out after 1 seconds during: Self-test hung psql"
+    }
+    Assert-HarnessSelfTest -Condition $timedOut -Message "hung fake psql was not terminated after the configured timeout."
+
+    $marker = Join-Path $tempDir "descendant-marker.txt"
+    $spawner = Join-Path $tempDir "spawn-descendant.ps1"
+    Set-Content -Path $spawner -Encoding UTF8 -Value @"
+`$markerPath = '$($marker -replace "'", "''")'
+Start-Process powershell.exe -ArgumentList @('-NoProfile', '-Command', "Start-Sleep -Seconds 4; Set-Content -LiteralPath '`$markerPath' -Value child-ran")
+Start-Sleep -Seconds 10
+"@
+    Invoke-CapturedProcess -FilePath "powershell.exe" -Arguments @("-NoProfile", "-File", $spawner) -WorkingDirectory $tempDir -TimeoutSeconds 1 | Out-Null
+    Start-Sleep -Seconds 5
+    Assert-HarnessSelfTest -Condition (-not (Test-Path $marker)) -Message "descendant process tree was not terminated before child side effect."
+
+    $nested = Invoke-CapturedProcess -FilePath "powershell.exe" -Arguments @("-NoProfile", "-Command", "Start-Sleep -Seconds 5") -WorkingDirectory $tempDir -TimeoutSeconds 1
+    Assert-HarnessSelfTest -Condition $nested.TimedOut -Message "hung nested PowerShell process did not time out."
+
+    $script:PsqlPath = $successPsql
+    $script:PsqlTimeoutSeconds = 5
+    $beforeTemp = @(Get-ChildItem -Path $env:TEMP -Filter "migration-harness-*.sql" -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+    Invoke-PsqlSql -Sql "select 1;" -Description "Self-test temp SQL cleanup"
+    $afterTemp = @(Get-ChildItem -Path $env:TEMP -Filter "migration-harness-*.sql" -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+    $newTempFiles = @($afterTemp | Where-Object { $_ -notin $beforeTemp })
+    Assert-HarnessSelfTest -Condition ($newTempFiles.Count -eq 0) -Message "temporary SQL files were not cleaned up."
+
+    Assert-SafeDisposableDatabase -ConnectionString "postgresql://postgres@127.0.0.1/test_commit12_harness_selftest?sslmode=disable"
+    $remoteRejected = $false
+    try {
+      Assert-SafeDisposableDatabase -ConnectionString "postgresql://postgres@db.example.com/test_commit12_harness_selftest?sslmode=disable"
+    } catch {
+      $remoteRejected = $_.Exception.Message -match "non-local database host"
+    }
+    Assert-HarnessSelfTest -Condition $remoteRejected -Message "remote disposable-looking URL should be rejected."
+
+    Set-Item -Path "Env:PGHOST" -Value "staging.example.invalid"
+    Set-Item -Path "Env:PGPORT" -Value "6543"
+    Set-Item -Path "Env:PGUSER" -Value "staging_user"
+    Set-Item -Path "Env:PGDATABASE" -Value "staging"
+    Set-Item -Path "Env:PGPASSWORD" -Value "restore-secret"
+    Set-Item -Path "Env:PGCONNECT_TIMEOUT" -Value "77"
+    Set-Item -Path "Env:PGSERVICE" -Value "staging"
+    Set-Item -Path "Env:PGSERVICEFILE" -Value "staging-service-file"
+    $successSnapshot = Get-LibpqEnvironmentSnapshot -VariableNames $libpqNames
+    Invoke-WithLocalDisposableDatabaseEnvironment {
+      Assert-HarnessSelfTest -Condition (-not (Get-Item -Path "Env:PGHOST" -ErrorAction SilentlyContinue)) -Message "PGHOST should be isolated inside child environment."
+      Assert-HarnessSelfTest -Condition ($env:PGPASSWORD -eq "restore-secret") -Message "PGPASSWORD should be preserved inside child environment."
+      Assert-HarnessSelfTest -Condition ($env:PGCONNECT_TIMEOUT -eq "10") -Message "PGCONNECT_TIMEOUT should be bounded inside child environment."
+    } | Out-Null
+    Assert-LibpqEnvironmentRestored -Snapshot $successSnapshot
+
+    $failureSnapshot = Get-LibpqEnvironmentSnapshot -VariableNames $libpqNames
+    try {
+      Invoke-WithLocalDisposableDatabaseEnvironment { throw "expected failure" } | Out-Null
+    } catch {
+    }
+    Assert-LibpqEnvironmentRestored -Snapshot $failureSnapshot
+
+    Write-Host "Harness self-tests passed"
+  }
+  finally {
+    $script:PsqlPath = $oldPsqlPath
+    $script:PsqlTimeoutSeconds = $oldTimeout
+    $script:TestDatabaseUrl = $oldTestDatabaseUrl
+    Restore-LibpqEnvironment -Snapshot $outerSnapshot
+    Remove-Item -Path "Env:HARNESS_MARKER" -ErrorAction SilentlyContinue
+    if (Test-Path $tempDir) {
+      Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+  }
+}
+
 function Invoke-Psql {
   param(
     [Parameter(Mandatory = $true)][string[]]$Arguments,
@@ -222,22 +708,31 @@ function Invoke-Psql {
     [switch]$ExpectFailure
   )
 
-  Write-Host "==> $Description"
-  Invoke-WithLocalDisposableDatabaseEnvironment {
-    & $PsqlPath @Arguments
+  $script:HarnessStepCounter += 1
+  $progressMessage = "RUNNING SQL-012.{0:D3} {1}" -f $script:HarnessStepCounter, $Description
+  $script:HarnessProgressMessages.Add($progressMessage) | Out-Null
+  Write-Host $progressMessage
+
+  $result = Invoke-WithLocalDisposableDatabaseEnvironment {
+    Invoke-CapturedProcess -FilePath $PsqlPath -Arguments $Arguments -WorkingDirectory $repoRoot -TimeoutSeconds $PsqlTimeoutSeconds
   }
-  $exitCode = $LASTEXITCODE
+
+  if ($result.TimedOut) {
+    throw "psql timed out after $PsqlTimeoutSeconds seconds during: $Description. The psql child process tree was terminated.`n$($result.Stderr)`n$($result.Stdout)"
+  }
 
   if ($ExpectFailure) {
-    if ($exitCode -eq 0) {
+    if ($result.ExitCode -eq 0) {
       throw "Expected failure but command succeeded: $Description"
     }
     return
   }
 
-  if ($exitCode -ne 0) {
-    throw "psql exited with code $exitCode during: $Description"
+  if ($result.ExitCode -ne 0) {
+    throw "psql exited with code $($result.ExitCode) during: $Description`n$($result.Stderr)`n$($result.Stdout)"
   }
+
+  return $result
 }
 
 function Invoke-PsqlSql {
@@ -250,7 +745,7 @@ function Invoke-PsqlSql {
   $tempFile = Join-Path $env:TEMP ("migration-harness-" + [System.Guid]::NewGuid().ToString("N") + ".sql")
   try {
     Set-Content -Path $tempFile -Value $Sql -Encoding UTF8
-    Invoke-Psql -Arguments @("-X", "-v", "ON_ERROR_STOP=1", "-d", $TestDatabaseUrl, "-f", $tempFile) -Description $Description -ExpectFailure:$ExpectFailure
+    Invoke-Psql -Arguments @("-X", "-w", "-v", "ON_ERROR_STOP=1", "-d", $TestDatabaseUrl, "-f", $tempFile) -Description $Description -ExpectFailure:$ExpectFailure | Out-Null
   }
   finally {
     if (Test-Path $tempFile) {
@@ -271,7 +766,7 @@ function Invoke-PsqlFile {
     throw "Missing SQL file: $fullPath"
   }
 
-  Invoke-Psql -Arguments @("-X", "-v", "ON_ERROR_STOP=1", "-d", $TestDatabaseUrl, "-f", $fullPath) -Description $Description -ExpectFailure:$ExpectFailure
+  Invoke-Psql -Arguments @("-X", "-w", "-v", "ON_ERROR_STOP=1", "-d", $TestDatabaseUrl, "-f", $fullPath) -Description $Description -ExpectFailure:$ExpectFailure | Out-Null
 }
 
 function Reset-DisposableDatabase {
@@ -482,6 +977,15 @@ END
   Invoke-PsqlSql -Sql $sql -Description "Seed canonical payment_events prerequisite"
 }
 
+function Invoke-Commit12PrerequisiteChain {
+  param([Parameter(Mandatory = $true)][string]$Scenario)
+
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Prepare Migration A substrate before $Scenario"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_02_solo_plus_payment_lifecycle.sql" -Description "Prepare Migration B payment lifecycle substrate before $Scenario"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260710_01_solo_plus_review_decision_rpc.sql" -Description "Prepare Commit 9 substrate before $Scenario"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260711_01_solo_plus_activation_rpc.sql" -Description "Prepare Commit 10 substrate before $Scenario"
+}
+
 function Initialize-SoloPlusReviewSecurityDriftFixture {
   $sql = @"
 ALTER TABLE public.solo_plus_cases DISABLE ROW LEVEL SECURITY;
@@ -600,7 +1104,7 @@ function Invoke-InjectedFailureMigration {
   $tempFile = Join-Path $env:TEMP ("migration-harness-injected-" + [System.Guid]::NewGuid().ToString("N") + ".sql")
   try {
     Set-Content -Path $tempFile -Value $mutated -Encoding UTF8
-    Invoke-Psql -Arguments @("-X", "-v", "ON_ERROR_STOP=1", "-d", $TestDatabaseUrl, "-f", $tempFile) -Description $Description -ExpectFailure
+    Invoke-Psql -Arguments @("-X", "-w", "-v", "ON_ERROR_STOP=1", "-d", $TestDatabaseUrl, "-f", $tempFile) -Description $Description -ExpectFailure | Out-Null
   }
   finally {
     if (Test-Path $tempFile) {
@@ -680,6 +1184,43 @@ function Run-Harness {
   Invoke-PsqlFile -RelativePath "supabase/migrations/20260711_01_solo_plus_activation_rpc.sql" -Description "Rerun Commit 10 activation RPC migration"
   Invoke-PsqlFile -RelativePath "supabase/tests/phase2_solo_plus_activation_rpc.sql" -Description "Rerun Commit 10 activation RPC SQL assertions"
   Add-PassResult -Results $results -Message "Commit 10 activation RPC clean + rerun"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-Commit12PrerequisiteChain -Scenario "Commit 12 preflight"
+  Invoke-PsqlFile -RelativePath "supabase/staging/preflight/013_solo_plus_payment_recovery_snapshot.sql" -Description "Run Commit 12 staging preflight snapshot"
+  Add-PassResult -Results $results -Message "Commit 12 staging preflight snapshot"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-Commit12PrerequisiteChain -Scenario "Commit 12 wrapper apply"
+  Invoke-PsqlFile -RelativePath "supabase/staging/013_solo_plus_payment_recovery.sql" -Description "Run Commit 12 staging wrapper"
+  Add-PassResult -Results $results -Message "Commit 12 staging wrapper apply"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-Commit12PrerequisiteChain -Scenario "Commit 12 postflight"
+  Invoke-PsqlFile -RelativePath "supabase/staging/013_solo_plus_payment_recovery.sql" -Description "Run Commit 12 staging wrapper before postflight"
+  Invoke-PsqlFile -RelativePath "supabase/staging/postflight/013_solo_plus_payment_recovery_verify.sql" -Description "Run Commit 12 staging postflight verify"
+  Add-PassResult -Results $results -Message "Commit 12 staging postflight verify"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-Commit12PrerequisiteChain -Scenario "Commit 12 wrapper rerun"
+  Invoke-PsqlFile -RelativePath "supabase/staging/013_solo_plus_payment_recovery.sql" -Description "Run Commit 12 staging wrapper first apply"
+  Invoke-PsqlFile -RelativePath "supabase/staging/013_solo_plus_payment_recovery.sql" -Description "Run Commit 12 staging wrapper rerun"
+  Invoke-PsqlFile -RelativePath "supabase/staging/postflight/013_solo_plus_payment_recovery_verify.sql" -Description "Run Commit 12 staging postflight verify after rerun"
+  Add-PassResult -Results $results -Message "Commit 12 staging wrapper rerun + postflight verify"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-Commit12PrerequisiteChain -Scenario "Commit 12 payment recovery RPC regression"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260718_01_solo_plus_payment_recovery.sql" -Description "Run Commit 12 payment recovery migration"
+  Invoke-PsqlFile -RelativePath "supabase/tests/phase2_solo_plus_activation_rpc.sql" -Description "Run Commit 10 regression assertions after Commit 12 payment recovery migration"
+  Invoke-PsqlFile -RelativePath "supabase/tests/phase2_solo_plus_payment_recovery_rpc.sql" -Description "Run Commit 12 payment recovery RPC SQL assertions"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260718_01_solo_plus_payment_recovery.sql" -Description "Rerun Commit 12 payment recovery migration"
+  Invoke-PsqlFile -RelativePath "supabase/tests/phase2_solo_plus_payment_recovery_rpc.sql" -Description "Rerun Commit 12 payment recovery RPC SQL assertions"
+  Add-PassResult -Results $results -Message "Commit 12 payment recovery clean + rerun"
 
   Reset-DisposableDatabase
   Initialize-CoreFixture
@@ -942,8 +1483,13 @@ CREATE UNIQUE INDEX idx_payment_records_solo_plus_provider_reference
   }
 }
 
-if ($RunSafetySelfTests) {
-  Run-SafetySelfTests
+if ($RunSafetySelfTests -or $RunHarnessSelfTests) {
+  if ($RunSafetySelfTests) {
+    Run-SafetySelfTests
+  }
+  if ($RunHarnessSelfTests) {
+    Run-HarnessSelfTests
+  }
 }
 else {
   Assert-SafeDisposableDatabase -ConnectionString $TestDatabaseUrl

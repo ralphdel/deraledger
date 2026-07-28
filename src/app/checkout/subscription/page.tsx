@@ -35,16 +35,29 @@ const PLAN_CONFIG: Record<string, {
     label: "Solo Plus",
     price: "NGN 13,000", priceKobo: 1300000, interval: "/month",
     features: [
-      "Phase 1 compatibility subscription path",
-      "No new feature unlocks in Phase 1",
-      "Existing billing rails reused",
-      "Storefront remains disabled",
-      "Receivable Sale remains disabled",
-      "Enhanced KYC remains out of scope",
+      "Higher reviewed collection capacity",
+      "Payment, requirements, review, and activation tracked separately",
+      "Structured activity profile submission",
+      "Evidence reuse only in this launch",
+      "No direct document uploads",
+      "No activation controls",
     ],
     color: "from-[#2A1033] to-[#5E1F66]",
   },
   corporate: {
+    label: "Business",
+    price: "NGN 20,000", priceKobo: 2000000, interval: "/month",
+    features: [
+      "Unlimited collection invoices",
+      "Custom Role-Based Access (RBAC)",
+      "Grouped receivables",
+      "Advanced analytics",
+      "No watermark",
+      "White-label invoices",
+    ],
+    color: "from-[#0B0314] to-[#12061F]",
+  },
+  business: {
     label: "Business",
     price: "NGN 20,000", priceKobo: 2000000, interval: "/month",
     features: [
@@ -633,9 +646,11 @@ function SubscriptionCheckoutContent() {
           <h2 className="text-lg font-bold text-white mb-1">Choose payment method</h2>
           <p className="text-sm text-white/60 mb-4">Select how you&apos;d like to pay for your subscription.</p>
           {context === "onboarding" && plan !== "starter" && (
-            <div className="mb-6 rounded-xl border border-amber-400/30 bg-amber-400/10 p-4 text-sm text-amber-100">
-              Your subscription creates a setup workspace. Live payment links, checkout, settlement, and payment collection remain disabled until verification is completed.
-            </div>
+          <div className="mb-6 rounded-xl border border-amber-400/30 bg-amber-400/10 p-4 text-sm text-amber-100">
+              {plan === "solo_plus"
+                ? "Your Solo Plus payment starts a reviewed verification flow. Payment does not approve or activate Solo Plus by itself."
+                : "Your subscription creates a setup workspace. Live payment links, checkout, settlement, and payment collection remain disabled until verification is completed."}
+          </div>
           )}
 
           {/* Tab selector */}

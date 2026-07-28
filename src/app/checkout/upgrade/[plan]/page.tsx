@@ -10,8 +10,24 @@ import {
   Loader2, ShieldCheck, Lock, Copy, Check, Building2, User,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  getUpgradeCheckoutSessionKey,
+  parseUpgradeCheckoutResponse,
+  UnsupportedCheckoutCompletionModeError,
+  type UpgradeCheckoutResponse,
+} from "@/lib/checkout/provider-completion";
+import {
+  PaystackCheckoutSdkError,
+  resumePaystackCheckout,
+} from "@/lib/checkout/paystack-inline";
 import { getMerchant } from "@/lib/data";
 import type { Merchant } from "@/lib/types";
+import {
+  getUpgradeCheckoutDisabledReason,
+  isPlaceholderOwnerName,
+  selectUpgradePaymentMethod,
+} from "@/lib/checkout/upgrade-rules";
+import { isSoloPlusOwnerEligible } from "@/lib/solo-plus/ui";
 
 const PLAN_CONFIG: Record<string, {
   label: string; price: string; priceKobo: number; interval: string;
@@ -26,11 +42,24 @@ const PLAN_CONFIG: Record<string, {
   },
   solo_plus: {
     label: "Solo Plus", price: "NGN 13,000", priceKobo: 1300000, interval: "/month",
-    verification: "Enhanced verification required later",
-    features: ["Phase 1 compatibility billing path", "No new feature unlocks in Phase 1", "Storefront remains disabled", "Receivable Sale remains disabled", "Discount codes remain disabled", "Ratings remain disabled"],
+    verification: "Identity verification required",
+    features: [
+      "Higher reviewed collection capacity",
+      "Requirement checklist and review-state tracking",
+      "Structured activity profile submission",
+      "Evidence reuse only in this launch",
+      "No direct document uploads",
+      "No activation controls",
+    ],
     icon: User, color: "from-[#2A1033] to-[#5E1F66]",
   },
   corporate: {
+    label: "Business", price: "NGN 20,000", priceKobo: 2000000, interval: "/month",
+    verification: "Business & authority checks required",
+    features: ["Unlimited collection invoices", "Custom Role-Based Access (RBAC)", "Grouped receivables", "Advanced analytics", "No watermark", "White-label invoices"],
+    icon: Building2, color: "from-[#0B0314] to-[#12061F]",
+  },
+  business: {
     label: "Business", price: "NGN 20,000", priceKobo: 2000000, interval: "/month",
     verification: "Business & authority checks required",
     features: ["Unlimited collection invoices", "Custom Role-Based Access (RBAC)", "Grouped receivables", "Advanced analytics", "No watermark", "White-label invoices"],
@@ -46,6 +75,10 @@ type AvailableMethod = {
   enabled: boolean;
   provider: "paystack" | "monnify" | "breet";
   fallbackProvider: "paystack" | "monnify" | "breet" | null;
+};
+
+type MerchantWithAccess = Merchant & {
+  currentUserRole?: string;
 };
 
 type CryptoCheckoutStatus = {
@@ -72,6 +105,25 @@ type CryptoCheckoutDetails = {
   expiresAt: string | null;
 };
 
+type UpgradeApiErrorPayload = {
+  error?: unknown;
+  code?: unknown;
+  requestId?: unknown;
+};
+
+type RecoveryPromptState = {
+  requestId: string | null;
+  recoveryRequestIdempotencyKey: string;
+};
+
+type CheckoutNoticeState = {
+  title: string;
+  message: string;
+  guidance?: string;
+  requestId?: string | null;
+  action?: "open_checkout_again";
+};
+
 interface UpgradeCheckoutPageProps {
   params: Promise<{ plan: string }>;
 }
@@ -89,10 +141,20 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
   const [cryptoDetails, setCryptoDetails] = useState<CryptoCheckoutDetails | null>(null);
   const [cryptoCheckoutStatus, setCryptoCheckoutStatus] = useState<CryptoCheckoutStatus | null>(null);
   const [availableMethods, setAvailableMethods] = useState<AvailableMethod[]>([]);
+  const [paymentMethodsLoaded, setPaymentMethodsLoaded] = useState(false);
+  const [paymentMethodsError, setPaymentMethodsError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [recoveryPrompt, setRecoveryPrompt] = useState<RecoveryPromptState | null>(null);
+  const [checkoutNotice, setCheckoutNotice] = useState<CheckoutNoticeState | null>(null);
+  const [preservedCheckoutSession, setPreservedCheckoutSession] = useState<Extract<
+    UpgradeCheckoutResponse,
+    { completionMode: "paystack_resume" }
+  > | null>(null);
   const [soloPlusAvailable, setSoloPlusAvailable] = useState(false);
   const [soloPlusAvailabilityLoaded, setSoloPlusAvailabilityLoaded] = useState(plan !== "solo_plus");
-  const paystackLoaded = useRef(false);
+  const submittingRef = useRef(false);
+  const openedCheckoutSessionRef = useRef<string | null>(null);
+  const redirectStartedRef = useRef(false);
   const cryptoStorageKey = `breet-upgrade-crypto:${plan}`;
   // ownerName + businessType are read from sessionStorage (set by upgrade settings page)
   const [ownerName, setOwnerName] = useState("");
@@ -102,15 +164,6 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
   const [disclosureVersion, setDisclosureVersion] = useState("1.0");
   const checkingPlanAvailability = plan === "solo_plus" && !soloPlusAvailabilityLoaded;
   const planAvailable = plan !== "solo_plus" || soloPlusAvailable;
-
-  useEffect(() => {
-    if (checkingPlanAvailability || !planAvailable || paystackLoaded.current) return;
-    const script = document.createElement("script");
-    script.src = "https://js.paystack.co/v1/inline.js";
-    script.async = true;
-    document.body.appendChild(script);
-    paystackLoaded.current = true;
-  }, [checkingPlanAvailability, planAvailable]);
 
   useEffect(() => {
     if (plan !== "solo_plus") {
@@ -145,25 +198,28 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
       return;
     }
 
-    let timer: number | null = null;
+    let storedOwnerName: string | null = null;
     const stored = sessionStorage.getItem("upgradeCheckout");
     if (stored) {
       try {
         const parsed = JSON.parse(stored);
-        timer = window.setTimeout(() => {
-          setOwnerName(parsed.ownerName || "");
-          setBusinessType(parsed.businessType || null);
-          setRelationshipClaim(parsed.relationshipClaim || null);
-          setVerificationDisclosureAccepted(parsed.verificationDisclosureAccepted === true);
-          setDisclosureVersion(parsed.disclosureVersion || "1.0");
-        }, 0);
+        storedOwnerName = typeof parsed.ownerName === "string" ? parsed.ownerName : "";
+        setOwnerName(storedOwnerName ?? "");
+        setBusinessType(typeof parsed.businessType === "string" ? parsed.businessType : null);
+        setRelationshipClaim(parsed.relationshipClaim || null);
+        setVerificationDisclosureAccepted(parsed.verificationDisclosureAccepted === true);
+        setDisclosureVersion(typeof parsed.disclosureVersion === "string" ? parsed.disclosureVersion : "1.0");
       } catch { /* ignore */ }
     }
     getMerchant()
-      .then(m => setMerchant(m))
+      .then(m => {
+        setMerchant(m);
+        if (plan === "solo_plus" && !storedOwnerName?.trim() && m?.owner_name) {
+          setOwnerName(m.owner_name);
+        }
+      })
       .finally(() => setLoadingMerchant(false));
     return () => {
-      if (timer !== null) window.clearTimeout(timer);
     };
   }, [plan, soloPlusAvailabilityLoaded, soloPlusAvailable]);
 
@@ -191,10 +247,13 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
     }
     if (plan === "solo_plus" && !soloPlusAvailable) {
       setAvailableMethods([]);
+      setPaymentMethodsLoaded(true);
       return;
     }
 
     const controller = new AbortController();
+    setPaymentMethodsLoaded(false);
+    setPaymentMethodsError(null);
     fetch(`/api/checkout/payment-methods?kind=upgrade&plan=${plan}`, {
       signal: controller.signal,
     })
@@ -202,15 +261,16 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
       .then((payload) => {
         const methods = Array.isArray(payload?.availableMethods) ? payload.availableMethods as AvailableMethod[] : [];
         setAvailableMethods(methods);
-        if (methods.length > 0 && !methods.some((method) => method.method === tab)) {
-          setTab(methods[0].method);
-        }
+        setTab((current) => selectUpgradePaymentMethod(current, methods) ?? current);
+        setPaymentMethodsLoaded(true);
       })
       .catch(() => {
         setAvailableMethods([]);
+        setPaymentMethodsError("Payment methods could not be loaded right now.");
+        setPaymentMethodsLoaded(true);
       });
     return () => controller.abort();
-  }, [plan, soloPlusAvailabilityLoaded, soloPlusAvailable, tab]);
+  }, [plan, soloPlusAvailabilityLoaded, soloPlusAvailable]);
 
   useEffect(() => {
     if (!cryptoDetails) return;
@@ -340,18 +400,122 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
     );
   }
 
+  const selectedMethod = availableMethods.find((method) => method.method === tab) ?? null;
+  const currentUserIsOwner = plan !== "solo_plus"
+    ? true
+    : isSoloPlusOwnerEligible({
+        currentUserRole: (merchant as MerchantWithAccess | null)?.currentUserRole ?? null,
+        subscriptionPlan: merchant?.subscription_plan ?? null,
+      });
+  const paymentMethodsLoading = !paymentMethodsLoaded;
+  const checkoutDisabledReason = getUpgradeCheckoutDisabledReason({
+    loadingMerchant,
+    paymentMethodsLoading,
+    availableMethods,
+    selectedPaymentMethod: selectedMethod?.method ?? null,
+    ownerName,
+    relationshipClaim,
+    verificationDisclosureAccepted,
+    disclosureVersion,
+    currentUserIsOwner,
+    isSubmitting: loading,
+  });
+  const canSubmitPayment = checkoutDisabledReason === null;
+
   const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleFiatPayment = async (paymentMethod: Extract<Tab, "card" | "bank_transfer" | "ussd">) => {
-    if (!verificationDisclosureAccepted) {
-      setError("Please go back and acknowledge the verification disclosure before payment.");
+  const parseUpgradeApiError = (payload: unknown) => {
+    const candidate =
+      typeof payload === "object" && payload !== null
+        ? (payload as UpgradeApiErrorPayload)
+        : null;
+    const message =
+      typeof candidate?.error === "string" && candidate.error.trim()
+        ? candidate.error
+        : "Failed to initialize payment.";
+    const code =
+      typeof candidate?.code === "string" && candidate.code.trim()
+        ? candidate.code
+        : null;
+    const requestId =
+      typeof candidate?.requestId === "string" && candidate.requestId.trim()
+        ? candidate.requestId
+        : null;
+
+    return { message, code, requestId };
+  };
+
+  const clearCheckoutMessaging = () => {
+    setError(null);
+    setRecoveryPrompt(null);
+    setCheckoutNotice(null);
+  };
+
+  const showCheckoutOpenFailure = (
+    normalizedResponse: Extract<
+      UpgradeCheckoutResponse,
+      { completionMode: "paystack_resume" }
+    >,
+    sdkError: PaystackCheckoutSdkError,
+  ) => {
+    setPreservedCheckoutSession(normalizedResponse);
+    setError(null);
+    if (
+      sdkError.code === "PAYSTACK_CHECKOUT_SDK_UNAVAILABLE" ||
+      sdkError.code === "PAYSTACK_CHECKOUT_BROWSER_ONLY" ||
+      sdkError.code === "PAYSTACK_CHECKOUT_ACCESS_CODE_MISSING"
+    ) {
+      setCheckoutNotice({
+        title: "Checkout is temporarily unavailable",
+        message:
+          "We could not open the secure payment window. Please refresh the page and try again. Your current payment session has been preserved.",
+        requestId: normalizedResponse.requestId,
+        action: "open_checkout_again",
+      });
       return;
     }
-    setError(null);
+
+    setCheckoutNotice({
+      title: "Checkout could not open",
+      message:
+        "Your payment session is ready, but the checkout window could not open. Please try opening it again. You will not need to start another payment attempt.",
+      guidance: "Do not create another payment while this session is pending.",
+      requestId: normalizedResponse.requestId,
+      action: "open_checkout_again",
+    });
+  };
+
+  const handleCheckoutError = (errorValue: unknown) => {
+    if (errorValue instanceof PaystackCheckoutSdkError) {
+      setError(null);
+      return;
+    }
+
+    setError(
+      errorValue instanceof UnsupportedCheckoutCompletionModeError
+        ? "Checkout is temporarily unavailable. Please refresh the page and try again."
+        : errorValue instanceof Error
+          ? errorValue.message
+          : "Something went wrong.",
+    );
+  };
+
+  const handleFiatPayment = async (paymentMethod: Extract<Tab, "card" | "bank_transfer" | "ussd">) => {
+    if (submittingRef.current) {
+      return;
+    }
+
+    if (checkoutDisabledReason) {
+      setError(checkoutDisabledReason);
+      return;
+    }
+
+    submittingRef.current = true;
+    clearCheckoutMessaging();
     setLoading(true);
     try {
       const res = await fetch("/api/payment/upgrade", {
@@ -368,52 +532,199 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
         }),
       });
       const data = await res.json();
-      if (!data.accessCode) throw new Error(data.error || "Failed to initialize payment.");
-
-      if (data.provider && data.provider !== "paystack") {
-        window.location.href = data.authorizationUrl;
-        return;
+      if (!res.ok) {
+        const parsedError = parseUpgradeApiError(data);
+        if (
+          plan === "solo_plus" &&
+          parsedError.code === "SOLO_PLUS_PAYMENT_INITIALIZATION_RECOVERY_REQUIRED"
+        ) {
+          setRecoveryPrompt({
+            requestId: parsedError.requestId,
+            recoveryRequestIdempotencyKey:
+              crypto.randomUUID(),
+          });
+          setCheckoutNotice(null);
+          setLoading(false);
+          submittingRef.current = false;
+          return;
+        }
+        throw new Error(parsedError.message);
       }
 
-      const pop = (window as Window & { PaystackPop?: { setup: (opts: Record<string, unknown>) => { openIframe: () => void } } }).PaystackPop;
-      if (!pop) throw new Error("Payment checkout could not load. Please refresh and try again.");
-
-      const handler = pop.setup({
-        key: process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY,
-        email: merchant?.email || "billing@deraledger.app",
-        amount: config.priceKobo,
-        ref: data.reference,
-        access_code: data.accessCode,
-        metadata: {
-          type: "subscription_upgrade",
-          merchant_id: merchant?.id,
-          new_plan: plan,
-          owner_name: ownerName || null,
-          business_type: businessType || null,
-          relationship_claim: relationshipClaim || null,
-          verification_disclosure_accepted: verificationDisclosureAccepted,
-          verification_disclosure_version: disclosureVersion,
-          payment_method_requested: paymentMethod,
-          resolved_provider: data.provider || "paystack",
-        },
-        callback: (response: { reference: string }) => {
-          sessionStorage.removeItem("upgradeCheckout");
-          router.push(`/settings/upgrade-success?reference=${response.reference}&plan=${plan}&provider=${data.provider || "paystack"}`);
-        },
-        onClose: () => setLoading(false),
-      });
-      handler.openIframe();
+      setRecoveryPrompt(null);
+      setCheckoutNotice(null);
+      const normalizedResponse = parseUpgradeCheckoutResponse(data);
+      await completeProviderCheckout(normalizedResponse);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Something went wrong.");
+      handleCheckoutError(e);
+      submittingRef.current = false;
+      setLoading(false);
+    }
+  };
+
+  const handleSoloPlusRecovery = async (
+    paymentMethod: Extract<Tab, "card" | "bank_transfer" | "ussd">,
+  ) => {
+    if (submittingRef.current) {
+      return;
+    }
+
+    if (!recoveryPrompt) {
+      setError("A recoverable Solo Plus payment attempt was not found.");
+      return;
+    }
+
+    submittingRef.current = true;
+    setError(null);
+    setCheckoutNotice(null);
+    setLoading(true);
+
+    try {
+      const res = await fetch("/api/payment/upgrade/recover", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          newPlan: plan,
+          paymentMethod,
+          recoveryRequestIdempotencyKey:
+            recoveryPrompt.recoveryRequestIdempotencyKey,
+        }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        const parsedError = parseUpgradeApiError(data);
+        throw new Error(
+          parsedError.requestId
+            ? `${parsedError.message} Request ID: ${parsedError.requestId}.`
+            : parsedError.message,
+        );
+      }
+
+      setRecoveryPrompt(null);
+      setCheckoutNotice(null);
+      const normalizedResponse = parseUpgradeCheckoutResponse(data);
+      await completeProviderCheckout(normalizedResponse);
+    } catch (errorValue: unknown) {
+      handleCheckoutError(errorValue);
+      submittingRef.current = false;
+      setLoading(false);
+    }
+  };
+
+  async function completeProviderCheckout(
+    normalizedResponse: UpgradeCheckoutResponse,
+    options: { allowReopen?: boolean } = {},
+  ) {
+    const sessionKey = getUpgradeCheckoutSessionKey(normalizedResponse);
+    if (!options.allowReopen && openedCheckoutSessionRef.current === sessionKey) {
+      return;
+    }
+    openedCheckoutSessionRef.current = sessionKey;
+
+    switch (normalizedResponse.completionMode) {
+      case "paystack_resume":
+        return openPaystackResume(normalizedResponse);
+      case "hosted_checkout_redirect":
+        if (redirectStartedRef.current) {
+          return;
+        }
+        redirectStartedRef.current = true;
+        window.location.assign(normalizedResponse.checkoutUrl);
+        return;
+      default:
+        throw new UnsupportedCheckoutCompletionModeError(
+          `Unsupported checkout completion mode: ${(normalizedResponse as { completionMode?: unknown }).completionMode ?? "unknown"}.`,
+        );
+    }
+  }
+
+  function openPaystackResume(
+    normalizedResponse: Extract<
+      UpgradeCheckoutResponse,
+      { completionMode: "paystack_resume" }
+    >,
+  ) {
+    setPreservedCheckoutSession(normalizedResponse);
+    return resumePaystackCheckout(normalizedResponse.accessCode, {
+      onSuccess: (transaction) => {
+        const reference = transaction.reference || normalizedResponse.reference;
+        setCheckoutNotice({
+          title: "Payment is pending verification",
+          message:
+            "We received the checkout callback and will confirm it securely before updating your plan.",
+          requestId: normalizedResponse.requestId,
+        });
+        sessionStorage.removeItem("upgradeCheckout");
+        router.push(
+          `/settings/upgrade-success?reference=${reference}&plan=${plan}&provider=${normalizedResponse.provider}`,
+        );
+      },
+      onCancel: () => {
+        setCheckoutNotice({
+          title: "Payment was not completed",
+          message:
+            "Payment was not completed. You can reopen this checkout when ready.",
+          requestId: normalizedResponse.requestId,
+          action: "open_checkout_again",
+        });
+        submittingRef.current = false;
+        setLoading(false);
+      },
+      onError: (error) => {
+        const sdkError = new PaystackCheckoutSdkError(
+          "PAYSTACK_CHECKOUT_OPEN_FAILED",
+          "Paystack checkout could not open.",
+          { cause: error },
+        );
+        showCheckoutOpenFailure(normalizedResponse, sdkError);
+        submittingRef.current = false;
+        setLoading(false);
+      },
+    }).then(
+      () => {
+        submittingRef.current = false;
+        setLoading(false);
+      },
+      (errorValue) => {
+        if (errorValue instanceof PaystackCheckoutSdkError) {
+          showCheckoutOpenFailure(normalizedResponse, errorValue);
+        }
+        throw errorValue;
+      },
+    );
+  }
+
+  const handleOpenPreservedCheckout = async () => {
+    if (submittingRef.current || !preservedCheckoutSession) {
+      return;
+    }
+
+    submittingRef.current = true;
+    setError(null);
+    setLoading(true);
+    try {
+      await completeProviderCheckout(preservedCheckoutSession, {
+        allowReopen: true,
+      });
+    } catch (errorValue: unknown) {
+      handleCheckoutError(errorValue);
+      submittingRef.current = false;
       setLoading(false);
     }
   };
 
   const handleCryptoPayment = async () => {
-    if (!verificationDisclosureAccepted) {
-      setError("Please go back and acknowledge the verification disclosure before payment.");
+    if (submittingRef.current) {
       return;
     }
+
+    if (checkoutDisabledReason) {
+      setError(checkoutDisabledReason);
+      return;
+    }
+
+    submittingRef.current = true;
     setError(null);
     setLoading(true);
     try {
@@ -456,6 +767,7 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Something went wrong.");
     } finally {
+      submittingRef.current = false;
       setLoading(false);
     }
   };
@@ -535,15 +847,80 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
           <h2 className="text-lg font-bold text-white mb-1">Choose payment method</h2>
           <p className="text-sm text-white/60 mb-4">Select how you&apos;d like to pay for your upgrade.</p>
           <div className="mb-6 rounded-xl border border-amber-400/30 bg-amber-400/10 p-4 text-sm text-amber-100">
-            Your payment moves this workspace into setup mode. Live payment links, checkout, settlement, and payment collection remain disabled until verification is completed.
+            {plan === "solo_plus"
+              ? "Your Solo Plus payment starts a reviewed verification flow. Payment does not approve or activate Solo Plus by itself."
+              : "Your payment moves this workspace into setup mode. Live payment links, checkout, settlement, and payment collection remain disabled until verification is completed."}
           </div>
+
+          {plan === "solo_plus" ? (
+            <div className="mb-6 space-y-4 rounded-2xl border border-white/10 bg-white/[0.04] p-5">
+              <div>
+                <label htmlFor="solo-plus-owner-name" className="text-sm font-semibold text-white">
+                  Account owner name <span className="text-amber-300">*</span>
+                </label>
+                <input
+                  id="solo-plus-owner-name"
+                  value={ownerName}
+                  onChange={(event) => {
+                    setOwnerName(event.target.value);
+                    clearCheckoutMessaging();
+                  }}
+                  placeholder="Enter the account owner's legal name"
+                  className="mt-2 h-11 w-full rounded-lg border border-white/10 bg-[#12061F] px-3 text-sm text-white outline-none transition focus:border-[#B58CFF] placeholder:text-white/30"
+                />
+                {isPlaceholderOwnerName(ownerName) ? (
+                  <p className="mt-2 text-xs text-amber-200">
+                    Replace this placeholder with the real account owner name before starting payment.
+                  </p>
+                ) : (
+                  <p className="mt-2 text-xs text-white/45">
+                    Use the real owner name for the reviewed Solo Plus request.
+                  </p>
+                )}
+              </div>
+
+              <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-white/10 bg-[#12061F]/50 p-4">
+                <input
+                  type="checkbox"
+                  checked={relationshipClaim === "owner_affiliated_claim"}
+                  onChange={(event) => {
+                    setRelationshipClaim(event.target.checked ? "owner_affiliated_claim" : null);
+                    clearCheckoutMessaging();
+                  }}
+                  className="mt-1 h-4 w-4 accent-[#7B2FF7]"
+                />
+                <span className="text-sm leading-relaxed text-white/75">
+                  I confirm that I am the account owner or owner-affiliated operator responsible for this Solo Plus request.
+                </span>
+              </label>
+
+              <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-amber-400/30 bg-amber-400/10 p-4">
+                <input
+                  type="checkbox"
+                  checked={verificationDisclosureAccepted}
+                  onChange={(event) => {
+                    setVerificationDisclosureAccepted(event.target.checked);
+                    clearCheckoutMessaging();
+                  }}
+                  className="mt-1 h-4 w-4 accent-[#7B2FF7]"
+                />
+                <span className="text-sm leading-relaxed text-amber-100">
+                  I understand that payment starts Solo Plus review only. Requirements, approval, and activation remain separate.
+                </span>
+              </label>
+            </div>
+          ) : null}
 
           {/* Tab selector */}
           <div className="flex gap-2 mb-6 border-b border-white/10 pb-1">
             {visibleTabs.map(t => (
               <button
                 key={t.id}
-                onClick={() => { setTab(t.id); setError(null); setCryptoDetails(null); }}
+                onClick={() => {
+                  setTab(t.id);
+                  clearCheckoutMessaging();
+                  setCryptoDetails(null);
+                }}
                 className={`flex items-center gap-1.5 px-3 py-2 rounded-t-lg text-sm font-medium transition-colors ${
                   tab === t.id
                     ? "bg-[#7B2FF7] text-white shadow-sm"
@@ -554,6 +931,16 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
               </button>
             ))}
           </div>
+          {paymentMethodsLoading ? (
+            <div className="mb-4 flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/65">
+              <Loader2 className="h-4 w-4 animate-spin text-[#B58CFF]" />
+              Payment methods are still loading.
+            </div>
+          ) : visibleTabs.length === 0 ? (
+            <div className="mb-4 rounded-xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
+              {paymentMethodsError || "No supported payment method is currently available."}
+            </div>
+          ) : null}
 
           {/* Card & Bank */}
           {tab === "card" && (
@@ -571,7 +958,7 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
                 <p className="text-xs text-white/50 mb-4">
                   Your card details are handled by the selected payment provider, not stored by DeraLedger.
                 </p>
-                <Button onClick={() => void handleFiatPayment("card")} disabled={loading || loadingMerchant || !verificationDisclosureAccepted}
+                <Button onClick={() => void handleFiatPayment("card")} disabled={!canSubmitPayment}
                   className="w-full h-12 bg-[#7B2FF7] hover:bg-[#B58CFF] hover:text-[#12061F] text-white font-bold text-base border-0 transition-all">
                   {loading ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Opening checkout...</> : <>Pay {config.price} <CreditCard className="ml-2 h-4 w-4" /></>}
                 </Button>
@@ -595,7 +982,7 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
                 <p className="text-xs text-white/50 mb-4">
                   The active backend route will generate the exact transfer flow for this upgrade.
                 </p>
-                <Button onClick={() => void handleFiatPayment("bank_transfer")} disabled={loading || loadingMerchant || !verificationDisclosureAccepted}
+                <Button onClick={() => void handleFiatPayment("bank_transfer")} disabled={!canSubmitPayment}
                   className="w-full h-12 bg-blue-600 hover:bg-blue-500 text-white font-bold text-base border-0">
                   {loading ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Opening...</> : <>Get Transfer Details <ArrowRightLeft className="ml-2 h-4 w-4" /></>}
                 </Button>
@@ -618,7 +1005,7 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
                 <p className="text-xs text-white/50 mb-4">
                   This opens the provider-hosted USSD flow for the exact upgrade amount.
                 </p>
-                <Button onClick={() => void handleFiatPayment("ussd")} disabled={loading || loadingMerchant || !verificationDisclosureAccepted}
+                <Button onClick={() => void handleFiatPayment("ussd")} disabled={!canSubmitPayment}
                   className="w-full h-12 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-base border-0">
                   {loading ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Opening...</> : <>Generate USSD <ShieldCheck className="ml-2 h-4 w-4" /></>}
                 </Button>
@@ -695,7 +1082,7 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
                       <p className="text-xs text-orange-600">BTC, USDT, ETH</p>
                     </div>
                   </div>
-                  <Button onClick={handleCryptoPayment} disabled={loading || !verificationDisclosureAccepted} className="w-full h-11 bg-orange-500 hover:bg-orange-600 text-white font-bold">
+                  <Button onClick={handleCryptoPayment} disabled={!canSubmitPayment} className="w-full h-11 bg-orange-500 hover:bg-orange-600 text-white font-bold">
                     {loading ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Generating...</> : "Generate Crypto Address"}
                   </Button>
                 </div>
@@ -706,6 +1093,81 @@ function UpgradeCheckoutContent({ plan }: { plan: string }) {
           {error && (
             <div className="mt-4 bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-sm text-red-400">{error}</div>
           )}
+
+          {checkoutNotice ? (
+            <div className="mt-4 rounded-lg border border-amber-400/30 bg-amber-400/10 p-4 text-sm text-amber-100">
+              <p className="font-semibold text-amber-50">{checkoutNotice.title}</p>
+              <p className="mt-2">{checkoutNotice.message}</p>
+              {checkoutNotice.guidance ? (
+                <p className="mt-2 text-xs text-amber-50/75">{checkoutNotice.guidance}</p>
+              ) : null}
+              {checkoutNotice.requestId ? (
+                <details className="mt-3 text-xs text-amber-50/65">
+                  <summary className="cursor-pointer">Technical details</summary>
+                  <p className="mt-1 font-mono break-all">Reference: {checkoutNotice.requestId}</p>
+                </details>
+              ) : null}
+              {checkoutNotice.action === "open_checkout_again" && preservedCheckoutSession ? (
+                <Button
+                  type="button"
+                  onClick={() => void handleOpenPreservedCheckout()}
+                  disabled={loading}
+                  className="mt-4 h-11 w-full bg-amber-400 text-[#12061F] hover:bg-amber-300"
+                >
+                  {loading ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Opening checkout...
+                    </>
+                  ) : (
+                    "Open checkout again"
+                  )}
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
+
+          {plan === "solo_plus" && recoveryPrompt ? (
+            <div className="mt-4 rounded-lg border border-amber-400/30 bg-amber-400/10 p-4 text-sm text-amber-100">
+              <p className="font-semibold text-amber-50">We need to check your previous payment</p>
+              <p className="mt-2">
+                Your previous checkout could not be reopened. We&rsquo;ll confirm its payment status before safely continuing with a new checkout.
+              </p>
+              {recoveryPrompt.requestId ? (
+                <details className="mt-3 text-xs text-amber-50/65">
+                  <summary className="cursor-pointer">Technical details</summary>
+                  <p className="mt-1 font-mono break-all">Reference: {recoveryPrompt.requestId}</p>
+                </details>
+              ) : null}
+              {selectedMethod && selectedMethod.method !== "crypto" ? (
+                <Button
+                  type="button"
+                  onClick={() =>
+                    void handleSoloPlusRecovery(
+                      selectedMethod.method as "card" | "bank_transfer" | "ussd",
+                    )
+                  }
+                  disabled={loading}
+                  className="mt-4 h-11 w-full bg-amber-400 text-[#12061F] hover:bg-amber-300"
+                >
+                  {loading ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Checking payment status...
+                    </>
+                  ) : (
+                    "Check status and continue"
+                  )}
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
+
+          {checkoutDisabledReason ? (
+            <div className="mt-4 rounded-lg border border-white/10 bg-white/5 p-3 text-sm text-white/65" data-testid="upgrade-payment-disabled-reason">
+              {checkoutDisabledReason}
+            </div>
+          ) : null}
 
           <p className="mt-auto pt-6 text-center text-xs text-white/40">
             Subscription renews monthly. You can manage it from Settings &gt; Billing.

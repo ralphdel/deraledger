@@ -41,9 +41,9 @@ const plans = [
     ],
   },
   {
-    name: getPlanDisplayName("corporate"),
-    href: "/onboarding/corporate",
-    price: getPlanMonthlyPriceLabel("corporate"),
+    name: getPlanDisplayName("business"),
+    href: "/onboarding/business",
+    price: getPlanMonthlyPriceLabel("business"),
     bestFor: "Collections infrastructure for growing teams",
     verification: "Business vetting required",
     cta: "Set up business",

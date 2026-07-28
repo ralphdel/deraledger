@@ -1,5 +1,7 @@
 import "server-only";
 
+import { randomUUID } from "node:crypto";
+
 import {
   createSoloPlusOrchestration,
   type AttachMerchantToSoloPlusOnboardingCaseInput,
@@ -124,6 +126,7 @@ export async function createSoloPlusServerService(
   assertSoloPlusServerEnvironment(options.env ?? process.env);
 
   const resolvedAccess = await resolveSoloPlusServerAccess(options);
+  const generateId = options.generateId || randomUUID;
   const serviceClient = options.serviceClient || createSoloPlusServiceRoleClient();
   const repository =
     options.repository ||
@@ -134,18 +137,13 @@ export async function createSoloPlusServerService(
   const orchestration = createSoloPlusOrchestration({
     repository,
     now: options.now,
-    generateId: options.generateId,
+    generateId,
   });
   const requirementsService = createSoloPlusRequirementsService({
     repository,
     serviceClient,
     now: options.now,
-    generateId: options.generateId || (() => {
-      throw new SoloPlusServerServiceFactoryError(
-        "SOLO_PLUS_SERVER_CONFIG_ERROR",
-        "Solo Plus KYC orchestration requires an ID generator.",
-      );
-    }),
+    generateId,
   });
 
   return {

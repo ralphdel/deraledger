@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-type PlanId = "starter" | "individual" | "solo_plus" | "corporate";
+type PlanId = "starter" | "individual" | "solo_plus" | "business" | "corporate";
 
 type PlanConfig = {
   label: string;
@@ -92,21 +92,46 @@ const PLAN_CONFIG: Record<PlanId, PlanConfig> = {
     price: "NGN 13,000/month",
     checkoutLabel: "Pay NGN 13,000",
     priceKobo: 1300000,
-    verification: "Enhanced verification required later",
+    verification: "Identity verification required",
     formDescription:
-      "Set up the Solo Plus subscription path. Additional product access remains locked in Phase 1.",
+      "Start the Solo Plus review flow with payment, requirements, manual review, and read-only activation tracking kept separate.",
     footnote:
-      "Solo Plus exists in the system for Phase 1 migration testing, but it does not unlock storefront, receivable sale, discount codes, or ratings yet.",
+      "This controlled launch does not include direct document upload, evidence preview, activation controls, storefront, or Business/KYB workflows.",
     successTitle: "Solo Plus workspace started",
     successMessage:
-      "After payment, complete the required verification steps before any live collection features can be activated.",
+      "After payment, continue the reviewed verification flow before Solo Plus can be approved and activated.",
     features: [
-      "Subscription path available when enabled",
+      "Higher reviewed collection capacity",
       "NGN 13,000 monthly billing",
-      "No new feature unlocks in Phase 1",
-      "Compatibility-first migration ready",
-      "Hidden unless explicitly enabled",
-      "Backed by the existing billing rails",
+      "Requirement checklist and review-state tracking",
+      "Structured activity profile submission",
+      "Read-only approval and activation status",
+      "Available only during the controlled launch",
+    ],
+  },
+  business: {
+    label: "Business",
+    workflow: "Operational collections infrastructure for growing businesses",
+    price: "NGN 20,000/month",
+    checkoutLabel: "Pay NGN 20,000",
+    priceKobo: 2000000,
+    verification: "Business & authority checks required",
+    formDescription:
+      "Create a verified business workspace for unlimited collections, advanced access control, and audit visibility.",
+    footnote:
+      "Built for operational businesses that need custom roles, audit logs, and organizational controls.",
+    successTitle: "Business workspace started",
+    successMessage:
+      "After payment, complete business verification to activate unlimited collections and governance controls.",
+    features: [
+      "Unlimited collections",
+      "Unlimited collection invoices",
+      "Custom Role-Based Access (RBAC)",
+      "Grouped receivables",
+      "Advanced analytics",
+      "No watermark",
+      "White-label invoices",
+      "Advanced operational workflows",
     ],
   },
   corporate: {
@@ -137,7 +162,7 @@ const PLAN_CONFIG: Record<PlanId, PlanConfig> = {
 };
 
 function isPlanId(value: string): value is PlanId {
-  return value === "starter" || value === "individual" || value === "solo_plus" || value === "corporate";
+  return value === "starter" || value === "individual" || value === "solo_plus" || value === "business" || value === "corporate";
 }
 
 function BrandHeader() {
@@ -221,7 +246,8 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
 
   const planId = plan;
   const config = PLAN_CONFIG[planId];
-  const Icon = planId === "corporate" ? Building2 : planId === "starter" ? Sparkles : User;
+  const isBusinessPlan = planId === "business" || planId === "corporate";
+  const Icon = isBusinessPlan ? Building2 : planId === "starter" ? Sparkles : User;
   const checkingAvailability = planId === "solo_plus" && !soloPlusAvailabilityLoaded;
   const planAllowed = planId !== "solo_plus" || soloPlusAvailable;
 
@@ -287,7 +313,7 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
           businessName: registeredName || businessName,
           plan: planId,
           businessType,
-          relationshipClaim: planId === "corporate" ? relationshipClaim : "owner_affiliated_claim",
+          relationshipClaim: isBusinessPlan ? relationshipClaim : "owner_affiliated_claim",
           verificationDisclosureAccepted,
           disclosureVersion: "1.0",
         }),
@@ -307,14 +333,14 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
         registeredName: registeredName || businessName,
         ownerName,
         businessType,
-        relationshipClaim: planId === "corporate" ? relationshipClaim : "owner_affiliated_claim",
+        relationshipClaim: isBusinessPlan ? relationshipClaim : "owner_affiliated_claim",
         verificationDisclosureAccepted,
         disclosureVersion: "1.0",
         plan: planId,
         sessionId: sessionData.sessionId,
         amountKobo: config.priceKobo,
       }));
-      router.push(`/checkout/subscription?plan=${planId}`);
+      router.push(`/checkout/subscription?plan=${isBusinessPlan ? "business" : planId}`);
     } catch (err: unknown) {
       setError("Something went wrong. Please try again.");
       console.error(err);
@@ -439,7 +465,7 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
                 />
               </div>
 
-              {planId === "corporate" && (
+              {isBusinessPlan && (
                 <div className="space-y-1.5">
                   <Label htmlFor="registeredName" className="text-white">Registered Business Name</Label>
                   <p className="text-xs text-white/50">
@@ -476,7 +502,7 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
                 </div>
               )}
 
-              {planId === "corporate" && (
+              {isBusinessPlan && (
                 <div className="space-y-1.5">
                   <Label htmlFor="businessType" className="text-white">Business Type</Label>
                   <select
@@ -501,7 +527,7 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
                 let ownerPlaceholder = "e.g. Adebayo Olanrewaju";
                 let ownerHelp = "This name should match your BVN verification details.";
 
-                if (planId === "corporate") {
+                if (isBusinessPlan) {
                   ownerHelp = "This name must match the official business registry details for verification.";
                   if (relationshipClaim === "representative_claim") {
                     ownerLabel = "Account Representative Full Name";
@@ -544,7 +570,7 @@ export default function OnboardingPlanPage({ params }: OnboardingPageProps) {
                 );
               })()}
 
-              {planId === "corporate" && (
+              {isBusinessPlan && (
                 <div className="space-y-2">
                   <Label className="text-white">Relationship with this business</Label>
                   <p className="text-xs text-white/50">

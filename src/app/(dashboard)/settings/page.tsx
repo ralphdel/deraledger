@@ -50,6 +50,7 @@ import {
   isLiveFeatureEnabled,
 } from "@/lib/services/onboarding-flow.service";
 import type { Merchant } from "@/lib/types";
+import { getSoloPlusBillingActionPresentation } from "@/lib/solo-plus/ui";
 import {
   getCollectionLimitLabel,
   getRequirementCompletion,
@@ -101,6 +102,10 @@ type IdentityLogRow = {
   name_match_status?: string | null;
 };
 
+type MerchantWithAccess = Merchant & {
+  currentUserRole?: string;
+};
+
 const BUSINESS_TYPE_OPTIONS = [
   { value: "sole_proprietorship", label: "Sole Proprietorship / Registered Business Name" },
   { value: "ltd", label: "Private Limited Company (LTD)" },
@@ -113,7 +118,7 @@ const BUSINESS_TYPE_OPTIONS = [
 
 function formatPlanLabel(plan: string | null | undefined) {
   if (!plan) return "Starter";
-  if (plan === "corporate") return "Business";
+  if (plan === "corporate" || plan === "business") return "Business";
   return plan.charAt(0).toUpperCase() + plan.slice(1);
 }
 
@@ -314,11 +319,13 @@ export default function SettingsPage() {
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [feeDefault, setFeeDefault] = useState<"business" | "customer">("business");
-  const [merchant, setMerchant] = useState<Merchant | null>(null);
+  const [merchant, setMerchant] = useState<MerchantWithAccess | null>(null);
   const [businessType, setBusinessType] = useState("sole_proprietorship");
   const [loading, setLoading] = useState(true);
   const [savingProfile, setSavingProfile] = useState(false);
   const [savingFeeSettings, setSavingFeeSettings] = useState(false);
+  const [soloPlusAvailable, setSoloPlusAvailable] = useState(false);
+  const [soloPlusAvailabilityLoaded, setSoloPlusAvailabilityLoaded] = useState(false);
 
   const [cacFile, setCacFile] = useState<File | null>(null);
   const [cacNumber, setCacNumber] = useState("");
@@ -575,6 +582,33 @@ export default function SettingsPage() {
       cancelled = true;
     };
   }, [applyMerchantState]);
+
+  useEffect(() => {
+    let active = true;
+
+    fetch("/api/plans/availability?plan=solo_plus")
+      .then((response) => response.json())
+      .then((payload) => {
+        if (!active) {
+          return;
+        }
+
+        setSoloPlusAvailable(payload?.available === true);
+        setSoloPlusAvailabilityLoaded(true);
+      })
+      .catch(() => {
+        if (!active) {
+          return;
+        }
+
+        setSoloPlusAvailable(false);
+        setSoloPlusAvailabilityLoaded(true);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const effectiveTier = merchant?.subscription_plan || merchant?.merchant_tier || "starter";
   const planRequirements = getVerificationRequirements(effectiveTier);
@@ -1228,7 +1262,7 @@ export default function SettingsPage() {
                           Upgrade Plan
                         </Button>
                       </Link>
-                      <Link href="/settings/upgrade/corporate">
+                      <Link href="/settings/upgrade/business">
                         <Button className="bg-purp-900 text-white hover:bg-purp-800">
                           Compare Plans
                         </Button>
@@ -2539,8 +2573,42 @@ export default function SettingsPage() {
                       Upgrade to Solo Lite
                       <ArrowRight className="h-4 w-4" />
                     </Link>
+
+                    {(() => {
+                      const soloPlusAction = getSoloPlusBillingActionPresentation({
+                        currentPlan: effectiveTier,
+                        currentUserRole: merchant?.currentUserRole,
+                        soloPlusAvailable,
+                        soloPlusAvailabilityLoaded,
+                      });
+
+                      if (!soloPlusAction) {
+                        return null;
+                      }
+
+                      return soloPlusAction.kind === "link" ? (
+                        <Link
+                          href={soloPlusAction.href}
+                          className="flex items-center justify-between rounded-xl border border-purp-200 px-4 py-3 text-sm font-medium text-purp-900 transition hover:bg-purp-50"
+                        >
+                          {soloPlusAction.label}
+                          <ArrowRight className="h-4 w-4" />
+                        </Link>
+                      ) : (
+                        <div className="space-y-2">
+                          <Button
+                            disabled
+                            variant="outline"
+                            className="w-full border-neutral-200 text-neutral-500 md:w-auto"
+                          >
+                            {soloPlusAction.label}
+                          </Button>
+                          <p className="text-xs text-neutral-500">{soloPlusAction.helperText}</p>
+                        </div>
+                      );
+                    })()}
                     <Link
-                      href="/settings/upgrade/corporate"
+                      href="/settings/upgrade/business"
                       className="flex items-center justify-between rounded-xl border border-purp-200 px-4 py-3 text-sm font-medium text-purp-900 transition hover:bg-purp-50"
                     >
                       Upgrade to Business
@@ -2557,7 +2625,7 @@ export default function SettingsPage() {
                       <ArrowRight className="h-4 w-4" />
                     </Link>
                     <Link
-                      href="/settings/upgrade/corporate"
+                      href="/settings/upgrade/business"
                       className="flex items-center justify-between rounded-xl border border-purp-200 px-4 py-3 text-sm font-medium text-purp-900 transition hover:bg-purp-50"
                     >
                       Upgrade to Business

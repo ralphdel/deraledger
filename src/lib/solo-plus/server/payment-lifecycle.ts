@@ -3,10 +3,15 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getStoragePlanCode, normalizePlanCode } from "@/lib/plans";
 import {
+  buildSoloPlusPaymentReference,
   createPendingPlanPaymentRecord,
   findFullPaymentRecordByReference,
   findPendingSoloPlusPaymentByCaseId,
+  hasReusablePaymentInitialization,
   type PendingPlanPaymentRecord,
+  readPaymentInitializationSnapshot,
+  mergePaymentInitializationSnapshot,
+  updatePlanPaymentRecordById,
 } from "@/lib/services/plan-payment-recovery.service";
 import { SOLO_PLUS_REQUIRED_REQUIREMENTS } from "../state";
 import { createSoloPlusServerService } from "./service-factory";
@@ -25,6 +30,27 @@ type SoloPlusPaymentPreparation = {
   paymentRecord: PendingPlanPaymentRecord;
   replay: boolean;
 };
+
+type SoloPlusPaymentDiagnosticStage =
+  | "case_rpc_completed"
+  | "case_payload_mapped"
+  | "requirements_ready"
+  | "payment_record_lookup_completed"
+  | "payment_record_created_or_reused";
+
+type SoloPlusPaymentDiagnosticEvent = {
+  caseId?: string | null;
+  caseStatus?: string | null;
+  paymentStatus?: string | null;
+  paymentRecordId?: string | null;
+  provider?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
+type SoloPlusPaymentDiagnosticLogger = (
+  stage: SoloPlusPaymentDiagnosticStage,
+  event?: SoloPlusPaymentDiagnosticEvent,
+) => void;
 
 type SoloPlusConfirmationInput = {
   provider: SupportedProvider;
@@ -47,13 +73,15 @@ export class SoloPlusPaymentLifecycleError extends Error {
   readonly code:
     | "SOLO_PLUS_PAYMENT_INIT_CONFLICT"
     | "SOLO_PLUS_PAYMENT_ALREADY_CONFIRMED"
-    | "SOLO_PLUS_PAYMENT_CONFIRMATION_CONFLICT";
+    | "SOLO_PLUS_PAYMENT_CONFIRMATION_CONFLICT"
+    | "SOLO_PLUS_PAYMENT_INITIALIZATION_RECOVERY_REQUIRED";
 
   constructor(
     code:
       | "SOLO_PLUS_PAYMENT_INIT_CONFLICT"
       | "SOLO_PLUS_PAYMENT_ALREADY_CONFIRMED"
-      | "SOLO_PLUS_PAYMENT_CONFIRMATION_CONFLICT",
+      | "SOLO_PLUS_PAYMENT_CONFIRMATION_CONFLICT"
+      | "SOLO_PLUS_PAYMENT_INITIALIZATION_RECOVERY_REQUIRED",
     message: string,
   ) {
     super(message);
@@ -66,8 +94,8 @@ function normalizeAmountNgnString(amountKobo: number) {
   return (amountKobo / 100).toFixed(2);
 }
 
-function buildReference(caseId: string, purpose: SupportedPurpose) {
-  const prefix = purpose === "plan_upgrade" ? "SPL-UPG" : "SPL-SUB";
+function buildProvisionalReference(caseId: string, purpose: SupportedPurpose) {
+  const prefix = purpose === "plan_upgrade" ? "SPL-UPG-TMP" : "SPL-SUB-TMP";
   return `${prefix}-${caseId.replace(/-/g, "").toUpperCase()}`;
 }
 
@@ -111,6 +139,60 @@ function assertPendingPaymentCompatibility(
   }
 }
 
+async function ensureCanonicalSoloPlusPaymentRecord(
+  serviceClient: SupabaseClient,
+  record: PendingPlanPaymentRecord,
+  purpose: SupportedPurpose,
+) {
+  const canonicalReference = buildSoloPlusPaymentReference(record.id, purpose);
+  const initialization = readPaymentInitializationSnapshot(record.metadata);
+
+  if (
+    record.internal_reference === canonicalReference &&
+    record.provider_reference === canonicalReference &&
+    initialization != null
+  ) {
+    return record;
+  }
+
+  const nextMetadata = mergePaymentInitializationSnapshot(record.metadata, {
+    status: initialization?.status ?? "created",
+    provider: record.provider_name,
+    completionMode:
+      initialization?.completionMode ??
+      (purpose === "plan_upgrade" || purpose === "plan_subscription"
+        ? record.provider_name === "paystack"
+          ? "paystack_resume"
+          : record.provider_name === "monnify"
+            ? "hosted_checkout_redirect"
+            : null
+        : null),
+    providerReference: canonicalReference,
+    authorizationUrl: initialization?.authorizationUrl ?? null,
+    accessCode: initialization?.accessCode ?? null,
+    checkoutUrl: initialization?.checkoutUrl ?? null,
+    providerTransactionReference:
+      initialization?.providerTransactionReference ?? null,
+    failureCode: initialization?.failureCode ?? null,
+    failureMessage: initialization?.failureMessage ?? null,
+    initializedAt: initialization?.initializedAt ?? null,
+    lastUpdatedAt: new Date().toISOString(),
+  });
+
+  await updatePlanPaymentRecordById(serviceClient, record.id, {
+    internal_reference: canonicalReference,
+    provider_reference: canonicalReference,
+    metadata: nextMetadata,
+  });
+
+  return {
+    ...record,
+    internal_reference: canonicalReference,
+    provider_reference: canonicalReference,
+    metadata: nextMetadata,
+  };
+}
+
 export async function prepareSoloPlusOnboardingPayment(
   input: {
     onboardingSessionId: string;
@@ -120,6 +202,7 @@ export async function prepareSoloPlusOnboardingPayment(
     provider: SupportedProvider;
     metadata: Record<string, unknown>;
     serviceClient?: SupabaseClient;
+    diagnostics?: SoloPlusPaymentDiagnosticLogger;
   },
 ): Promise<SoloPlusPaymentPreparation> {
   const serviceClient = (input.serviceClient ||
@@ -138,11 +221,30 @@ export async function prepareSoloPlusOnboardingPayment(
     requirementsPolicyVersion: SOLO_PLUS_REQUIREMENTS_POLICY_VERSION,
     requirementsSnapshot: buildRequirementsSnapshot("onboarding"),
   });
+  input.diagnostics?.("case_rpc_completed", {
+    caseId: created.caseRecord.id,
+    caseStatus: created.caseRecord.caseStatus,
+    paymentStatus: created.caseRecord.paymentStatus,
+    metadata: { outcome: created.outcome },
+  });
 
   const caseRecord = created.caseRecord;
+  input.diagnostics?.("case_payload_mapped", {
+    caseId: caseRecord.id,
+    caseStatus: caseRecord.caseStatus,
+    paymentStatus: caseRecord.paymentStatus,
+  });
+  input.diagnostics?.("requirements_ready", {
+    caseId: caseRecord.id,
+    metadata: { requirementCount: created.requirements.length },
+  });
   const paymentPurpose = "plan_subscription" as const;
-  const reference = buildReference(caseRecord.id, paymentPurpose);
   const existing = await findPendingSoloPlusPaymentByCaseId(serviceClient, caseRecord.id);
+  input.diagnostics?.("payment_record_lookup_completed", {
+    caseId: caseRecord.id,
+    paymentRecordId: existing?.id ?? null,
+    metadata: { found: Boolean(existing) },
+  });
 
   if (existing) {
     assertPendingPaymentCompatibility(existing, {
@@ -151,6 +253,11 @@ export async function prepareSoloPlusOnboardingPayment(
       paymentPurpose,
       expectedAmount,
     });
+    const readyRecord = await ensureCanonicalSoloPlusPaymentRecord(
+      serviceClient,
+      existing,
+      paymentPurpose,
+    );
 
     if (caseRecord.caseStatus === "draft") {
       await service.markCaseAwaitingPayment({
@@ -160,16 +267,27 @@ export async function prepareSoloPlusOnboardingPayment(
       });
     }
 
+    input.diagnostics?.("payment_record_created_or_reused", {
+      caseId: caseRecord.id,
+      paymentRecordId: readyRecord.id,
+      provider: input.provider,
+      metadata: {
+        replay: true,
+        hasReusableCheckout: Boolean(
+          hasReusablePaymentInitialization(readyRecord, input.provider),
+        ),
+      },
+    });
     return {
       caseId: caseRecord.id,
-      reference: existing.internal_reference,
-      paymentRecord: existing,
+      reference: readyRecord.provider_reference || readyRecord.internal_reference,
+      paymentRecord: readyRecord,
       replay: true,
     };
   }
 
   const paymentRecord = await createPendingPlanPaymentRecord(serviceClient, {
-    internalReference: reference,
+    internalReference: buildProvisionalReference(caseRecord.id, paymentPurpose),
     provider: input.provider,
     paymentMethod: input.paymentMethod,
     paymentPurpose,
@@ -182,6 +300,12 @@ export async function prepareSoloPlusOnboardingPayment(
     passwordSetupRequired: true,
     metadata: input.metadata,
   });
+  input.diagnostics?.("payment_record_created_or_reused", {
+    caseId: caseRecord.id,
+    paymentRecordId: paymentRecord.id,
+    provider: input.provider,
+    metadata: { replay: false },
+  });
 
   if (caseRecord.caseStatus === "draft") {
     await service.markCaseAwaitingPayment({
@@ -193,7 +317,7 @@ export async function prepareSoloPlusOnboardingPayment(
 
   return {
     caseId: caseRecord.id,
-    reference,
+    reference: paymentRecord.provider_reference || paymentRecord.internal_reference,
     paymentRecord,
     replay: false,
   };
@@ -208,6 +332,7 @@ export async function prepareSoloPlusUpgradePayment(
     provider: SupportedProvider;
     metadata: Record<string, unknown>;
     serviceClient?: SupabaseClient;
+    diagnostics?: SoloPlusPaymentDiagnosticLogger;
   },
 ): Promise<SoloPlusPaymentPreparation> {
   const serviceClient = (input.serviceClient ||
@@ -227,11 +352,30 @@ export async function prepareSoloPlusUpgradePayment(
     requirementsPolicyVersion: SOLO_PLUS_REQUIREMENTS_POLICY_VERSION,
     requirementsSnapshot: buildRequirementsSnapshot("upgrade"),
   });
+  input.diagnostics?.("case_rpc_completed", {
+    caseId: created.caseRecord.id,
+    caseStatus: created.caseRecord.caseStatus,
+    paymentStatus: created.caseRecord.paymentStatus,
+    metadata: { outcome: created.outcome },
+  });
 
   const caseRecord = created.caseRecord;
+  input.diagnostics?.("case_payload_mapped", {
+    caseId: caseRecord.id,
+    caseStatus: caseRecord.caseStatus,
+    paymentStatus: caseRecord.paymentStatus,
+  });
+  input.diagnostics?.("requirements_ready", {
+    caseId: caseRecord.id,
+    metadata: { requirementCount: created.requirements.length },
+  });
   const paymentPurpose = "plan_upgrade" as const;
-  const reference = buildReference(caseRecord.id, paymentPurpose);
   const existing = await findPendingSoloPlusPaymentByCaseId(serviceClient, caseRecord.id);
+  input.diagnostics?.("payment_record_lookup_completed", {
+    caseId: caseRecord.id,
+    paymentRecordId: existing?.id ?? null,
+    metadata: { found: Boolean(existing) },
+  });
 
   if (existing) {
     assertPendingPaymentCompatibility(existing, {
@@ -240,6 +384,11 @@ export async function prepareSoloPlusUpgradePayment(
       paymentPurpose,
       expectedAmount,
     });
+    const readyRecord = await ensureCanonicalSoloPlusPaymentRecord(
+      serviceClient,
+      existing,
+      paymentPurpose,
+    );
 
     if (caseRecord.caseStatus === "draft") {
       await service.markCaseAwaitingPayment({
@@ -249,16 +398,27 @@ export async function prepareSoloPlusUpgradePayment(
       });
     }
 
+    input.diagnostics?.("payment_record_created_or_reused", {
+      caseId: caseRecord.id,
+      paymentRecordId: readyRecord.id,
+      provider: input.provider,
+      metadata: {
+        replay: true,
+        hasReusableCheckout: Boolean(
+          hasReusablePaymentInitialization(readyRecord, input.provider),
+        ),
+      },
+    });
     return {
       caseId: caseRecord.id,
-      reference: existing.internal_reference,
-      paymentRecord: existing,
+      reference: readyRecord.provider_reference || readyRecord.internal_reference,
+      paymentRecord: readyRecord,
       replay: true,
     };
   }
 
   const paymentRecord = await createPendingPlanPaymentRecord(serviceClient, {
-    internalReference: reference,
+    internalReference: buildProvisionalReference(caseRecord.id, paymentPurpose),
     provider: input.provider,
     paymentMethod: input.paymentMethod,
     paymentPurpose,
@@ -269,6 +429,12 @@ export async function prepareSoloPlusUpgradePayment(
     merchantId: input.merchantId,
     soloPlusCaseId: caseRecord.id,
     metadata: input.metadata,
+  });
+  input.diagnostics?.("payment_record_created_or_reused", {
+    caseId: caseRecord.id,
+    paymentRecordId: paymentRecord.id,
+    provider: input.provider,
+    metadata: { replay: false },
   });
 
   if (caseRecord.caseStatus === "draft") {
@@ -281,7 +447,7 @@ export async function prepareSoloPlusUpgradePayment(
 
   return {
     caseId: caseRecord.id,
-    reference,
+    reference: paymentRecord.provider_reference || paymentRecord.internal_reference,
     paymentRecord,
     replay: false,
   };

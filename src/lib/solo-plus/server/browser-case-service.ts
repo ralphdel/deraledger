@@ -17,6 +17,7 @@ import {
 } from "./access-context";
 import {
   createSoloPlusServiceRoleClient,
+  readSoloPlusCaseBundle,
   createSoloPlusSupabaseRepository,
   type SoloPlusSupabaseClientLike,
 } from "./supabase-repository";
@@ -187,14 +188,31 @@ function resolveRepository(
 }
 
 async function loadBrowserCaseLookupResult(
+  serviceClient: SoloPlusSupabaseClientLike,
   repository: SoloPlusCaseRepository,
   caseRecord: SoloPlusCaseRecord,
   requirements?: readonly SoloPlusCaseRequirementRecord[],
 ): Promise<SoloPlusBrowserCaseLookupResult> {
+  const caseBundle =
+    requirements == null ? await readSoloPlusCaseBundle(serviceClient, caseRecord.id) : null;
+  const resolvedCaseRecord = caseBundle?.caseRecord ?? caseRecord;
+  const resolvedRequirements =
+    requirements ?? caseBundle?.requirements ?? (await repository.listRequirements(caseRecord.id));
+  const shouldLoadLatestReviewDecisionEvent =
+    resolvedCaseRecord.caseStatus === "manual_review" ||
+    resolvedCaseRecord.caseStatus === "approved" ||
+    resolvedCaseRecord.caseStatus === "rejected" ||
+    (resolvedCaseRecord.caseStatus === "verification_pending" &&
+      (resolvedCaseRecord.reopenedAt != null ||
+        resolvedCaseRecord.reopenedByAdminId != null ||
+        resolvedCaseRecord.rejectionReason != null));
+
   return {
-    caseRecord,
-    requirements: requirements ?? (await repository.listRequirements(caseRecord.id)),
-    latestReviewDecisionEvent: await repository.findLatestReviewDecisionEvent(caseRecord.id),
+    caseRecord: resolvedCaseRecord,
+    requirements: resolvedRequirements,
+    latestReviewDecisionEvent: shouldLoadLatestReviewDecisionEvent
+      ? await repository.findLatestReviewDecisionEvent(resolvedCaseRecord.id)
+      : null,
   };
 }
 
@@ -300,7 +318,7 @@ export async function createSoloPlusBrowserCaseService(
         }
 
         assertCaseOwnership(caseRecord, merchant?.id || null, onboardingSessionId);
-        return loadBrowserCaseLookupResult(repository, caseRecord);
+        return loadBrowserCaseLookupResult(serviceClient, repository, caseRecord);
       }
 
       if (input.onboardingSessionId) {
@@ -316,7 +334,7 @@ export async function createSoloPlusBrowserCaseService(
           return null;
         }
 
-        return loadBrowserCaseLookupResult(repository, caseRecord);
+        return loadBrowserCaseLookupResult(serviceClient, repository, caseRecord);
       }
 
       const merchant = await loadOwnerMerchantForUser(serviceClient, authenticatedUser.id);
@@ -329,7 +347,7 @@ export async function createSoloPlusBrowserCaseService(
         return null;
       }
 
-      return loadBrowserCaseLookupResult(repository, caseRecord);
+      return loadBrowserCaseLookupResult(serviceClient, repository, caseRecord);
     },
 
     async submitEvidence(input) {

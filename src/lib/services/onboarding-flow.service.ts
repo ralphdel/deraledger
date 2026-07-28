@@ -15,7 +15,7 @@ import {
   requiresPlanVerificationDisclosure,
 } from "@/lib/plans";
 
-export type PlanType = "starter" | "individual" | "corporate" | "solo_plus";
+export type PlanType = "starter" | "individual" | "business" | "corporate" | "solo_plus";
 export type RelationshipClaim = "owner_affiliated_claim" | "representative_claim";
 
 export const VERIFICATION_DISCLOSURE_VERSION = "1.0";
@@ -293,18 +293,26 @@ export async function recordVerificationDisclosure(
 
   const { error } = await adminClient.from("verification_disclosures").insert(payload);
   if (error) {
-    console.warn("[OnboardingFlow] Disclosure insert skipped:", error.message);
-    return { success: false, error: error.message };
+    console.warn("[OnboardingFlow] Disclosure insert failed:", error.message);
+    throw new Error("Failed to persist verification disclosure audit record.");
   }
 
   if (params.merchantId) {
-    await adminClient
+    const { error: merchantUpdateError } = await adminClient
       .from("merchants")
       .update({
         verification_disclosure_acknowledged_at: new Date().toISOString(),
         verification_disclosure_version: disclosureVersion,
       })
       .eq("id", params.merchantId);
+
+    if (merchantUpdateError) {
+      console.warn(
+        "[OnboardingFlow] Merchant disclosure acknowledgement update failed:",
+        merchantUpdateError.message,
+      );
+      throw new Error("Failed to persist verification disclosure acknowledgement.");
+    }
   }
 
   return { success: true };

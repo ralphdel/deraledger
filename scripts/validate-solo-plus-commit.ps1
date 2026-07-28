@@ -3,7 +3,9 @@ param(
   [switch]$CollectAllFailures = $true,
   [int]$CommitNumber = 10,
   [string]$OutputDirectory,
-  [string]$TestDatabaseUrl = $env:TEST_DATABASE_URL
+  [string]$TestDatabaseUrl = $env:TEST_DATABASE_URL,
+  [int]$PsqlTimeoutSeconds = 120,
+  [switch]$RunValidatorSelfTests
 )
 
 $ErrorActionPreference = 'Stop'
@@ -18,8 +20,126 @@ $script:LogRoot = if ($OutputDirectory) {
 }
 $script:CheckResults = [System.Collections.Generic.List[object]]::new()
 $script:CheckResultMap = @{}
+$script:ApprovedCommit12Migration = 'supabase/migrations/20260718_01_solo_plus_payment_recovery.sql'
+$script:JobObjectInteropLoaded = $false
 
 New-Item -ItemType Directory -Path $script:LogRoot -Force | Out-Null
+
+function Ensure-JobObjectInterop {
+  if ($script:JobObjectInteropLoaded -or $env:OS -ne 'Windows_NT') {
+    return
+  }
+
+  Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class DeraLedgerValidatorJobObject
+{
+    private const int JobObjectExtendedLimitInformation = 9;
+    private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct JOBOBJECT_BASIC_LIMIT_INFORMATION
+    {
+        public long PerProcessUserTimeLimit;
+        public long PerJobUserTimeLimit;
+        public uint LimitFlags;
+        public UIntPtr MinimumWorkingSetSize;
+        public UIntPtr MaximumWorkingSetSize;
+        public uint ActiveProcessLimit;
+        public UIntPtr Affinity;
+        public uint PriorityClass;
+        public uint SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct IO_COUNTERS
+    {
+        public ulong ReadOperationCount;
+        public ulong WriteOperationCount;
+        public ulong OtherOperationCount;
+        public ulong ReadTransferCount;
+        public ulong WriteTransferCount;
+        public ulong OtherTransferCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+    {
+        public JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;
+        public IO_COUNTERS IoInfo;
+        public UIntPtr ProcessMemoryLimit;
+        public UIntPtr JobMemoryLimit;
+        public UIntPtr PeakProcessMemoryUsed;
+        public UIntPtr PeakJobMemoryUsed;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr CreateJobObject(IntPtr lpJobAttributes, string lpName);
+
+    [DllImport("kernel32.dll")]
+    private static extern bool SetInformationJobObject(IntPtr hJob, int JobObjectInfoClass, IntPtr lpJobObjectInfo, uint cbJobObjectInfoLength);
+
+    [DllImport("kernel32.dll")]
+    public static extern bool AssignProcessToJobObject(IntPtr hJob, IntPtr hProcess);
+
+    [DllImport("kernel32.dll")]
+    public static extern bool CloseHandle(IntPtr hObject);
+
+    public static IntPtr CreateKillOnCloseJob()
+    {
+        IntPtr job = CreateJobObject(IntPtr.Zero, null);
+        if (job == IntPtr.Zero)
+        {
+            return IntPtr.Zero;
+        }
+
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION info = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+
+        int length = Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
+        IntPtr infoPtr = Marshal.AllocHGlobal(length);
+        try
+        {
+            Marshal.StructureToPtr(info, infoPtr, false);
+            if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, infoPtr, (uint)length))
+            {
+                CloseHandle(job);
+                return IntPtr.Zero;
+            }
+            return job;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(infoPtr);
+        }
+    }
+}
+"@
+  $script:JobObjectInteropLoaded = $true
+}
+
+function Redact-SensitiveText {
+  param([AllowNull()][string]$Value)
+
+  if ($null -eq $Value) {
+    return ''
+  }
+
+  $redacted = [string]$Value
+  $password = Get-Item -Path 'Env:PGPASSWORD' -ErrorAction SilentlyContinue
+  if ($password -and -not [string]::IsNullOrEmpty([string]$password.Value)) {
+    $redacted = $redacted -replace [regex]::Escape([string]$password.Value), '<redacted-password>'
+  }
+
+  return [regex]::Replace(
+    $redacted,
+    '(postgres(?:ql)?://)([^/\s:@]+):([^@\s/]*)@',
+    '$1$2:***@',
+    [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+  )
+}
 
 function New-CheckLogPaths {
   param([string]$CheckId)
@@ -92,22 +212,45 @@ function Invoke-CapturedProcess {
   $process.StartInfo = $psi
 
   $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+  $jobHandle = [IntPtr]::Zero
+  $jobOwnsProcessTree = $false
   try {
     [void]$process.Start()
+    if ($env:OS -eq 'Windows_NT') {
+      try {
+        Ensure-JobObjectInterop
+        $jobHandle = [DeraLedgerValidatorJobObject]::CreateKillOnCloseJob()
+        if ($jobHandle -ne [IntPtr]::Zero) {
+          $jobOwnsProcessTree = [DeraLedgerValidatorJobObject]::AssignProcessToJobObject($jobHandle, $process.Handle)
+        }
+      } catch {
+        $jobHandle = [IntPtr]::Zero
+        $jobOwnsProcessTree = $false
+      }
+    }
     $stdoutTask = $process.StandardOutput.ReadToEndAsync()
     $stderrTask = $process.StandardError.ReadToEndAsync()
 
     $timedOut = -not $process.WaitForExit($TimeoutSeconds * 1000)
     if ($timedOut) {
       try {
-        $process.Kill($true)
+        if ($jobOwnsProcessTree -and $jobHandle -ne [IntPtr]::Zero) {
+          [void][DeraLedgerValidatorJobObject]::CloseHandle($jobHandle)
+          $jobHandle = [IntPtr]::Zero
+        } else {
+          $process.Kill($true)
+        }
       } catch {
+        try {
+          $process.Kill()
+        } catch {
+        }
       }
       $process.WaitForExit()
     }
 
-    $stdout = $stdoutTask.GetAwaiter().GetResult()
-    $stderr = $stderrTask.GetAwaiter().GetResult()
+    $stdout = Redact-SensitiveText ($stdoutTask.GetAwaiter().GetResult())
+    $stderr = Redact-SensitiveText ($stderrTask.GetAwaiter().GetResult())
 
     return [pscustomobject]@{
       ExitCode   = if ($timedOut) { 124 } else { $process.ExitCode }
@@ -115,11 +258,17 @@ function Invoke-CapturedProcess {
       Stdout     = $stdout
       Stderr     = $stderr
       DurationMs = [int][Math]::Round($stopwatch.Elapsed.TotalMilliseconds)
-      Command    = (@($effectiveFilePath) + @($effectiveArguments)) -join ' '
+      Command    = Redact-SensitiveText ((@($effectiveFilePath) + @($effectiveArguments)) -join ' ')
     }
   }
   finally {
     $stopwatch.Stop()
+    if ($jobHandle -ne [IntPtr]::Zero) {
+      try {
+        [void][DeraLedgerValidatorJobObject]::CloseHandle($jobHandle)
+      } catch {
+      }
+    }
     $process.Dispose()
   }
 }
@@ -232,6 +381,7 @@ function Invoke-WithLocalDisposableDatabaseEnvironment {
     "PGUSER",
     "PGDATABASE",
     "PGPASSWORD",
+    "PGCONNECT_TIMEOUT",
     "PGSERVICE",
     "PGSERVICEFILE"
   )
@@ -244,7 +394,7 @@ function Invoke-WithLocalDisposableDatabaseEnvironment {
     Remove-Item -Path "Env:PGPORT" -ErrorAction SilentlyContinue
     Remove-Item -Path "Env:PGUSER" -ErrorAction SilentlyContinue
     Remove-Item -Path "Env:PGDATABASE" -ErrorAction SilentlyContinue
-    Remove-Item -Path "Env:PGPASSWORD" -ErrorAction SilentlyContinue
+    Remove-Item -Path "Env:PGCONNECT_TIMEOUT" -ErrorAction SilentlyContinue
     Remove-Item -Path "Env:PGSERVICE" -ErrorAction SilentlyContinue
     Remove-Item -Path "Env:PGSERVICEFILE" -ErrorAction SilentlyContinue
 
@@ -255,6 +405,7 @@ function Invoke-WithLocalDisposableDatabaseEnvironment {
     }
 
     Set-Item -Path "Env:PGSSLMODE" -Value "disable"
+    Set-Item -Path "Env:PGCONNECT_TIMEOUT" -Value "10"
 
     return & $Operation
   }
@@ -390,6 +541,7 @@ function Test-NeedsSanitizedLibpqEnvironment {
       'sql-suite-commit7',
       'sql-suite-commit9',
       'sql-suite-commit10',
+      'sql-suite-commit12',
       'migration-rerun',
       'harness-safety',
       'hostile-harness'
@@ -552,7 +704,7 @@ function Invoke-PsqlCaptured {
   param(
     [Parameter(Mandatory = $true)][hashtable]$Context,
     [Parameter(Mandatory = $true)][string[]]$Arguments,
-    [int]$TimeoutSeconds = 1800
+    [int]$TimeoutSeconds = $PsqlTimeoutSeconds
   )
 
   return Invoke-CapturedProcess -FilePath $Context.PsqlPath -Arguments $Arguments -WorkingDirectory $script:RepoRoot -TimeoutSeconds $TimeoutSeconds
@@ -562,7 +714,7 @@ function Invoke-PsqlFileStrict {
   param(
     [Parameter(Mandatory = $true)][hashtable]$Context,
     [Parameter(Mandatory = $true)][string]$RelativePath,
-    [int]$TimeoutSeconds = 1800
+    [int]$TimeoutSeconds = $PsqlTimeoutSeconds
   )
 
   $fullPath = Join-Path $script:RepoRoot $RelativePath
@@ -570,8 +722,11 @@ function Invoke-PsqlFileStrict {
     throw "Missing SQL file: $RelativePath"
   }
 
-  $result = Invoke-PsqlCaptured -Context $Context -Arguments @('-X', '-v', 'ON_ERROR_STOP=1', '-d', $Context.TestDatabaseUrl, '-f', $fullPath) -TimeoutSeconds $TimeoutSeconds
+  $result = Invoke-PsqlCaptured -Context $Context -Arguments @('-X', '-w', '-v', 'ON_ERROR_STOP=1', '-d', $Context.TestDatabaseUrl, '-f', $fullPath) -TimeoutSeconds $TimeoutSeconds
   if ($result.ExitCode -ne 0) {
+    if ($result.TimedOut) {
+      throw "$RelativePath timed out after $TimeoutSeconds seconds. The psql child process tree was terminated.`n$($result.Stderr)`n$($result.Stdout)"
+    }
     throw "$RelativePath failed with exit code $($result.ExitCode)`n$($result.Stderr)`n$($result.Stdout)"
   }
 
@@ -582,14 +737,17 @@ function Invoke-PsqlSqlStrict {
   param(
     [Parameter(Mandatory = $true)][hashtable]$Context,
     [Parameter(Mandatory = $true)][string]$Sql,
-    [int]$TimeoutSeconds = 1800
+    [int]$TimeoutSeconds = $PsqlTimeoutSeconds
   )
 
   $tempFile = Join-Path $env:TEMP ("solo-plus-validate-" + [guid]::NewGuid().ToString('N') + '.sql')
   try {
     Set-Content -Path $tempFile -Value $Sql -Encoding UTF8
-    $result = Invoke-PsqlCaptured -Context $Context -Arguments @('-X', '-v', 'ON_ERROR_STOP=1', '-d', $Context.TestDatabaseUrl, '-f', $tempFile) -TimeoutSeconds $TimeoutSeconds
+    $result = Invoke-PsqlCaptured -Context $Context -Arguments @('-X', '-w', '-v', 'ON_ERROR_STOP=1', '-d', $Context.TestDatabaseUrl, '-f', $tempFile) -TimeoutSeconds $TimeoutSeconds
     if ($result.ExitCode -ne 0) {
+      if ($result.TimedOut) {
+        throw "Inline SQL timed out after $TimeoutSeconds seconds. The psql child process tree was terminated.`n$($result.Stderr)`n$($result.Stdout)"
+      }
       throw "Inline SQL failed with exit code $($result.ExitCode)`n$($result.Stderr)`n$($result.Stdout)"
     }
     return $result
@@ -715,6 +873,13 @@ function Bootstrap-ThroughCommit10 {
   }
 }
 
+function Bootstrap-ThroughCommit12 {
+  param([hashtable]$Context)
+
+  Bootstrap-ThroughCommit10 -Context $Context
+  Invoke-PsqlFileStrict -Context $Context -RelativePath 'supabase/migrations/20260718_01_solo_plus_payment_recovery.sql' | Out-Null
+}
+
 function Bootstrap-ThroughCommit9 {
   param([hashtable]$Context)
 
@@ -771,6 +936,192 @@ function Get-ChangedFileNames {
 function Get-UntrackedFileNames {
   $result = Invoke-CapturedProcess -FilePath 'git' -Arguments @('ls-files', '--others', '--exclude-standard') -WorkingDirectory $script:RepoRoot -TimeoutSeconds 60
   return ($result.Stdout -split "(`r`n|`n|`r)") | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+}
+
+function Get-GitStatusPath {
+  param([string]$StatusLine)
+
+  if ([string]::IsNullOrWhiteSpace($StatusLine) -or $StatusLine.Length -lt 4) {
+    return $null
+  }
+
+  $path = $StatusLine.Substring(3).Trim()
+  if ($path -match ' -> ') {
+    $path = ($path -split ' -> ' | Select-Object -Last 1).Trim()
+  }
+
+  return ($path -replace '\\', '/')
+}
+
+function Get-UnexpectedMigrationStatusLines {
+  param(
+    [string[]]$StatusLines,
+    [int]$CommitNumber
+  )
+
+  $approved = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+  if ($CommitNumber -ge 12) {
+    [void]$approved.Add($script:ApprovedCommit12Migration)
+  }
+
+  return @($StatusLines | Where-Object {
+    $path = Get-GitStatusPath -StatusLine $_
+    if (-not $path -or -not $path.StartsWith('supabase/migrations/')) {
+      return $false
+    }
+
+    return -not $approved.Contains($path)
+  })
+}
+
+function Assert-ValidatorSelfTest {
+  param(
+    [Parameter(Mandatory = $true)][bool]$Condition,
+    [Parameter(Mandatory = $true)][string]$Message
+  )
+
+  if (-not $Condition) {
+    throw $Message
+  }
+}
+
+function Get-CurrentLibpqEnvironment {
+  $names = @(
+    'PGHOST',
+    'PGPORT',
+    'PGUSER',
+    'PGDATABASE',
+    'PGSSLMODE',
+    'PGPASSWORD',
+    'PGCONNECT_TIMEOUT',
+    'PGSERVICE',
+    'PGSERVICEFILE'
+  )
+  $snapshot = @{}
+  foreach ($name in $names) {
+    $entry = Get-Item -Path "Env:$name" -ErrorAction SilentlyContinue
+    $snapshot[$name] = if ($entry) { [string]$entry.Value } else { $null }
+  }
+  return $snapshot
+}
+
+function Assert-LibpqEnvironmentRestored {
+  param([hashtable]$Expected)
+
+  $current = Get-CurrentLibpqEnvironment
+  foreach ($name in $Expected.Keys) {
+    Assert-ValidatorSelfTest -Condition ([string]$current[$name] -eq [string]$Expected[$name]) -Message "$name was not restored."
+  }
+}
+
+function Invoke-ValidatorSelfTests {
+  $secret = 'validator-self-test-password'
+  $localUrl = 'postgresql://postgres@127.0.0.1:55432/test_commit12_solo_plus_recovery?sslmode=disable'
+  $fakePsql = Join-Path $env:TEMP ("fake-psql-" + [guid]::NewGuid().ToString('N') + ".cmd")
+  $original = Get-CurrentLibpqEnvironment
+
+  try {
+    Set-Content -LiteralPath $fakePsql -Encoding ASCII -Value @'
+@echo off
+echo args:%*
+if "%PGPASSWORD%"=="" (
+  echo fe_sendauth: no password supplied 1>&2
+  exit /b 2
+)
+echo has-password
+exit /b 0
+'@
+
+    $migrationStatus = @('?? supabase/migrations/20260719_01_unexpected.sql')
+    Assert-ValidatorSelfTest -Condition (@(Get-UnexpectedMigrationStatusLines -StatusLines $migrationStatus -CommitNumber 11).Count -eq 1) -Message 'Commit 11 did not reject an unexpected migration.'
+
+    $commit12RecoveryStatus = @("?? $script:ApprovedCommit12Migration")
+    Assert-ValidatorSelfTest -Condition (@(Get-UnexpectedMigrationStatusLines -StatusLines $commit12RecoveryStatus -CommitNumber 12).Count -eq 0) -Message 'Commit 12 did not accept the approved recovery migration.'
+    Assert-ValidatorSelfTest -Condition (@(Get-UnexpectedMigrationStatusLines -StatusLines $commit12RecoveryStatus -CommitNumber 11).Count -eq 1) -Message 'Dirty Commit 12 migration was incorrectly treated as Commit 11-safe.'
+
+    $commit12MixedStatus = @(
+      "?? $script:ApprovedCommit12Migration",
+      '?? supabase/migrations/20260719_01_unexpected.sql'
+    )
+    Assert-ValidatorSelfTest -Condition (@(Get-UnexpectedMigrationStatusLines -StatusLines $commit12MixedStatus -CommitNumber 12).Count -eq 1) -Message 'Commit 12 did not reject an unrelated additional migration.'
+
+    $safe = Get-DatabaseSafety -ConnectionString $localUrl
+    Assert-ValidatorSelfTest -Condition $safe.IsSafe -Message 'Disposable URL safety check did not accept the local test database URL.'
+    $unsafe = Get-DatabaseSafety -ConnectionString 'postgresql://postgres@db.supabase.co/postgres?sslmode=require'
+    Assert-ValidatorSelfTest -Condition (-not $unsafe.IsSafe) -Message 'Disposable URL safety check accepted a non-local database URL.'
+
+    Set-Item -Path 'Env:PGPASSWORD' -Value $secret
+    $beforeSuccess = Get-CurrentLibpqEnvironment
+
+    Invoke-WithLocalDisposableDatabaseEnvironment -ConnectionString $localUrl -Operation {
+      $ctx = @{
+        PsqlPath = $fakePsql
+        TestDatabaseUrl = $localUrl
+      }
+      $result = Invoke-PsqlSqlStrict -Context $ctx -Sql 'select 1;' -TimeoutSeconds 5
+      Assert-ValidatorSelfTest -Condition ($result.Stdout -match 'args:.* -w ') -Message 'psql arguments did not include -w.'
+      Assert-ValidatorSelfTest -Condition ($result.Stdout -match 'has-password') -Message 'fake psql child did not receive PGPASSWORD.'
+      Assert-ValidatorSelfTest -Condition ($result.Stdout -notmatch [regex]::Escape($secret)) -Message 'PGPASSWORD leaked to stdout.'
+      Assert-ValidatorSelfTest -Condition ($result.Stderr -notmatch [regex]::Escape($secret)) -Message 'PGPASSWORD leaked to stderr.'
+      Assert-ValidatorSelfTest -Condition ($result.Command -notmatch [regex]::Escape($secret)) -Message 'PGPASSWORD leaked to command display.'
+    }
+    Assert-LibpqEnvironmentRestored -Expected $beforeSuccess
+
+    Remove-Item -Path 'Env:PGPASSWORD' -ErrorAction SilentlyContinue
+    $beforeMissingAuth = Get-CurrentLibpqEnvironment
+    $missingAuthFailed = $false
+    try {
+      Invoke-WithLocalDisposableDatabaseEnvironment -ConnectionString $localUrl -Operation {
+        $ctx = @{
+          PsqlPath = $fakePsql
+          TestDatabaseUrl = $localUrl
+        }
+        Invoke-PsqlSqlStrict -Context $ctx -Sql 'select 1;' -TimeoutSeconds 5 | Out-Null
+      }
+    }
+    catch {
+      $missingAuthFailed = $_.Exception.Message -match 'no password supplied'
+    }
+    Assert-ValidatorSelfTest -Condition $missingAuthFailed -Message 'Missing authentication did not fail quickly.'
+    Assert-LibpqEnvironmentRestored -Expected $beforeMissingAuth
+
+    Set-Item -Path 'Env:PGPASSWORD' -Value $secret
+    $beforeTimeout = Get-CurrentLibpqEnvironment
+    $timeoutResult = Invoke-WithLocalDisposableDatabaseEnvironment -ConnectionString $localUrl -Operation {
+      Invoke-CapturedProcess -FilePath 'powershell.exe' -Arguments @('-NoProfile', '-Command', 'Start-Sleep -Seconds 5') -WorkingDirectory $script:RepoRoot -TimeoutSeconds 1
+    }
+    Assert-ValidatorSelfTest -Condition ($timeoutResult.TimedOut -and $timeoutResult.ExitCode -eq 124) -Message 'Hung child process was not terminated after timeout.'
+    Assert-LibpqEnvironmentRestored -Expected $beforeTimeout
+
+    $redactionResult = Invoke-WithLocalDisposableDatabaseEnvironment -ConnectionString $localUrl -Operation {
+      Invoke-CapturedProcess -FilePath 'powershell.exe' -Arguments @('-NoProfile', '-Command', 'Write-Output $env:PGPASSWORD; [Console]::Error.WriteLine($env:PGPASSWORD)') -WorkingDirectory $script:RepoRoot -TimeoutSeconds 5
+    }
+    Assert-ValidatorSelfTest -Condition ($redactionResult.Stdout -notmatch [regex]::Escape($secret)) -Message 'Secret appeared in captured stdout.'
+    Assert-ValidatorSelfTest -Condition ($redactionResult.Stderr -notmatch [regex]::Escape($secret)) -Message 'Secret appeared in captured stderr.'
+    Assert-ValidatorSelfTest -Condition ($redactionResult.Command -notmatch [regex]::Escape($secret)) -Message 'Secret appeared in captured command.'
+    Assert-ValidatorSelfTest -Condition ($redactionResult.Stdout -match '<redacted-password>') -Message 'Captured stdout was not redacted.'
+    Assert-LibpqEnvironmentRestored -Expected $beforeTimeout
+
+    Write-Host 'validator self-tests passed'
+  }
+  finally {
+    foreach ($name in $original.Keys) {
+      if ($null -eq $original[$name]) {
+        Remove-Item -Path "Env:$name" -ErrorAction SilentlyContinue
+      } else {
+        Set-Item -Path "Env:$name" -Value $original[$name]
+      }
+    }
+
+    if (Test-Path -LiteralPath $fakePsql) {
+      Remove-Item -LiteralPath $fakePsql -Force
+    }
+  }
+}
+
+if ($RunValidatorSelfTests) {
+  Invoke-ValidatorSelfTests
+  exit 0
 }
 
 $psqlPath = Resolve-PsqlPath
@@ -880,19 +1231,19 @@ $checks = @(
       }
       return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = 'Solo Plus feature-flag defaults remain false in committed source.'; Stderr = '' }
     }),
-  (New-CallbackCheck -Id 'ENV-012' -Name 'No activation route, server action, or UI additions' -Phase 'A' -RootCauseCategory 'scope-boundary' -CommandDisplay 'Inspect current working tree for forbidden app-boundary additions' -Callback {
+  (New-CallbackCheck -Id 'ENV-012' -Name 'No activation route or server action additions' -Phase 'A' -RootCauseCategory 'scope-boundary' -CommandDisplay 'Inspect current working tree for forbidden activation boundaries' -Callback {
       param($ctx)
       $statusLines = Get-GitStatusLines
       $forbidden = @($statusLines | Where-Object {
+        $_ -match '(^|/)(api/)?solo-plus/activate(/|\.|$)' -or
         $_ -match '(^|/)activate(/|\.|$)' -or
         $_ -match '(^|/)actions(/|\.|$)' -or
-        $_ -match '(^|/)page\.(ts|tsx|js|jsx)$' -or
-        $_ -match '(^|/)layout\.(ts|tsx|js|jsx)$'
+        $_ -match '(^|/)server-actions?(/|\.|$)'
       })
       if ($forbidden.Count -gt 0) {
-        return [pscustomobject]@{ Status = 'FAIL'; ExitCode = 1; Stdout = ($forbidden -join [Environment]::NewLine); Stderr = 'Commit 11 must not add activation routes, server actions, or UI files.' }
+        return [pscustomobject]@{ Status = 'FAIL'; ExitCode = 1; Stdout = ($forbidden -join [Environment]::NewLine); Stderr = 'Commit 12 must not add activation routes or server actions.' }
       }
-      return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = 'No forbidden activation-route, server-action, or UI additions detected.'; Stderr = '' }
+      return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = 'No forbidden activation-route or server-action additions detected.'; Stderr = '' }
     }),
   (New-CallbackCheck -Id 'ENV-013' -Name 'No plan_migrations writes added in Commit 10 diff' -Phase 'A' -RootCauseCategory 'scope-boundary' -CommandDisplay 'Search uncommitted diff for plan_migrations writes' -Callback {
       param($ctx)
@@ -935,16 +1286,30 @@ $checks = @(
   (New-CallbackCheck -Id 'ENV-017' -Name 'No Commit 11 migration added' -Phase 'A' -RootCauseCategory 'migration-manifest' -CommandDisplay 'Inspect current working tree for unexpected migration additions' -Callback {
       param($ctx)
       $statusLines = Get-GitStatusLines
-      $unexpected = @($statusLines | Where-Object {
-        $_ -match '^\?\?\s+supabase/migrations/' -or
-        $_ -match '^[ MARCUD?]{2}\s+supabase/migrations/'
-      } | Where-Object {
-        $_ -notmatch '20260711_01_solo_plus_activation_rpc\.sql'
-      })
+      $unexpected = @(Get-UnexpectedMigrationStatusLines -StatusLines $statusLines -CommitNumber $CommitNumber)
       if ($unexpected.Count -gt 0) {
-        return [pscustomobject]@{ Status = 'FAIL'; ExitCode = 1; Stdout = ($unexpected -join [Environment]::NewLine); Stderr = 'Commit 11 must not add any migration file.' }
+        return [pscustomobject]@{ Status = 'FAIL'; ExitCode = 1; Stdout = ($unexpected -join [Environment]::NewLine); Stderr = 'Unexpected migration file changes detected for this commit scope.' }
       }
-      return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = 'No unexpected migration additions detected.'; Stderr = '' }
+      $allowed = if ($CommitNumber -ge 12) { $script:ApprovedCommit12Migration } else { 'none' }
+      return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = "No unexpected migration additions detected. allowed=$allowed"; Stderr = '' }
+    }),
+  (New-CallbackCheck -Id 'ENV-019' -Name 'Commit 12 recovery SQL artifacts exist' -Phase 'A' -RootCauseCategory 'migration-manifest' -CommandDisplay 'Check Commit 12 recovery migration, staging wrappers, and SQL self-test' -Callback {
+      param($ctx)
+      $required = @(
+        'supabase/migrations/20260718_01_solo_plus_payment_recovery.sql',
+        'supabase/staging/013_solo_plus_payment_recovery.sql',
+        'supabase/staging/preflight/013_solo_plus_payment_recovery_snapshot.sql',
+        'supabase/staging/postflight/013_solo_plus_payment_recovery_verify.sql',
+        'supabase/tests/phase2_solo_plus_payment_recovery_rpc.sql'
+      )
+      $missing = @($required | Where-Object {
+          $fullPath = Join-Path $ctx.RepoRoot $_
+          -not (Test-Path -LiteralPath $fullPath)
+        })
+      if ($missing.Count -gt 0) {
+        return [pscustomobject]@{ Status = 'FAIL'; ExitCode = 1; Stdout = ''; Stderr = ('Missing required files:' + [Environment]::NewLine + ($missing -join [Environment]::NewLine)) }
+      }
+      return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = ($required -join [Environment]::NewLine); Stderr = '' }
     }),
   (New-CallbackCheck -Id 'ENV-018' -Name 'Local libpq environment isolation self-test' -Phase 'A' -RootCauseCategory 'database-safety' -CommandDisplay 'Verify local disposable validation restores and isolates libpq environment' -DependsOn @('ENV-009') -Callback {
       param($ctx)
@@ -1108,11 +1473,14 @@ $checks = @(
   (New-CommandCheck -Id 'APP-004' -Name 'Browser origin guard test' -Phase 'B' -RootCauseCategory 'application-validation' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-Command',"Set-Location '$($script:RepoRoot)'; npx tsx tests/solo-plus-browser-origin.test.ts") -TimeoutSeconds 600),
   (New-CommandCheck -Id 'APP-010' -Name 'Merchant review status contract test' -Phase 'B' -RootCauseCategory 'application-validation' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-Command',"Set-Location '$($script:RepoRoot)'; npx tsx tests/solo-plus-browser-case-contract.test.ts") -TimeoutSeconds 900),
   (New-CommandCheck -Id 'APP-011' -Name 'Plan availability flag alignment test' -Phase 'B' -RootCauseCategory 'application-validation' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-Command',"Set-Location '$($script:RepoRoot)'; npx tsx tests/plans.test.ts") -TimeoutSeconds 600),
+  (New-CommandCheck -Id 'APP-015' -Name 'Solo Plus UI contract test' -Phase 'B' -RootCauseCategory 'application-validation' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-Command',"Set-Location '$($script:RepoRoot)'; npx tsx tests/solo-plus-ui-contract.test.tsx") -TimeoutSeconds 900),
   (New-CommandCheck -Id 'APP-005' -Name 'Solo Plus case route test' -Phase 'B' -RootCauseCategory 'application-validation' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-Command',"Set-Location '$($script:RepoRoot)'; npx tsx tests/solo-plus-case-route.test.ts") -TimeoutSeconds 1200),
   (New-CommandCheck -Id 'APP-006' -Name 'Solo Plus evidence route test' -Phase 'B' -RootCauseCategory 'application-validation' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-Command',"Set-Location '$($script:RepoRoot)'; npx tsx tests/solo-plus-case-evidence-route.test.ts") -TimeoutSeconds 1200),
   (New-CommandCheck -Id 'APP-012' -Name 'Admin read service test' -Phase 'B' -RootCauseCategory 'application-validation' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-Command',"Set-Location '$($script:RepoRoot)'; npx tsx tests/solo-plus-admin-read-service.test.ts") -TimeoutSeconds 900),
   (New-CommandCheck -Id 'APP-013' -Name 'Admin cases route test' -Phase 'B' -RootCauseCategory 'application-validation' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-Command',"Set-Location '$($script:RepoRoot)'; npx tsx tests/solo-plus-admin-cases-route.test.ts") -TimeoutSeconds 900),
   (New-CommandCheck -Id 'APP-014' -Name 'Admin case detail route test' -Phase 'B' -RootCauseCategory 'application-validation' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-Command',"Set-Location '$($script:RepoRoot)'; npx tsx tests/solo-plus-admin-case-detail-route.test.ts") -TimeoutSeconds 900),
+  (New-CommandCheck -Id 'APP-016' -Name 'No Solo Plus raw file-upload UI' -Phase 'B' -RootCauseCategory 'application-validation' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-Command',"Set-Location '$($script:RepoRoot)'; `$paths = @('src/components/solo-plus','src/app/onboarding/page.tsx','src/app/onboarding/[plan]/page.tsx','src/app/onboarding/solo_plus/status/page.tsx','src/app/onboarding/payment-callback/page.tsx','src/app/(dashboard)/settings/billing/page.tsx','src/app/(dashboard)/settings/upgrade/[plan]/page.tsx','src/app/(dashboard)/settings/upgrade/solo_plus/status/page.tsx','src/app/(dashboard)/settings/upgrade-success/page.tsx','src/app/(admin)/admin/solo-plus'); `$patterns = @('type\s*=\s*[""'' ]file[""'' ]','name\s*=\s*[""'' ]storageKey[""'' ]','name\s*=\s*[""'' ]providerReference[""'' ]','placeholder\s*=\s*[""'' ][^""'']*(storage key|provider reference)[^""'']*[""'' ]','label[^<]*(storage key|provider reference)'); `$matches = Get-ChildItem `$paths -Recurse -File | Select-String -Pattern `$patterns; if (`$matches) { `$matches | ForEach-Object { Write-Host `$_.Path ':' `$_.LineNumber ':' `$_.Line.Trim() }; exit 1 }") -TimeoutSeconds 120),
+  (New-CommandCheck -Id 'APP-017' -Name 'No Solo Plus activation control UI' -Phase 'B' -RootCauseCategory 'application-validation' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-Command',"Set-Location '$($script:RepoRoot)'; `$paths = @('src/components/solo-plus','src/app/onboarding/page.tsx','src/app/onboarding/[plan]/page.tsx','src/app/onboarding/solo_plus/status/page.tsx','src/app/onboarding/payment-callback/page.tsx','src/app/(dashboard)/settings/billing/page.tsx','src/app/(dashboard)/settings/upgrade/[plan]/page.tsx','src/app/(dashboard)/settings/upgrade/solo_plus/status/page.tsx','src/app/(dashboard)/settings/upgrade-success/page.tsx','src/app/(admin)/admin/solo-plus'); `$patterns = @('/api/solo-plus/activate','\bactivateSoloPlus\b','\bactivationAction\b','>\s*Activate Solo Plus\s*<','aria-label\s*=\s*[""'' ]Activate Solo Plus[""'' ]','title\s*=\s*[""'' ]Activate Solo Plus[""'' ]'); `$matches = Get-ChildItem `$paths -Recurse -File | Select-String -Pattern `$patterns; if (`$matches) { `$matches | ForEach-Object { Write-Host `$_.Path ':' `$_.LineNumber ':' `$_.Line.Trim() }; exit 1 }") -TimeoutSeconds 120),
   (New-CommandCheck -Id 'APP-007' -Name 'TypeScript compile' -Phase 'B' -RootCauseCategory 'application-validation' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-Command',"Set-Location '$($script:RepoRoot)'; npx tsc --noEmit") -TimeoutSeconds 2400),
   (New-CommandCheck -Id 'APP-008' -Name 'Next.js build' -Phase 'B' -RootCauseCategory 'application-validation' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-Command',"Set-Location '$($script:RepoRoot)'; npm run build") -TimeoutSeconds 3600),
   (New-CommandCheck -Id 'APP-009' -Name 'git diff --check' -Phase 'B' -RootCauseCategory 'repository-state' -FilePath 'git' -Arguments @('diff', '--check') -TimeoutSeconds 120),
@@ -1179,21 +1547,55 @@ $checks = @(
       Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/tests/phase2_solo_plus_activation_rpc.sql' | Out-Null
       return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = 'phase2_solo_plus_activation_rpc.sql passed.'; Stderr = '' }
     }),
+  (New-CallbackCheck -Id 'SQL-013' -Name 'Commit 12 preflight snapshot' -Phase 'F' -RootCauseCategory 'sql-suite-commit12' -CommandDisplay 'Bootstrap through Commit 10 and run Commit 12 preflight snapshot' -DependsOn @('ENV-006','ENV-009','ENV-019') -Callback {
+      param($ctx)
+      Bootstrap-ThroughCommit10 -Context $ctx
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/preflight/013_solo_plus_payment_recovery_snapshot.sql' | Out-Null
+      return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = 'Commit 12 preflight snapshot passed.'; Stderr = '' }
+    }),
+  (New-CallbackCheck -Id 'SQL-014' -Name 'Commit 12 staging wrapper apply' -Phase 'F' -RootCauseCategory 'sql-suite-commit12' -CommandDisplay 'Bootstrap through Commit 10 and apply Commit 12 staging wrapper' -DependsOn @('SQL-013') -Callback {
+      param($ctx)
+      Bootstrap-ThroughCommit10 -Context $ctx
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/013_solo_plus_payment_recovery.sql' | Out-Null
+      return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = 'Commit 12 staging wrapper applied locally.'; Stderr = '' }
+    }),
+  (New-CallbackCheck -Id 'SQL-015' -Name 'Commit 12 postflight verify' -Phase 'F' -RootCauseCategory 'sql-suite-commit12' -CommandDisplay 'Bootstrap through Commit 10, apply wrapper, and run Commit 12 postflight verify' -DependsOn @('SQL-014') -Callback {
+      param($ctx)
+      Bootstrap-ThroughCommit10 -Context $ctx
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/013_solo_plus_payment_recovery.sql' | Out-Null
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/postflight/013_solo_plus_payment_recovery_verify.sql' | Out-Null
+      return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = 'Commit 12 postflight verify passed.'; Stderr = '' }
+    }),
+  (New-CallbackCheck -Id 'SQL-016' -Name 'Commit 12 wrapper rerun and postflight verify' -Phase 'F' -RootCauseCategory 'migration-rerun' -CommandDisplay 'Bootstrap through Commit 10, apply wrapper twice, and rerun Commit 12 postflight verify' -DependsOn @('SQL-015') -Callback {
+      param($ctx)
+      Bootstrap-ThroughCommit10 -Context $ctx
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/013_solo_plus_payment_recovery.sql' | Out-Null
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/013_solo_plus_payment_recovery.sql' | Out-Null
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/postflight/013_solo_plus_payment_recovery_verify.sql' | Out-Null
+      return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = 'Commit 12 wrapper rerun and postflight verify passed.'; Stderr = '' }
+    }),
+  (New-CallbackCheck -Id 'SQL-017' -Name 'Commit 12 payment recovery RPC SQL regression' -Phase 'F' -RootCauseCategory 'sql-suite-commit12' -CommandDisplay 'Bootstrap through Commit 12 and run phase2_solo_plus_payment_recovery_rpc.sql' -DependsOn @('SQL-016') -Callback {
+      param($ctx)
+      Bootstrap-ThroughCommit12 -Context $ctx
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/tests/phase2_solo_plus_payment_recovery_rpc.sql' | Out-Null
+      return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = 'phase2_solo_plus_payment_recovery_rpc.sql passed.'; Stderr = '' }
+    }),
   (New-CallbackCheck -Id 'SQL-011' -Name 'Migration safety self-tests' -Phase 'F' -RootCauseCategory 'harness-safety' -CommandDisplay 'Run migration safety self-tests' -DependsOn @('ENV-006','ENV-009') -Callback {
       param($ctx)
-      $result = Invoke-CapturedProcess -FilePath 'powershell.exe' -Arguments @('-NoProfile','-ExecutionPolicy','Bypass','-File','.\\scripts\\test-breet-solo-plus-migrations.ps1','-RunSafetySelfTests','-PsqlPath',$resolvedPsqlForHarness) -WorkingDirectory $ctx.RepoRoot -TimeoutSeconds 1800
+      $result = Invoke-CapturedProcess -FilePath 'powershell.exe' -Arguments @('-NoProfile','-ExecutionPolicy','Bypass','-File','.\\scripts\\test-breet-solo-plus-migrations.ps1','-RunSafetySelfTests','-RunHarnessSelfTests','-PsqlPath',$resolvedPsqlForHarness,'-PsqlTimeoutSeconds','120') -WorkingDirectory $ctx.RepoRoot -TimeoutSeconds 600
       if ($result.ExitCode -ne 0) {
         return [pscustomobject]@{ Status = 'FAIL'; ExitCode = $result.ExitCode; Stdout = $result.Stdout; Stderr = $result.Stderr }
       }
       return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = $result.Stdout; Stderr = $result.Stderr }
     }),
-  (New-CommandCheck -Id 'SQL-012' -Name 'Full hostile/default-grant harness' -Phase 'F' -RootCauseCategory 'hostile-harness' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-ExecutionPolicy','Bypass','-File','.\\scripts\\test-breet-solo-plus-migrations.ps1','-PsqlPath',$resolvedPsqlForHarness) -TimeoutSeconds 5400 -DependsOn @('ENV-006','ENV-009')),
+  (New-CommandCheck -Id 'SQL-012' -Name 'Full hostile/default-grant harness' -Phase 'F' -RootCauseCategory 'hostile-harness' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-ExecutionPolicy','Bypass','-File','.\\scripts\\test-breet-solo-plus-migrations.ps1','-PsqlPath',$resolvedPsqlForHarness,'-PsqlTimeoutSeconds','120') -TimeoutSeconds 600 -DependsOn @('ENV-006','ENV-009')),
   (New-CommandCheck -Id 'FINAL-001' -Name 'Final git status' -Phase 'G' -RootCauseCategory 'repository-state' -FilePath 'git' -Arguments @('status', '--short') -TimeoutSeconds 120),
   (New-CommandCheck -Id 'FINAL-002' -Name 'Final git diff --stat' -Phase 'G' -RootCauseCategory 'repository-state' -FilePath 'git' -Arguments @('diff', '--stat') -TimeoutSeconds 120),
   (New-CommandCheck -Id 'FINAL-003' -Name 'Final git diff --name-only' -Phase 'G' -RootCauseCategory 'repository-state' -FilePath 'git' -Arguments @('diff', '--name-only') -TimeoutSeconds 120)
 )
 
 foreach ($check in $checks) {
+  Write-Host ("RUNNING {0} {1}" -f $check.Id, $check.Name)
   $result = Invoke-ManifestCheck -Check $check -Context $context
   Save-CheckResult -Result $result
   $statusLabel = $result.Status.PadRight(7)

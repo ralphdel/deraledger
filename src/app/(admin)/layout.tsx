@@ -40,6 +40,7 @@ const adminNavItems = [
   { href: "/admin/verification-logs", label: "Verification Logs", icon: ScrollText },
   { href: "/admin/verification-costs", label: "Verification Costs", icon: Banknote },
   { href: "/admin/verification-settings", label: "Verification Settings", icon: Settings2 },
+  { href: "/admin/solo-plus", label: "Solo Plus Reviews", icon: ShieldCheck },
   { href: "/admin/payments", label: "Payment Routing", icon: Banknote },
   { href: "/admin/system", label: "System Controls", icon: Settings2 },
   { href: "/admin/merchants", label: "Merchants", icon: Users },

@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   ArrowRight,
@@ -8,17 +9,36 @@ import {
   CheckCircle2,
   ClipboardList,
   CreditCard,
+  Loader2,
   ShieldCheck,
   Sparkles,
   User,
   Users,
 } from "lucide-react";
+
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { ThemeToggle } from "@/components/theme-toggle";
 
-const plans = [
+type OnboardingPlanCard = {
+  id: "starter" | "individual" | "solo_plus" | "business";
+  name: string;
+  href: string;
+  price: string;
+  priceNote?: string;
+  verification: string;
+  bestFor: string;
+  icon: typeof Sparkles;
+  highlight: boolean;
+  badge: string | null;
+  cta: string;
+  included: string[];
+  locked: string[];
+  footer: string;
+};
+
+const plans: OnboardingPlanCard[] = [
   {
     id: "starter",
     name: "Starter",
@@ -51,8 +71,7 @@ const plans = [
     name: "Solo Lite",
     href: "/onboarding/individual",
     price: "NGN 5,000/month",
-    priceNote: "",
-    verification: "BVN & Selfie required",
+    verification: "BVN and selfie required",
     bestFor: "For verified online collections",
     icon: User,
     highlight: true,
@@ -61,9 +80,9 @@ const plans = [
     included: [
       "Collection invoices enabled",
       "Online payment collection",
-      "Grouped references & deposits",
+      "Grouped references and deposits",
       "Partial payment controls",
-      "₦5M monthly collection limit",
+      "NGN 5M monthly collection limit",
       "20 active collection invoices",
       "Up to 3 invited team members (4 total)",
       "Predefined roles only",
@@ -73,12 +92,37 @@ const plans = [
     footer: "Designed for growing businesses that get paid in parts.",
   },
   {
-    id: "corporate",
+    id: "solo_plus",
+    name: "Solo Plus",
+    href: "/onboarding/solo_plus",
+    price: "NGN 13,000/month",
+    verification: "Identity verification required",
+    bestFor: "For higher reviewed collection capacity with a controlled launch flow",
+    icon: User,
+    highlight: false,
+    badge: "Controlled launch",
+    cta: "Continue with Solo Plus",
+    included: [
+      "Higher reviewed collection capacity",
+      "Structured activity profile submission",
+      "Requirement checklist and review status",
+      "Read-only approval and activation tracking",
+      "Owner-only upgrade support for existing workspaces",
+      "Evidence reuse only in this launch",
+    ],
+    locked: [
+      "Direct document uploads",
+      "Evidence preview or download",
+      "Activation controls",
+    ],
+    footer: "Use Solo Plus when you need reviewed collection capacity without guessing the next verification step.",
+  },
+  {
+    id: "business",
     name: "Business",
-    href: "/onboarding/corporate",
+    href: "/onboarding/business",
     price: "NGN 20,000/month",
-    priceNote: "",
-    verification: "Business & authority checks required",
+    verification: "Business and authority checks required",
     bestFor: "Operational collections infrastructure for growing businesses",
     icon: Building2,
     highlight: false,
@@ -129,6 +173,54 @@ function BrandLink() {
 }
 
 export default function OnboardingPage() {
+  const [soloPlusAvailable, setSoloPlusAvailable] = useState(false);
+  const [soloPlusLoaded, setSoloPlusLoaded] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+
+    fetch("/api/plans/availability?plan=solo_plus")
+      .then((response) => response.json())
+      .then((payload) => {
+        if (!active) {
+          return;
+        }
+
+        setSoloPlusAvailable(payload?.available === true);
+        setSoloPlusLoaded(true);
+      })
+      .catch(() => {
+        if (!active) {
+          return;
+        }
+
+        setSoloPlusAvailable(false);
+        setSoloPlusLoaded(true);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const renderedPlans = useMemo(
+    () =>
+      plans.map((plan) =>
+        plan.id === "solo_plus"
+          ? {
+              ...plan,
+              badge: soloPlusAvailable ? "Controlled launch" : "Coming soon",
+              cta: soloPlusAvailable
+                ? plan.cta
+                : soloPlusLoaded
+                ? "Solo Plus unavailable"
+                : "Checking availability",
+            }
+          : plan,
+      ),
+    [soloPlusAvailable, soloPlusLoaded],
+  );
+
   return (
     <div className="min-h-screen bg-background text-foreground selection:bg-primary/20">
       <header className="border-b border-border/70 bg-background/90 backdrop-blur-xl">
@@ -152,8 +244,7 @@ export default function OnboardingPage() {
             Choose How You Want To Use DeraLedger
           </h1>
           <p className="mx-auto mt-4 max-w-2xl text-lg leading-relaxed text-muted-foreground">
-            Start with simple balance tracking, or verify your business workflow to unlock online
-            collections, payment links, team access, and stronger controls.
+            Start with simple balance tracking, or move into verified online collections and reviewed Solo Plus capacity with the right verification workflow.
           </p>
         </section>
 
@@ -175,9 +266,11 @@ export default function OnboardingPage() {
         </section>
 
         <section className="mx-auto max-w-7xl px-4 pb-16 sm:px-6 lg:px-8">
-          <div className="grid gap-8 lg:grid-cols-3">
-            {plans.map((plan) => {
+          <div className="grid gap-8 lg:grid-cols-4">
+            {renderedPlans.map((plan) => {
               const Icon = plan.icon;
+              const soloPlusUnavailable = plan.id === "solo_plus" && (!soloPlusLoaded || !soloPlusAvailable);
+
               return (
                 <Card
                   key={plan.id}
@@ -187,38 +280,33 @@ export default function OnboardingPage() {
                       : "border-border bg-card dark:bg-white/5"
                   } backdrop-blur-sm`}
                 >
-                  {plan.badge && (
+                  {plan.badge ? (
                     <div className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-gradient-to-r from-[#7B2FF7] to-[#B58CFF] px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-white">
                       {plan.badge}
                     </div>
-                  )}
+                  ) : null}
 
                   <CardHeader className="px-8 pb-0 pt-10">
                     <div
                       className={`mb-4 flex h-12 w-12 items-center justify-center rounded-lg ${
-                        plan.highlight ? "bg-accent text-primary dark:bg-white/10 dark:text-white" : "bg-[#7B2FF7]/10 text-[#B58CFF]"
+                        plan.highlight
+                          ? "bg-accent text-primary dark:bg-white/10 dark:text-white"
+                          : "bg-[#7B2FF7]/10 text-[#B58CFF]"
                       }`}
                     >
                       <Icon className="h-6 w-6" />
                     </div>
-                    <p
-                      className="text-xs font-semibold uppercase tracking-wider text-[#B58CFF] mb-2"
-                    >
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-[#B58CFF]">
                       {plan.verification}
                     </p>
                     <h2 className="text-2xl font-bold text-foreground dark:text-white">
                       {plan.name}
                     </h2>
-                    <p className="mt-2 h-10 text-sm text-muted-foreground dark:text-white/70">
+                    <p className="mt-2 h-12 text-sm text-muted-foreground dark:text-white/70">
                       {plan.bestFor}
                     </p>
                     <div className="pt-2 text-3xl font-bold text-foreground dark:text-white">
                       {plan.price}
-                      {plan.priceNote && (
-                        <span className="ml-1 text-sm font-medium text-muted-foreground dark:text-white/70">
-                          {plan.priceNote}
-                        </span>
-                      )}
                     </div>
                   </CardHeader>
 
@@ -240,10 +328,10 @@ export default function OnboardingPage() {
                         ))}
                       </ul>
 
-                      {plan.locked.length > 0 && (
+                      {plan.locked.length > 0 ? (
                         <>
-                          <p className="mt-6 mb-3 text-sm font-bold text-muted-foreground dark:text-white/70">
-                            Unlock later
+                          <p className="mb-3 mt-6 text-sm font-bold text-muted-foreground dark:text-white/70">
+                            Not in this launch
                           </p>
                           <ul className="space-y-2">
                             {plan.locked.map((item) => (
@@ -253,24 +341,49 @@ export default function OnboardingPage() {
                             ))}
                           </ul>
                         </>
-                      )}
+                      ) : null}
                     </div>
 
-                    <p className="mt-6 mb-6 text-sm text-muted-foreground dark:text-white/65">
+                    <p className="mb-6 mt-6 text-sm text-muted-foreground dark:text-white/65">
                       {plan.footer}
                     </p>
-                    <Link href={plan.href} className="mt-auto block w-full">
-                      <Button
-                        className={`h-12 w-full font-semibold transition-all ${
-                          plan.highlight
-                            ? "bg-[#7B2FF7] text-white hover:bg-[#B58CFF] hover:text-[#12061F] border-0"
-                            : "bg-accent text-accent-foreground hover:bg-accent/80 border-0 dark:bg-white/10 dark:text-white dark:hover:bg-white/20"
-                        }`}
-                      >
-                        {plan.cta}
-                        <ArrowRight className="ml-2 h-4 w-4" />
-                      </Button>
-                    </Link>
+
+                    {soloPlusUnavailable ? (
+                      <div className="mt-auto space-y-3">
+                        <Button
+                          disabled
+                          className="h-12 w-full border-0 bg-neutral-200 font-semibold text-neutral-600 dark:bg-white/10 dark:text-white/50"
+                        >
+                          {!soloPlusLoaded ? (
+                            <>
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              {plan.cta}
+                            </>
+                          ) : (
+                            <>
+                              {plan.cta}
+                              <ArrowRight className="ml-2 h-4 w-4" />
+                            </>
+                          )}
+                        </Button>
+                        <p className="text-xs text-muted-foreground dark:text-white/60">
+                          Solo Plus only becomes selectable when the controlled-launch enrollment rules are available.
+                        </p>
+                      </div>
+                    ) : (
+                      <Link href={plan.href} className="mt-auto block w-full">
+                        <Button
+                          className={`h-12 w-full border-0 font-semibold transition-all ${
+                            plan.highlight
+                              ? "bg-[#7B2FF7] text-white hover:bg-[#B58CFF] hover:text-[#12061F]"
+                              : "bg-accent text-accent-foreground hover:bg-accent/80 dark:bg-white/10 dark:text-white dark:hover:bg-white/20"
+                          }`}
+                        >
+                          {plan.cta}
+                          <ArrowRight className="ml-2 h-4 w-4" />
+                        </Button>
+                      </Link>
+                    )}
                   </CardContent>
                 </Card>
               );
@@ -279,14 +392,13 @@ export default function OnboardingPage() {
         </section>
 
         <section className="mx-auto max-w-5xl px-4 pb-16 sm:px-6">
-          <div className="rounded-2xl border border-border bg-muted p-8 text-center md:p-10 backdrop-blur-sm shadow-[0_0_20px_rgba(123,47,247,0.05)] dark:bg-white/5">
+          <div className="rounded-2xl border border-border bg-muted p-8 text-center shadow-[0_0_20px_rgba(123,47,247,0.05)] backdrop-blur-sm md:p-10 dark:bg-white/5">
             <div className="mx-auto mb-6 flex h-14 w-14 items-center justify-center rounded-xl bg-[#7B2FF7]/20 text-[#B58CFF]">
               <ShieldCheck className="h-7 w-7" />
             </div>
             <h2 className="text-3xl font-bold text-foreground dark:text-white">Verification follows the workflow.</h2>
             <p className="mx-auto mt-4 max-w-2xl text-base leading-relaxed text-muted-foreground dark:text-white/70">
-              Starter opens immediately. Solo Lite collections require identity verification. Business
-              workspaces use business and authority checks for higher trust and unlimited collections.
+              Starter opens immediately. Solo Lite collections require identity verification. Solo Plus adds a reviewed verification flow, and Business workspaces add business and authority checks for higher trust and broader operational controls.
             </p>
             <div className="mt-8 flex flex-wrap justify-center gap-4 text-sm font-semibold text-foreground dark:text-white">
               <span className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-5 py-2.5 backdrop-blur-sm dark:bg-white/5">
@@ -305,7 +417,7 @@ export default function OnboardingPage() {
       <footer className="border-t border-border bg-muted px-4 py-10 text-center text-sm text-muted-foreground dark:bg-[#181022] dark:text-white/60">
         <p>
           Already have an account?{" "}
-          <Link href="/login" className="font-semibold text-foreground hover:text-[#B58CFF] transition-colors dark:text-white">
+          <Link href="/login" className="font-semibold text-foreground transition-colors hover:text-[#B58CFF] dark:text-white">
             Sign in
           </Link>
         </p>

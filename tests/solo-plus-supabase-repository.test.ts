@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   createSoloPlusSupabaseRepository,
+  readSoloPlusCaseBundle,
   soloPlusSupabaseRpcNames,
   SoloPlusSupabaseRepositoryError,
   type SoloPlusSupabaseClientLike,
@@ -15,6 +16,9 @@ import type {
 type QueryResponse = {
   data: unknown;
   error: { message: string } | null;
+  count?: number | null;
+  status?: number;
+  statusText?: string;
 };
 
 class FakeQueryBuilder {
@@ -74,7 +78,26 @@ class FakeQueryBuilder {
   }
 
   async maybeSingle(): Promise<QueryResponse> {
+    const error = this.client.queryErrors.get(this.table) ?? null;
+    if (error) {
+      return { data: null, error };
+    }
+
+    if (this.client.maybeSingleResponses.has(this.table)) {
+      return {
+        data: this.client.maybeSingleResponses.get(this.table),
+        error: null,
+      };
+    }
+
     const rows = this.resolveRows();
+    if (this.client.maybeSingleArrayTables.has(this.table)) {
+      return {
+        data: rows,
+        error: null,
+      };
+    }
+
     return {
       data: rows[0] ?? null,
       error: null,
@@ -82,6 +105,11 @@ class FakeQueryBuilder {
   }
 
   async single(): Promise<QueryResponse> {
+    const error = this.client.queryErrors.get(this.table) ?? null;
+    if (error) {
+      return { data: null, error };
+    }
+
     const rows = this.resolveRows();
     return {
       data: rows[0] ?? null,
@@ -127,9 +155,30 @@ class FakeQueryBuilder {
       | null,
     onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
   ): Promise<TResult1 | TResult2> {
+    const error = this.client.queryErrors.get(this.table) ?? null;
+    if (error) {
+      return Promise.resolve({
+        data: null,
+        error,
+        count: null,
+        status: 400,
+        statusText: "Bad Request",
+      }).then(onfulfilled, onrejected);
+    }
+
+    if (this.client.queryResponses.has(this.table)) {
+      return Promise.resolve(this.client.queryResponses.get(this.table)!).then(
+        onfulfilled,
+        onrejected,
+      );
+    }
+
     return Promise.resolve({
       data: this.resolveRows(),
       error: null,
+      count: null,
+      status: 200,
+      statusText: "OK",
     }).then(onfulfilled, onrejected);
   }
 
@@ -252,6 +301,10 @@ class FakeQueryBuilder {
 
 class FakeSupabaseClient implements SoloPlusSupabaseClientLike {
   readonly tables = new Map<string, unknown[]>();
+  readonly queryErrors = new Map<string, { message: string }>();
+  readonly queryResponses = new Map<string, QueryResponse>();
+  readonly maybeSingleResponses = new Map<string, unknown>();
+  readonly maybeSingleArrayTables = new Set<string>();
   readonly rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
   readonly rpcResponses = new Map<string, QueryResponse>();
 
@@ -285,7 +338,7 @@ function buildCaseRow(overrides: Record<string, unknown> = {}) {
     payment_record_id: null,
     payment_provider: null,
     payment_reference: null,
-    expected_amount: "13000.50",
+    expected_amount: 13000.5,
     payment_currency: "NGN",
     requirements_policy_version: "solo-plus-policy-v1",
     requirements_snapshot: { policy: "safe" },
@@ -306,6 +359,56 @@ function buildCaseRow(overrides: Record<string, unknown> = {}) {
     updated_at: "2026-07-05T10:00:00.000Z",
     ...overrides,
   };
+}
+
+function buildLiveShapedCaseRow(overrides: Record<string, unknown> = {}) {
+  return buildCaseRow({
+    id: "11111111-1111-1111-1111-111111111111",
+    merchant_id: "11111111-1111-1111-1111-111111111111",
+    onboarding_session_id: null,
+    flow_origin: "upgrade",
+    source_plan: "solo_lite",
+    target_plan: "solo_plus",
+    case_status: "awaiting_payment",
+    payment_status: "pending",
+    refund_status: "none",
+    payment_record_id: null,
+    payment_provider: null,
+    payment_reference: null,
+    expected_amount: 13000,
+    payment_currency: "NGN",
+    requirements_policy_version: "solo-plus-payment-init-v1",
+    requirements_snapshot: {
+      commitScope: "solo_plus_commit_7_payment_lifecycle",
+      flowOrigin: "upgrade",
+      activationDeferred: true,
+      paymentConfirmationTargetStatus: "verification_pending",
+      requiredRequirements: [
+        "activity_profile",
+        "bvn",
+        "id_document",
+        "proof_of_address",
+        "selfie_liveness",
+        "settlement_account",
+      ],
+    },
+    active_plan_snapshot: "solo_lite",
+    rejection_reason: null,
+    approved_at: null,
+    approved_by_admin_id: null,
+    rejected_at: null,
+    rejected_by_admin_id: null,
+    reopened_at: null,
+    reopened_by_admin_id: null,
+    idempotency_key: "solo-plus:upgrade:11111111-1111-1111-1111-111111111111",
+    activation_idempotency_key: null,
+    refund_idempotency_key: null,
+    row_version: 1,
+    audit_metadata: {},
+    created_at: "2026-07-16T08:00:00.000Z",
+    updated_at: "2026-07-16T08:05:00.000Z",
+    ...overrides,
+  });
 }
 
 function buildRequirementRow(overrides: Record<string, unknown> = {}) {
@@ -553,6 +656,139 @@ async function run() {
   assert.equal(mappedCase?.approvedByAdminId, null);
   assert.deepEqual(mappedCase?.auditMetadata, {});
 
+  client.tables.set("solo_plus_cases", [buildCaseRow({ expected_amount: "13000.50" })]);
+  client.rpcResponses.set(soloPlusSupabaseRpcNames.caseBundlePayload, {
+    data: {
+      case: buildCaseRow({ expected_amount: "13000.50" }),
+      requirements: [buildRequirementRow()],
+      created_event: buildEventRow(),
+    },
+    error: null,
+  });
+  const mappedStringAmountCase = await repository.findCaseById(
+    "11111111-1111-4111-8111-111111111111",
+  );
+  assert.equal(mappedStringAmountCase?.expectedAmount, "13000.50");
+
+  client.tables.set("solo_plus_cases", [buildCaseRow({ expected_amount: 0 })]);
+  client.rpcResponses.set(soloPlusSupabaseRpcNames.caseBundlePayload, {
+    data: {
+      case: buildCaseRow({ expected_amount: 0 }),
+      requirements: [buildRequirementRow()],
+      created_event: buildEventRow(),
+    },
+    error: null,
+  });
+  const mappedZeroAmountCase = await repository.findCaseById(
+    "11111111-1111-4111-8111-111111111111",
+  );
+  assert.equal(mappedZeroAmountCase?.expectedAmount, "0.00");
+
+  const liveShapedCaseRow = buildLiveShapedCaseRow();
+  client.tables.set("solo_plus_cases", [liveShapedCaseRow]);
+  client.rpcResponses.set(soloPlusSupabaseRpcNames.caseBundlePayload, {
+    data: {
+      case: liveShapedCaseRow,
+      requirements: [buildRequirementRow()],
+      created_event: buildEventRow({ case_id: liveShapedCaseRow.id }),
+    },
+    error: null,
+  });
+  const mappedLiveShapedCase = await repository.findActiveCaseByMerchantId(
+    "11111111-1111-1111-1111-111111111111",
+  );
+  assert.equal(mappedLiveShapedCase?.expectedAmount, "13000.00");
+  assert.equal(mappedLiveShapedCase?.rowVersion, 1);
+  assert.equal(mappedLiveShapedCase?.caseStatus, "awaiting_payment");
+  assert.equal(mappedLiveShapedCase?.paymentStatus, "pending");
+  assert.deepEqual(mappedLiveShapedCase?.auditMetadata, {});
+  assert.equal(mappedLiveShapedCase?.requirementsSnapshot.flowOrigin, "upgrade");
+
+  const liveNullableCaseRow = buildLiveShapedCaseRow({
+    active_plan_snapshot: null,
+    approved_at: null,
+    approved_by_admin_id: null,
+    audit_metadata: {},
+    onboarding_session_id: null,
+    payment_provider: null,
+    payment_record_id: null,
+    payment_reference: null,
+    refund_idempotency_key: null,
+    rejected_at: null,
+    rejected_by_admin_id: null,
+    rejection_reason: null,
+    reopened_at: null,
+    reopened_by_admin_id: null,
+  });
+  client.tables.set("solo_plus_cases", [liveNullableCaseRow]);
+  client.rpcResponses.set(soloPlusSupabaseRpcNames.caseBundlePayload, {
+    data: {
+      case: liveNullableCaseRow,
+      requirements: [buildRequirementRow()],
+      created_event: buildEventRow({ case_id: liveNullableCaseRow.id }),
+    },
+    error: null,
+  });
+  const mappedLiveNullableCase = await repository.findActiveCaseByMerchantId(
+    "11111111-1111-1111-1111-111111111111",
+  );
+  assert.equal(mappedLiveNullableCase?.activePlanSnapshot, null);
+  assert.equal(mappedLiveNullableCase?.paymentReference, null);
+  assert.equal(mappedLiveNullableCase?.rejectedByAdminId, null);
+
+  client.tables.set("solo_plus_cases", [buildCaseRow()]);
+  client.rpcResponses.set(soloPlusSupabaseRpcNames.caseBundlePayload, {
+    data: {
+      case: buildCaseRow(),
+      requirements: [buildRequirementRow()],
+      created_event: buildEventRow(),
+    },
+    error: null,
+  });
+
+  const mappedBundle = await readSoloPlusCaseBundle(
+    client,
+    "11111111-1111-4111-8111-111111111111",
+  );
+  assert.equal(mappedBundle?.caseRecord.id, "11111111-1111-4111-8111-111111111111");
+  assert.equal(mappedBundle?.requirements.length, 1);
+  assert.equal(mappedBundle?.createdEvent?.eventType, "case_created");
+
+  client.rpcResponses.set(soloPlusSupabaseRpcNames.caseBundlePayload, {
+    data: {
+      payload: {
+        case: {
+          case: buildCaseRow(),
+          requirements: [buildRequirementRow()],
+          created_event: buildEventRow(),
+        },
+      },
+    },
+    error: null,
+  });
+  const nestedBundle = await readSoloPlusCaseBundle(
+    client,
+    "11111111-1111-4111-8111-111111111111",
+  );
+  assert.equal(nestedBundle?.caseRecord.merchantId, "22222222-2222-4222-8222-222222222222");
+  assert.equal(nestedBundle?.requirements.length, 1);
+
+  client.rpcResponses.set(soloPlusSupabaseRpcNames.caseBundlePayload, {
+    data: [
+      {
+        case: buildCaseRow(),
+        requirements: [buildRequirementRow()],
+        created_event: buildEventRow(),
+      },
+    ],
+    error: null,
+  });
+  const arrayBundle = await readSoloPlusCaseBundle(
+    client,
+    "11111111-1111-4111-8111-111111111111",
+  );
+  assert.equal(arrayBundle?.caseRecord.id, "11111111-1111-4111-8111-111111111111");
+
   const mappedByIdempotencyKey = await repository.findCaseByIdempotencyKey("idem-1");
   assert.equal(mappedByIdempotencyKey?.expectedAmount, "13000.50");
   assert.equal(mappedByIdempotencyKey?.refundStatus, "none");
@@ -562,6 +798,191 @@ async function run() {
   );
   assert.equal(mappedByMerchant?.expectedAmount, "13000.50");
   assert.equal(mappedByMerchant?.merchantId, "22222222-2222-4222-8222-222222222222");
+
+  client.tables.set("solo_plus_cases", [
+    buildCaseRow({
+      id: "11111111-1111-1111-1111-111111111111",
+      merchant_id: "11111111-1111-1111-1111-111111111111",
+    }),
+  ]);
+  const mappedByRealFixtureMerchant = await repository.findActiveCaseByMerchantId(
+    "11111111-1111-1111-1111-111111111111",
+  );
+  assert.equal(mappedByRealFixtureMerchant?.id, "11111111-1111-1111-1111-111111111111");
+  assert.equal(mappedByRealFixtureMerchant?.merchantId, "11111111-1111-1111-1111-111111111111");
+
+  client.tables.set("solo_plus_cases", [
+    buildCaseRow({
+      id: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA",
+      merchant_id: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB",
+    }),
+  ]);
+  const mappedByUppercaseMerchant = await repository.findActiveCaseByMerchantId(
+    "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB",
+  );
+  assert.equal(mappedByUppercaseMerchant?.id, "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA");
+  assert.equal(mappedByUppercaseMerchant?.merchantId, "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB");
+
+  client.tables.set("solo_plus_cases", [buildCaseRow()]);
+  const mappedByMerchantFromArray = await repository.findActiveCaseByMerchantId(
+    "22222222-2222-4222-8222-222222222222",
+  );
+  assert.equal(mappedByMerchantFromArray?.id, "11111111-1111-4111-8111-111111111111");
+  assert.equal(mappedByMerchantFromArray?.merchantId, "22222222-2222-4222-8222-222222222222");
+
+  client.tables.set("solo_plus_cases", []);
+  const missingByMerchantFromEmptyArray = await repository.findActiveCaseByMerchantId(
+    "22222222-2222-4222-8222-222222222222",
+  );
+  assert.equal(missingByMerchantFromEmptyArray, null);
+
+  client.queryResponses.set("solo_plus_cases", {
+    data: buildCaseRow(),
+    error: null,
+    count: null,
+    status: 200,
+    statusText: "OK",
+  });
+  const mappedByMerchantFromDirectRow = await repository.findActiveCaseByMerchantId(
+    "22222222-2222-4222-8222-222222222222",
+  );
+  assert.equal(mappedByMerchantFromDirectRow?.id, "11111111-1111-4111-8111-111111111111");
+  client.queryResponses.delete("solo_plus_cases");
+
+  client.tables.set("solo_plus_cases", []);
+  const missingByMerchant = await repository.findActiveCaseByMerchantId(
+    "22222222-2222-4222-8222-222222222222",
+  );
+  assert.equal(missingByMerchant, null);
+
+  client.queryResponses.set("solo_plus_cases", {
+    data: buildCaseRow({ merchant_id: undefined }),
+    error: null,
+    count: null,
+    status: 200,
+    statusText: "OK",
+  });
+  await assert.rejects(
+    async () => repository.findActiveCaseByMerchantId("22222222-2222-4222-8222-222222222222"),
+    (error: unknown) => {
+      assert.ok(error instanceof SoloPlusSupabaseRepositoryError);
+      assert.equal(error.message, "Solo Plus repository mapping rejected merchant_id.");
+      return true;
+    },
+  );
+
+  client.queryResponses.set("solo_plus_cases", {
+    data: buildCaseRow({ merchant_id: "not-a-uuid" }),
+    error: null,
+    count: null,
+    status: 200,
+    statusText: "OK",
+  });
+  await assert.rejects(
+    async () => repository.findActiveCaseByMerchantId("22222222-2222-4222-8222-222222222222"),
+    (error: unknown) => {
+      assert.ok(error instanceof SoloPlusSupabaseRepositoryError);
+      assert.equal(error.message, "Solo Plus repository mapping rejected merchant_id.");
+      return true;
+    },
+  );
+
+  client.queryResponses.set("solo_plus_cases", {
+    data: buildCaseRow({ merchant_id: "1111111-1111-1111-1111-111111111111" }),
+    error: null,
+    count: null,
+    status: 200,
+    statusText: "OK",
+  });
+  await assert.rejects(
+    async () => repository.findActiveCaseByMerchantId("22222222-2222-4222-8222-222222222222"),
+    (error: unknown) => {
+      assert.ok(error instanceof SoloPlusSupabaseRepositoryError);
+      assert.equal(error.message, "Solo Plus repository mapping rejected merchant_id.");
+      return true;
+    },
+  );
+
+  client.queryResponses.set("solo_plus_cases", {
+    data: buildCaseRow({ merchant_id: "11111111-1111-1111-1111-11111111111z" }),
+    error: null,
+    count: null,
+    status: 200,
+    statusText: "OK",
+  });
+  await assert.rejects(
+    async () => repository.findActiveCaseByMerchantId("22222222-2222-4222-8222-222222222222"),
+    (error: unknown) => {
+      assert.ok(error instanceof SoloPlusSupabaseRepositoryError);
+      assert.equal(error.message, "Solo Plus repository mapping rejected merchant_id.");
+      return true;
+    },
+  );
+
+  client.queryResponses.set("solo_plus_cases", {
+    data: buildCaseRow({ merchant_id: "11111111111111111111111111111111" }),
+    error: null,
+    count: null,
+    status: 200,
+    statusText: "OK",
+  });
+  await assert.rejects(
+    async () => repository.findActiveCaseByMerchantId("22222222-2222-4222-8222-222222222222"),
+    (error: unknown) => {
+      assert.ok(error instanceof SoloPlusSupabaseRepositoryError);
+      assert.equal(error.message, "Solo Plus repository mapping rejected merchant_id.");
+      return true;
+    },
+  );
+
+  client.queryResponses.set("solo_plus_cases", {
+    data: buildCaseRow({ merchant_id: "99999999-9999-4999-8999-999999999999" }),
+    error: null,
+    count: null,
+    status: 200,
+    statusText: "OK",
+  });
+  await assert.rejects(
+    async () => repository.findActiveCaseByMerchantId("22222222-2222-4222-8222-222222222222"),
+    (error: unknown) => {
+      assert.ok(error instanceof SoloPlusSupabaseRepositoryError);
+      assert.equal(error.message, "Solo Plus repository rejected a cross-merchant active case.");
+      return true;
+    },
+  );
+
+  client.queryResponses.set("solo_plus_cases", {
+    data: [
+      buildCaseRow(),
+      buildCaseRow({ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }),
+    ],
+    error: null,
+    count: null,
+    status: 200,
+    statusText: "OK",
+  });
+  await assert.rejects(
+    async () => repository.findActiveCaseByMerchantId("22222222-2222-4222-8222-222222222222"),
+    (error: unknown) => {
+      assert.ok(error instanceof SoloPlusSupabaseRepositoryError);
+      assert.equal(error.message, "Solo Plus repository expected at most one row.");
+      return true;
+    },
+  );
+  client.queryResponses.delete("solo_plus_cases");
+
+  client.queryErrors.set("solo_plus_cases", { message: "permission denied for table solo_plus_cases" });
+  await assert.rejects(
+    async () => repository.findActiveCaseByMerchantId("22222222-2222-4222-8222-222222222222"),
+    (error: unknown) => {
+      assert.ok(error instanceof SoloPlusSupabaseRepositoryError);
+      assert.equal(error.code, "SOLO_PLUS_ATOMIC_PERSISTENCE_UNAVAILABLE");
+      return true;
+    },
+  );
+  client.queryErrors.delete("solo_plus_cases");
+
+  client.tables.set("solo_plus_cases", [buildCaseRow()]);
 
   client.tables.set("solo_plus_cases", [
     buildCaseRow({
@@ -605,6 +1026,30 @@ async function run() {
   );
   assert.equal(mappedRequirement.length, 1);
   assert.equal(mappedRequirement[0].requirementCode, "bvn");
+
+  client.queryErrors.set("solo_plus_case_requirements", {
+    message: "Could not find the table 'public.solo_plus_case_requirements' in the schema cache",
+  });
+  client.rpcResponses.set(soloPlusSupabaseRpcNames.caseBundlePayload, {
+    data: {
+      case: buildCaseRow(),
+      requirements: [
+        buildRequirementRow(),
+        buildRequirementRow({
+          id: "99999999-9999-4999-8999-999999999999",
+          requirement_code: "proof_of_address",
+        }),
+      ],
+      created_event: buildEventRow(),
+    },
+    error: null,
+  });
+  const fallbackRequirements = await repository.listRequirements(
+    "11111111-1111-4111-8111-111111111111",
+  );
+  assert.equal(fallbackRequirements.length, 2);
+  assert.equal(fallbackRequirements[1]?.requirementCode, "proof_of_address");
+  client.queryErrors.delete("solo_plus_case_requirements");
 
   const mappedEvents = await repository.listSafeEvents(
     "11111111-1111-4111-8111-111111111111",
@@ -829,6 +1274,20 @@ async function run() {
     },
   );
 
+  client.tables.set("solo_plus_cases", [buildCaseRow({ row_version: "2" })]);
+  client.rpcResponses.set(soloPlusSupabaseRpcNames.caseBundlePayload, {
+    data: {
+      case: buildCaseRow({ row_version: "2" }),
+      requirements: [buildRequirementRow()],
+      created_event: buildEventRow(),
+    },
+    error: null,
+  });
+  const mappedStringRowVersionCase = await repository.findCaseById(
+    "11111111-1111-4111-8111-111111111111",
+  );
+  assert.equal(mappedStringRowVersionCase?.rowVersion, 2);
+
   client.tables.set("solo_plus_cases", [buildCaseRow({ requirements_snapshot: [] })]);
   client.rpcResponses.set(soloPlusSupabaseRpcNames.caseBundlePayload, {
     data: {
@@ -876,10 +1335,114 @@ async function run() {
   assert.equal(mappedBoundaryCase?.expectedAmount, "9999999999999999.99");
 
   client.tables.set("solo_plus_cases", [buildCaseRow({ expected_amount: 13000.5 })]);
+  client.rpcResponses.set(soloPlusSupabaseRpcNames.caseBundlePayload, {
+    data: {
+      case: buildCaseRow({ expected_amount: 13000.5 }),
+      requirements: [buildRequirementRow()],
+      created_event: buildEventRow(),
+    },
+    error: null,
+  });
+  const mappedNumericAmountCase = await repository.findCaseById(
+    "11111111-1111-4111-8111-111111111111",
+  );
+  assert.equal(mappedNumericAmountCase?.expectedAmount, "13000.50");
+
+  client.tables.set("solo_plus_cases", [buildCaseRow({ expected_amount: 0.29 })]);
+  client.rpcResponses.set(soloPlusSupabaseRpcNames.caseBundlePayload, {
+    data: {
+      case: buildCaseRow({ expected_amount: 0.29 }),
+      requirements: [buildRequirementRow()],
+      created_event: buildEventRow(),
+    },
+    error: null,
+  });
+  const mappedFloatEdgeAmountCase = await repository.findCaseById(
+    "11111111-1111-4111-8111-111111111111",
+  );
+  assert.equal(mappedFloatEdgeAmountCase?.expectedAmount, "0.29");
+
+  for (const invalidExpectedAmount of [
+    -1,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    90071992547409.92,
+    "",
+    "NGN 13000.00",
+    "13,000.00",
+    null,
+  ]) {
+    client.tables.set("solo_plus_cases", [
+      buildCaseRow({ expected_amount: invalidExpectedAmount }),
+    ]);
+    client.rpcResponses.set(soloPlusSupabaseRpcNames.caseBundlePayload, {
+      data: {
+        case: buildCaseRow({ expected_amount: invalidExpectedAmount }),
+        requirements: [buildRequirementRow()],
+        created_event: buildEventRow(),
+      },
+      error: null,
+    });
+    await assert.rejects(
+      async () => repository.findCaseById("11111111-1111-4111-8111-111111111111"),
+      (error: unknown) => {
+        assert.ok(error instanceof SoloPlusSupabaseRepositoryError);
+        assert.equal(error.message, "Solo Plus repository mapping rejected expected_amount.");
+        return true;
+      },
+    );
+  }
+
+  client.tables.set("solo_plus_cases", [buildCaseRow({ expected_amount: "13000.001" })]);
+  client.rpcResponses.set(soloPlusSupabaseRpcNames.caseBundlePayload, {
+    data: {
+      case: buildCaseRow({ expected_amount: "13000.001" }),
+      requirements: [buildRequirementRow()],
+      created_event: buildEventRow(),
+    },
+    error: null,
+  });
   await assert.rejects(
     async () => repository.findCaseById("11111111-1111-4111-8111-111111111111"),
     (error: unknown) => {
       assert.ok(error instanceof SoloPlusSupabaseRepositoryError);
+      assert.equal(error.message, "Solo Plus repository mapping rejected expected_amount.");
+      return true;
+    },
+  );
+
+  client.rpcResponses.set(soloPlusSupabaseRpcNames.caseBundlePayload, {
+    data: {
+      case: {
+        case: buildCaseRow(),
+      },
+      requirements: [buildRequirementRow()],
+      created_event: buildEventRow(),
+    },
+    error: null,
+  });
+  await assert.rejects(
+    async () => readSoloPlusCaseBundle(client, "11111111-1111-4111-8111-111111111111"),
+    (error: unknown) => {
+      assert.ok(error instanceof SoloPlusSupabaseRepositoryError);
+      assert.match(error.message, /^Solo Plus repository mapping rejected /);
+      return true;
+    },
+  );
+
+  client.rpcResponses.set(soloPlusSupabaseRpcNames.caseBundlePayload, {
+    data: {
+      case: buildCaseRow({ merchant_id: "not-a-uuid" }),
+      requirements: [buildRequirementRow()],
+      created_event: buildEventRow(),
+    },
+    error: null,
+  });
+  await assert.rejects(
+    async () => readSoloPlusCaseBundle(client, "11111111-1111-4111-8111-111111111111"),
+    (error: unknown) => {
+      assert.ok(error instanceof SoloPlusSupabaseRepositoryError);
+      assert.equal(error.message, "Solo Plus repository mapping rejected merchant_id.");
       return true;
     },
   );
@@ -911,7 +1474,11 @@ async function run() {
   client.rpcResponses.set(soloPlusSupabaseRpcNames.createCaseBundle, {
     data: {
       kind: "idempotent_replay",
-      case: buildCaseRow(),
+      case: {
+        case: buildCaseRow(),
+        requirements: [buildRequirementRow()],
+        created_event: buildEventRow(),
+      },
     },
     error: null,
   });
@@ -919,10 +1486,18 @@ async function run() {
   assert.equal(createReplay.kind, "idempotent_replay");
 
   client.rpcResponses.set(soloPlusSupabaseRpcNames.createCaseBundle, {
-    data: {
-      kind: "existing_active_case",
-      case: buildCaseRow(),
-    },
+    data: [
+      {
+        payload: {
+          kind: "existing_active_case",
+          case: {
+            case: buildCaseRow(),
+            requirements: [buildRequirementRow()],
+            created_event: buildEventRow(),
+          },
+        },
+      },
+    ],
     error: null,
   });
   const existingActive = await repository.createCaseWithRequirementsAndEvent(buildCreateInput());

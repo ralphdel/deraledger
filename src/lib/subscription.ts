@@ -1,6 +1,6 @@
 import { normalizeCapabilityPlanCode } from "@/lib/plans";
 
-export type PlanType = "individual" | "corporate" | "starter" | "solo_plus";
+export type PlanType = "individual" | "business" | "corporate" | "starter" | "solo_plus";
 
 interface SubscriptionState {
   planType: PlanType;
@@ -11,6 +11,7 @@ const DAILY_RATES: Record<PlanType, number> = {
   starter: 0,
   individual: 5000 / 30,
   solo_plus: 13000 / 30,
+  business: 20000 / 30,
   corporate: 20000 / 30,
 };
 
