@@ -2,9 +2,14 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import {
+  canManageSettlementAccounts,
+  resolveMerchantContextForUser,
+} from "@/lib/merchant-context";
+import {
   getMerchantPaymentMethodReadiness,
   getSettlementEnvironment,
 } from "@/lib/services/settlement-ledger.service";
+import { cookies } from "next/headers";
 
 export const dynamic = "force-dynamic";
 
@@ -15,11 +20,21 @@ const serviceRole = createSupabaseClient(
 
 export async function GET() {
   const supabase = await createClient();
-  const merchantId = await resolveCurrentMerchantId(supabase);
+  const merchantContext = await resolveCurrentMerchantContext(supabase);
 
-  if (!merchantId) {
+  if (merchantContext.status === "unauthenticated") {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  if (merchantContext.status !== "resolved") {
+    return NextResponse.json({ error: "No authorized merchant workspace was found." }, { status: 403 });
+  }
+
+  if (!canManageSettlementAccounts(merchantContext)) {
+    return NextResponse.json({ error: "Settlement account management is owner-only." }, { status: 403 });
+  }
+
+  const merchantId = merchantContext.merchantId;
 
   const { data: merchant } = await serviceRole
     .from("merchants")
@@ -55,30 +70,15 @@ export async function GET() {
   });
 }
 
-async function resolveCurrentMerchantId(supabase: Awaited<ReturnType<typeof createClient>>) {
+async function resolveCurrentMerchantContext(supabase: Awaited<ReturnType<typeof createClient>>) {
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) return null;
-
-  const { data: owned } = await supabase
-    .from("merchants")
-    .select("id")
-    .eq("user_id", user.id)
-    .maybeSingle();
-  if (owned?.id) return owned.id as string;
-
-  const { data: teamRow } = await supabase
-    .from("merchant_team")
-    .select("merchant_id")
-    .eq("user_id", user.id)
-    .eq("is_active", true)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  return (teamRow?.merchant_id as string | undefined) || null;
+  const cookieStore = await cookies();
+  return resolveMerchantContextForUser(supabase, user, {
+    preferredMerchantId: cookieStore.get("purpledger_workspace_id")?.value || null,
+  });
 }
 
 function sanitizeSettlementAccountRecord(account: Record<string, unknown>) {

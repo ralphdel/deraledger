@@ -35,6 +35,12 @@ import { getMerchant, getActiveSubscription, getNotifications, type AppNotificat
 import { logoutUser } from "@/app/(auth)/actions";
 import { cn } from "@/lib/utils";
 import type { Merchant, Subscription } from "@/lib/types";
+import {
+  getDashboardMerchantNavigationDecision,
+  isResolvedMerchantContext,
+  resolveMerchantContextForUser,
+  traceTeamDashboardRedirect,
+} from "@/lib/merchant-context";
 import { SubscriptionBanner } from "@/components/subscription-banner";
 import { SubscriptionExpiryModal } from "@/components/subscription-expiry-modal";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -95,6 +101,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [merchant, setMerchant] = useState<Merchant | null>(null);
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [merchantContextError, setMerchantContextError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const pathname = usePathname();
 
@@ -105,13 +112,76 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       const { data: { session } } = await sb.auth.getSession();
       const user = session?.user;
 
-      const m = await getMerchant();
+      const preferredMerchantId = readWorkspaceCookie();
+      const merchantContext = await resolveMerchantContextForUser(sb, user, {
+        preferredMerchantId,
+      });
+      const initialDecision = getDashboardMerchantNavigationDecision(merchantContext, false);
 
-      if (m === null) {
+      if (initialDecision.action === "login") {
+        traceTeamDashboardRedirect({
+          source: "DashboardLayout.loadMerchant",
+          context: merchantContext,
+          hasMerchantDto: false,
+          hasWorkspaceCookie: Boolean(preferredMerchantId),
+          workspaceAuthorized: false,
+          redirectReason: initialDecision.reason,
+        });
+        window.location.href = "/login";
+        return;
+      }
+
+      if (initialDecision.action === "onboarding") {
         if (typeof window !== "undefined") {
           document.cookie = "purpledger_workspace_id=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT;";
         }
+        traceTeamDashboardRedirect({
+          source: "DashboardLayout.loadMerchant",
+          context: merchantContext,
+          hasMerchantDto: false,
+          hasWorkspaceCookie: Boolean(preferredMerchantId),
+          workspaceAuthorized: false,
+          redirectReason: initialDecision.reason,
+        });
         window.location.href = "/onboarding";
+        return;
+      }
+
+      if (initialDecision.action === "error") {
+        traceTeamDashboardRedirect({
+          source: "DashboardLayout.loadMerchant",
+          context: merchantContext,
+          hasMerchantDto: false,
+          hasWorkspaceCookie: Boolean(preferredMerchantId),
+          workspaceAuthorized: null,
+          redirectReason: initialDecision.reason,
+        });
+        setMerchantContextError(initialDecision.reason);
+        return;
+      }
+
+      if (!isResolvedMerchantContext(merchantContext)) {
+        return;
+      }
+
+      const m = await getMerchant(merchantContext.merchantId);
+      const dtoDecision = getDashboardMerchantNavigationDecision(merchantContext, Boolean(m));
+
+      if (m === null) {
+        traceTeamDashboardRedirect({
+          source: "DashboardLayout.loadMerchant",
+          context: merchantContext,
+          hasMerchantDto: false,
+          hasWorkspaceCookie: Boolean(preferredMerchantId),
+          workspaceAuthorized: preferredMerchantId === merchantContext.merchantId,
+          redirectReason: dtoDecision.reason,
+        });
+        setMerchant({
+          id: merchantContext.merchantId,
+          business_name: "Workspace",
+          currentUserRole: merchantContext.roleName,
+          permissions: merchantContext.permissions,
+        } as unknown as Merchant);
         return;
       }
 
@@ -381,7 +451,28 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
         {/* Page Content */}
         <main className="min-w-0 flex-1 overflow-x-hidden p-4 sm:p-6 lg:p-8">
-          {businessTypeMissing && pathname !== "/settings" ? (
+          {merchantContextError ? (
+            <div className="flex flex-col items-center justify-center min-h-[60vh] text-center max-w-md mx-auto">
+              <div className="w-16 h-16 rounded-full flex items-center justify-center mb-6 bg-amber-100 text-amber-600 dark:bg-amber-500/10 dark:text-amber-400 dark:border dark:border-amber-500/20">
+                <AlertCircle className="w-8 h-8" />
+              </div>
+              <h2 className="text-2xl font-bold text-neutral-900 dark:text-white mb-2">
+                Workspace could not load
+              </h2>
+              <p className="text-neutral-600 dark:text-white/60 mb-8 leading-relaxed">
+                We could not verify your workspace access right now. Please refresh the page, or sign out and try again.
+              </p>
+              <Button
+                onClick={async () => {
+                  await logoutUser();
+                  window.location.href = "/login";
+                }}
+                className="bg-purp-900 text-white dark:bg-[#7B2FF7] hover:bg-purp-800 dark:hover:bg-[#7B2FF7]/80 px-8 py-3 rounded-lg font-bold transition-all"
+              >
+                Sign Out
+              </Button>
+            </div>
+          ) : businessTypeMissing && pathname !== "/settings" ? (
             <div className="flex flex-col items-center justify-center min-h-[60vh] text-center max-w-md mx-auto">
               <div className="w-16 h-16 rounded-full flex items-center justify-center mb-6 bg-amber-100 text-amber-600 dark:bg-amber-500/10 dark:text-amber-400 dark:border dark:border-amber-500/20">
                 <AlertCircle className="w-8 h-8" />
@@ -483,4 +574,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </div>
     </div>
   );
+}
+
+function readWorkspaceCookie() {
+  if (typeof document === "undefined") return null;
+  const cookieMatch = document.cookie.match(/(?:^|;\s*)purpledger_workspace_id=([^;]+)/);
+  return cookieMatch?.[1] ? decodeURIComponent(cookieMatch[1]) : null;
 }

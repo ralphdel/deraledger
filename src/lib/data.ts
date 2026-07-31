@@ -17,6 +17,7 @@ import type {
   Reference,
 } from "@/lib/types";
 import { getPlanDisplayName, normalizeCapabilityPlanCode, normalizePlanCode } from "@/lib/plans";
+import { resolveMerchantContextForUser } from "@/lib/merchant-context";
 
 // ── Active Merchant ID Resolver ───────────────────────────────────────────────
 function supabase() {
@@ -35,23 +36,12 @@ async function getActiveMerchantId(): Promise<string> {
   const user = session?.user;
 
   if (user) {
-    // 2. Owner: merchant row is linked by user_id.
-    const { data } = await sb.from("merchants").select("id").eq("user_id", user.id).single();
-    if (data?.id) {
-      return data.id;
-    }
-
-    // 3. Team member fallback: look up the active merchant_team row for this user.
-    const { data: teamRow } = await sb
-      .from("merchant_team")
-      .select("merchant_id")
-      .eq("user_id", user.id)
-      .eq("is_active", true)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .single();
-    if (teamRow?.merchant_id) {
-      return teamRow.merchant_id;
+    const preferredMerchantId = typeof window !== "undefined"
+      ? readWorkspaceCookie()
+      : null;
+    const context = await resolveMerchantContextForUser(sb, user, { preferredMerchantId });
+    if (context.status === "resolved") {
+      return context.merchantId;
     }
 
     return "00000000-0000-0000-0000-000000000001"; // Fallback to demo layout
@@ -60,13 +50,17 @@ async function getActiveMerchantId(): Promise<string> {
   // 4. Read the workspace cookie set during team-member login.
   //    This is a fallback when no authenticated user is available yet.
   if (typeof window !== "undefined") {
-    const cookieMatch = document.cookie.match(/(?:^|;\s*)purpledger_workspace_id=([^;]+)/);
-    if (cookieMatch?.[1]) {
-      return cookieMatch[1];
-    }
+    const workspaceCookie = readWorkspaceCookie();
+    if (workspaceCookie) return workspaceCookie;
   }
 
   return "00000000-0000-0000-0000-000000000001"; // Fallback to demo layout
+}
+
+function readWorkspaceCookie() {
+  if (typeof document === "undefined") return null;
+  const cookieMatch = document.cookie.match(/(?:^|;\s*)purpledger_workspace_id=([^;]+)/);
+  return cookieMatch?.[1] ? decodeURIComponent(cookieMatch[1]) : null;
 }
 
 // ── Merchant ────────────────────────────────────────────────────────────────

@@ -769,6 +769,29 @@ function Invoke-PsqlFile {
   Invoke-Psql -Arguments @("-X", "-w", "-v", "ON_ERROR_STOP=1", "-d", $TestDatabaseUrl, "-f", $fullPath) -Description $Description -ExpectFailure:$ExpectFailure | Out-Null
 }
 
+function Invoke-PsqlFileAsRole {
+  param(
+    [Parameter(Mandatory = $true)][string]$RoleName,
+    [Parameter(Mandatory = $true)][string]$RelativePath,
+    [Parameter(Mandatory = $true)][string]$Description,
+    [switch]$ExpectFailure
+  )
+
+  $fullPath = Join-Path $repoRoot $RelativePath
+  if (-not (Test-Path $fullPath)) {
+    throw "Missing SQL file: $fullPath"
+  }
+
+  $normalizedPath = ($fullPath -replace "\\", "/").Replace("'", "''")
+  $sql = @"
+SET ROLE $RoleName;
+\ir '$normalizedPath'
+RESET ROLE;
+"@
+
+  Invoke-PsqlSql -Sql $sql -Description $Description -ExpectFailure:$ExpectFailure
+}
+
 function Reset-DisposableDatabase {
   $sql = @"
 DROP SCHEMA IF EXISTS public CASCADE;
@@ -986,6 +1009,20 @@ function Invoke-Commit12PrerequisiteChain {
   Invoke-PsqlFile -RelativePath "supabase/migrations/20260711_01_solo_plus_activation_rpc.sql" -Description "Prepare Commit 10 substrate before $Scenario"
 }
 
+function Invoke-Commit13PrerequisiteChain {
+  param([Parameter(Mandatory = $true)][string]$Scenario)
+
+  Invoke-Commit12PrerequisiteChain -Scenario $Scenario
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260718_01_solo_plus_payment_recovery.sql" -Description "Prepare Commit 12 substrate before $Scenario"
+}
+
+function Invoke-Commit13AuthorizationChain {
+  param([Parameter(Mandatory = $true)][string]$Scenario)
+
+  Invoke-Commit13PrerequisiteChain -Scenario $Scenario
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260728_00_authorization_hardening.sql" -Description "Prepare Commit 13 authorization hardening before $Scenario"
+}
+
 function Initialize-SoloPlusReviewSecurityDriftFixture {
   $sql = @"
 ALTER TABLE public.solo_plus_cases DISABLE ROW LEVEL SECURITY;
@@ -1011,6 +1048,128 @@ GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE pub
 "@
 
   Invoke-PsqlSql -Sql $sql -Description "Seed staging-like Solo Plus review table security drift"
+}
+
+function Initialize-VerificationDisclosureBrowserWriteDriftFixture {
+  $sql = @"
+ALTER TABLE public.merchants ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.verification_disclosures ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Allow public read merchants" ON public.merchants;
+DROP POLICY IF EXISTS "Allow public update merchants" ON public.merchants;
+CREATE POLICY "Allow public read merchants"
+  ON public.merchants FOR SELECT USING (true);
+CREATE POLICY "Allow public update merchants"
+  ON public.merchants FOR UPDATE USING (true) WITH CHECK (true);
+
+REVOKE ALL ON TABLE public.merchants FROM PUBLIC;
+REVOKE ALL ON TABLE public.merchants FROM anon;
+REVOKE ALL ON TABLE public.merchants FROM authenticated;
+REVOKE ALL ON TABLE public.verification_disclosures FROM PUBLIC;
+REVOKE ALL ON TABLE public.verification_disclosures FROM anon;
+REVOKE ALL ON TABLE public.verification_disclosures FROM authenticated;
+
+GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE public.merchants TO anon;
+GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE public.merchants TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE public.verification_disclosures TO anon;
+GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE public.verification_disclosures TO authenticated;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLES TO anon;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLES TO authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT EXECUTE ON FUNCTIONS TO anon;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT EXECUTE ON FUNCTIONS TO authenticated;
+"@
+
+  Invoke-PsqlSql -Sql $sql -Description "Seed staging-like verification disclosure browser write drift"
+}
+
+function Initialize-HostedSupabaseManagedDefaultAclFixture {
+  $sql = @"
+DO `$`$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'supabase_admin') THEN
+    CREATE ROLE supabase_admin NOLOGIN;
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'commit13_migration_owner') THEN
+    CREATE ROLE commit13_migration_owner NOLOGIN;
+  END IF;
+END
+`$`$;
+
+REVOKE supabase_admin FROM commit13_migration_owner;
+
+GRANT USAGE ON SCHEMA auth TO commit13_migration_owner;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA auth TO commit13_migration_owner;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM anon;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON FUNCTIONS FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON FUNCTIONS FROM anon;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON FUNCTIONS FROM authenticated;
+
+ALTER DEFAULT PRIVILEGES FOR ROLE commit13_migration_owner IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLES TO authenticated;
+ALTER DEFAULT PRIVILEGES FOR ROLE commit13_migration_owner IN SCHEMA public
+  GRANT EXECUTE ON FUNCTIONS TO authenticated;
+
+ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLES TO anon;
+ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public
+  GRANT EXECUTE ON FUNCTIONS TO anon;
+
+ALTER SCHEMA public OWNER TO commit13_migration_owner;
+ALTER TABLE public.merchants OWNER TO commit13_migration_owner;
+ALTER TABLE public.merchant_team OWNER TO commit13_migration_owner;
+ALTER TABLE public.verification_disclosures OWNER TO commit13_migration_owner;
+"@
+
+  Invoke-PsqlSql -Sql $sql -Description "Seed hosted Supabase managed-role default ACL fixture"
+}
+
+function Assert-SupabaseAdminDefaultAclFixturePreserved {
+  $sql = @"
+DO `$`$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_default_acl d
+    JOIN pg_namespace n ON n.oid = d.defaclnamespace
+    JOIN pg_roles owner_role ON owner_role.oid = d.defaclrole
+    LEFT JOIN LATERAL aclexplode(d.defaclacl) acl ON true
+    LEFT JOIN pg_roles grantee_role ON grantee_role.oid = acl.grantee
+    WHERE n.nspname = 'public'
+      AND owner_role.rolname = 'supabase_admin'
+      AND COALESCE(grantee_role.rolname, 'PUBLIC') IN ('PUBLIC', 'anon', 'authenticated')
+      AND acl.privilege_type IN ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER', 'EXECUTE')
+  ) THEN
+    RAISE EXCEPTION 'expected managed supabase_admin default ACL fixture to remain visible as WARN';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM pg_default_acl d
+    JOIN pg_namespace n ON n.oid = d.defaclnamespace
+    JOIN pg_roles owner_role ON owner_role.oid = d.defaclrole
+    LEFT JOIN LATERAL aclexplode(d.defaclacl) acl ON true
+    LEFT JOIN pg_roles grantee_role ON grantee_role.oid = acl.grantee
+    WHERE n.nspname = 'public'
+      AND owner_role.rolname = 'commit13_migration_owner'
+      AND COALESCE(grantee_role.rolname, 'PUBLIC') IN ('PUBLIC', 'anon', 'authenticated')
+      AND acl.privilege_type IN ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER', 'EXECUTE')
+  ) THEN
+    RAISE EXCEPTION 'commit13_migration_owner unsafe default ACLs should have been hardened';
+  END IF;
+END
+`$`$;
+"@
+
+  Invoke-PsqlSql -Sql $sql -Description "Assert managed supabase_admin default ACL warning fixture"
 }
 
 function Assert-RelationAbsent {
@@ -1221,6 +1380,130 @@ function Run-Harness {
   Invoke-PsqlFile -RelativePath "supabase/migrations/20260718_01_solo_plus_payment_recovery.sql" -Description "Rerun Commit 12 payment recovery migration"
   Invoke-PsqlFile -RelativePath "supabase/tests/phase2_solo_plus_payment_recovery_rpc.sql" -Description "Rerun Commit 12 payment recovery RPC SQL assertions"
   Add-PassResult -Results $results -Message "Commit 12 payment recovery clean + rerun"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-Commit13PrerequisiteChain -Scenario "Commit 13 authorization preflight"
+  Invoke-PsqlFile -RelativePath "supabase/staging/preflight/014_authorization_hardening_snapshot.sql" -Description "Run Commit 13 authorization hardening staging preflight snapshot"
+  Add-PassResult -Results $results -Message "Commit 13 authorization hardening staging preflight snapshot"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-Commit13PrerequisiteChain -Scenario "Commit 13 authorization wrapper apply"
+  Invoke-PsqlFile -RelativePath "supabase/staging/014_authorization_hardening.sql" -Description "Run Commit 13 authorization hardening staging wrapper"
+  Add-PassResult -Results $results -Message "Commit 13 authorization hardening staging wrapper apply"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-Commit13PrerequisiteChain -Scenario "Commit 13 authorization postflight"
+  Invoke-PsqlFile -RelativePath "supabase/staging/014_authorization_hardening.sql" -Description "Run Commit 13 authorization hardening staging wrapper before postflight"
+  Invoke-PsqlFile -RelativePath "supabase/staging/postflight/014_authorization_hardening_verify.sql" -Description "Run Commit 13 authorization hardening staging postflight verify"
+  Add-PassResult -Results $results -Message "Commit 13 authorization hardening staging postflight verify"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-Commit13PrerequisiteChain -Scenario "Commit 13 authorization wrapper rerun"
+  Invoke-PsqlFile -RelativePath "supabase/staging/014_authorization_hardening.sql" -Description "Run Commit 13 authorization hardening staging wrapper first apply"
+  Invoke-PsqlFile -RelativePath "supabase/staging/014_authorization_hardening.sql" -Description "Run Commit 13 authorization hardening staging wrapper rerun"
+  Invoke-PsqlFile -RelativePath "supabase/staging/postflight/014_authorization_hardening_verify.sql" -Description "Run Commit 13 authorization hardening staging postflight verify after rerun"
+  Add-PassResult -Results $results -Message "Commit 13 authorization hardening staging wrapper rerun + postflight verify"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-Commit13PrerequisiteChain -Scenario "Commit 13 authorization SQL regression"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260728_00_authorization_hardening.sql" -Description "Run Commit 13 authorization hardening migration"
+  Invoke-PsqlFile -RelativePath "supabase/tests/phase2_authorization_hardening.sql" -Description "Run Commit 13 authorization hardening SQL assertions"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260728_00_authorization_hardening.sql" -Description "Rerun Commit 13 authorization hardening migration"
+  Invoke-PsqlFile -RelativePath "supabase/tests/phase2_authorization_hardening.sql" -Description "Rerun Commit 13 authorization hardening SQL assertions"
+  Add-PassResult -Results $results -Message "Commit 13 authorization hardening clean + rerun"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-Commit13PrerequisiteChain -Scenario "Commit 13 hosted Supabase managed-role default ACL fixture"
+  Initialize-HostedSupabaseManagedDefaultAclFixture
+  Invoke-PsqlFileAsRole -RoleName "commit13_migration_owner" -RelativePath "supabase/staging/preflight/014_authorization_hardening_snapshot.sql" -Description "Run Commit 13 authorization preflight under hosted managed-role fixture"
+  Invoke-PsqlFileAsRole -RoleName "commit13_migration_owner" -RelativePath "supabase/staging/014_authorization_hardening.sql" -Description "Run Commit 13 authorization wrapper under hosted managed-role fixture"
+  Invoke-PsqlFileAsRole -RoleName "commit13_migration_owner" -RelativePath "supabase/staging/postflight/014_authorization_hardening_verify.sql" -Description "Run Commit 13 authorization postflight under hosted managed-role fixture"
+  Invoke-PsqlFileAsRole -RoleName "commit13_migration_owner" -RelativePath "supabase/staging/014_authorization_hardening.sql" -Description "Rerun Commit 13 authorization wrapper under hosted managed-role fixture"
+  Invoke-PsqlFileAsRole -RoleName "commit13_migration_owner" -RelativePath "supabase/staging/postflight/014_authorization_hardening_verify.sql" -Description "Rerun Commit 13 authorization postflight under hosted managed-role fixture"
+  Assert-SupabaseAdminDefaultAclFixturePreserved
+  Add-PassResult -Results $results -Message "Commit 13 skips unmodifiable supabase_admin defaults while hardening DeraLedger-owned defaults"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-Commit13PrerequisiteChain -Scenario "Commit 13 disclosure preflight staging-drift failure"
+  Initialize-VerificationDisclosureBrowserWriteDriftFixture
+  Invoke-PsqlFile -RelativePath "supabase/staging/preflight/015_verification_disclosure_acknowledgement_snapshot.sql" -Description "Expect Commit 13 disclosure preflight to fail before authorization hardening" -ExpectFailure
+  Add-PassResult -Results $results -Message "Commit 13 disclosure preflight fails closed before authorization hardening"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-Commit13AuthorizationChain -Scenario "Commit 13 disclosure preflight"
+  Invoke-PsqlFile -RelativePath "supabase/staging/preflight/015_verification_disclosure_acknowledgement_snapshot.sql" -Description "Run Commit 13 disclosure staging preflight snapshot"
+  Add-PassResult -Results $results -Message "Commit 13 disclosure staging preflight snapshot"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-Commit13AuthorizationChain -Scenario "Commit 13 disclosure wrapper apply"
+  Invoke-PsqlFile -RelativePath "supabase/staging/015_verification_disclosure_acknowledgement_rpc.sql" -Description "Run Commit 13 disclosure staging wrapper"
+  Add-PassResult -Results $results -Message "Commit 13 disclosure staging wrapper apply"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-Commit13AuthorizationChain -Scenario "Commit 13 disclosure postflight"
+  Invoke-PsqlFile -RelativePath "supabase/staging/015_verification_disclosure_acknowledgement_rpc.sql" -Description "Run Commit 13 disclosure staging wrapper before postflight"
+  Invoke-PsqlFile -RelativePath "supabase/staging/postflight/015_verification_disclosure_acknowledgement_verify.sql" -Description "Run Commit 13 disclosure staging postflight verify"
+  Add-PassResult -Results $results -Message "Commit 13 disclosure staging postflight verify"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-Commit13AuthorizationChain -Scenario "Commit 13 disclosure wrapper rerun"
+  Invoke-PsqlFile -RelativePath "supabase/staging/015_verification_disclosure_acknowledgement_rpc.sql" -Description "Run Commit 13 disclosure staging wrapper first apply"
+  Invoke-PsqlFile -RelativePath "supabase/staging/015_verification_disclosure_acknowledgement_rpc.sql" -Description "Run Commit 13 disclosure staging wrapper rerun"
+  Invoke-PsqlFile -RelativePath "supabase/staging/postflight/015_verification_disclosure_acknowledgement_verify.sql" -Description "Run Commit 13 disclosure staging postflight verify after rerun"
+  Add-PassResult -Results $results -Message "Commit 13 disclosure staging wrapper rerun + postflight verify"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-Commit13AuthorizationChain -Scenario "Commit 13 disclosure RPC regression"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260728_01_verification_disclosure_acknowledgement_rpc.sql" -Description "Run Commit 13 disclosure acknowledgement migration"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260731_00_verification_disclosure_identity_hardening.sql" -Description "Run Commit 13 disclosure identity hardening migration"
+  Invoke-PsqlFile -RelativePath "supabase/tests/phase2_verification_disclosure_acknowledgement_rpc.sql" -Description "Run Commit 13 disclosure acknowledgement SQL assertions"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260728_01_verification_disclosure_acknowledgement_rpc.sql" -Description "Rerun Commit 13 disclosure acknowledgement migration"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260731_00_verification_disclosure_identity_hardening.sql" -Description "Rerun Commit 13 disclosure identity hardening migration"
+  Invoke-PsqlFile -RelativePath "supabase/tests/phase2_verification_disclosure_acknowledgement_rpc.sql" -Description "Rerun Commit 13 disclosure acknowledgement SQL assertions"
+  Add-PassResult -Results $results -Message "Commit 13 disclosure acknowledgement clean + rerun"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-Commit13AuthorizationChain -Scenario "Commit 13 disclosure identity preflight"
+  Invoke-PsqlFile -RelativePath "supabase/staging/015_verification_disclosure_acknowledgement_rpc.sql" -Description "Run Commit 13 disclosure staging wrapper before identity preflight"
+  Invoke-PsqlFile -RelativePath "supabase/staging/preflight/016_verification_disclosure_identity_hardening_snapshot.sql" -Description "Run Commit 13 disclosure identity preflight snapshot"
+  Add-PassResult -Results $results -Message "Commit 13 disclosure identity preflight snapshot"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-Commit13AuthorizationChain -Scenario "Commit 13 disclosure identity wrapper apply"
+  Invoke-PsqlFile -RelativePath "supabase/staging/015_verification_disclosure_acknowledgement_rpc.sql" -Description "Run Commit 13 disclosure staging wrapper before identity apply"
+  Invoke-PsqlFile -RelativePath "supabase/staging/016_verification_disclosure_identity_hardening.sql" -Description "Run Commit 13 disclosure identity staging wrapper"
+  Add-PassResult -Results $results -Message "Commit 13 disclosure identity staging wrapper apply"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-Commit13AuthorizationChain -Scenario "Commit 13 disclosure identity postflight"
+  Invoke-PsqlFile -RelativePath "supabase/staging/015_verification_disclosure_acknowledgement_rpc.sql" -Description "Run Commit 13 disclosure staging wrapper before identity postflight"
+  Invoke-PsqlFile -RelativePath "supabase/staging/016_verification_disclosure_identity_hardening.sql" -Description "Run Commit 13 disclosure identity staging wrapper before postflight"
+  Invoke-PsqlFile -RelativePath "supabase/staging/postflight/016_verification_disclosure_identity_hardening_verify.sql" -Description "Run Commit 13 disclosure identity postflight verify"
+  Add-PassResult -Results $results -Message "Commit 13 disclosure identity postflight verify"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture
+  Invoke-Commit13AuthorizationChain -Scenario "Commit 13 disclosure identity wrapper rerun"
+  Invoke-PsqlFile -RelativePath "supabase/staging/015_verification_disclosure_acknowledgement_rpc.sql" -Description "Run Commit 13 disclosure staging wrapper before identity rerun"
+  Invoke-PsqlFile -RelativePath "supabase/staging/016_verification_disclosure_identity_hardening.sql" -Description "Run Commit 13 disclosure identity staging wrapper first apply"
+  Invoke-PsqlFile -RelativePath "supabase/staging/016_verification_disclosure_identity_hardening.sql" -Description "Run Commit 13 disclosure identity staging wrapper rerun"
+  Invoke-PsqlFile -RelativePath "supabase/staging/postflight/016_verification_disclosure_identity_hardening_verify.sql" -Description "Run Commit 13 disclosure identity postflight verify after rerun"
+  Add-PassResult -Results $results -Message "Commit 13 disclosure identity staging wrapper rerun + postflight verify"
 
   Reset-DisposableDatabase
   Initialize-CoreFixture

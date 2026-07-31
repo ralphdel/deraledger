@@ -20,6 +20,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { logoutUser } from "@/app/(auth)/actions";
+import { createClient } from "@/lib/supabase/client";
 
 type OnboardingPlanCard = {
   id: "starter" | "individual" | "solo_plus" | "business";
@@ -175,9 +177,15 @@ function BrandLink() {
 export default function OnboardingPage() {
   const [soloPlusAvailable, setSoloPlusAvailable] = useState(false);
   const [soloPlusLoaded, setSoloPlusLoaded] = useState(false);
+  const [hasSession, setHasSession] = useState(false);
 
   useEffect(() => {
     let active = true;
+    const sb = createClient();
+
+    sb.auth.getSession().then(({ data: { session } }) => {
+      if (active) setHasSession(Boolean(session?.user));
+    });
 
     fetch("/api/plans/availability?plan=solo_plus")
       .then((response) => response.json())
@@ -228,9 +236,22 @@ export default function OnboardingPage() {
           <BrandLink />
           <div className="flex items-center gap-2">
             <ThemeToggle className="text-muted-foreground hover:text-foreground hover:bg-accent" />
-            <Link href="/login" className="text-sm font-semibold text-muted-foreground hover:text-foreground">
-              Sign in
-            </Link>
+            {hasSession ? (
+              <button
+                type="button"
+                onClick={async () => {
+                  await logoutUser();
+                  window.location.href = "/login";
+                }}
+                className="text-sm font-semibold text-muted-foreground hover:text-foreground"
+              >
+                Sign out
+              </button>
+            ) : (
+              <Link href="/login" className="text-sm font-semibold text-muted-foreground hover:text-foreground">
+                Sign in
+              </Link>
+            )}
           </div>
         </div>
       </header>

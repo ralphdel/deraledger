@@ -70,10 +70,8 @@ export default function DashboardPage() {
       getMerchant(), 
       getMonthlyCollectionTotal(),
       sb.auth.getSession(),
-      fetch("/api/merchant/settlement-accounts", { cache: "no-store" })
-        .then((response) => response.json())
-        .catch(() => null),
-    ]).then(([dashData, merchantData, collected, { data: { session } }, settlementPayload]) => {
+    ]).then(async ([dashData, merchantData, collected, { data: { session } }]) => {
+      const settlementPayload = await loadOptionalSettlementReadiness(merchantData);
       setStats(dashData);
       setMerchant(merchantData);
       setMonthlyCollected(collected);
@@ -393,4 +391,27 @@ export default function DashboardPage() {
       </div>
     </div>
   );
+}
+
+async function loadOptionalSettlementReadiness(merchant: Merchant | null) {
+  if (!canViewSettlementReadiness(merchant)) {
+    return null;
+  }
+
+  try {
+    const response = await fetch("/api/merchant/settlement-accounts", { cache: "no-store" });
+    if (response.status === 403) {
+      return null;
+    }
+    if (!response.ok) {
+      return null;
+    }
+    return response.json();
+  } catch {
+    return null;
+  }
+}
+
+function canViewSettlementReadiness(merchant: Merchant | null) {
+  return merchant?.permissions?.manage_settlement_account === true;
 }

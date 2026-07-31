@@ -123,7 +123,6 @@ export async function POST(request: Request) {
       businessType,
       relationshipClaim,
       verificationDisclosureAccepted,
-      disclosureVersion,
       paymentMethod,
     } = await request.json();
 
@@ -216,7 +215,7 @@ export async function POST(request: Request) {
     const ipAddress =
       request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
       request.headers.get("x-real-ip");
-    const disclosureVersionToStore = disclosureVersion || VERIFICATION_DISCLOSURE_VERSION;
+    const disclosureVersionToStore = VERIFICATION_DISCLOSURE_VERSION;
 
     await recordVerificationDisclosure(trustedSupabase, {
       planType: normalizedPlan,

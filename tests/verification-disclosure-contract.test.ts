@@ -10,6 +10,11 @@ type QueryResult = {
   error: { message: string } | null;
 };
 
+type RpcCall = {
+  name: string;
+  args: Record<string, unknown>;
+};
+
 class FakeQueryBuilder {
   private readonly client: FakeSupabaseClient;
   private readonly table: string;
@@ -51,11 +56,18 @@ class FakeSupabaseClient {
     value: Record<string, unknown> | null;
     filter: { column: string; value: unknown } | null;
   }> = [];
+  readonly rpcCalls: RpcCall[] = [];
   readonly insertErrors = new Map<string, { message: string }>();
   readonly updateErrors = new Map<string, { message: string }>();
+  rpcResult: QueryResult = { data: { kind: "created" }, error: null };
 
   from(table: string) {
     return new FakeQueryBuilder(this, table);
+  }
+
+  rpc(name: string, args: Record<string, unknown>): Promise<QueryResult> {
+    this.rpcCalls.push({ name, args: JSON.parse(JSON.stringify(args)) });
+    return Promise.resolve(this.rpcResult);
   }
 }
 
@@ -71,14 +83,16 @@ async function run() {
       deviceMetadata: { source: "test" },
     });
 
-    assert.deepEqual(result, { success: true });
-    assert.equal(client.inserts.length, 1);
-    assert.equal(client.inserts[0]?.table, "verification_disclosures");
-    assert.equal(client.inserts[0]?.value.disclosure_version, "1.2");
-    assert.equal(client.updates.length, 1);
-    assert.equal(client.updates[0]?.table, "merchants");
-    assert.equal(client.updates[0]?.filter?.column, "id");
-    assert.equal(client.updates[0]?.filter?.value, "merchant-1");
+    assert.deepEqual(result, { success: true, kind: "created" });
+    assert.equal(client.rpcCalls.length, 1);
+    assert.equal(client.rpcCalls[0]?.name, "record_verification_disclosure_acceptance_v1");
+    assert.equal(client.rpcCalls[0]?.args.p_user_id, "user-1");
+    assert.equal(client.rpcCalls[0]?.args.p_merchant_id, "merchant-1");
+    assert.equal(client.rpcCalls[0]?.args.p_plan_type, "solo_plus");
+    assert.equal(client.rpcCalls[0]?.args.p_context, "upgrade");
+    assert.equal(client.rpcCalls[0]?.args.p_disclosure_version, VERIFICATION_DISCLOSURE_VERSION);
+    assert.equal(client.inserts.length, 0);
+    assert.equal(client.updates.length, 0);
   }
 
   {
@@ -90,30 +104,34 @@ async function run() {
     });
 
     assert.deepEqual(result, { success: true });
+    assert.equal(client.rpcCalls.length, 0);
     assert.equal(client.inserts.length, 0);
     assert.equal(client.updates.length, 0);
   }
 
   {
     const client = new FakeSupabaseClient();
+    client.rpcResult = { data: { kind: "replayed" }, error: null };
     await recordVerificationDisclosure(client as never, {
       planType: "solo_plus",
       context: "upgrade",
       merchantId: "merchant-1",
+      disclosureVersion: "9.9",
     });
 
     assert.equal(
-      client.inserts[0]?.value.disclosure_version,
+      client.rpcCalls[0]?.args.p_disclosure_version,
       VERIFICATION_DISCLOSURE_VERSION,
     );
+    assert.equal(client.rpcCalls[0]?.args.p_device_metadata instanceof Object, true);
   }
 
   await assert.rejects(
     () => {
       const client = new FakeSupabaseClient();
-      client.insertErrors.set("verification_disclosures", {
+      client.rpcResult = { data: null, error: {
         message: "new row violates row-level security policy for table \"verification_disclosures\"",
-      });
+      } };
       return recordVerificationDisclosure(client as never, {
         planType: "solo_plus",
         context: "upgrade",
@@ -126,9 +144,7 @@ async function run() {
   await assert.rejects(
     () => {
       const client = new FakeSupabaseClient();
-      client.updateErrors.set("merchants", {
-        message: "permission denied for table merchants",
-      });
+      client.rpcResult = { data: { kind: "version_conflict" }, error: null };
       return recordVerificationDisclosure(client as never, {
         planType: "solo_plus",
         context: "upgrade",

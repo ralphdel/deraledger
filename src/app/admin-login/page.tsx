@@ -6,7 +6,6 @@ import { ShieldCheck, Lock, AlertTriangle } from "lucide-react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { verifyAdminPassword } from "./actions";
 
 export default function AdminLoginPage() {
   const [password, setPassword] = useState("");
@@ -19,8 +18,13 @@ export default function AdminLoginPage() {
     setLoading(true);
     setError(null);
 
-    const success = await verifyAdminPassword(password);
-    if (success) {
+    const response = await fetch("/api/admin-login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+
+    if (response.ok) {
       router.push("/admin");
     } else {
       setError("Invalid password. Access denied.");

@@ -29,7 +29,6 @@ export async function POST(request: Request) {
     sessionId,
     amountKobo,
     verificationDisclosureAccepted,
-    disclosureVersion,
     paymentMethod,
   } = await request.json();
 
@@ -70,7 +69,7 @@ export async function POST(request: Request) {
       business_type: businessType || null,
       relationship_claim: relationshipClaim || null,
       verification_disclosure_accepted: verificationDisclosureAccepted === true,
-      verification_disclosure_version: disclosureVersion || VERIFICATION_DISCLOSURE_VERSION,
+      verification_disclosure_version: VERIFICATION_DISCLOSURE_VERSION,
       session_id: sessionId,
       amount_expected_kobo: amountKobo,
       payment_method_requested: method,

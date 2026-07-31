@@ -21,7 +21,6 @@ export async function POST(request: Request) {
     businessType,
     relationshipClaim,
     verificationDisclosureAccepted,
-    disclosureVersion,
   } = await request.json();
 
   if (!email || !businessName || !plan) {
@@ -46,7 +45,7 @@ export async function POST(request: Request) {
     request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
     request.headers.get("x-real-ip");
   const userAgent = request.headers.get("user-agent");
-  const disclosureVersionToStore = disclosureVersion || VERIFICATION_DISCLOSURE_VERSION;
+  const disclosureVersionToStore = VERIFICATION_DISCLOSURE_VERSION;
 
   const { data, error } = await supabase
     .from("onboarding_sessions")

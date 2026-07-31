@@ -21,6 +21,11 @@ $script:LogRoot = if ($OutputDirectory) {
 $script:CheckResults = [System.Collections.Generic.List[object]]::new()
 $script:CheckResultMap = @{}
 $script:ApprovedCommit12Migration = 'supabase/migrations/20260718_01_solo_plus_payment_recovery.sql'
+$script:ApprovedCommit13Migrations = @(
+  'supabase/migrations/20260728_00_authorization_hardening.sql',
+  'supabase/migrations/20260728_01_verification_disclosure_acknowledgement_rpc.sql',
+  'supabase/migrations/20260731_00_verification_disclosure_identity_hardening.sql'
+)
 $script:JobObjectInteropLoaded = $false
 
 New-Item -ItemType Directory -Path $script:LogRoot -Force | Out-Null
@@ -880,6 +885,15 @@ function Bootstrap-ThroughCommit12 {
   Invoke-PsqlFileStrict -Context $Context -RelativePath 'supabase/migrations/20260718_01_solo_plus_payment_recovery.sql' | Out-Null
 }
 
+function Bootstrap-ThroughCommit13 {
+  param([hashtable]$Context)
+
+  Bootstrap-ThroughCommit12 -Context $Context
+  Invoke-PsqlFileStrict -Context $Context -RelativePath 'supabase/migrations/20260728_00_authorization_hardening.sql' | Out-Null
+  Invoke-PsqlFileStrict -Context $Context -RelativePath 'supabase/migrations/20260728_01_verification_disclosure_acknowledgement_rpc.sql' | Out-Null
+  Invoke-PsqlFileStrict -Context $Context -RelativePath 'supabase/migrations/20260731_00_verification_disclosure_identity_hardening.sql' | Out-Null
+}
+
 function Bootstrap-ThroughCommit9 {
   param([hashtable]$Context)
 
@@ -963,6 +977,11 @@ function Get-UnexpectedMigrationStatusLines {
   if ($CommitNumber -ge 12) {
     [void]$approved.Add($script:ApprovedCommit12Migration)
   }
+  if ($CommitNumber -ge 13) {
+    foreach ($migration in $script:ApprovedCommit13Migrations) {
+      [void]$approved.Add($migration)
+    }
+  }
 
   return @($StatusLines | Where-Object {
     $path = Get-GitStatusPath -StatusLine $_
@@ -1044,6 +1063,19 @@ exit /b 0
       '?? supabase/migrations/20260719_01_unexpected.sql'
     )
     Assert-ValidatorSelfTest -Condition (@(Get-UnexpectedMigrationStatusLines -StatusLines $commit12MixedStatus -CommitNumber 12).Count -eq 1) -Message 'Commit 12 did not reject an unrelated additional migration.'
+
+    $commit13MigrationStatus = @($script:ApprovedCommit13Migrations | ForEach-Object { "?? $_" })
+    Assert-ValidatorSelfTest -Condition (@(Get-UnexpectedMigrationStatusLines -StatusLines $commit13MigrationStatus -CommitNumber 13).Count -eq 0) -Message 'Commit 13 did not accept the approved authorization and disclosure migrations.'
+    Assert-ValidatorSelfTest -Condition (@(Get-UnexpectedMigrationStatusLines -StatusLines $commit13MigrationStatus -CommitNumber 12).Count -eq 3) -Message 'Dirty Commit 13 migrations were incorrectly treated as Commit 12-safe.'
+
+    $commit13MixedStatus = @(
+      "?? $script:ApprovedCommit12Migration",
+      "?? $($script:ApprovedCommit13Migrations[0])",
+      "?? $($script:ApprovedCommit13Migrations[1])",
+      "?? $($script:ApprovedCommit13Migrations[2])",
+      '?? supabase/migrations/20260729_01_unexpected.sql'
+    )
+    Assert-ValidatorSelfTest -Condition (@(Get-UnexpectedMigrationStatusLines -StatusLines $commit13MixedStatus -CommitNumber 13).Count -eq 1) -Message 'Commit 13 did not reject an unrelated additional migration.'
 
     $safe = Get-DatabaseSafety -ConnectionString $localUrl
     Assert-ValidatorSelfTest -Condition $safe.IsSafe -Message 'Disposable URL safety check did not accept the local test database URL.'
@@ -1235,13 +1267,14 @@ $checks = @(
       param($ctx)
       $statusLines = Get-GitStatusLines
       $forbidden = @($statusLines | Where-Object {
-        $_ -match '(^|/)(api/)?solo-plus/activate(/|\.|$)' -or
-        $_ -match '(^|/)activate(/|\.|$)' -or
-        $_ -match '(^|/)actions(/|\.|$)' -or
-        $_ -match '(^|/)server-actions?(/|\.|$)'
+        $path = ($_ -replace '^[ MADRCU?!]{1,2}\s+', '') -replace '\\', '/'
+        $path -match '(^|/)(api/)?solo-plus/activate(/|\.|$)' -or
+        $path -match '(^|/)activate(/|\.|$)' -or
+        $path -match '(^|/)activation(/|\.|$)' -or
+        $path -match '(^|/)server-actions?(/|\.|$)'
       })
       if ($forbidden.Count -gt 0) {
-        return [pscustomobject]@{ Status = 'FAIL'; ExitCode = 1; Stdout = ($forbidden -join [Environment]::NewLine); Stderr = 'Commit 12 must not add activation routes or server actions.' }
+        return [pscustomobject]@{ Status = 'FAIL'; ExitCode = 1; Stdout = ($forbidden -join [Environment]::NewLine); Stderr = 'This scope must not add activation routes or activation server actions.' }
       }
       return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = 'No forbidden activation-route or server-action additions detected.'; Stderr = '' }
     }),
@@ -1290,7 +1323,13 @@ $checks = @(
       if ($unexpected.Count -gt 0) {
         return [pscustomobject]@{ Status = 'FAIL'; ExitCode = 1; Stdout = ($unexpected -join [Environment]::NewLine); Stderr = 'Unexpected migration file changes detected for this commit scope.' }
       }
-      $allowed = if ($CommitNumber -ge 12) { $script:ApprovedCommit12Migration } else { 'none' }
+      $allowed = if ($CommitNumber -ge 13) {
+        (@($script:ApprovedCommit12Migration) + $script:ApprovedCommit13Migrations) -join ', '
+      } elseif ($CommitNumber -ge 12) {
+        $script:ApprovedCommit12Migration
+      } else {
+        'none'
+      }
       return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = "No unexpected migration additions detected. allowed=$allowed"; Stderr = '' }
     }),
   (New-CallbackCheck -Id 'ENV-019' -Name 'Commit 12 recovery SQL artifacts exist' -Phase 'A' -RootCauseCategory 'migration-manifest' -CommandDisplay 'Check Commit 12 recovery migration, staging wrappers, and SQL self-test' -Callback {
@@ -1301,6 +1340,33 @@ $checks = @(
         'supabase/staging/preflight/013_solo_plus_payment_recovery_snapshot.sql',
         'supabase/staging/postflight/013_solo_plus_payment_recovery_verify.sql',
         'supabase/tests/phase2_solo_plus_payment_recovery_rpc.sql'
+      )
+      $missing = @($required | Where-Object {
+          $fullPath = Join-Path $ctx.RepoRoot $_
+          -not (Test-Path -LiteralPath $fullPath)
+        })
+      if ($missing.Count -gt 0) {
+        return [pscustomobject]@{ Status = 'FAIL'; ExitCode = 1; Stdout = ''; Stderr = ('Missing required files:' + [Environment]::NewLine + ($missing -join [Environment]::NewLine)) }
+      }
+      return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = ($required -join [Environment]::NewLine); Stderr = '' }
+    }),
+  (New-CallbackCheck -Id 'ENV-020' -Name 'Commit 13 authorization and disclosure SQL artifacts exist' -Phase 'A' -RootCauseCategory 'migration-manifest' -CommandDisplay 'Check Commit 13 authorization hardening and disclosure acknowledgement artifacts' -Callback {
+      param($ctx)
+      $required = @(
+        'supabase/migrations/20260728_00_authorization_hardening.sql',
+        'supabase/staging/014_authorization_hardening.sql',
+        'supabase/staging/preflight/014_authorization_hardening_snapshot.sql',
+        'supabase/staging/postflight/014_authorization_hardening_verify.sql',
+        'supabase/tests/phase2_authorization_hardening.sql',
+        'supabase/migrations/20260728_01_verification_disclosure_acknowledgement_rpc.sql',
+        'supabase/staging/015_verification_disclosure_acknowledgement_rpc.sql',
+        'supabase/staging/preflight/015_verification_disclosure_acknowledgement_snapshot.sql',
+        'supabase/staging/postflight/015_verification_disclosure_acknowledgement_verify.sql',
+        'supabase/migrations/20260731_00_verification_disclosure_identity_hardening.sql',
+        'supabase/staging/016_verification_disclosure_identity_hardening.sql',
+        'supabase/staging/preflight/016_verification_disclosure_identity_hardening_snapshot.sql',
+        'supabase/staging/postflight/016_verification_disclosure_identity_hardening_verify.sql',
+        'supabase/tests/phase2_verification_disclosure_acknowledgement_rpc.sql'
       )
       $missing = @($required | Where-Object {
           $fullPath = Join-Path $ctx.RepoRoot $_
@@ -1580,15 +1646,121 @@ $checks = @(
       Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/tests/phase2_solo_plus_payment_recovery_rpc.sql' | Out-Null
       return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = 'phase2_solo_plus_payment_recovery_rpc.sql passed.'; Stderr = '' }
     }),
+  (New-CallbackCheck -Id 'SQL-018' -Name 'Commit 13 authorization hardening preflight snapshot' -Phase 'F' -RootCauseCategory 'sql-suite-commit13' -CommandDisplay 'Bootstrap through Commit 12 and run Commit 13 authorization hardening preflight snapshot' -DependsOn @('ENV-006','ENV-009','ENV-020','SQL-017') -Callback {
+      param($ctx)
+      Bootstrap-ThroughCommit12 -Context $ctx
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/preflight/014_authorization_hardening_snapshot.sql' | Out-Null
+      return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = 'Commit 13 authorization hardening preflight snapshot passed.'; Stderr = '' }
+    }),
+  (New-CallbackCheck -Id 'SQL-019' -Name 'Commit 13 authorization hardening staging wrapper apply' -Phase 'F' -RootCauseCategory 'sql-suite-commit13' -CommandDisplay 'Bootstrap through Commit 12 and apply Commit 13 authorization hardening staging wrapper' -DependsOn @('SQL-018') -Callback {
+      param($ctx)
+      Bootstrap-ThroughCommit12 -Context $ctx
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/014_authorization_hardening.sql' | Out-Null
+      return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = 'Commit 13 authorization hardening staging wrapper applied locally.'; Stderr = '' }
+    }),
+  (New-CallbackCheck -Id 'SQL-020' -Name 'Commit 13 authorization hardening postflight verify' -Phase 'F' -RootCauseCategory 'sql-suite-commit13' -CommandDisplay 'Bootstrap through Commit 12, apply authorization wrapper, and run Commit 13 authorization postflight verify' -DependsOn @('SQL-019') -Callback {
+      param($ctx)
+      Bootstrap-ThroughCommit12 -Context $ctx
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/014_authorization_hardening.sql' | Out-Null
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/postflight/014_authorization_hardening_verify.sql' | Out-Null
+      return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = 'Commit 13 authorization hardening postflight verify passed.'; Stderr = '' }
+    }),
+  (New-CallbackCheck -Id 'SQL-021' -Name 'Commit 13 authorization hardening wrapper rerun and postflight verify' -Phase 'F' -RootCauseCategory 'migration-rerun' -CommandDisplay 'Bootstrap through Commit 12, apply authorization wrapper twice, and rerun Commit 13 authorization postflight verify' -DependsOn @('SQL-020') -Callback {
+      param($ctx)
+      Bootstrap-ThroughCommit12 -Context $ctx
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/014_authorization_hardening.sql' | Out-Null
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/014_authorization_hardening.sql' | Out-Null
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/postflight/014_authorization_hardening_verify.sql' | Out-Null
+      return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = 'Commit 13 authorization hardening wrapper rerun and postflight verify passed.'; Stderr = '' }
+    }),
+  (New-CallbackCheck -Id 'SQL-022' -Name 'Commit 13 authorization hardening SQL regression' -Phase 'F' -RootCauseCategory 'sql-suite-commit13' -CommandDisplay 'Bootstrap through Commit 13 authorization hardening and run phase2_authorization_hardening.sql' -DependsOn @('SQL-021') -Callback {
+      param($ctx)
+      Bootstrap-ThroughCommit12 -Context $ctx
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/migrations/20260728_00_authorization_hardening.sql' | Out-Null
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/tests/phase2_authorization_hardening.sql' | Out-Null
+      return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = 'phase2_authorization_hardening.sql passed.'; Stderr = '' }
+    }),
+  (New-CallbackCheck -Id 'SQL-023' -Name 'Commit 13 disclosure preflight snapshot' -Phase 'F' -RootCauseCategory 'sql-suite-commit13' -CommandDisplay 'Bootstrap through Commit 13 authorization hardening and run disclosure preflight snapshot' -DependsOn @('SQL-022') -Callback {
+      param($ctx)
+      Bootstrap-ThroughCommit12 -Context $ctx
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/014_authorization_hardening.sql' | Out-Null
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/preflight/015_verification_disclosure_acknowledgement_snapshot.sql' | Out-Null
+      return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = 'Commit 13 disclosure preflight snapshot passed.'; Stderr = '' }
+    }),
+  (New-CallbackCheck -Id 'SQL-024' -Name 'Commit 13 disclosure staging wrapper apply' -Phase 'F' -RootCauseCategory 'sql-suite-commit13' -CommandDisplay 'Bootstrap through Commit 13 authorization hardening and apply disclosure staging wrapper' -DependsOn @('SQL-023') -Callback {
+      param($ctx)
+      Bootstrap-ThroughCommit12 -Context $ctx
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/014_authorization_hardening.sql' | Out-Null
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/015_verification_disclosure_acknowledgement_rpc.sql' | Out-Null
+      return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = 'Commit 13 disclosure staging wrapper applied locally.'; Stderr = '' }
+    }),
+  (New-CallbackCheck -Id 'SQL-025' -Name 'Commit 13 disclosure postflight verify' -Phase 'F' -RootCauseCategory 'sql-suite-commit13' -CommandDisplay 'Bootstrap through Commit 13 authorization hardening, apply disclosure wrapper, and run disclosure postflight verify' -DependsOn @('SQL-024') -Callback {
+      param($ctx)
+      Bootstrap-ThroughCommit12 -Context $ctx
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/014_authorization_hardening.sql' | Out-Null
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/015_verification_disclosure_acknowledgement_rpc.sql' | Out-Null
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/postflight/015_verification_disclosure_acknowledgement_verify.sql' | Out-Null
+      return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = 'Commit 13 disclosure postflight verify passed.'; Stderr = '' }
+    }),
+  (New-CallbackCheck -Id 'SQL-026' -Name 'Commit 13 disclosure wrapper rerun and postflight verify' -Phase 'F' -RootCauseCategory 'migration-rerun' -CommandDisplay 'Bootstrap through Commit 13 authorization hardening, apply disclosure wrapper twice, and rerun disclosure postflight verify' -DependsOn @('SQL-025') -Callback {
+      param($ctx)
+      Bootstrap-ThroughCommit12 -Context $ctx
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/014_authorization_hardening.sql' | Out-Null
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/015_verification_disclosure_acknowledgement_rpc.sql' | Out-Null
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/015_verification_disclosure_acknowledgement_rpc.sql' | Out-Null
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/postflight/015_verification_disclosure_acknowledgement_verify.sql' | Out-Null
+      return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = 'Commit 13 disclosure wrapper rerun and postflight verify passed.'; Stderr = '' }
+    }),
+  (New-CallbackCheck -Id 'SQL-028' -Name 'Commit 13 disclosure identity preflight snapshot' -Phase 'F' -RootCauseCategory 'sql-suite-commit13' -CommandDisplay 'Bootstrap through Commit 13 disclosure acknowledgement and run identity hardening preflight snapshot' -DependsOn @('SQL-026') -Callback {
+      param($ctx)
+      Bootstrap-ThroughCommit12 -Context $ctx
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/014_authorization_hardening.sql' | Out-Null
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/015_verification_disclosure_acknowledgement_rpc.sql' | Out-Null
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/preflight/016_verification_disclosure_identity_hardening_snapshot.sql' | Out-Null
+      return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = 'Commit 13 disclosure identity preflight snapshot passed.'; Stderr = '' }
+    }),
+  (New-CallbackCheck -Id 'SQL-029' -Name 'Commit 13 disclosure identity staging wrapper apply' -Phase 'F' -RootCauseCategory 'sql-suite-commit13' -CommandDisplay 'Bootstrap through Commit 13 disclosure acknowledgement and apply identity hardening staging wrapper' -DependsOn @('SQL-028') -Callback {
+      param($ctx)
+      Bootstrap-ThroughCommit12 -Context $ctx
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/014_authorization_hardening.sql' | Out-Null
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/015_verification_disclosure_acknowledgement_rpc.sql' | Out-Null
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/016_verification_disclosure_identity_hardening.sql' | Out-Null
+      return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = 'Commit 13 disclosure identity staging wrapper applied locally.'; Stderr = '' }
+    }),
+  (New-CallbackCheck -Id 'SQL-030' -Name 'Commit 13 disclosure identity postflight verify' -Phase 'F' -RootCauseCategory 'sql-suite-commit13' -CommandDisplay 'Bootstrap through Commit 13 disclosure acknowledgement, apply identity wrapper, and run identity postflight verify' -DependsOn @('SQL-029') -Callback {
+      param($ctx)
+      Bootstrap-ThroughCommit12 -Context $ctx
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/014_authorization_hardening.sql' | Out-Null
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/015_verification_disclosure_acknowledgement_rpc.sql' | Out-Null
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/016_verification_disclosure_identity_hardening.sql' | Out-Null
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/postflight/016_verification_disclosure_identity_hardening_verify.sql' | Out-Null
+      return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = 'Commit 13 disclosure identity postflight verify passed.'; Stderr = '' }
+    }),
+  (New-CallbackCheck -Id 'SQL-031' -Name 'Commit 13 disclosure identity wrapper rerun and postflight verify' -Phase 'F' -RootCauseCategory 'migration-rerun' -CommandDisplay 'Bootstrap through Commit 13 disclosure acknowledgement, apply identity wrapper twice, and rerun identity postflight verify' -DependsOn @('SQL-030') -Callback {
+      param($ctx)
+      Bootstrap-ThroughCommit12 -Context $ctx
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/014_authorization_hardening.sql' | Out-Null
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/015_verification_disclosure_acknowledgement_rpc.sql' | Out-Null
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/016_verification_disclosure_identity_hardening.sql' | Out-Null
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/016_verification_disclosure_identity_hardening.sql' | Out-Null
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/staging/postflight/016_verification_disclosure_identity_hardening_verify.sql' | Out-Null
+      return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = 'Commit 13 disclosure identity wrapper rerun and postflight verify passed.'; Stderr = '' }
+    }),
+  (New-CallbackCheck -Id 'SQL-027' -Name 'Commit 13 disclosure acknowledgement RPC SQL regression' -Phase 'F' -RootCauseCategory 'sql-suite-commit13' -CommandDisplay 'Bootstrap through Commit 13 and run phase2_verification_disclosure_acknowledgement_rpc.sql' -DependsOn @('SQL-031') -Callback {
+      param($ctx)
+      Bootstrap-ThroughCommit13 -Context $ctx
+      Invoke-PsqlFileStrict -Context $ctx -RelativePath 'supabase/tests/phase2_verification_disclosure_acknowledgement_rpc.sql' | Out-Null
+      return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = 'phase2_verification_disclosure_acknowledgement_rpc.sql passed.'; Stderr = '' }
+    }),
   (New-CallbackCheck -Id 'SQL-011' -Name 'Migration safety self-tests' -Phase 'F' -RootCauseCategory 'harness-safety' -CommandDisplay 'Run migration safety self-tests' -DependsOn @('ENV-006','ENV-009') -Callback {
       param($ctx)
-      $result = Invoke-CapturedProcess -FilePath 'powershell.exe' -Arguments @('-NoProfile','-ExecutionPolicy','Bypass','-File','.\\scripts\\test-breet-solo-plus-migrations.ps1','-RunSafetySelfTests','-RunHarnessSelfTests','-PsqlPath',$resolvedPsqlForHarness,'-PsqlTimeoutSeconds','120') -WorkingDirectory $ctx.RepoRoot -TimeoutSeconds 600
+      $result = Invoke-CapturedProcess -FilePath 'powershell.exe' -Arguments @('-NoProfile','-ExecutionPolicy','Bypass','-File','.\\scripts\\test-breet-solo-plus-migrations.ps1','-RunSafetySelfTests','-RunHarnessSelfTests','-PsqlPath',$resolvedPsqlForHarness,'-PsqlTimeoutSeconds','120','-TestDatabaseUrl',$ctx.TestDatabaseUrl) -WorkingDirectory $ctx.RepoRoot -TimeoutSeconds 600
       if ($result.ExitCode -ne 0) {
         return [pscustomobject]@{ Status = 'FAIL'; ExitCode = $result.ExitCode; Stdout = $result.Stdout; Stderr = $result.Stderr }
       }
       return [pscustomobject]@{ Status = 'PASS'; ExitCode = 0; Stdout = $result.Stdout; Stderr = $result.Stderr }
     }),
-  (New-CommandCheck -Id 'SQL-012' -Name 'Full hostile/default-grant harness' -Phase 'F' -RootCauseCategory 'hostile-harness' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-ExecutionPolicy','Bypass','-File','.\\scripts\\test-breet-solo-plus-migrations.ps1','-PsqlPath',$resolvedPsqlForHarness,'-PsqlTimeoutSeconds','120') -TimeoutSeconds 600 -DependsOn @('ENV-006','ENV-009')),
+  (New-CommandCheck -Id 'SQL-012' -Name 'Full hostile/default-grant harness' -Phase 'F' -RootCauseCategory 'hostile-harness' -FilePath 'powershell.exe' -Arguments @('-NoProfile','-ExecutionPolicy','Bypass','-File','.\\scripts\\test-breet-solo-plus-migrations.ps1','-PsqlPath',$resolvedPsqlForHarness,'-PsqlTimeoutSeconds','120','-TestDatabaseUrl',$context.TestDatabaseUrl) -TimeoutSeconds 600 -DependsOn @('ENV-006','ENV-009')),
   (New-CommandCheck -Id 'FINAL-001' -Name 'Final git status' -Phase 'G' -RootCauseCategory 'repository-state' -FilePath 'git' -Arguments @('status', '--short') -TimeoutSeconds 120),
   (New-CommandCheck -Id 'FINAL-002' -Name 'Final git diff --stat' -Phase 'G' -RootCauseCategory 'repository-state' -FilePath 'git' -Arguments @('diff', '--stat') -TimeoutSeconds 120),
   (New-CommandCheck -Id 'FINAL-003' -Name 'Final git diff --name-only' -Phase 'G' -RootCauseCategory 'repository-state' -FilePath 'git' -Arguments @('diff', '--name-only') -TimeoutSeconds 120)

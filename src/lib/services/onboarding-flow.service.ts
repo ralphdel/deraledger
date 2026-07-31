@@ -278,44 +278,37 @@ export async function recordVerificationDisclosure(
 ) {
   if (!requiresVerificationDisclosure(params.planType)) return { success: true };
 
-  const disclosureVersion = params.disclosureVersion || VERIFICATION_DISCLOSURE_VERSION;
-  const payload = {
-    user_id: params.userId || null,
-    merchant_id: params.merchantId || null,
-    onboarding_session_id: params.onboardingSessionId || null,
-    plan_type: params.planType,
-    context: params.context,
-    disclosure_version: disclosureVersion,
-    ip_address: params.ipAddress || null,
-    user_agent: params.userAgent || null,
-    device_metadata: params.deviceMetadata || {},
-  };
+  const disclosureVersion = VERIFICATION_DISCLOSURE_VERSION;
+  const { data, error } = await adminClient.rpc(
+    "record_verification_disclosure_acceptance_v1",
+    {
+      p_user_id: params.userId || null,
+      p_merchant_id: params.merchantId || null,
+      p_onboarding_session_id: params.onboardingSessionId || null,
+      p_plan_type: params.planType,
+      p_context: params.context,
+      p_disclosure_version: disclosureVersion,
+      p_ip_address: params.ipAddress || null,
+      p_user_agent: params.userAgent || null,
+      p_device_metadata: params.deviceMetadata || {},
+    },
+  );
 
-  const { error } = await adminClient.from("verification_disclosures").insert(payload);
   if (error) {
-    console.warn("[OnboardingFlow] Disclosure insert failed:", error.message);
+    console.warn("[OnboardingFlow] Disclosure acknowledgement RPC failed:", error.message);
     throw new Error("Failed to persist verification disclosure audit record.");
   }
 
-  if (params.merchantId) {
-    const { error: merchantUpdateError } = await adminClient
-      .from("merchants")
-      .update({
-        verification_disclosure_acknowledged_at: new Date().toISOString(),
-        verification_disclosure_version: disclosureVersion,
-      })
-      .eq("id", params.merchantId);
+  const kind = typeof data === "object" && data !== null && "kind" in data
+    ? String((data as { kind?: unknown }).kind || "")
+    : "";
 
-    if (merchantUpdateError) {
-      console.warn(
-        "[OnboardingFlow] Merchant disclosure acknowledgement update failed:",
-        merchantUpdateError.message,
-      );
-      throw new Error("Failed to persist verification disclosure acknowledgement.");
-    }
+  if (kind === "created" || kind === "replayed") {
+    return { success: true, kind };
   }
 
-  return { success: true };
+  console.warn("[OnboardingFlow] Disclosure acknowledgement RPC returned an unexpected result:", kind || "missing");
+  throw new Error("Failed to persist verification disclosure acknowledgement.");
 }
 
 export async function enterPaidSetupMode(
