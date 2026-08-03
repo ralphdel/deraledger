@@ -245,6 +245,7 @@ DO $$
 DECLARE
   v_function_def TEXT;
   v_payment_records_policy TEXT;
+  v_processor_default TEXT;
   v_table TEXT;
 BEGIN
   IF NOT EXISTS (
@@ -257,6 +258,38 @@ BEGIN
       AND is_nullable = 'YES'
   ) THEN
     RAISE EXCEPTION 'payment_events.merchant_id must remain intentionally nullable for historical ownerless audit rows';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'payment_events'
+      AND column_name = 'processor'
+      AND udt_name = 'text'
+      AND is_nullable = 'NO'
+  ) THEN
+    RAISE EXCEPTION 'payment_events.processor must remain text not null';
+  END IF;
+
+  SELECT pg_get_expr(d.adbin, d.adrelid)
+  INTO v_processor_default
+  FROM pg_attribute a
+  JOIN pg_class c ON c.oid = a.attrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  LEFT JOIN pg_attrdef d
+    ON d.adrelid = a.attrelid
+   AND d.adnum = a.attnum
+  WHERE n.nspname = 'public'
+    AND c.relname = 'payment_events'
+    AND a.attname = 'processor'
+    AND a.attnum > 0
+    AND NOT a.attisdropped;
+
+  IF v_processor_default IS NOT NULL
+     AND trim(regexp_replace(lower(v_processor_default), '\s+', ' ', 'g')) <> '''paystack''::text' THEN
+    RAISE EXCEPTION 'payment_events.processor must have no default or the accepted legacy paystack default, got %',
+      v_processor_default;
   END IF;
 
   INSERT INTO public.payment_events (

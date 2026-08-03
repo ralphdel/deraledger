@@ -407,6 +407,7 @@ async function main() {
 
     assert.equal(client.upsertCalls.length, 1);
     assert.equal(client.upsertCalls[0]?.value.merchant_id, "merchant-1");
+    assert.equal(client.upsertCalls[0]?.value.processor, "paystack");
     assert.equal(client.upsertCalls[0]?.value.amount_kobo, 1300000);
   }
 
@@ -417,6 +418,11 @@ async function main() {
   const monnifyWebhookSource = readFileSync("src/app/api/webhooks/monnify/route.ts", "utf8");
   const verifyAndProvisionSource = readFileSync("src/app/api/onboarding/verify-and-provision/route.ts", "utf8");
   const fiatConfirmationSource = readFileSync("src/lib/services/fiat-payment-confirmation.service.ts", "utf8");
+  const planPaymentRecoverySource = readFileSync("src/lib/services/plan-payment-recovery.service.ts", "utf8");
+  const migrationASource = readFileSync(
+    "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql",
+    "utf8",
+  );
   const legacyCompatibilityMigrationSource = readFileSync(
     "supabase/migrations/20260803_00_payment_events_legacy_merchant_compatibility.sql",
     "utf8",
@@ -432,7 +438,12 @@ async function main() {
   assert.match(monnifyWebhookSource, /Skipping payment_events audit without merchant_id for Monnify processed webhook/);
   assert.match(verifyAndProvisionSource, /Skipping payment_events audit without merchant_id during payment verification attempt/);
   assert.match(fiatConfirmationSource, /from\("payment_events"\)\.upsert\(\{[\s\S]*?merchant_id: invoice\.merchant_id/);
+  assert.match(fiatConfirmationSource, /from\("payment_events"\)\.upsert\(\{[\s\S]*?processor:\s*provider/);
+  assert.match(planPaymentRecoverySource, /from\("payment_events"\)\.upsert\([\s\S]*?processor:\s*input\.provider/);
+  assert.match(breetWebhookSource, /from\("payment_events"\)\.insert\(\{[\s\S]*?processor:\s*"breet"/);
   assert.doesNotMatch(fiatConfirmationSource, /from\("payment_events"\)\.upsert\(\{[\s\S]*?merchant_id:\s*null/);
+  assert.match(migrationASource, /assert_payment_events_processor_legacy_compatible/);
+  assert.doesNotMatch(migrationASource, /ALTER\s+TABLE\s+public\.payment_events\s+ALTER\s+COLUMN\s+processor\s+DROP\s+DEFAULT/i);
   assert.doesNotMatch(legacyCompatibilityMigrationSource, /\b(UPDATE|DELETE FROM)\s+public\.payment_events\b/i);
   assert.doesNotMatch(
     legacyCompatibilityMigrationSource,

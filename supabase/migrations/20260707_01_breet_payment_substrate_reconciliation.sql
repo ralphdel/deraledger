@@ -208,6 +208,58 @@ AS $$
   );
 $$;
 
+CREATE OR REPLACE FUNCTION pg_temp.assert_payment_events_processor_legacy_compatible()
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_udt_name TEXT;
+  v_not_null BOOLEAN;
+  v_default_expr TEXT;
+BEGIN
+  SELECT
+    t.typname,
+    a.attnotnull,
+    pg_get_expr(d.adbin, d.adrelid)
+  INTO
+    v_udt_name,
+    v_not_null,
+    v_default_expr
+  FROM pg_attribute a
+  JOIN pg_class c ON c.oid = a.attrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  JOIN pg_type t ON t.oid = a.atttypid
+  LEFT JOIN pg_attrdef d
+    ON d.adrelid = a.attrelid
+   AND d.adnum = a.attnum
+  WHERE n.nspname = 'public'
+    AND c.relname = 'payment_events'
+    AND a.attname = 'processor'
+    AND a.attnum > 0
+    AND NOT a.attisdropped;
+
+  IF v_udt_name IS NULL THEN
+    RAISE EXCEPTION 'Migration A compatibility failure: schema=public object=payment_events.processor expected=column actual=missing';
+  END IF;
+
+  IF v_udt_name <> 'text' THEN
+    RAISE EXCEPTION 'Migration A compatibility failure: schema=public object=payment_events.processor expected=type:text actual=type:%',
+      v_udt_name;
+  END IF;
+
+  IF v_not_null IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'Migration A compatibility failure: schema=public object=payment_events.processor expected=not_null:true actual=not_null:%',
+      v_not_null;
+  END IF;
+
+  IF v_default_expr IS NOT NULL
+     AND pg_temp.normalize_catalog_sql(v_default_expr) <> '''paystack''::text' THEN
+    RAISE EXCEPTION 'Migration A compatibility failure: schema=public object=payment_events.processor expected=no default or default ''paystack''::text actual=%',
+      v_default_expr;
+  END IF;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION pg_temp.assert_public_primary_key(
   p_table_name TEXT,
   p_expected_columns TEXT[]
@@ -1381,7 +1433,7 @@ BEGIN
     PERFORM pg_temp.assert_public_column_definition('payment_events', 'invoice_id', 'uuid', false, NULL);
     PERFORM pg_temp.assert_public_column_definition('payment_events', 'transaction_id', 'uuid', false, NULL);
     PERFORM pg_temp.assert_public_column_definition('payment_events', 'event_type', 'text', true, NULL);
-    PERFORM pg_temp.assert_public_column_definition('payment_events', 'processor', 'text', true, NULL);
+    PERFORM pg_temp.assert_payment_events_processor_legacy_compatible();
     PERFORM pg_temp.assert_public_column_definition('payment_events', 'processor_ref', 'text', false, NULL);
     PERFORM pg_temp.assert_public_column_definition('payment_events', 'amount_kobo', 'int8', false, NULL);
     PERFORM pg_temp.assert_public_column_definition('payment_events', 'raw_payload', 'jsonb', false, NULL);

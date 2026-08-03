@@ -1298,6 +1298,7 @@ BEGIN
     FROM public.payment_events
     WHERE id = '20000000-0000-4000-8000-000000000001'
       AND merchant_id IS NULL
+      AND processor = 'paystack'
       AND processor_ref = 'legacy-ownerless-ref'
       AND raw_payload = '{"fixture":"historical_ownerless"}'::jsonb
       AND payment_purpose IS NULL
@@ -1310,6 +1311,7 @@ BEGIN
     FROM public.payment_events
     WHERE id = '20000000-0000-4000-8000-000000000002'
       AND merchant_id = '10000000-0000-4000-8000-000000000001'
+      AND processor = 'paystack'
       AND processor_ref = 'merchant-owned-ref'
       AND raw_payload = '{"fixture":"merchant_owned"}'::jsonb
       AND payment_purpose = 'invoice_payment'
@@ -1324,6 +1326,56 @@ BEGIN
       AND merchant_id IS NOT NULL
   ) THEN
     RAISE EXCEPTION 'historical ownerless payment_events row received synthetic ownership';
+  END IF;
+END
+`$`$;
+"@
+
+  Invoke-PsqlSql -Sql $sql -Description $Description
+}
+
+function Assert-PaymentEventsProcessorDefault {
+  param(
+    [Parameter(Mandatory = $true)][string]$Description,
+    [Parameter(Mandatory = $true)]
+    [ValidateSet("none", "paystack", "monnify")]
+    [string]$ExpectedDefaultState
+  )
+
+  $sql = @"
+DO `$`$
+DECLARE
+  v_default_expr TEXT;
+  v_normalized_default TEXT;
+BEGIN
+  SELECT pg_get_expr(d.adbin, d.adrelid)
+  INTO v_default_expr
+  FROM pg_attribute a
+  JOIN pg_class c ON c.oid = a.attrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  LEFT JOIN pg_attrdef d
+    ON d.adrelid = a.attrelid
+   AND d.adnum = a.attnum
+  WHERE n.nspname = 'public'
+    AND c.relname = 'payment_events'
+    AND a.attname = 'processor'
+    AND a.attnum > 0
+    AND NOT a.attisdropped;
+
+  v_normalized_default := trim(regexp_replace(lower(coalesce(v_default_expr, '')), '\s+', ' ', 'g'));
+
+  IF '$ExpectedDefaultState' = 'none' THEN
+    IF v_default_expr IS NOT NULL THEN
+      RAISE EXCEPTION 'payment_events.processor expected no default, got %', v_default_expr;
+    END IF;
+  ELSIF '$ExpectedDefaultState' = 'paystack' THEN
+    IF v_normalized_default <> '''paystack''::text' THEN
+      RAISE EXCEPTION 'payment_events.processor expected legacy paystack default, got %', COALESCE(v_default_expr, 'NULL');
+    END IF;
+  ELSIF '$ExpectedDefaultState' = 'monnify' THEN
+    IF v_normalized_default <> '''monnify''::text' THEN
+      RAISE EXCEPTION 'payment_events.processor expected rejected monnify fixture default, got %', COALESCE(v_default_expr, 'NULL');
+    END IF;
   END IF;
 END
 `$`$;
@@ -1445,16 +1497,37 @@ function Run-Harness {
   Invoke-PsqlFile -RelativePath "supabase/tests/phase2_breet_payment_substrate_reconciliation.sql" -Description "Run Migration A SQL assertions"
   Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Rerun Migration A"
   Invoke-PsqlFile -RelativePath "supabase/tests/phase2_breet_payment_substrate_reconciliation.sql" -Description "Rerun Migration A SQL assertions"
+  Assert-PaymentEventsProcessorDefault -Description "Assert clean Migration A creates canonical payment_events.processor without a default" -ExpectedDefaultState "none"
   Add-PassResult -Results $results -Message "Migration A clean + rerun"
 
   Reset-DisposableDatabase
   Initialize-CoreFixture -IncludeCanonicalPaymentRecordsSecurityPrerequisite -IncludePaymentEventsPrerequisite
   Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Run Migration A with canonical preexisting payment_events under hostile default grants"
   Invoke-PsqlFile -RelativePath "supabase/tests/phase2_breet_payment_substrate_reconciliation.sql" -Description "Run Migration A SQL assertions with canonical preexisting payment_events under hostile default grants"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Rerun Migration A with canonical preexisting payment_events"
+  Invoke-PsqlFile -RelativePath "supabase/tests/phase2_breet_payment_substrate_reconciliation.sql" -Description "Rerun Migration A SQL assertions with canonical preexisting payment_events"
   Assert-PaymentEventsLegacyRowsPreserved -Description "Assert Migration A preserves historical and merchant-owned payment_events rows"
+  Assert-PaymentEventsProcessorDefault -Description "Assert Migration A preserves canonical payment_events.processor without a default" -ExpectedDefaultState "none"
   Assert-PaymentEventsMerchantIdNullable -Description "Assert Migration A canonical payment_events.merchant_id nullability"
   Assert-PaymentEventsForeignKeyRejectsInvalidMerchant -Description "Assert Migration A rejects invalid non-null payment_events merchant ownership"
   Add-PassResult -Results $results -Message "Migration A accepts canonical preexisting payment_events and repairs hostile browser grants"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture -IncludeCanonicalPaymentRecordsSecurityPrerequisite -IncludePaymentEventsPrerequisite
+  Invoke-PsqlSql -Description "Create production-like payment_events.processor legacy default fixture" -Sql @"
+ALTER TABLE public.payment_events
+  ALTER COLUMN processor SET DEFAULT 'paystack'::text;
+"@
+  Assert-PaymentEventsProcessorDefault -Description "Assert production-like fixture has legacy payment_events.processor default before Migration A" -ExpectedDefaultState "paystack"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Run Migration A with production-like payment_events.processor legacy default"
+  Invoke-PsqlFile -RelativePath "supabase/tests/phase2_breet_payment_substrate_reconciliation.sql" -Description "Run Migration A SQL assertions with production-like payment_events.processor legacy default"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Rerun Migration A with production-like payment_events.processor legacy default"
+  Invoke-PsqlFile -RelativePath "supabase/tests/phase2_breet_payment_substrate_reconciliation.sql" -Description "Rerun Migration A SQL assertions with production-like payment_events.processor legacy default"
+  Assert-PaymentEventsLegacyRowsPreserved -Description "Assert Migration A preserves rows with production-like payment_events.processor legacy default"
+  Assert-PaymentEventsProcessorDefault -Description "Assert Migration A preserves production-like payment_events.processor legacy default" -ExpectedDefaultState "paystack"
+  Assert-PaymentEventsMerchantIdNullable -Description "Assert Migration A keeps merchant_id nullable with production-like processor default"
+  Assert-PaymentEventsForeignKeyRejectsInvalidMerchant -Description "Assert Migration A keeps FK enforcement with production-like processor default"
+  Add-PassResult -Results $results -Message "Migration A accepts and preserves production-like payment_events.processor paystack default"
 
   Reset-DisposableDatabase
   Initialize-CoreFixture -IncludeCanonicalPaymentRecordsSecurityPrerequisite -IncludePaymentEventsPrerequisite
@@ -1839,6 +1912,18 @@ ALTER TABLE public.payment_events DROP CONSTRAINT payment_events_merchant_id_fke
   Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Expect Migration A to fail on incompatible payment_events" -ExpectFailure
   Assert-RelationAbsent -QualifiedName "public.payment_sessions"
   Add-PassResult -Results $results -Message "Migration A blocks incompatible payment_events before DDL"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture -IncludePaymentEventsPrerequisite
+  Invoke-PsqlSql -Description "Create incompatible payment_events.processor default fixture" -Sql @"
+ALTER TABLE public.payment_events
+  ALTER COLUMN processor SET DEFAULT 'monnify'::text;
+"@
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Expect Migration A to fail on incompatible payment_events.processor default" -ExpectFailure
+  Assert-RelationAbsent -QualifiedName "public.payment_sessions"
+  Assert-PaymentEventsProcessorDefault -Description "Assert failed Migration A leaves rejected payment_events.processor default unchanged" -ExpectedDefaultState "monnify"
+  Assert-PaymentEventsLegacyRowsPreserved -Description "Assert failed Migration A leaves payment_events rows unchanged after processor default rejection"
+  Add-PassResult -Results $results -Message "Migration A blocks incompatible payment_events.processor defaults before DDL"
 
   Reset-DisposableDatabase
   Initialize-CoreFixture -IncludeCanonicalPaymentRecordsSecurityPrerequisite
