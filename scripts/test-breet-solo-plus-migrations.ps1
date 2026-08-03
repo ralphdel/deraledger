@@ -930,7 +930,7 @@ function Initialize-PaymentEventsPrerequisite {
   $sql = @"
 CREATE TABLE IF NOT EXISTS public.payment_events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  merchant_id UUID NOT NULL,
+  merchant_id UUID,
   invoice_id UUID,
   transaction_id UUID,
   event_type TEXT NOT NULL,
@@ -995,6 +995,52 @@ BEGIN
   END IF;
 END
 `$`$;
+
+INSERT INTO public.merchants (id, business_name, email, subscription_plan, merchant_tier)
+VALUES (
+  '10000000-0000-4000-8000-000000000001',
+  'Harness Merchant',
+  'harness-merchant@example.test',
+  'starter',
+  'starter'
+)
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO public.payment_events (
+  id,
+  merchant_id,
+  event_type,
+  processor,
+  processor_ref,
+  raw_payload,
+  processed_at,
+  idempotency_key,
+  payment_purpose
+)
+VALUES
+  (
+    '20000000-0000-4000-8000-000000000001',
+    NULL,
+    'historical.ownerless',
+    'paystack',
+    'legacy-ownerless-ref',
+    '{"fixture":"historical_ownerless"}'::jsonb,
+    '2026-06-06T00:00:00Z',
+    'harness:payment-events:historical-ownerless',
+    NULL
+  ),
+  (
+    '20000000-0000-4000-8000-000000000002',
+    '10000000-0000-4000-8000-000000000001',
+    'merchant.owned',
+    'paystack',
+    'merchant-owned-ref',
+    '{"fixture":"merchant_owned"}'::jsonb,
+    '2026-06-06T00:01:00Z',
+    'harness:payment-events:merchant-owned',
+    'invoice_payment'
+  )
+ON CONFLICT (id) DO NOTHING;
 "@
 
   Invoke-PsqlSql -Sql $sql -Description "Seed canonical payment_events prerequisite"
@@ -1241,6 +1287,124 @@ END
   Invoke-PsqlSql -Sql $sql -Description "Assert function absent: public.$FunctionName($TypeArguments)"
 }
 
+function Assert-PaymentEventsLegacyRowsPreserved {
+  param([Parameter(Mandatory = $true)][string]$Description)
+
+  $sql = @"
+DO `$`$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM public.payment_events
+    WHERE id = '20000000-0000-4000-8000-000000000001'
+      AND merchant_id IS NULL
+      AND processor_ref = 'legacy-ownerless-ref'
+      AND raw_payload = '{"fixture":"historical_ownerless"}'::jsonb
+      AND payment_purpose IS NULL
+  ) THEN
+    RAISE EXCEPTION 'historical ownerless payment_events row was not preserved unchanged';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM public.payment_events
+    WHERE id = '20000000-0000-4000-8000-000000000002'
+      AND merchant_id = '10000000-0000-4000-8000-000000000001'
+      AND processor_ref = 'merchant-owned-ref'
+      AND raw_payload = '{"fixture":"merchant_owned"}'::jsonb
+      AND payment_purpose = 'invoice_payment'
+  ) THEN
+    RAISE EXCEPTION 'merchant-owned payment_events row was not preserved unchanged';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM public.payment_events
+    WHERE id = '20000000-0000-4000-8000-000000000001'
+      AND merchant_id IS NOT NULL
+  ) THEN
+    RAISE EXCEPTION 'historical ownerless payment_events row received synthetic ownership';
+  END IF;
+END
+`$`$;
+"@
+
+  Invoke-PsqlSql -Sql $sql -Description $Description
+}
+
+function Assert-PaymentEventsMerchantIdNullable {
+  param([Parameter(Mandatory = $true)][string]$Description)
+
+  $sql = @"
+DO `$`$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'payment_events'
+      AND column_name = 'merchant_id'
+      AND udt_name = 'uuid'
+      AND is_nullable = 'YES'
+  ) THEN
+    RAISE EXCEPTION 'payment_events.merchant_id should be nullable uuid';
+  END IF;
+END
+`$`$;
+"@
+
+  Invoke-PsqlSql -Sql $sql -Description $Description
+}
+
+function Assert-PaymentEventsMerchantIdNotNull {
+  param([Parameter(Mandatory = $true)][string]$Description)
+
+  $sql = @"
+DO `$`$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'payment_events'
+      AND column_name = 'merchant_id'
+      AND udt_name = 'uuid'
+      AND is_nullable = 'NO'
+  ) THEN
+    RAISE EXCEPTION 'payment_events.merchant_id should remain NOT NULL after rollback';
+  END IF;
+END
+`$`$;
+"@
+
+  Invoke-PsqlSql -Sql $sql -Description $Description
+}
+
+function Assert-PaymentEventsForeignKeyRejectsInvalidMerchant {
+  param([Parameter(Mandatory = $true)][string]$Description)
+
+  $sql = @"
+INSERT INTO public.payment_events (
+  id,
+  merchant_id,
+  event_type,
+  processor,
+  processed_at,
+  idempotency_key
+)
+VALUES (
+  '20000000-0000-4000-8000-0000000000ff',
+  'ffffffff-ffff-4fff-8fff-ffffffffffff',
+  'invalid.merchant',
+  'paystack',
+  now(),
+  'harness:payment-events:invalid-merchant'
+);
+"@
+
+  Invoke-PsqlSql -Sql $sql -Description $Description -ExpectFailure
+}
+
 function Invoke-InjectedFailureMigration {
   param(
     [Parameter(Mandatory = $true)][string]$RelativePath,
@@ -1287,7 +1451,41 @@ function Run-Harness {
   Initialize-CoreFixture -IncludeCanonicalPaymentRecordsSecurityPrerequisite -IncludePaymentEventsPrerequisite
   Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Run Migration A with canonical preexisting payment_events under hostile default grants"
   Invoke-PsqlFile -RelativePath "supabase/tests/phase2_breet_payment_substrate_reconciliation.sql" -Description "Run Migration A SQL assertions with canonical preexisting payment_events under hostile default grants"
+  Assert-PaymentEventsLegacyRowsPreserved -Description "Assert Migration A preserves historical and merchant-owned payment_events rows"
+  Assert-PaymentEventsMerchantIdNullable -Description "Assert Migration A canonical payment_events.merchant_id nullability"
+  Assert-PaymentEventsForeignKeyRejectsInvalidMerchant -Description "Assert Migration A rejects invalid non-null payment_events merchant ownership"
   Add-PassResult -Results $results -Message "Migration A accepts canonical preexisting payment_events and repairs hostile browser grants"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture -IncludeCanonicalPaymentRecordsSecurityPrerequisite -IncludePaymentEventsPrerequisite
+  Invoke-PsqlSql -Description "Create production-like payment_events FK delete-action drift" -Sql @"
+ALTER TABLE public.payment_events DROP CONSTRAINT payment_events_merchant_id_fkey;
+ALTER TABLE public.payment_events
+  ADD CONSTRAINT payment_events_merchant_id_fkey
+  FOREIGN KEY (merchant_id) REFERENCES public.merchants(id);
+"@
+  Invoke-PsqlFile -RelativePath "supabase/staging/preflight/017_payment_events_legacy_merchant_compatibility_snapshot.sql" -Description "Run payment_events legacy compatibility staging preflight"
+  Invoke-PsqlFile -RelativePath "supabase/staging/017_payment_events_legacy_merchant_compatibility.sql" -Description "Run payment_events legacy compatibility staging wrapper"
+  Invoke-PsqlFile -RelativePath "supabase/staging/postflight/017_payment_events_legacy_merchant_compatibility_verify.sql" -Description "Run payment_events legacy compatibility staging postflight"
+  Invoke-PsqlFile -RelativePath "supabase/staging/017_payment_events_legacy_merchant_compatibility.sql" -Description "Rerun payment_events legacy compatibility staging wrapper"
+  Invoke-PsqlFile -RelativePath "supabase/staging/postflight/017_payment_events_legacy_merchant_compatibility_verify.sql" -Description "Run payment_events legacy compatibility staging postflight after rerun"
+  Assert-PaymentEventsLegacyRowsPreserved -Description "Assert forward migration preserves historical and merchant-owned payment_events rows"
+  Assert-PaymentEventsMerchantIdNullable -Description "Assert forward migration canonical payment_events.merchant_id nullability"
+  Assert-PaymentEventsForeignKeyRejectsInvalidMerchant -Description "Assert forward migration rejects invalid non-null payment_events merchant ownership"
+  Add-PassResult -Results $results -Message "Payment events legacy compatibility staging flow repairs FK drift and preserves rows"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture -IncludeCanonicalPaymentRecordsSecurityPrerequisite -IncludePaymentEventsPrerequisite
+  Invoke-PsqlSql -Description "Create already-applied NOT NULL payment_events fixture" -Sql @"
+DELETE FROM public.payment_events
+WHERE id = '20000000-0000-4000-8000-000000000001';
+ALTER TABLE public.payment_events ALTER COLUMN merchant_id SET NOT NULL;
+"@
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260803_00_payment_events_legacy_merchant_compatibility.sql" -Description "Run forward payment_events compatibility migration on NOT NULL fixture"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260803_00_payment_events_legacy_merchant_compatibility.sql" -Description "Rerun forward payment_events compatibility migration on repaired fixture"
+  Assert-PaymentEventsMerchantIdNullable -Description "Assert forward migration drops payment_events.merchant_id NOT NULL"
+  Assert-PaymentEventsForeignKeyRejectsInvalidMerchant -Description "Assert forward migration keeps real merchant FK enforcement after NOT NULL repair"
+  Add-PassResult -Results $results -Message "Forward payment_events compatibility migration repairs already-applied NOT NULL schemas"
 
   Reset-DisposableDatabase
   Initialize-CoreFixture -IncludeCanonicalPaymentRecordsSecurityPrerequisite
@@ -1636,7 +1834,7 @@ ALTER TABLE public.payment_records DROP CONSTRAINT payment_records_internal_refe
   Reset-DisposableDatabase
   Initialize-CoreFixture -IncludePaymentEventsPrerequisite
   Invoke-PsqlSql -Description "Create incompatible payment_events fixture" -Sql @"
-ALTER TABLE public.payment_events ALTER COLUMN merchant_id DROP NOT NULL;
+ALTER TABLE public.payment_events DROP CONSTRAINT payment_events_merchant_id_fkey;
 "@
   Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Expect Migration A to fail on incompatible payment_events" -ExpectFailure
   Assert-RelationAbsent -QualifiedName "public.payment_sessions"
@@ -1736,6 +1934,17 @@ CREATE UNIQUE INDEX idx_payment_records_solo_plus_provider_reference
   Invoke-InjectedFailureMigration -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Run Migration A with injected late failure"
   Assert-RelationAbsent -QualifiedName "public.payment_sessions"
   Add-PassResult -Results $results -Message "Migration A rolls back on injected late failure"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture -IncludeCanonicalPaymentRecordsSecurityPrerequisite -IncludePaymentEventsPrerequisite
+  Invoke-PsqlSql -Description "Create NOT NULL payment_events rollback fixture" -Sql @"
+DELETE FROM public.payment_events
+WHERE id = '20000000-0000-4000-8000-000000000001';
+ALTER TABLE public.payment_events ALTER COLUMN merchant_id SET NOT NULL;
+"@
+  Invoke-InjectedFailureMigration -RelativePath "supabase/migrations/20260803_00_payment_events_legacy_merchant_compatibility.sql" -Description "Run payment_events legacy compatibility migration with injected late failure"
+  Assert-PaymentEventsMerchantIdNotNull -Description "Assert payment_events legacy compatibility rollback preserves NOT NULL fixture"
+  Add-PassResult -Results $results -Message "Payment events legacy compatibility migration rolls back on injected late failure"
 
   Reset-DisposableDatabase
   Initialize-CoreFixture

@@ -369,21 +369,25 @@ async function main() {
     /Solo Plus renewal remains deferred/i,
   );
 
-  await assert.rejects(
-    () =>
-      upsertWebhookAuditEvent((new FakeSupabaseClient()) as never, {
-        provider: "paystack",
-        eventType: "paystack.received",
-        paymentMethod: "card",
-        paymentPurpose: "plan_subscription",
-        paymentReference: "SPL-SUB-TEST",
-        providerReference: "paystack-ref-1",
-        rawPayload: {},
-        processingStatus: "received",
-        idempotencyKey: "paystack:test:received",
-      }),
-    /requires merchantId/i,
-  );
+  for (const provider of ["paystack", "monnify", "breet"] as const) {
+    const client = new FakeSupabaseClient();
+    await assert.rejects(
+      () =>
+        upsertWebhookAuditEvent(client as never, {
+          provider,
+          eventType: `${provider}.received`,
+          paymentMethod: provider === "breet" ? "crypto" : "card",
+          paymentPurpose: "plan_subscription",
+          paymentReference: "SPL-SUB-TEST",
+          providerReference: `${provider}-ref-1`,
+          rawPayload: {},
+          processingStatus: "received",
+          idempotencyKey: `${provider}:test:received`,
+        }),
+      /requires merchantId/i,
+    );
+    assert.equal(client.upsertCalls.length, 0);
+  }
 
   {
     const client = new FakeSupabaseClient();
@@ -409,13 +413,31 @@ async function main() {
   const cryptoSubscriptionSource = readFileSync("src/app/api/checkout/crypto-subscription/route.ts", "utf8");
   const cryptoUpgradeSource = readFileSync("src/app/api/checkout/crypto-upgrade/route.ts", "utf8");
   const breetWebhookSource = readFileSync("src/app/api/webhooks/breet/route.ts", "utf8");
+  const paystackWebhookSource = readFileSync("src/app/api/webhooks/paystack/route.ts", "utf8");
+  const monnifyWebhookSource = readFileSync("src/app/api/webhooks/monnify/route.ts", "utf8");
   const verifyAndProvisionSource = readFileSync("src/app/api/onboarding/verify-and-provision/route.ts", "utf8");
+  const fiatConfirmationSource = readFileSync("src/lib/services/fiat-payment-confirmation.service.ts", "utf8");
+  const legacyCompatibilityMigrationSource = readFileSync(
+    "supabase/migrations/20260803_00_payment_events_legacy_merchant_compatibility.sql",
+    "utf8",
+  );
 
   assert.match(cryptoSubscriptionSource, /payment_record_id:\s*pendingPaymentRecord\.id/);
   assert.match(cryptoUpgradeSource, /payment_record_id:\s*pendingPaymentRecord\.id/);
   assert.match(breetWebhookSource, /const soloPlusConfirmation = await confirmSoloPlusPayment\(/);
   assert.match(breetWebhookSource, /Skipping payment_events audit without merchant_id/);
+  assert.match(paystackWebhookSource, /if \(normalized\.merchantId\) \{[\s\S]*?await upsertWebhookAuditEvent/);
+  assert.match(paystackWebhookSource, /Skipping payment_events audit without merchant_id for Paystack processed webhook/);
+  assert.match(monnifyWebhookSource, /if \(normalized\.merchantId\) \{[\s\S]*?await upsertWebhookAuditEvent/);
+  assert.match(monnifyWebhookSource, /Skipping payment_events audit without merchant_id for Monnify processed webhook/);
   assert.match(verifyAndProvisionSource, /Skipping payment_events audit without merchant_id during payment verification attempt/);
+  assert.match(fiatConfirmationSource, /from\("payment_events"\)\.upsert\(\{[\s\S]*?merchant_id: invoice\.merchant_id/);
+  assert.doesNotMatch(fiatConfirmationSource, /from\("payment_events"\)\.upsert\(\{[\s\S]*?merchant_id:\s*null/);
+  assert.doesNotMatch(legacyCompatibilityMigrationSource, /\b(UPDATE|DELETE FROM)\s+public\.payment_events\b/i);
+  assert.doesNotMatch(
+    legacyCompatibilityMigrationSource,
+    /\b(UPDATE|INSERT INTO|DELETE FROM)\s+public\.(solo_plus_cases|subscriptions|subscription_payments|refunds|payment_records)\b/i,
+  );
 }
 
 main().catch((error) => {

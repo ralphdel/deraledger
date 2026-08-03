@@ -247,15 +247,48 @@ DECLARE
   v_payment_records_policy TEXT;
   v_table TEXT;
 BEGIN
-  IF EXISTS (
+  IF NOT EXISTS (
     SELECT 1
     FROM information_schema.columns
     WHERE table_schema = 'public'
       AND table_name = 'payment_events'
       AND column_name = 'merchant_id'
-      AND is_nullable <> 'NO'
+      AND udt_name = 'uuid'
+      AND is_nullable = 'YES'
   ) THEN
-    RAISE EXCEPTION 'payment_events.merchant_id unexpectedly became nullable';
+    RAISE EXCEPTION 'payment_events.merchant_id must remain intentionally nullable for historical ownerless audit rows';
+  END IF;
+
+  INSERT INTO public.payment_events (
+    id,
+    merchant_id,
+    event_type,
+    processor,
+    processed_at,
+    raw_payload,
+    idempotency_key,
+    payment_purpose
+  )
+  VALUES (
+    'aaaaaaaa-0000-4000-8000-000000000009',
+    NULL,
+    'historical.ownerless',
+    'paystack',
+    now(),
+    '{"fixture":"historical_ownerless"}'::jsonb,
+    'phase2-breet-payment-substrate:historical-ownerless',
+    NULL
+  )
+  ON CONFLICT (id) DO NOTHING;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM public.payment_events
+    WHERE id = 'aaaaaaaa-0000-4000-8000-000000000009'
+      AND merchant_id IS NULL
+      AND raw_payload = '{"fixture":"historical_ownerless"}'::jsonb
+  ) THEN
+    RAISE EXCEPTION 'historical ownerless payment_events rows must be accepted and preserved';
   END IF;
 
   IF NOT EXISTS (

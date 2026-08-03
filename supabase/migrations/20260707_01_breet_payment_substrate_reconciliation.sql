@@ -435,7 +435,8 @@ BEGIN
       v_actual_ref_columns;
   END IF;
 
-  IF upper(v_actual_delete_action) <> upper(p_expected_delete_action) THEN
+  IF p_expected_delete_action IS NOT NULL
+     AND upper(v_actual_delete_action) <> upper(p_expected_delete_action) THEN
     RAISE EXCEPTION 'Migration A compatibility failure: schema=public object=%.% expected=on delete % actual=%',
       p_table_name,
       p_constraint_name,
@@ -1376,7 +1377,7 @@ BEGIN
     PERFORM pg_temp.assert_public_relation_kind('payment_events');
     PERFORM pg_temp.assert_public_named_primary_key('payment_events', 'payment_events_pkey', ARRAY['id']);
     PERFORM pg_temp.assert_public_column_definition('payment_events', 'id', 'uuid', true, 'gen_random_uuid');
-    PERFORM pg_temp.assert_public_column_definition('payment_events', 'merchant_id', 'uuid', true, NULL);
+    PERFORM pg_temp.assert_public_column_definition('payment_events', 'merchant_id', 'uuid', false, NULL);
     PERFORM pg_temp.assert_public_column_definition('payment_events', 'invoice_id', 'uuid', false, NULL);
     PERFORM pg_temp.assert_public_column_definition('payment_events', 'transaction_id', 'uuid', false, NULL);
     PERFORM pg_temp.assert_public_column_definition('payment_events', 'event_type', 'text', true, NULL);
@@ -1416,7 +1417,7 @@ BEGIN
         ARRAY['merchant_id'],
         'merchants',
         ARRAY['id'],
-        'CASCADE'
+        NULL
       );
     ELSE
       RAISE EXCEPTION 'Migration A compatibility failure: schema=public object=payment_events.payment_events_merchant_id_fkey expected=foreign key actual=missing';
@@ -1960,7 +1961,7 @@ FOR EACH ROW EXECUTE FUNCTION public.touch_updated_at();
 
 CREATE TABLE IF NOT EXISTS public.payment_events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  merchant_id UUID NOT NULL,
+  merchant_id UUID,
   invoice_id UUID,
   transaction_id UUID,
   event_type TEXT NOT NULL,
@@ -2014,6 +2015,77 @@ ALTER TABLE public.payment_events
   ADD COLUMN IF NOT EXISTS failure_reason TEXT,
   ADD COLUMN IF NOT EXISTS settlement_destination_source TEXT,
   ADD COLUMN IF NOT EXISTS reconciliation_status TEXT;
+
+DO $$
+DECLARE
+  v_actual_columns TEXT[];
+  v_actual_ref_schema TEXT;
+  v_actual_ref_table TEXT;
+  v_actual_ref_columns TEXT[];
+  v_actual_delete_action TEXT;
+BEGIN
+  SELECT
+    array_agg(src.attname ORDER BY src_ord.ordinality),
+    ref_ns.nspname,
+    ref_cls.relname,
+    array_agg(ref.attname ORDER BY ref_ord.ordinality),
+    CASE con.confdeltype
+      WHEN 'a' THEN 'NO ACTION'
+      WHEN 'r' THEN 'RESTRICT'
+      WHEN 'c' THEN 'CASCADE'
+      WHEN 'n' THEN 'SET NULL'
+      WHEN 'd' THEN 'SET DEFAULT'
+    END
+  INTO
+    v_actual_columns,
+    v_actual_ref_schema,
+    v_actual_ref_table,
+    v_actual_ref_columns,
+    v_actual_delete_action
+  FROM pg_constraint con
+  JOIN pg_class ref_cls ON ref_cls.oid = con.confrelid
+  JOIN pg_namespace ref_ns ON ref_ns.oid = ref_cls.relnamespace
+  CROSS JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS src_ord(attnum, ordinality)
+  JOIN pg_attribute src
+    ON src.attrelid = con.conrelid
+   AND src.attnum = src_ord.attnum
+  CROSS JOIN LATERAL unnest(con.confkey) WITH ORDINALITY AS ref_ord(attnum, ordinality)
+  JOIN pg_attribute ref
+    ON ref.attrelid = con.confrelid
+   AND ref.attnum = ref_ord.attnum
+   AND ref_ord.ordinality = src_ord.ordinality
+  WHERE con.conrelid = 'public.payment_events'::regclass
+    AND con.conname = 'payment_events_merchant_id_fkey'
+    AND con.contype = 'f'
+  GROUP BY ref_ns.nspname, ref_cls.relname, con.confdeltype;
+
+  IF v_actual_columns IS NULL THEN
+    ALTER TABLE public.payment_events
+      ADD CONSTRAINT payment_events_merchant_id_fkey
+      FOREIGN KEY (merchant_id) REFERENCES public.merchants(id) ON DELETE CASCADE;
+    RETURN;
+  END IF;
+
+  IF v_actual_columns <> ARRAY['merchant_id']
+     OR v_actual_ref_schema <> 'public'
+     OR v_actual_ref_table <> 'merchants'
+     OR v_actual_ref_columns <> ARRAY['id'] THEN
+    RAISE EXCEPTION 'Migration A compatibility failure: schema=public object=payment_events.payment_events_merchant_id_fkey expected=merchant_id references public.merchants(id) actual=%.%(%)->%',
+      v_actual_ref_schema,
+      v_actual_ref_table,
+      v_actual_ref_columns,
+      v_actual_columns;
+  END IF;
+
+  IF v_actual_delete_action <> 'CASCADE' THEN
+    ALTER TABLE public.payment_events
+      DROP CONSTRAINT payment_events_merchant_id_fkey;
+    ALTER TABLE public.payment_events
+      ADD CONSTRAINT payment_events_merchant_id_fkey
+      FOREIGN KEY (merchant_id) REFERENCES public.merchants(id) ON DELETE CASCADE;
+  END IF;
+END;
+$$;
 
 CREATE INDEX IF NOT EXISTS idx_payment_events_created_at
   ON public.payment_events(created_at DESC);
@@ -4247,6 +4319,15 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'Migration A verification failed: public.payment_events unexpectedly has RLS policies';
   END IF;
+  PERFORM pg_temp.assert_public_column_definition('payment_events', 'merchant_id', 'uuid', false, NULL);
+  PERFORM pg_temp.assert_public_foreign_key(
+    'payment_events',
+    'payment_events_merchant_id_fkey',
+    ARRAY['merchant_id'],
+    'merchants',
+    ARRAY['id'],
+    'CASCADE'
+  );
   PERFORM pg_temp.assert_public_column_definition('payment_events', 'amount_kobo', 'int8', false, NULL);
   PERFORM pg_temp.assert_public_policy_compatible(
     'payment_records',
