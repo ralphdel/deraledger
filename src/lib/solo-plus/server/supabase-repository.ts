@@ -677,7 +677,7 @@ function mapAdminMerchantRow(row: unknown): SoloPlusAdminCaseMerchantRecord {
   return {
     merchantId: assertUuidLike(candidate.id, "merchant.id")!,
     businessName: assertText(candidate.business_name, "business_name", true),
-    ownerName: assertText(candidate.owner_name, "owner_name", true),
+    ownerName: null,
     email: assertText(candidate.email, "email", true),
     subscriptionPlan: assertText(candidate.subscription_plan, "subscription_plan", true),
   };
@@ -1340,7 +1340,7 @@ async function loadAdminMerchantsById(
   const rows = await many(
     client
       .from("merchants")
-      .select("id, business_name, owner_name, email, subscription_plan")
+      .select("id, business_name, email, subscription_plan")
       .in("id", merchantIds),
   );
 
@@ -1552,13 +1552,12 @@ export function createSoloPlusSupabaseRepository(
         const normalizedSearch = input.merchantSearch.trim();
         const merchantQuery = client
           .from("merchants")
-          .select("id, business_name, owner_name, email, subscription_plan");
+          .select("id, business_name, email, subscription_plan");
 
         if (typeof merchantQuery.or === "function") {
           merchantQuery.or(
             [
               `business_name.ilike.%${normalizedSearch}%`,
-              `owner_name.ilike.%${normalizedSearch}%`,
               `email.ilike.%${normalizedSearch}%`,
             ].join(","),
           );

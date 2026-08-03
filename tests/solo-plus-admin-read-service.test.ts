@@ -91,7 +91,7 @@ class FakeSoloPlusRepository implements SoloPlusCaseRepository {
           merchant: {
             merchantId: "22222222-2222-4222-8222-222222222222",
             businessName: "Acme Retail",
-            ownerName: "Ada Owner",
+            ownerName: null,
             email: "owner@example.test",
             subscriptionPlan: "solo_lite",
           },
@@ -138,7 +138,7 @@ class FakeSoloPlusRepository implements SoloPlusCaseRepository {
       merchant: {
         merchantId: "22222222-2222-4222-8222-222222222222",
         businessName: "Acme Retail",
-        ownerName: "Ada Owner",
+        ownerName: null,
         email: "owner@example.test",
         subscriptionPlan: "solo_lite",
       },

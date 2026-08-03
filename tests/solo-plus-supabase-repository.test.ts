@@ -36,7 +36,11 @@ class FakeQueryBuilder {
     this.table = table;
   }
 
-  select(): FakeQueryBuilder {
+  select(columns?: string): FakeQueryBuilder {
+    this.client.selectCalls.push({
+      table: this.table,
+      columns: columns ?? null,
+    });
     return this;
   }
 
@@ -52,6 +56,10 @@ class FakeQueryBuilder {
 
   or(filters: string): FakeQueryBuilder {
     this.orClauses.push(filters);
+    this.client.orCalls.push({
+      table: this.table,
+      filters,
+    });
     return this;
   }
 
@@ -307,6 +315,8 @@ class FakeSupabaseClient implements SoloPlusSupabaseClientLike {
   readonly maybeSingleArrayTables = new Set<string>();
   readonly rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
   readonly rpcResponses = new Map<string, QueryResponse>();
+  readonly selectCalls: Array<{ table: string; columns: string | null }> = [];
+  readonly orCalls: Array<{ table: string; filters: string }> = [];
 
   from(table: string) {
     return new FakeQueryBuilder(this, table) as unknown as ReturnType<
@@ -1057,11 +1067,22 @@ async function run() {
   assert.equal(mappedEvents.length, 1);
   assert.equal(mappedEvents[0].eventType, "case_created");
 
+  client.tables.set("solo_plus_cases", []);
+  const emptyAdminQueue = await repository.listAdminCases({
+    caseStatus: null,
+    flowOrigin: null,
+    paymentStatus: null,
+    refundStatus: null,
+    merchantSearch: null,
+    cursor: null,
+    limit: 25,
+  });
+  assert.deepEqual(emptyAdminQueue, { items: [], nextCursor: null });
+
   client.tables.set("merchants", [
     {
       id: "22222222-2222-4222-8222-222222222222",
       business_name: "Acme Retail",
-      owner_name: "Ada Owner",
       email: "owner@example.test",
       subscription_plan: "solo_lite",
     },
@@ -1144,12 +1165,26 @@ async function run() {
   });
   assert.equal(adminQueue.items.length, 1);
   assert.equal(adminQueue.items[0].merchant?.businessName, "Acme Retail");
+  assert.equal(adminQueue.items[0].merchant?.ownerName, null);
   assert.equal(adminQueue.items[0].requirements.length, 2);
   assert.equal(
     adminQueue.items[0].latestReviewDecisionEvent?.eventType,
     "case_review_requested_more_information",
   );
   assert.equal(adminQueue.nextCursor, null);
+
+  const adminQueueByEmail = await repository.listAdminCases({
+    caseStatus: "verification_pending",
+    flowOrigin: null,
+    paymentStatus: "paid",
+    refundStatus: null,
+    merchantSearch: "owner@example.test",
+    cursor: null,
+    limit: 10,
+  });
+  assert.equal(adminQueueByEmail.items.length, 1);
+  assert.equal(adminQueueByEmail.items[0].merchant?.businessName, "Acme Retail");
+  assert.equal(adminQueueByEmail.items[0].merchant?.ownerName, null);
 
   const adminQueueNextPage = await repository.listAdminCases({
     caseStatus: null,
@@ -1173,11 +1208,36 @@ async function run() {
     "11111111-1111-4111-8111-111111111111",
   );
   assert.equal(adminDetail?.merchant?.email, "owner@example.test");
+  assert.equal(adminDetail?.merchant?.ownerName, null);
   assert.equal(adminDetail?.requirements[1]?.evidenceReference, "kyc-documents/proof.pdf");
   assert.equal(
     adminDetail?.latestReviewDecisionEvent?.eventType,
     "case_review_requested_more_information",
   );
+
+  const merchantSelectCalls = client.selectCalls.filter((call) => call.table === "merchants");
+  assert.ok(merchantSelectCalls.length >= 3);
+  assert.deepEqual(
+    [...new Set(merchantSelectCalls.map((call) => call.columns))],
+    ["id, business_name, email, subscription_plan"],
+  );
+  assert.equal(
+    merchantSelectCalls.some((call) => call.columns?.includes("owner_name")),
+    false,
+  );
+
+  const merchantSearchFilters = client.orCalls
+    .filter((call) => call.table === "merchants")
+    .map((call) => call.filters);
+  assert.equal(merchantSearchFilters.length, 2);
+  assert.equal(
+    merchantSearchFilters.some((filters) => filters.includes("owner_name")),
+    false,
+  );
+  assert.deepEqual(merchantSearchFilters, [
+    "business_name.ilike.%Acme%,email.ilike.%Acme%",
+    "business_name.ilike.%owner@example.test%,email.ilike.%owner@example.test%",
+  ]);
 
   const adminEvents = await repository.listAdminCaseEvents(
     "11111111-1111-4111-8111-111111111111",
