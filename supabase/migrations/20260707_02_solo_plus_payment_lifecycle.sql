@@ -1,6 +1,6 @@
 BEGIN;
 
-CREATE OR REPLACE FUNCTION pg_temp.assert_public_table_exists(p_table_name TEXT)
+CREATE OR REPLACE FUNCTION pg_temp.assert_public_table_exists_m010(p_table_name TEXT)
 RETURNS void
 LANGUAGE plpgsql
 AS $$
@@ -11,7 +11,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION pg_temp.assert_public_column_exists(
+CREATE OR REPLACE FUNCTION pg_temp.assert_public_column_exists_m010(
   p_table_name TEXT,
   p_column_name TEXT
 )
@@ -35,7 +35,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION pg_temp.assert_public_function_exists(
+CREATE OR REPLACE FUNCTION pg_temp.assert_public_function_exists_m010(
   p_function_name TEXT,
   p_identity_arguments TEXT
 )
@@ -58,7 +58,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION pg_temp.assert_public_relation_kind(
+CREATE OR REPLACE FUNCTION pg_temp.assert_public_relation_kind_m010(
   p_table_name TEXT,
   p_expected_kind "char" DEFAULT 'r'
 )
@@ -88,7 +88,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION pg_temp.assert_public_column_type(
+CREATE OR REPLACE FUNCTION pg_temp.assert_public_column_type_m010(
   p_table_name TEXT,
   p_column_name TEXT,
   p_udt_name TEXT
@@ -125,7 +125,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION pg_temp.normalize_catalog_sql(p_input TEXT)
+CREATE OR REPLACE FUNCTION pg_temp.normalize_catalog_sql_m010(p_input TEXT)
 RETURNS TEXT
 LANGUAGE sql
 AS $$
@@ -144,7 +144,7 @@ AS $$
   );
 $$;
 
-CREATE OR REPLACE FUNCTION pg_temp.assert_public_column_definition(
+CREATE OR REPLACE FUNCTION pg_temp.assert_public_column_definition_m010(
   p_table_name TEXT,
   p_column_name TEXT,
   p_udt_name TEXT,
@@ -217,7 +217,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION pg_temp.assert_public_constraint_contains(
+CREATE OR REPLACE FUNCTION pg_temp.assert_public_constraint_contains_m010(
   p_table_name TEXT,
   p_constraint_name TEXT,
   p_constraint_type "char",
@@ -256,7 +256,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION pg_temp.assert_public_constraint_definition_one_of(
+CREATE OR REPLACE FUNCTION pg_temp.assert_public_constraint_definition_one_of_m010(
   p_table_name TEXT,
   p_constraint_name TEXT,
   p_constraint_type "char",
@@ -284,7 +284,7 @@ BEGIN
 
   FOREACH v_expected_definition IN ARRAY p_expected_definitions
   LOOP
-    IF pg_temp.normalize_catalog_sql(v_definition) = pg_temp.normalize_catalog_sql(v_expected_definition) THEN
+    IF pg_temp.normalize_catalog_sql_m010(v_definition) = pg_temp.normalize_catalog_sql_m010(v_expected_definition) THEN
       RETURN;
     END IF;
   END LOOP;
@@ -297,7 +297,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION pg_temp.assert_public_foreign_key(
+CREATE OR REPLACE FUNCTION pg_temp.assert_public_foreign_key_m010(
   p_table_name TEXT,
   p_constraint_name TEXT,
   p_expected_columns TEXT[],
@@ -386,7 +386,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION pg_temp.assert_public_index_contains(
+CREATE OR REPLACE FUNCTION pg_temp.assert_public_index_contains_m010(
   p_index_name TEXT,
   p_expected_fragments TEXT[]
 )
@@ -418,7 +418,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION pg_temp.assert_public_index_definition(
+CREATE OR REPLACE FUNCTION pg_temp.assert_public_index_definition_m010(
   p_index_name TEXT,
   p_expected_indexdef TEXT,
   p_expected_predicate TEXT DEFAULT NULL
@@ -449,14 +449,14 @@ BEGIN
     RAISE EXCEPTION 'Migration B prerequisite missing: public.% index does not exist', p_index_name;
   END IF;
 
-  IF pg_temp.normalize_catalog_sql(v_definition) <> pg_temp.normalize_catalog_sql(p_expected_indexdef) THEN
+  IF pg_temp.normalize_catalog_sql_m010(v_definition) <> pg_temp.normalize_catalog_sql_m010(p_expected_indexdef) THEN
     RAISE EXCEPTION 'Migration B compatibility failure: public.% expected indexdef % actual %',
       p_index_name,
       p_expected_indexdef,
       v_definition;
   END IF;
 
-  IF pg_temp.normalize_catalog_sql(v_predicate) IS DISTINCT FROM pg_temp.normalize_catalog_sql(p_expected_predicate) THEN
+  IF pg_temp.normalize_catalog_sql_m010(v_predicate) IS DISTINCT FROM pg_temp.normalize_catalog_sql_m010(p_expected_predicate) THEN
     RAISE EXCEPTION 'Migration B compatibility failure: public.% expected predicate % actual %',
       p_index_name,
       COALESCE(p_expected_predicate, 'NULL'),
@@ -469,7 +469,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION pg_temp.assert_public_function_execute_grants(
+CREATE OR REPLACE FUNCTION pg_temp.assert_public_function_execute_grants_m010(
   p_function_name TEXT,
   p_identity_arguments TEXT,
   p_expected_grantees TEXT[]
@@ -555,40 +555,40 @@ $$;
 
 DO $$
 BEGIN
-  PERFORM pg_temp.assert_public_table_exists('payment_records');
-  PERFORM pg_temp.assert_public_table_exists('payment_sessions');
-  PERFORM pg_temp.assert_public_table_exists('crypto_payment_sessions');
-  PERFORM pg_temp.assert_public_table_exists('settlement_records');
-  PERFORM pg_temp.assert_public_table_exists('onboarding_sessions');
-  PERFORM pg_temp.assert_public_table_exists('solo_plus_cases');
-  PERFORM pg_temp.assert_public_table_exists('solo_plus_case_events');
-  PERFORM pg_temp.assert_public_relation_kind('payment_records');
-  PERFORM pg_temp.assert_public_relation_kind('payment_sessions');
-  PERFORM pg_temp.assert_public_relation_kind('crypto_payment_sessions');
-  PERFORM pg_temp.assert_public_relation_kind('settlement_records');
-  PERFORM pg_temp.assert_public_relation_kind('onboarding_sessions');
-  PERFORM pg_temp.assert_public_relation_kind('solo_plus_cases');
-  PERFORM pg_temp.assert_public_relation_kind('solo_plus_case_events');
+  PERFORM pg_temp.assert_public_table_exists_m010('payment_records');
+  PERFORM pg_temp.assert_public_table_exists_m010('payment_sessions');
+  PERFORM pg_temp.assert_public_table_exists_m010('crypto_payment_sessions');
+  PERFORM pg_temp.assert_public_table_exists_m010('settlement_records');
+  PERFORM pg_temp.assert_public_table_exists_m010('onboarding_sessions');
+  PERFORM pg_temp.assert_public_table_exists_m010('solo_plus_cases');
+  PERFORM pg_temp.assert_public_table_exists_m010('solo_plus_case_events');
+  PERFORM pg_temp.assert_public_relation_kind_m010('payment_records');
+  PERFORM pg_temp.assert_public_relation_kind_m010('payment_sessions');
+  PERFORM pg_temp.assert_public_relation_kind_m010('crypto_payment_sessions');
+  PERFORM pg_temp.assert_public_relation_kind_m010('settlement_records');
+  PERFORM pg_temp.assert_public_relation_kind_m010('onboarding_sessions');
+  PERFORM pg_temp.assert_public_relation_kind_m010('solo_plus_cases');
+  PERFORM pg_temp.assert_public_relation_kind_m010('solo_plus_case_events');
 
-  PERFORM pg_temp.assert_public_column_exists('payment_records', 'expected_amount');
-  PERFORM pg_temp.assert_public_column_exists('payment_records', 'processing_status');
-  PERFORM pg_temp.assert_public_column_exists('payment_records', 'account_setup_status');
-  PERFORM pg_temp.assert_public_column_exists('payment_records', 'reconciliation_status');
-  PERFORM pg_temp.assert_public_column_exists('payment_records', 'created_at');
-  PERFORM pg_temp.assert_public_column_exists('payment_records', 'payment_status');
-  PERFORM pg_temp.assert_public_column_exists('payment_records', 'provider_name');
-  PERFORM pg_temp.assert_public_column_exists('payment_records', 'provider_reference');
-  PERFORM pg_temp.assert_public_column_exists('settlement_records', 'settlement_recipient_type');
-  PERFORM pg_temp.assert_public_column_exists('settlement_records', 'settlement_mode');
-  PERFORM pg_temp.assert_public_column_exists('settlement_records', 'provider_fee_source');
-  PERFORM pg_temp.assert_public_column_exists('crypto_payment_sessions', 'settlement_recipient_type');
-  PERFORM pg_temp.assert_public_column_exists('crypto_payment_sessions', 'settlement_mode');
-  PERFORM pg_temp.assert_public_column_exists('solo_plus_cases', 'payment_record_id');
-  PERFORM pg_temp.assert_public_column_exists('solo_plus_cases', 'payment_provider');
-  PERFORM pg_temp.assert_public_column_exists('solo_plus_cases', 'payment_reference');
-  PERFORM pg_temp.assert_public_column_exists('solo_plus_case_events', 'request_idempotency_key');
+  PERFORM pg_temp.assert_public_column_exists_m010('payment_records', 'expected_amount');
+  PERFORM pg_temp.assert_public_column_exists_m010('payment_records', 'processing_status');
+  PERFORM pg_temp.assert_public_column_exists_m010('payment_records', 'account_setup_status');
+  PERFORM pg_temp.assert_public_column_exists_m010('payment_records', 'reconciliation_status');
+  PERFORM pg_temp.assert_public_column_exists_m010('payment_records', 'created_at');
+  PERFORM pg_temp.assert_public_column_exists_m010('payment_records', 'payment_status');
+  PERFORM pg_temp.assert_public_column_exists_m010('payment_records', 'provider_name');
+  PERFORM pg_temp.assert_public_column_exists_m010('payment_records', 'provider_reference');
+  PERFORM pg_temp.assert_public_column_exists_m010('settlement_records', 'settlement_recipient_type');
+  PERFORM pg_temp.assert_public_column_exists_m010('settlement_records', 'settlement_mode');
+  PERFORM pg_temp.assert_public_column_exists_m010('settlement_records', 'provider_fee_source');
+  PERFORM pg_temp.assert_public_column_exists_m010('crypto_payment_sessions', 'settlement_recipient_type');
+  PERFORM pg_temp.assert_public_column_exists_m010('crypto_payment_sessions', 'settlement_mode');
+  PERFORM pg_temp.assert_public_column_exists_m010('solo_plus_cases', 'payment_record_id');
+  PERFORM pg_temp.assert_public_column_exists_m010('solo_plus_cases', 'payment_provider');
+  PERFORM pg_temp.assert_public_column_exists_m010('solo_plus_cases', 'payment_reference');
+  PERFORM pg_temp.assert_public_column_exists_m010('solo_plus_case_events', 'request_idempotency_key');
 
-  PERFORM pg_temp.assert_public_constraint_definition_one_of(
+  PERFORM pg_temp.assert_public_constraint_definition_one_of_m010(
     'solo_plus_cases',
     'solo_plus_cases_payment_provider_check',
     'c',
@@ -597,28 +597,28 @@ BEGIN
       'CHECK (((payment_provider IS NULL) OR (payment_provider = ANY (ARRAY[''paystack''::text, ''monnify''::text, ''breet''::text]))))'
     ]
   );
-  PERFORM pg_temp.assert_public_index_contains(
+  PERFORM pg_temp.assert_public_index_contains_m010(
     'idx_solo_plus_case_events_request_idempotency',
     ARRAY['public.solo_plus_case_events', 'case_id', 'event_type', 'request_idempotency_key', 'where']
   );
 
-  PERFORM pg_temp.assert_public_function_exists(
+  PERFORM pg_temp.assert_public_function_exists_m010(
     'process_breet_invoice_confirmation',
     'p_payment_session_id uuid, p_event_type text, p_processor_reference text, p_blockchain_tx_hash text, p_breet_reference text, p_source_amount numeric, p_exchange_rate numeric, p_payment_rail text, p_source_currency text, p_gross_ngn numeric, p_platform_fee numeric, p_network_fee numeric, p_merchant_net_ngn numeric, p_confirmation_count integer, p_expected_confirmations integer, p_raw_payload jsonb'
   );
-  PERFORM pg_temp.assert_public_function_exists(
+  PERFORM pg_temp.assert_public_function_exists_m010(
     'queue_pending_crypto_settlements',
     'p_merchant_id uuid, p_payout_provider text'
   );
-  PERFORM pg_temp.assert_public_function_exists(
+  PERFORM pg_temp.assert_public_function_exists_m010(
     'update_settlement_batch_status',
     'p_batch_id uuid, p_action text, p_failure_reason text'
   );
-  PERFORM pg_temp.assert_public_function_exists(
+  PERFORM pg_temp.assert_public_function_exists_m010(
     'solo_plus_assert_amount_v1',
     'p_expected_amount text'
   );
-  PERFORM pg_temp.assert_public_function_exists(
+  PERFORM pg_temp.assert_public_function_exists_m010(
     'solo_plus_case_bundle_payload_v1',
     'p_case_id uuid'
   );
@@ -634,8 +634,8 @@ BEGIN
       AND a.attnum > 0
       AND NOT a.attisdropped
   ) THEN
-    PERFORM pg_temp.assert_public_column_definition('payment_records', 'onboarding_session_id', 'uuid', false, NULL);
-    PERFORM pg_temp.assert_public_foreign_key(
+    PERFORM pg_temp.assert_public_column_definition_m010('payment_records', 'onboarding_session_id', 'uuid', false, NULL);
+    PERFORM pg_temp.assert_public_foreign_key_m010(
       'payment_records',
       'payment_records_onboarding_session_id_fkey',
       ARRAY['onboarding_session_id'],
@@ -669,8 +669,8 @@ BEGIN
       AND a.attnum > 0
       AND NOT a.attisdropped
   ) THEN
-    PERFORM pg_temp.assert_public_column_definition('payment_records', 'solo_plus_case_id', 'uuid', false, NULL);
-    PERFORM pg_temp.assert_public_foreign_key(
+    PERFORM pg_temp.assert_public_column_definition_m010('payment_records', 'solo_plus_case_id', 'uuid', false, NULL);
+    PERFORM pg_temp.assert_public_foreign_key_m010(
       'payment_records',
       'payment_records_solo_plus_case_id_fkey',
       ARRAY['solo_plus_case_id'],
@@ -694,7 +694,7 @@ BEGIN
   END IF;
 
   IF to_regclass('public.idx_payment_records_onboarding_session') IS NOT NULL THEN
-    PERFORM pg_temp.assert_public_index_definition(
+    PERFORM pg_temp.assert_public_index_definition_m010(
       'idx_payment_records_onboarding_session',
       'CREATE INDEX idx_payment_records_onboarding_session ON public.payment_records USING btree (onboarding_session_id, created_at DESC)',
       NULL
@@ -702,7 +702,7 @@ BEGIN
   END IF;
 
   IF to_regclass('public.idx_payment_records_solo_plus_case') IS NOT NULL THEN
-    PERFORM pg_temp.assert_public_index_definition(
+    PERFORM pg_temp.assert_public_index_definition_m010(
       'idx_payment_records_solo_plus_case',
       'CREATE INDEX idx_payment_records_solo_plus_case ON public.payment_records USING btree (solo_plus_case_id, created_at DESC)',
       NULL
@@ -710,7 +710,7 @@ BEGIN
   END IF;
 
   IF to_regclass('public.idx_payment_records_solo_plus_pending_case') IS NOT NULL THEN
-    PERFORM pg_temp.assert_public_index_definition(
+    PERFORM pg_temp.assert_public_index_definition_m010(
       'idx_payment_records_solo_plus_pending_case',
       'CREATE UNIQUE INDEX idx_payment_records_solo_plus_pending_case ON public.payment_records USING btree (solo_plus_case_id) WHERE ((solo_plus_case_id IS NOT NULL) AND ((payment_status)::text = ''pending''::text))',
       'solo_plus_case_id IS NOT NULL AND payment_status::text = ''pending''::text'
@@ -718,7 +718,7 @@ BEGIN
   END IF;
 
   IF to_regclass('public.idx_payment_records_solo_plus_provider_reference') IS NOT NULL THEN
-    PERFORM pg_temp.assert_public_index_definition(
+    PERFORM pg_temp.assert_public_index_definition_m010(
       'idx_payment_records_solo_plus_provider_reference',
       'CREATE UNIQUE INDEX idx_payment_records_solo_plus_provider_reference ON public.payment_records USING btree (provider_name, provider_reference) WHERE ((solo_plus_case_id IS NOT NULL) AND (provider_reference IS NOT NULL))',
       'solo_plus_case_id IS NOT NULL AND provider_reference IS NOT NULL'
@@ -736,8 +736,8 @@ BEGIN
       AND a.attnum > 0
       AND NOT a.attisdropped
   ) THEN
-    PERFORM pg_temp.assert_public_column_definition('crypto_payment_sessions', 'payment_record_id', 'uuid', false, NULL);
-    PERFORM pg_temp.assert_public_foreign_key(
+    PERFORM pg_temp.assert_public_column_definition_m010('crypto_payment_sessions', 'payment_record_id', 'uuid', false, NULL);
+    PERFORM pg_temp.assert_public_foreign_key_m010(
       'crypto_payment_sessions',
       'crypto_payment_sessions_payment_record_id_fkey',
       ARRAY['payment_record_id'],
@@ -1128,27 +1128,27 @@ BEGIN
     RAISE EXCEPTION 'Migration B verification failed: public.crypto_payment_sessions.payment_record_id was not created';
   END IF;
 
-  PERFORM pg_temp.assert_public_index_contains(
+  PERFORM pg_temp.assert_public_index_contains_m010(
     'idx_payment_records_onboarding_session',
     ARRAY['public.payment_records', 'onboarding_session_id', 'created_at']
   );
-  PERFORM pg_temp.assert_public_index_contains(
+  PERFORM pg_temp.assert_public_index_contains_m010(
     'idx_payment_records_solo_plus_case',
     ARRAY['public.payment_records', 'solo_plus_case_id', 'created_at']
   );
-  PERFORM pg_temp.assert_public_index_contains(
+  PERFORM pg_temp.assert_public_index_contains_m010(
     'idx_payment_records_solo_plus_pending_case',
     ARRAY['public.payment_records', 'solo_plus_case_id', 'payment_status', 'pending']
   );
-  PERFORM pg_temp.assert_public_index_contains(
+  PERFORM pg_temp.assert_public_index_contains_m010(
     'idx_payment_records_solo_plus_provider_reference',
     ARRAY['public.payment_records', 'provider_name', 'provider_reference', 'solo_plus_case_id']
   );
-  PERFORM pg_temp.assert_public_index_contains(
+  PERFORM pg_temp.assert_public_index_contains_m010(
     'idx_crypto_payment_sessions_payment_record_id',
     ARRAY['public.crypto_payment_sessions', 'payment_record_id', 'where']
   );
-  PERFORM pg_temp.assert_public_foreign_key(
+  PERFORM pg_temp.assert_public_foreign_key_m010(
     'payment_records',
     'payment_records_onboarding_session_id_fkey',
     ARRAY['onboarding_session_id'],
@@ -1156,7 +1156,7 @@ BEGIN
     ARRAY['id'],
     'SET NULL'
   );
-  PERFORM pg_temp.assert_public_foreign_key(
+  PERFORM pg_temp.assert_public_foreign_key_m010(
     'payment_records',
     'payment_records_solo_plus_case_id_fkey',
     ARRAY['solo_plus_case_id'],
@@ -1164,7 +1164,7 @@ BEGIN
     ARRAY['id'],
     'SET NULL'
   );
-  PERFORM pg_temp.assert_public_foreign_key(
+  PERFORM pg_temp.assert_public_foreign_key_m010(
     'crypto_payment_sessions',
     'crypto_payment_sessions_payment_record_id_fkey',
     ARRAY['payment_record_id'],
@@ -1172,11 +1172,11 @@ BEGIN
     ARRAY['id'],
     'SET NULL'
   );
-  PERFORM pg_temp.assert_public_function_exists(
+  PERFORM pg_temp.assert_public_function_exists_m010(
     'confirm_solo_plus_payment_v1',
     'p_internal_reference text, p_provider text, p_provider_reference text, p_payment_purpose text, p_paid_amount text, p_currency text, p_merchant_id uuid, p_onboarding_session_id uuid, p_platform_directed boolean, p_raw_provider_payload jsonb, p_request_idempotency_key text'
   );
-  PERFORM pg_temp.assert_public_function_execute_grants(
+  PERFORM pg_temp.assert_public_function_execute_grants_m010(
     'confirm_solo_plus_payment_v1',
     'p_internal_reference text, p_provider text, p_provider_reference text, p_payment_purpose text, p_paid_amount text, p_currency text, p_merchant_id uuid, p_onboarding_session_id uuid, p_platform_directed boolean, p_raw_provider_payload jsonb, p_request_idempotency_key text',
     ARRAY['service_role']

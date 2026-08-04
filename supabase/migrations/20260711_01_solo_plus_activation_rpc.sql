@@ -1,6 +1,6 @@
 BEGIN;
 
-CREATE OR REPLACE FUNCTION pg_temp.assert_public_table_exists(p_table_name TEXT)
+CREATE OR REPLACE FUNCTION pg_temp.assert_public_table_exists_m012(p_table_name TEXT)
 RETURNS void
 LANGUAGE plpgsql
 AS $$
@@ -11,7 +11,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION pg_temp.assert_public_column_exists(
+CREATE OR REPLACE FUNCTION pg_temp.assert_public_column_exists_m012(
   p_table_name TEXT,
   p_column_name TEXT
 )
@@ -31,7 +31,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION pg_temp.assert_public_index_exists(
+CREATE OR REPLACE FUNCTION pg_temp.assert_public_index_exists_m012(
   p_table_name TEXT,
   p_index_name TEXT
 )
@@ -51,7 +51,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION pg_temp.assert_no_unexpected_function_overloads(
+CREATE OR REPLACE FUNCTION pg_temp.assert_no_unexpected_function_overloads_m012(
   p_function_name TEXT,
   p_exact_signature TEXT
 )
@@ -77,7 +77,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION pg_temp.normalize_catalog_sql(p_sql TEXT)
+CREATE OR REPLACE FUNCTION pg_temp.normalize_catalog_sql_m012(p_sql TEXT)
 RETURNS TEXT
 LANGUAGE sql
 IMMUTABLE
@@ -105,7 +105,7 @@ AS $$
   FROM normalized;
 $$;
 
-CREATE OR REPLACE FUNCTION pg_temp.assert_public_table_rls_state(
+CREATE OR REPLACE FUNCTION pg_temp.assert_public_table_rls_state_m012(
   p_table_name TEXT,
   p_expected_enabled BOOLEAN,
   p_expected_forced BOOLEAN
@@ -146,7 +146,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION pg_temp.assert_public_table_privileges_absent(
+CREATE OR REPLACE FUNCTION pg_temp.assert_public_table_privileges_absent_m012(
   p_table_name TEXT,
   p_roles TEXT[],
   p_privileges TEXT[]
@@ -174,7 +174,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION pg_temp.assert_public_table_privileges_present(
+CREATE OR REPLACE FUNCTION pg_temp.assert_public_table_privileges_present_m012(
   p_table_name TEXT,
   p_roles TEXT[],
   p_privileges TEXT[]
@@ -208,7 +208,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION pg_temp.repair_public_table_access_manifest(
+CREATE OR REPLACE FUNCTION pg_temp.repair_public_table_access_manifest_m012(
   p_table_name TEXT,
   p_access_model TEXT
 )
@@ -230,7 +230,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION pg_temp.assert_public_table_access_manifest(
+CREATE OR REPLACE FUNCTION pg_temp.assert_public_table_access_manifest_m012(
   p_table_name TEXT,
   p_access_model TEXT
 )
@@ -238,26 +238,26 @@ RETURNS void
 LANGUAGE plpgsql
 AS $$
 BEGIN
-  PERFORM pg_temp.assert_public_table_privileges_absent(
+  PERFORM pg_temp.assert_public_table_privileges_absent_m012(
     p_table_name,
     ARRAY['public', 'anon'],
     ARRAY['select', 'insert', 'update', 'delete', 'truncate', 'references', 'trigger']
   );
 
-  PERFORM pg_temp.assert_public_table_privileges_absent(
+  PERFORM pg_temp.assert_public_table_privileges_absent_m012(
     p_table_name,
     ARRAY['authenticated'],
     ARRAY['insert', 'update', 'delete', 'truncate', 'references', 'trigger']
   );
 
   IF p_access_model = 'merchant_read_select' THEN
-    PERFORM pg_temp.assert_public_table_privileges_present(
+    PERFORM pg_temp.assert_public_table_privileges_present_m012(
       p_table_name,
       ARRAY['authenticated'],
       ARRAY['select']
     );
   ELSIF p_access_model = 'internal' THEN
-    PERFORM pg_temp.assert_public_table_privileges_absent(
+    PERFORM pg_temp.assert_public_table_privileges_absent_m012(
       p_table_name,
       ARRAY['authenticated'],
       ARRAY['select']
@@ -270,7 +270,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION pg_temp.assert_public_table_allowed_triggers(
+CREATE OR REPLACE FUNCTION pg_temp.assert_public_table_allowed_triggers_m012(
   p_table_name TEXT,
   p_expected_triggers TEXT[]
 )
@@ -298,7 +298,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION pg_temp.assert_public_only_expected_policies(
+CREATE OR REPLACE FUNCTION pg_temp.assert_public_only_expected_policies_m012(
   p_table_name TEXT,
   p_expected_policy_names TEXT[]
 )
@@ -323,7 +323,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION pg_temp.assert_public_policy_fragments(
+CREATE OR REPLACE FUNCTION pg_temp.assert_public_policy_fragments_m012(
   p_table_name TEXT,
   p_policy_name TEXT,
   p_command TEXT,
@@ -367,22 +367,22 @@ BEGIN
       v_policy.roles;
   END IF;
 
-  v_normalized_qual := pg_temp.normalize_catalog_sql(v_policy.qual);
+  v_normalized_qual := pg_temp.normalize_catalog_sql_m012(v_policy.qual);
 
   FOREACH v_fragment IN ARRAY p_using_fragments
   LOOP
-    IF position(pg_temp.normalize_catalog_sql(v_fragment) IN v_normalized_qual) = 0 THEN
+    IF position(pg_temp.normalize_catalog_sql_m012(v_fragment) IN v_normalized_qual) = 0 THEN
       RAISE EXCEPTION 'Commit 10 compatibility failure: schema=public object=policy %.% expected=fragment:% actual=%',
         p_table_name,
         p_policy_name,
-        pg_temp.normalize_catalog_sql(v_fragment),
+        pg_temp.normalize_catalog_sql_m012(v_fragment),
         v_normalized_qual;
     END IF;
   END LOOP;
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION pg_temp.assert_public_function_search_path(
+CREATE OR REPLACE FUNCTION pg_temp.assert_public_function_search_path_m012(
   p_function_name TEXT,
   p_type_args TEXT,
   p_expected_setting TEXT
@@ -414,7 +414,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION pg_temp.assert_service_role_only_function_execute(
+CREATE OR REPLACE FUNCTION pg_temp.assert_service_role_only_function_execute_m012(
   p_function_name TEXT,
   p_type_args TEXT
 )
@@ -497,105 +497,105 @@ $$;
 
 DO $$
 BEGIN
-  PERFORM pg_temp.assert_public_table_exists('solo_plus_cases');
-  PERFORM pg_temp.assert_public_table_exists('solo_plus_case_requirements');
-  PERFORM pg_temp.assert_public_table_exists('solo_plus_case_events');
-  PERFORM pg_temp.assert_public_table_exists('merchants');
-  PERFORM pg_temp.assert_public_table_exists('workspaces');
-  PERFORM pg_temp.assert_public_table_exists('workspace_subscriptions');
-  PERFORM pg_temp.assert_public_table_exists('platform_settings');
+  PERFORM pg_temp.assert_public_table_exists_m012('solo_plus_cases');
+  PERFORM pg_temp.assert_public_table_exists_m012('solo_plus_case_requirements');
+  PERFORM pg_temp.assert_public_table_exists_m012('solo_plus_case_events');
+  PERFORM pg_temp.assert_public_table_exists_m012('merchants');
+  PERFORM pg_temp.assert_public_table_exists_m012('workspaces');
+  PERFORM pg_temp.assert_public_table_exists_m012('workspace_subscriptions');
+  PERFORM pg_temp.assert_public_table_exists_m012('platform_settings');
 
-  PERFORM pg_temp.assert_public_column_exists('solo_plus_cases', 'merchant_id');
-  PERFORM pg_temp.assert_public_column_exists('solo_plus_cases', 'flow_origin');
-  PERFORM pg_temp.assert_public_column_exists('solo_plus_cases', 'source_plan');
-  PERFORM pg_temp.assert_public_column_exists('solo_plus_cases', 'target_plan');
-  PERFORM pg_temp.assert_public_column_exists('solo_plus_cases', 'case_status');
-  PERFORM pg_temp.assert_public_column_exists('solo_plus_cases', 'payment_status');
-  PERFORM pg_temp.assert_public_column_exists('solo_plus_cases', 'refund_status');
-  PERFORM pg_temp.assert_public_column_exists('solo_plus_cases', 'payment_reference');
-  PERFORM pg_temp.assert_public_column_exists('solo_plus_cases', 'expected_amount');
-  PERFORM pg_temp.assert_public_column_exists('solo_plus_cases', 'requirements_policy_version');
-  PERFORM pg_temp.assert_public_column_exists('solo_plus_cases', 'activation_idempotency_key');
-  PERFORM pg_temp.assert_public_column_exists('solo_plus_cases', 'row_version');
-  PERFORM pg_temp.assert_public_column_exists('solo_plus_cases', 'approved_at');
-  PERFORM pg_temp.assert_public_column_exists('solo_plus_cases', 'approved_by_admin_id');
+  PERFORM pg_temp.assert_public_column_exists_m012('solo_plus_cases', 'merchant_id');
+  PERFORM pg_temp.assert_public_column_exists_m012('solo_plus_cases', 'flow_origin');
+  PERFORM pg_temp.assert_public_column_exists_m012('solo_plus_cases', 'source_plan');
+  PERFORM pg_temp.assert_public_column_exists_m012('solo_plus_cases', 'target_plan');
+  PERFORM pg_temp.assert_public_column_exists_m012('solo_plus_cases', 'case_status');
+  PERFORM pg_temp.assert_public_column_exists_m012('solo_plus_cases', 'payment_status');
+  PERFORM pg_temp.assert_public_column_exists_m012('solo_plus_cases', 'refund_status');
+  PERFORM pg_temp.assert_public_column_exists_m012('solo_plus_cases', 'payment_reference');
+  PERFORM pg_temp.assert_public_column_exists_m012('solo_plus_cases', 'expected_amount');
+  PERFORM pg_temp.assert_public_column_exists_m012('solo_plus_cases', 'requirements_policy_version');
+  PERFORM pg_temp.assert_public_column_exists_m012('solo_plus_cases', 'activation_idempotency_key');
+  PERFORM pg_temp.assert_public_column_exists_m012('solo_plus_cases', 'row_version');
+  PERFORM pg_temp.assert_public_column_exists_m012('solo_plus_cases', 'approved_at');
+  PERFORM pg_temp.assert_public_column_exists_m012('solo_plus_cases', 'approved_by_admin_id');
 
-  PERFORM pg_temp.assert_public_column_exists('solo_plus_case_requirements', 'case_id');
-  PERFORM pg_temp.assert_public_column_exists('solo_plus_case_requirements', 'requirement_code');
-  PERFORM pg_temp.assert_public_column_exists('solo_plus_case_requirements', 'requirement_state');
+  PERFORM pg_temp.assert_public_column_exists_m012('solo_plus_case_requirements', 'case_id');
+  PERFORM pg_temp.assert_public_column_exists_m012('solo_plus_case_requirements', 'requirement_code');
+  PERFORM pg_temp.assert_public_column_exists_m012('solo_plus_case_requirements', 'requirement_state');
 
-  PERFORM pg_temp.assert_public_column_exists('solo_plus_case_events', 'case_id');
-  PERFORM pg_temp.assert_public_column_exists('solo_plus_case_events', 'event_type');
-  PERFORM pg_temp.assert_public_column_exists('solo_plus_case_events', 'previous_state');
-  PERFORM pg_temp.assert_public_column_exists('solo_plus_case_events', 'new_state');
-  PERFORM pg_temp.assert_public_column_exists('solo_plus_case_events', 'actor_type');
-  PERFORM pg_temp.assert_public_column_exists('solo_plus_case_events', 'actor_id');
-  PERFORM pg_temp.assert_public_column_exists('solo_plus_case_events', 'request_idempotency_key');
-  PERFORM pg_temp.assert_public_column_exists('solo_plus_case_events', 'policy_version');
+  PERFORM pg_temp.assert_public_column_exists_m012('solo_plus_case_events', 'case_id');
+  PERFORM pg_temp.assert_public_column_exists_m012('solo_plus_case_events', 'event_type');
+  PERFORM pg_temp.assert_public_column_exists_m012('solo_plus_case_events', 'previous_state');
+  PERFORM pg_temp.assert_public_column_exists_m012('solo_plus_case_events', 'new_state');
+  PERFORM pg_temp.assert_public_column_exists_m012('solo_plus_case_events', 'actor_type');
+  PERFORM pg_temp.assert_public_column_exists_m012('solo_plus_case_events', 'actor_id');
+  PERFORM pg_temp.assert_public_column_exists_m012('solo_plus_case_events', 'request_idempotency_key');
+  PERFORM pg_temp.assert_public_column_exists_m012('solo_plus_case_events', 'policy_version');
 
-  PERFORM pg_temp.assert_public_column_exists('merchants', 'user_id');
-  PERFORM pg_temp.assert_public_column_exists('merchants', 'business_name');
-  PERFORM pg_temp.assert_public_column_exists('merchants', 'subscription_plan');
-  PERFORM pg_temp.assert_public_column_exists('merchants', 'merchant_tier');
-  PERFORM pg_temp.assert_public_column_exists('merchants', 'monthly_collection_limit');
-  PERFORM pg_temp.assert_public_column_exists('merchants', 'workspace_id');
-  PERFORM pg_temp.assert_public_column_exists('merchants', 'onboarding_status');
-  PERFORM pg_temp.assert_public_column_exists('merchants', 'setup_mode');
-  PERFORM pg_temp.assert_public_column_exists('merchants', 'live_features_enabled');
-  PERFORM pg_temp.assert_public_column_exists('merchants', 'live_features_activated_at');
-  PERFORM pg_temp.assert_public_column_exists('merchants', 'verification_status');
+  PERFORM pg_temp.assert_public_column_exists_m012('merchants', 'user_id');
+  PERFORM pg_temp.assert_public_column_exists_m012('merchants', 'business_name');
+  PERFORM pg_temp.assert_public_column_exists_m012('merchants', 'subscription_plan');
+  PERFORM pg_temp.assert_public_column_exists_m012('merchants', 'merchant_tier');
+  PERFORM pg_temp.assert_public_column_exists_m012('merchants', 'monthly_collection_limit');
+  PERFORM pg_temp.assert_public_column_exists_m012('merchants', 'workspace_id');
+  PERFORM pg_temp.assert_public_column_exists_m012('merchants', 'onboarding_status');
+  PERFORM pg_temp.assert_public_column_exists_m012('merchants', 'setup_mode');
+  PERFORM pg_temp.assert_public_column_exists_m012('merchants', 'live_features_enabled');
+  PERFORM pg_temp.assert_public_column_exists_m012('merchants', 'live_features_activated_at');
+  PERFORM pg_temp.assert_public_column_exists_m012('merchants', 'verification_status');
 
-  PERFORM pg_temp.assert_public_column_exists('workspaces', 'owner_user_id');
-  PERFORM pg_temp.assert_public_column_exists('workspaces', 'merchant_id');
-  PERFORM pg_temp.assert_public_column_exists('workspaces', 'workspace_type');
-  PERFORM pg_temp.assert_public_column_exists('workspaces', 'display_name');
-  PERFORM pg_temp.assert_public_column_exists('workspaces', 'plan_type');
-  PERFORM pg_temp.assert_public_column_exists('workspaces', 'onboarding_status');
-  PERFORM pg_temp.assert_public_column_exists('workspaces', 'setup_mode');
-  PERFORM pg_temp.assert_public_column_exists('workspaces', 'live_features_enabled');
+  PERFORM pg_temp.assert_public_column_exists_m012('workspaces', 'owner_user_id');
+  PERFORM pg_temp.assert_public_column_exists_m012('workspaces', 'merchant_id');
+  PERFORM pg_temp.assert_public_column_exists_m012('workspaces', 'workspace_type');
+  PERFORM pg_temp.assert_public_column_exists_m012('workspaces', 'display_name');
+  PERFORM pg_temp.assert_public_column_exists_m012('workspaces', 'plan_type');
+  PERFORM pg_temp.assert_public_column_exists_m012('workspaces', 'onboarding_status');
+  PERFORM pg_temp.assert_public_column_exists_m012('workspaces', 'setup_mode');
+  PERFORM pg_temp.assert_public_column_exists_m012('workspaces', 'live_features_enabled');
 
-  PERFORM pg_temp.assert_public_column_exists('workspace_subscriptions', 'workspace_id');
-  PERFORM pg_temp.assert_public_column_exists('workspace_subscriptions', 'merchant_id');
-  PERFORM pg_temp.assert_public_column_exists('workspace_subscriptions', 'plan_type');
-  PERFORM pg_temp.assert_public_column_exists('workspace_subscriptions', 'subscription_status');
-  PERFORM pg_temp.assert_public_column_exists('workspace_subscriptions', 'payment_reference');
-  PERFORM pg_temp.assert_public_column_exists('workspace_subscriptions', 'amount_paid');
-  PERFORM pg_temp.assert_public_column_exists('workspace_subscriptions', 'period_start');
-  PERFORM pg_temp.assert_public_column_exists('workspace_subscriptions', 'period_end');
+  PERFORM pg_temp.assert_public_column_exists_m012('workspace_subscriptions', 'workspace_id');
+  PERFORM pg_temp.assert_public_column_exists_m012('workspace_subscriptions', 'merchant_id');
+  PERFORM pg_temp.assert_public_column_exists_m012('workspace_subscriptions', 'plan_type');
+  PERFORM pg_temp.assert_public_column_exists_m012('workspace_subscriptions', 'subscription_status');
+  PERFORM pg_temp.assert_public_column_exists_m012('workspace_subscriptions', 'payment_reference');
+  PERFORM pg_temp.assert_public_column_exists_m012('workspace_subscriptions', 'amount_paid');
+  PERFORM pg_temp.assert_public_column_exists_m012('workspace_subscriptions', 'period_start');
+  PERFORM pg_temp.assert_public_column_exists_m012('workspace_subscriptions', 'period_end');
 
-  PERFORM pg_temp.assert_public_column_exists('platform_settings', 'key');
-  PERFORM pg_temp.assert_public_column_exists('platform_settings', 'value');
+  PERFORM pg_temp.assert_public_column_exists_m012('platform_settings', 'key');
+  PERFORM pg_temp.assert_public_column_exists_m012('platform_settings', 'value');
 
-  PERFORM pg_temp.assert_public_index_exists('solo_plus_cases', 'idx_solo_plus_cases_activation_idempotency_key');
-  PERFORM pg_temp.assert_public_index_exists('solo_plus_case_events', 'idx_solo_plus_case_events_request_idempotency');
+  PERFORM pg_temp.assert_public_index_exists_m012('solo_plus_cases', 'idx_solo_plus_cases_activation_idempotency_key');
+  PERFORM pg_temp.assert_public_index_exists_m012('solo_plus_case_events', 'idx_solo_plus_case_events_request_idempotency');
 
-  PERFORM pg_temp.assert_public_table_allowed_triggers(
+  PERFORM pg_temp.assert_public_table_allowed_triggers_m012(
     'solo_plus_cases',
     ARRAY['trg_solo_plus_cases_updated_at']
   );
-  PERFORM pg_temp.assert_public_table_allowed_triggers(
+  PERFORM pg_temp.assert_public_table_allowed_triggers_m012(
     'solo_plus_case_requirements',
     ARRAY['trg_solo_plus_case_requirements_updated_at']
   );
-  PERFORM pg_temp.assert_public_table_allowed_triggers(
+  PERFORM pg_temp.assert_public_table_allowed_triggers_m012(
     'solo_plus_case_events',
     ARRAY[]::TEXT[]
   );
 
-  PERFORM pg_temp.assert_public_only_expected_policies(
+  PERFORM pg_temp.assert_public_only_expected_policies_m012(
     'solo_plus_cases',
     ARRAY['merchant_read_solo_plus_cases']
   );
-  PERFORM pg_temp.assert_public_only_expected_policies(
+  PERFORM pg_temp.assert_public_only_expected_policies_m012(
     'solo_plus_case_requirements',
     ARRAY['merchant_read_solo_plus_case_requirements']
   );
-  PERFORM pg_temp.assert_public_only_expected_policies(
+  PERFORM pg_temp.assert_public_only_expected_policies_m012(
     'solo_plus_case_events',
     ARRAY[]::TEXT[]
   );
 
-  PERFORM pg_temp.assert_public_policy_fragments(
+  PERFORM pg_temp.assert_public_policy_fragments_m012(
     'solo_plus_cases',
     'merchant_read_solo_plus_cases',
     'SELECT',
@@ -608,7 +608,7 @@ BEGIN
       'm.user_id = auth.uid()'
     ]
   );
-  PERFORM pg_temp.assert_public_policy_fragments(
+  PERFORM pg_temp.assert_public_policy_fragments_m012(
     'solo_plus_case_requirements',
     'merchant_read_solo_plus_case_requirements',
     'SELECT',
@@ -621,7 +621,7 @@ BEGIN
     ]
   );
 
-  PERFORM pg_temp.assert_no_unexpected_function_overloads(
+  PERFORM pg_temp.assert_no_unexpected_function_overloads_m012(
     'activate_solo_plus_case_v1',
     'public.activate_solo_plus_case_v1(uuid,bigint,text,uuid,text)'
   );
@@ -632,9 +632,9 @@ ALTER TABLE public.solo_plus_cases ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.solo_plus_case_requirements ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.solo_plus_case_events ENABLE ROW LEVEL SECURITY;
 
-SELECT pg_temp.repair_public_table_access_manifest('solo_plus_cases', 'merchant_read_select');
-SELECT pg_temp.repair_public_table_access_manifest('solo_plus_case_requirements', 'merchant_read_select');
-SELECT pg_temp.repair_public_table_access_manifest('solo_plus_case_events', 'internal');
+SELECT pg_temp.repair_public_table_access_manifest_m012('solo_plus_cases', 'merchant_read_select');
+SELECT pg_temp.repair_public_table_access_manifest_m012('solo_plus_case_requirements', 'merchant_read_select');
+SELECT pg_temp.repair_public_table_access_manifest_m012('solo_plus_case_events', 'internal');
 
 DROP POLICY IF EXISTS "merchant_read_solo_plus_cases" ON public.solo_plus_cases;
 CREATE POLICY "merchant_read_solo_plus_cases"
@@ -1195,46 +1195,46 @@ GRANT EXECUTE ON FUNCTION public.activate_solo_plus_case_v1(uuid, bigint, text, 
 
 DO $$
 BEGIN
-  PERFORM pg_temp.assert_no_unexpected_function_overloads(
+  PERFORM pg_temp.assert_no_unexpected_function_overloads_m012(
     'activate_solo_plus_case_v1',
     'public.activate_solo_plus_case_v1(uuid,bigint,text,uuid,text)'
   );
 
-  PERFORM pg_temp.assert_public_table_rls_state('solo_plus_cases', true, false);
-  PERFORM pg_temp.assert_public_table_rls_state('solo_plus_case_requirements', true, false);
-  PERFORM pg_temp.assert_public_table_rls_state('solo_plus_case_events', true, false);
+  PERFORM pg_temp.assert_public_table_rls_state_m012('solo_plus_cases', true, false);
+  PERFORM pg_temp.assert_public_table_rls_state_m012('solo_plus_case_requirements', true, false);
+  PERFORM pg_temp.assert_public_table_rls_state_m012('solo_plus_case_events', true, false);
 
-  PERFORM pg_temp.assert_public_table_access_manifest('solo_plus_cases', 'merchant_read_select');
-  PERFORM pg_temp.assert_public_table_access_manifest('solo_plus_case_requirements', 'merchant_read_select');
-  PERFORM pg_temp.assert_public_table_access_manifest('solo_plus_case_events', 'internal');
+  PERFORM pg_temp.assert_public_table_access_manifest_m012('solo_plus_cases', 'merchant_read_select');
+  PERFORM pg_temp.assert_public_table_access_manifest_m012('solo_plus_case_requirements', 'merchant_read_select');
+  PERFORM pg_temp.assert_public_table_access_manifest_m012('solo_plus_case_events', 'internal');
 
-  PERFORM pg_temp.assert_public_only_expected_policies(
+  PERFORM pg_temp.assert_public_only_expected_policies_m012(
     'solo_plus_cases',
     ARRAY['merchant_read_solo_plus_cases']
   );
-  PERFORM pg_temp.assert_public_only_expected_policies(
+  PERFORM pg_temp.assert_public_only_expected_policies_m012(
     'solo_plus_case_requirements',
     ARRAY['merchant_read_solo_plus_case_requirements']
   );
-  PERFORM pg_temp.assert_public_only_expected_policies(
+  PERFORM pg_temp.assert_public_only_expected_policies_m012(
     'solo_plus_case_events',
     ARRAY[]::TEXT[]
   );
 
-  PERFORM pg_temp.assert_public_table_allowed_triggers(
+  PERFORM pg_temp.assert_public_table_allowed_triggers_m012(
     'solo_plus_cases',
     ARRAY['trg_solo_plus_cases_updated_at']
   );
-  PERFORM pg_temp.assert_public_table_allowed_triggers(
+  PERFORM pg_temp.assert_public_table_allowed_triggers_m012(
     'solo_plus_case_requirements',
     ARRAY['trg_solo_plus_case_requirements_updated_at']
   );
-  PERFORM pg_temp.assert_public_table_allowed_triggers(
+  PERFORM pg_temp.assert_public_table_allowed_triggers_m012(
     'solo_plus_case_events',
     ARRAY[]::TEXT[]
   );
 
-  PERFORM pg_temp.assert_public_policy_fragments(
+  PERFORM pg_temp.assert_public_policy_fragments_m012(
     'solo_plus_cases',
     'merchant_read_solo_plus_cases',
     'SELECT',
@@ -1247,7 +1247,7 @@ BEGIN
       'm.user_id = auth.uid()'
     ]
   );
-  PERFORM pg_temp.assert_public_policy_fragments(
+  PERFORM pg_temp.assert_public_policy_fragments_m012(
     'solo_plus_case_requirements',
     'merchant_read_solo_plus_case_requirements',
     'SELECT',
@@ -1260,12 +1260,12 @@ BEGIN
     ]
   );
 
-  PERFORM pg_temp.assert_public_function_search_path(
+  PERFORM pg_temp.assert_public_function_search_path_m012(
     'activate_solo_plus_case_v1',
     'uuid, bigint, text, uuid, text',
     'search_path=public, pg_temp'
   );
-  PERFORM pg_temp.assert_service_role_only_function_execute(
+  PERFORM pg_temp.assert_service_role_only_function_execute_m012(
     'activate_solo_plus_case_v1',
     'uuid, bigint, text, uuid, text'
   );

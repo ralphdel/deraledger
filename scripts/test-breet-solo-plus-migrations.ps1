@@ -546,6 +546,154 @@ function Assert-LibpqEnvironmentRestored {
   }
 }
 
+function Get-RollbackRunnerMigrationPaths {
+  return @(
+    @{ Number = "006"; Path = "supabase/staging/006_solo_plus_prerequisites.sql" },
+    @{ Number = "007"; Path = "supabase/staging/007_solo_plus_case_foundation.sql" },
+    @{ Number = "008"; Path = "supabase/staging/008_solo_plus_transactional_repository_rpcs.sql" },
+    @{ Number = "009"; Path = "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" },
+    @{ Number = "010"; Path = "supabase/migrations/20260707_02_solo_plus_payment_lifecycle.sql" },
+    @{ Number = "011"; Path = "supabase/migrations/20260710_01_solo_plus_review_decision_rpc.sql" },
+    @{ Number = "012"; Path = "supabase/migrations/20260711_01_solo_plus_activation_rpc.sql" },
+    @{ Number = "013"; Path = "supabase/migrations/20260718_01_solo_plus_payment_recovery.sql" },
+    @{ Number = "014"; Path = "supabase/migrations/20260728_00_authorization_hardening.sql" },
+    @{ Number = "015"; Path = "supabase/migrations/20260728_01_verification_disclosure_acknowledgement_rpc.sql" },
+    @{ Number = "016"; Path = "supabase/migrations/20260731_00_verification_disclosure_identity_hardening.sql" },
+    @{ Number = "017"; Path = "supabase/migrations/20260803_00_payment_events_legacy_merchant_compatibility.sql" }
+  )
+}
+
+function Get-PgTempFunctionDefinitions {
+  param(
+    [Parameter(Mandatory = $true)][string]$MigrationNumber,
+    [Parameter(Mandatory = $true)][string]$RelativePath
+  )
+
+  $absolutePath = Join-Path $repoRoot $RelativePath
+  $lines = Get-Content -LiteralPath $absolutePath
+  $definitions = @()
+  $insideBlockComment = $false
+  $insideDollarQuote = $false
+
+  for ($index = 0; $index -lt $lines.Count; $index++) {
+    $line = $lines[$index]
+    $scanLine = $line
+
+    if ($insideBlockComment) {
+      if ($scanLine -match '\*/') {
+        $insideBlockComment = $false
+        $scanLine = $scanLine.Substring($scanLine.IndexOf('*/') + 2)
+      } else {
+        continue
+      }
+    }
+
+    while ($scanLine -match '/\*') {
+      $beforeComment = $scanLine.Substring(0, $scanLine.IndexOf('/*'))
+      $afterStart = $scanLine.Substring($scanLine.IndexOf('/*') + 2)
+      if ($afterStart -match '\*/') {
+        $scanLine = $beforeComment + $afterStart.Substring($afterStart.IndexOf('*/') + 2)
+      } else {
+        $scanLine = $beforeComment
+        $insideBlockComment = $true
+        break
+      }
+    }
+
+    $lineWithoutInlineComment = ($scanLine -replace '--.*$', '')
+    if ($lineWithoutInlineComment -match '\$\$') {
+      $insideDollarQuote = -not $insideDollarQuote
+      continue
+    }
+
+    if ($insideDollarQuote) {
+      continue
+    }
+
+    if ($lineWithoutInlineComment -notmatch '^\s*CREATE( OR REPLACE)? FUNCTION pg_temp\.([A-Za-z0-9_]+)\s*\(') {
+      continue
+    }
+
+    $createMode = if ($matches[1]) { "CREATE OR REPLACE" } else { "CREATE" }
+    $functionName = $matches[2]
+    $headerLines = @($lines[$index].Trim())
+    $cursor = $index + 1
+    while ($cursor -lt $lines.Count -and $lines[$cursor] -notmatch '^\s*LANGUAGE\s+') {
+      $headerLines += $lines[$cursor].Trim()
+      if ($lines[$cursor] -match '^\s*RETURNS\s+') {
+        break
+      }
+      $cursor += 1
+    }
+
+    $header = ($headerLines -join ' ')
+    $argsText = [regex]::Match($header, 'FUNCTION\s+pg_temp\.[A-Za-z0-9_]+\s*\((.*)\)\s+RETURNS', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase).Groups[1].Value
+    $returnType = [regex]::Match($header, '\)\s+RETURNS\s+(.+)$', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase).Groups[1].Value.Trim()
+    $argNames = @()
+    $argTypes = @()
+    $defaults = @()
+
+    if (-not [string]::IsNullOrWhiteSpace($argsText)) {
+      foreach ($rawArg in ($argsText -split ',')) {
+        $arg = $rawArg.Trim()
+        if ([string]::IsNullOrWhiteSpace($arg)) {
+          continue
+        }
+
+        $parts = [regex]::Split($arg, '\s+DEFAULT\s+', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        $nameAndType = $parts[0].Trim()
+        $firstSpace = $nameAndType.IndexOf(' ')
+        Assert-HarnessSelfTest -Condition ($firstSpace -gt 0) -Message "Unable to parse pg_temp argument in $RelativePath line $($index + 1): $arg"
+
+        $argNames += $nameAndType.Substring(0, $firstSpace).Trim()
+        $argTypes += $nameAndType.Substring($firstSpace + 1).Trim().ToLowerInvariant()
+        if ($parts.Count -gt 1) {
+          $defaults += (($parts[1..($parts.Count - 1)] -join " DEFAULT ").Trim())
+        }
+      }
+    }
+
+    $definitions += [pscustomobject]@{
+      Migration = $MigrationNumber
+      Path = $RelativePath
+      Line = $index + 1
+      Name = $functionName
+      Identity = ("{0}({1})" -f $functionName, ($argTypes -join ","))
+      ArgumentNames = ($argNames -join ",")
+      Defaults = ($defaults -join ",")
+      ReturnType = $returnType.ToLowerInvariant()
+      CreateMode = $createMode
+    }
+  }
+
+  return $definitions
+}
+
+function Assert-RollbackRunnerPgTempHelpersAreIsolated {
+  $definitions = @()
+  foreach ($migration in Get-RollbackRunnerMigrationPaths) {
+    $definitions += Get-PgTempFunctionDefinitions -MigrationNumber $migration.Number -RelativePath $migration.Path
+  }
+
+  $grouped = @($definitions | Group-Object -Property Identity | Where-Object { $_.Count -gt 1 })
+  Assert-HarnessSelfTest -Condition ($grouped.Count -eq 0) -Message "ordered rollback migrations redefine pg_temp helper identities in one session: $(($grouped | ForEach-Object { $_.Name }) -join '; ')"
+
+  $migrationSpecificDefinitions = $definitions | Where-Object { $_.Migration -in @("010", "011", "012") }
+  foreach ($definition in $migrationSpecificDefinitions) {
+    Assert-HarnessSelfTest -Condition ($definition.Name.EndsWith("_m$($definition.Migration)")) -Message "Migration $($definition.Migration) pg_temp helper $($definition.Name) is not migration-specific."
+  }
+
+  $m009FunctionHelper = @($definitions | Where-Object {
+    $_.Migration -eq "009" -and $_.Name -eq "assert_public_function_exists"
+  })
+  $m010FunctionHelper = @($definitions | Where-Object {
+    $_.Migration -eq "010" -and $_.Name -eq "assert_public_function_exists_m010"
+  })
+  Assert-HarnessSelfTest -Condition ($m009FunctionHelper.Count -eq 1) -Message "Migration 009 public-function assertion helper was not found."
+  Assert-HarnessSelfTest -Condition ($m010FunctionHelper.Count -eq 1) -Message "Migration 010 public-function assertion helper was not isolated."
+  Assert-HarnessSelfTest -Condition ($m009FunctionHelper.Identity -ne $m010FunctionHelper.Identity) -Message "Migration 009 and 010 public-function helpers still share one pg_temp identity."
+}
+
 function Run-HarnessSelfTests {
   $tempDir = Join-Path $env:TEMP ("deraledger-harness-selftest-" + [System.Guid]::NewGuid().ToString("N"))
   New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
@@ -556,6 +704,8 @@ function Run-HarnessSelfTests {
   $outerSnapshot = Get-LibpqEnvironmentSnapshot -VariableNames $libpqNames
 
   try {
+    Assert-RollbackRunnerPgTempHelpersAreIsolated
+
     $script:HarnessStepCounter = 0
     $script:HarnessProgressMessages.Clear()
     $script:TestDatabaseUrl = "postgresql://postgres@127.0.0.1/test_commit12_harness_selftest?sslmode=disable"
