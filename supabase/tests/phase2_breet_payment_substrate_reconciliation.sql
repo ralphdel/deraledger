@@ -246,6 +246,7 @@ DECLARE
   v_function_def TEXT;
   v_payment_records_policy TEXT;
   v_processor_default TEXT;
+  v_processed_at_default TEXT;
   v_table TEXT;
 BEGIN
   IF NOT EXISTS (
@@ -292,6 +293,37 @@ BEGIN
       v_processor_default;
   END IF;
 
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'payment_events'
+      AND column_name = 'processed_at'
+      AND udt_name = 'timestamptz'
+      AND is_nullable = 'YES'
+  ) THEN
+    RAISE EXCEPTION 'payment_events.processed_at must remain nullable timestamptz';
+  END IF;
+
+  SELECT pg_get_expr(d.adbin, d.adrelid)
+  INTO v_processed_at_default
+  FROM pg_attribute a
+  JOIN pg_class c ON c.oid = a.attrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  LEFT JOIN pg_attrdef d
+    ON d.adrelid = a.attrelid
+   AND d.adnum = a.attnum
+  WHERE n.nspname = 'public'
+    AND c.relname = 'payment_events'
+    AND a.attname = 'processed_at'
+    AND a.attnum > 0
+    AND NOT a.attisdropped;
+
+  IF v_processed_at_default IS NOT NULL THEN
+    RAISE EXCEPTION 'payment_events.processed_at must not have a default after reconciliation, got %',
+      v_processed_at_default;
+  END IF;
+
   INSERT INTO public.payment_events (
     id,
     merchant_id,
@@ -319,9 +351,43 @@ BEGIN
     FROM public.payment_events
     WHERE id = 'aaaaaaaa-0000-4000-8000-000000000009'
       AND merchant_id IS NULL
+      AND processed_at IS NOT NULL
       AND raw_payload = '{"fixture":"historical_ownerless"}'::jsonb
   ) THEN
     RAISE EXCEPTION 'historical ownerless payment_events rows must be accepted and preserved';
+  END IF;
+
+  INSERT INTO public.payment_events (
+    id,
+    merchant_id,
+    event_type,
+    processor,
+    processed_at,
+    raw_payload,
+    idempotency_key,
+    payment_purpose
+  )
+  VALUES (
+    'aaaaaaaa-0000-4000-8000-000000000019',
+    NULL,
+    'historical.ownerless.null_processed_at',
+    'paystack',
+    NULL,
+    '{"fixture":"historical_ownerless_null_processed_at"}'::jsonb,
+    'phase2-breet-payment-substrate:historical-ownerless-null-processed-at',
+    NULL
+  )
+  ON CONFLICT (id) DO NOTHING;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM public.payment_events
+    WHERE id = 'aaaaaaaa-0000-4000-8000-000000000019'
+      AND merchant_id IS NULL
+      AND processed_at IS NULL
+      AND raw_payload = '{"fixture":"historical_ownerless_null_processed_at"}'::jsonb
+  ) THEN
+    RAISE EXCEPTION 'historical ownerless payment_events rows with NULL processed_at must be accepted and preserved';
   END IF;
 
   IF NOT EXISTS (

@@ -427,6 +427,26 @@ async function main() {
     "supabase/migrations/20260803_00_payment_events_legacy_merchant_compatibility.sql",
     "utf8",
   );
+  const requireSourceMatch = (source: string, pattern: RegExp, description: string) => {
+    const match = source.match(pattern);
+    assert.ok(match, `${description} was not found`);
+    return match[0];
+  };
+  const breetPaymentEventInsert = requireSourceMatch(
+    breetWebhookSource,
+    /supabase\.from\("payment_events"\)\.insert\(\{[\s\S]*?\n\s*\}\);/,
+    "Breet payment_events insert",
+  );
+  const sharedPaymentEventUpsert = requireSourceMatch(
+    planPaymentRecoverySource,
+    /supabase\.from\("payment_events"\)\.upsert\(\s*\{[\s\S]*?\n\s*\},\s*\{ onConflict: "idempotency_key" \}\s*\);/,
+    "shared payment_events upsert",
+  );
+  const invoicePaymentEventUpsert = requireSourceMatch(
+    fiatConfirmationSource,
+    /supabase\.from\("payment_events"\)\.upsert\(\{[\s\S]*?\n\s*\}\);/,
+    "invoice confirmation payment_events upsert",
+  );
 
   assert.match(cryptoSubscriptionSource, /payment_record_id:\s*pendingPaymentRecord\.id/);
   assert.match(cryptoUpgradeSource, /payment_record_id:\s*pendingPaymentRecord\.id/);
@@ -441,9 +461,21 @@ async function main() {
   assert.match(fiatConfirmationSource, /from\("payment_events"\)\.upsert\(\{[\s\S]*?processor:\s*provider/);
   assert.match(planPaymentRecoverySource, /from\("payment_events"\)\.upsert\([\s\S]*?processor:\s*input\.provider/);
   assert.match(breetWebhookSource, /from\("payment_events"\)\.insert\(\{[\s\S]*?processor:\s*"breet"/);
+  assert.doesNotMatch(breetPaymentEventInsert, /processed_at:/);
+  assert.doesNotMatch(sharedPaymentEventUpsert, /processed_at:/);
+  assert.doesNotMatch(invoicePaymentEventUpsert, /processed_at:/);
   assert.doesNotMatch(fiatConfirmationSource, /from\("payment_events"\)\.upsert\(\{[\s\S]*?merchant_id:\s*null/);
   assert.match(migrationASource, /assert_payment_events_processor_legacy_compatible/);
+  assert.match(migrationASource, /assert_payment_events_processed_at_legacy_compatible/);
+  assert.match(migrationASource, /ALTER TABLE public\.payment_events[\s\S]*?ALTER COLUMN processed_at DROP DEFAULT/);
+  assert.match(migrationASource, /ALTER TABLE public\.payment_events[\s\S]*?ALTER COLUMN processed_at DROP NOT NULL/);
+  assert.match(migrationASource, /CREATE TABLE IF NOT EXISTS public\.payment_events \([\s\S]*?processed_at TIMESTAMPTZ NULL,/);
+  assert.doesNotMatch(
+    migrationASource,
+    /CREATE TABLE IF NOT EXISTS public\.payment_events \([\s\S]*?processed_at TIMESTAMPTZ NOT NULL/
+  );
   assert.doesNotMatch(migrationASource, /ALTER\s+TABLE\s+public\.payment_events\s+ALTER\s+COLUMN\s+processor\s+DROP\s+DEFAULT/i);
+  assert.doesNotMatch(migrationASource, /\b(UPDATE|DELETE FROM)\s+public\.payment_events\b/i);
   assert.doesNotMatch(legacyCompatibilityMigrationSource, /\b(UPDATE|DELETE FROM)\s+public\.payment_events\b/i);
   assert.doesNotMatch(
     legacyCompatibilityMigrationSource,

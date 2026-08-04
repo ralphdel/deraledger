@@ -260,6 +260,50 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION pg_temp.assert_payment_events_processed_at_legacy_compatible()
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_udt_name TEXT;
+  v_default_expr TEXT;
+BEGIN
+  SELECT
+    t.typname,
+    pg_get_expr(d.adbin, d.adrelid)
+  INTO
+    v_udt_name,
+    v_default_expr
+  FROM pg_attribute a
+  JOIN pg_class c ON c.oid = a.attrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  JOIN pg_type t ON t.oid = a.atttypid
+  LEFT JOIN pg_attrdef d
+    ON d.adrelid = a.attrelid
+   AND d.adnum = a.attnum
+  WHERE n.nspname = 'public'
+    AND c.relname = 'payment_events'
+    AND a.attname = 'processed_at'
+    AND a.attnum > 0
+    AND NOT a.attisdropped;
+
+  IF v_udt_name IS NULL THEN
+    RAISE EXCEPTION 'Migration A compatibility failure: schema=public object=payment_events.processed_at expected=column actual=missing';
+  END IF;
+
+  IF v_udt_name <> 'timestamptz' THEN
+    RAISE EXCEPTION 'Migration A compatibility failure: schema=public object=payment_events.processed_at expected=type:timestamptz actual=type:%',
+      v_udt_name;
+  END IF;
+
+  IF v_default_expr IS NOT NULL
+     AND pg_temp.normalize_catalog_sql(v_default_expr) <> 'now()' THEN
+    RAISE EXCEPTION 'Migration A compatibility failure: schema=public object=payment_events.processed_at expected=no default or default now() actual=%',
+      v_default_expr;
+  END IF;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION pg_temp.assert_public_primary_key(
   p_table_name TEXT,
   p_expected_columns TEXT[]
@@ -1437,7 +1481,7 @@ BEGIN
     PERFORM pg_temp.assert_public_column_definition('payment_events', 'processor_ref', 'text', false, NULL);
     PERFORM pg_temp.assert_public_column_definition('payment_events', 'amount_kobo', 'int8', false, NULL);
     PERFORM pg_temp.assert_public_column_definition('payment_events', 'raw_payload', 'jsonb', false, NULL);
-    PERFORM pg_temp.assert_public_column_definition('payment_events', 'processed_at', 'timestamptz', true, NULL);
+    PERFORM pg_temp.assert_payment_events_processed_at_legacy_compatible();
     PERFORM pg_temp.assert_public_column_definition('payment_events', 'idempotency_key', 'text', false, NULL);
     PERFORM pg_temp.assert_public_column_definition('payment_events', 'payment_method', 'text', false, NULL);
     PERFORM pg_temp.assert_public_column_definition('payment_events', 'payment_purpose', 'text', false, NULL);
@@ -2021,7 +2065,7 @@ CREATE TABLE IF NOT EXISTS public.payment_events (
   processor_ref TEXT,
   amount_kobo BIGINT,
   raw_payload JSONB,
-  processed_at TIMESTAMPTZ NOT NULL,
+  processed_at TIMESTAMPTZ NULL,
   idempotency_key TEXT,
   payment_method TEXT,
   payment_purpose TEXT,
@@ -2050,6 +2094,7 @@ CREATE TABLE IF NOT EXISTS public.payment_events (
 ALTER TABLE public.payment_events
   ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ADD COLUMN IF NOT EXISTS processed_at TIMESTAMPTZ NULL,
   ADD COLUMN IF NOT EXISTS amount_kobo BIGINT,
   ADD COLUMN IF NOT EXISTS payment_method TEXT,
   ADD COLUMN IF NOT EXISTS payment_purpose TEXT,
@@ -2067,6 +2112,10 @@ ALTER TABLE public.payment_events
   ADD COLUMN IF NOT EXISTS failure_reason TEXT,
   ADD COLUMN IF NOT EXISTS settlement_destination_source TEXT,
   ADD COLUMN IF NOT EXISTS reconciliation_status TEXT;
+
+ALTER TABLE public.payment_events
+  ALTER COLUMN processed_at DROP NOT NULL,
+  ALTER COLUMN processed_at DROP DEFAULT;
 
 DO $$
 DECLARE
@@ -4381,6 +4430,7 @@ BEGIN
     'CASCADE'
   );
   PERFORM pg_temp.assert_public_column_definition('payment_events', 'amount_kobo', 'int8', false, NULL);
+  PERFORM pg_temp.assert_public_column_definition('payment_events', 'processed_at', 'timestamptz', false, NULL);
   PERFORM pg_temp.assert_public_policy_compatible(
     'payment_records',
     'merchant_read_payment_records',
