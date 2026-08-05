@@ -521,6 +521,137 @@ function Assert-HarnessSelfTest {
   }
 }
 
+function New-InvoiceFkControlState {
+  param(
+    [string]$InvoiceIdType = "uuid",
+    [bool]$InvoiceIdNullable = $true,
+    [int]$CandidateCount = 1,
+    [int]$NamedCount = 1,
+    [int]$ExactReferenceCount = 1,
+    [int]$ConflictingCount = 0,
+    [bool]$AllCandidatesValidated = $true,
+    [string]$DeleteAction = "SET NULL"
+  )
+
+  @{
+    InvoiceIdType = $InvoiceIdType
+    InvoiceIdNullable = $InvoiceIdNullable
+    CandidateCount = $CandidateCount
+    NamedCount = $NamedCount
+    ExactReferenceCount = $ExactReferenceCount
+    ConflictingCount = $ConflictingCount
+    AllCandidatesValidated = $AllCandidatesValidated
+    DeleteAction = $DeleteAction
+  }
+}
+
+function Get-InvoiceFkControlClassification {
+  param([hashtable]$State)
+
+  $exactShape = (
+    $State.InvoiceIdType -eq "uuid" -and
+    $State.InvoiceIdNullable -eq $true -and
+    $State.CandidateCount -eq 1 -and
+    $State.NamedCount -eq 1 -and
+    $State.ExactReferenceCount -eq 1 -and
+    $State.ConflictingCount -eq 0 -and
+    $State.AllCandidatesValidated -eq $true
+  )
+  $canonicalAlready = $exactShape -and $State.DeleteAction -eq "SET NULL"
+  $normalizationRequired = $exactShape -and $State.DeleteAction -eq "NO ACTION"
+  $legacyCompatible = $canonicalAlready -or $normalizationRequired
+
+  [pscustomobject]@{
+    LegacyCompatible = $legacyCompatible
+    CanonicalAlready = $canonicalAlready
+    NormalizationRequired = $normalizationRequired
+    Accepted = $legacyCompatible
+  }
+}
+
+function Assert-InvoiceFkControlClassification {
+  param(
+    [string]$Name,
+    [hashtable]$State,
+    [bool]$ExpectedLegacyCompatible,
+    [bool]$ExpectedCanonicalAlready,
+    [bool]$ExpectedNormalizationRequired,
+    [bool]$ExpectedAccepted
+  )
+
+  $classification = Get-InvoiceFkControlClassification -State $State
+  Assert-HarnessSelfTest -Condition ($classification.LegacyCompatible -eq $ExpectedLegacyCompatible) -Message "$Name legacy-compatible mismatch."
+  Assert-HarnessSelfTest -Condition ($classification.CanonicalAlready -eq $ExpectedCanonicalAlready) -Message "$Name canonical-already mismatch."
+  Assert-HarnessSelfTest -Condition ($classification.NormalizationRequired -eq $ExpectedNormalizationRequired) -Message "$Name normalization-required mismatch."
+  Assert-HarnessSelfTest -Condition ($classification.Accepted -eq $ExpectedAccepted) -Message "$Name accepted mismatch."
+  Assert-HarnessSelfTest -Condition (-not ($classification.CanonicalAlready -and $classification.NormalizationRequired)) -Message "$Name cannot be both canonical and normalization-required."
+}
+
+function Assert-InvoiceFkOfflineClassificationMatrix {
+  $cases = @(
+    @{ Name = "canonical-set-null"; State = New-InvoiceFkControlState -DeleteAction "SET NULL"; Legacy = $true; Canonical = $true; Normalize = $false; Accepted = $true },
+    @{ Name = "legacy-no-action"; State = New-InvoiceFkControlState -DeleteAction "NO ACTION"; Legacy = $true; Canonical = $false; Normalize = $true; Accepted = $true },
+    @{ Name = "wrong-name"; State = New-InvoiceFkControlState -NamedCount 0 -ConflictingCount 1; Legacy = $false; Canonical = $false; Normalize = $false; Accepted = $false },
+    @{ Name = "wrong-reference"; State = New-InvoiceFkControlState -ExactReferenceCount 0 -ConflictingCount 1; Legacy = $false; Canonical = $false; Normalize = $false; Accepted = $false },
+    @{ Name = "multiple-candidates"; State = New-InvoiceFkControlState -CandidateCount 2 -ConflictingCount 1; Legacy = $false; Canonical = $false; Normalize = $false; Accepted = $false },
+    @{ Name = "unvalidated"; State = New-InvoiceFkControlState -AllCandidatesValidated $false -ConflictingCount 1; Legacy = $false; Canonical = $false; Normalize = $false; Accepted = $false },
+    @{ Name = "cascade"; State = New-InvoiceFkControlState -DeleteAction "CASCADE"; Legacy = $false; Canonical = $false; Normalize = $false; Accepted = $false },
+    @{ Name = "set-default"; State = New-InvoiceFkControlState -DeleteAction "SET DEFAULT"; Legacy = $false; Canonical = $false; Normalize = $false; Accepted = $false },
+    @{ Name = "not-null"; State = New-InvoiceFkControlState -InvoiceIdNullable $false; Legacy = $false; Canonical = $false; Normalize = $false; Accepted = $false },
+    @{ Name = "wrong-type"; State = New-InvoiceFkControlState -InvoiceIdType "text"; Legacy = $false; Canonical = $false; Normalize = $false; Accepted = $false }
+  )
+
+  foreach ($case in @($cases)) {
+    Assert-InvoiceFkControlClassification `
+      -Name $case.Name `
+      -State $case.State `
+      -ExpectedLegacyCompatible $case.Legacy `
+      -ExpectedCanonicalAlready $case.Canonical `
+      -ExpectedNormalizationRequired $case.Normalize `
+      -ExpectedAccepted $case.Accepted
+  }
+
+  $noActionCanonical = New-InvoiceFkControlState -DeleteAction "NO ACTION"
+  Assert-HarnessSelfTest -Condition (-not (Get-InvoiceFkControlClassification -State $noActionCanonical).CanonicalAlready) -Message "NO ACTION was marked canonical."
+  $setNullNormalize = New-InvoiceFkControlState -DeleteAction "SET NULL"
+  Assert-HarnessSelfTest -Condition (-not (Get-InvoiceFkControlClassification -State $setNullNormalize).NormalizationRequired) -Message "SET NULL was marked normalization-required."
+  $wrongReference = New-InvoiceFkControlState -ExactReferenceCount 0 -ConflictingCount 1 -DeleteAction "NO ACTION"
+  Assert-HarnessSelfTest -Condition (-not (Get-InvoiceFkControlClassification -State $wrongReference).LegacyCompatible) -Message "Wrong reference was marked legacy-compatible."
+  $multipleCompatible = New-InvoiceFkControlState -CandidateCount 2 -ConflictingCount 1 -DeleteAction "NO ACTION"
+  Assert-HarnessSelfTest -Condition (-not (Get-InvoiceFkControlClassification -State $multipleCompatible).LegacyCompatible) -Message "Multiple candidates were marked compatible."
+  $notNullCanonical = New-InvoiceFkControlState -InvoiceIdNullable $false -DeleteAction "SET NULL"
+  Assert-HarnessSelfTest -Condition (-not (Get-InvoiceFkControlClassification -State $notNullCanonical).CanonicalAlready) -Message "NOT NULL invoice_id was marked canonical."
+  $unsupported = New-InvoiceFkControlState -DeleteAction "RESTRICT"
+  Assert-HarnessSelfTest -Condition (-not (Get-InvoiceFkControlClassification -State $unsupported).LegacyCompatible) -Message "Unsupported delete action was accepted."
+}
+
+function Assert-InvoiceFkReferencePredicatesOutsideHaving {
+  param(
+    [Parameter(Mandatory = $true)][string]$SourceName,
+    [Parameter(Mandatory = $true)][string]$SourceText,
+    [Parameter(Mandatory = $true)][string]$CountVariableName
+  )
+
+  $countVariablePattern = [regex]::Escape($CountVariableName)
+  $blockPattern = "(?is)SELECT\s+count\(\*\)::integer,[\s\S]*?INTO\s+[\s\S]*?\b$countVariablePattern\b[\s\S]*?FROM\s+pg_constraint\s+con[\s\S]*?WHERE[\s\S]*?con\.conname\s*=\s*'payment_events_invoice_id_fkey'[\s\S]*?GROUP\s+BY\s+con\.conname,\s+con\.confdeltype\s+HAVING[\s\S]*?;"
+  $blockMatch = [regex]::Match($SourceText, $blockPattern)
+  Assert-HarnessSelfTest -Condition $blockMatch.Success -Message "$SourceName payment_events.invoice_id FK assertion block was not found."
+
+  $block = $blockMatch.Value
+  $whereMatch = [regex]::Match($block, "(?is)\bWHERE\b(?<where>.*?)\bGROUP\s+BY\b")
+  $havingMatch = [regex]::Match($block, "(?is)\bHAVING\b(?<having>.*?);")
+  Assert-HarnessSelfTest -Condition $whereMatch.Success -Message "$SourceName invoice FK assertion WHERE clause was not found."
+  Assert-HarnessSelfTest -Condition $havingMatch.Success -Message "$SourceName invoice FK assertion HAVING clause was not found."
+
+  $where = $whereMatch.Groups["where"].Value
+  $having = $havingMatch.Groups["having"].Value
+  Assert-HarnessSelfTest -Condition ($where -match "ref_ns\.nspname::text\s*=\s*'public'") -Message "$SourceName invoice FK referenced schema predicate must be in WHERE."
+  Assert-HarnessSelfTest -Condition ($where -match "ref_cls\.relname::text\s*=\s*'invoices'") -Message "$SourceName invoice FK referenced table predicate must be in WHERE."
+  Assert-HarnessSelfTest -Condition ($having -notmatch "ref_ns\.nspname|ref_cls\.relname") -Message "$SourceName invoice FK assertion must not reference ref_ns/ref_cls row columns in HAVING."
+  Assert-HarnessSelfTest -Condition ($having -match "array_agg\(src\.attname::text ORDER BY src_ord\.ordinality\)\s*=\s*ARRAY\['invoice_id'\]::text\[\]") -Message "$SourceName invoice FK local-column aggregate check must remain in HAVING."
+  Assert-HarnessSelfTest -Condition ($having -match "array_agg\(ref\.attname::text ORDER BY ref_ord\.ordinality\)\s*=\s*ARRAY\['id'\]::text\[\]") -Message "$SourceName invoice FK referenced-column aggregate check must remain in HAVING."
+}
+
 function New-FakeBatchCommand {
   param(
     [Parameter(Mandatory = $true)][string]$Directory,
@@ -704,6 +835,40 @@ function Run-HarnessSelfTests {
   $outerSnapshot = Get-LibpqEnvironmentSnapshot -VariableNames $libpqNames
 
   try {
+    Assert-InvoiceFkOfflineClassificationMatrix
+    $phase2SqlTest = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "supabase/tests/phase2_breet_payment_substrate_reconciliation.sql")
+    Assert-InvoiceFkReferencePredicatesOutsideHaving -SourceName "phase2_breet_payment_substrate_reconciliation.sql" -SourceText $phase2SqlTest -CountVariableName "v_invoice_fk_count"
+
+    $harnessSource = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/test-breet-solo-plus-migrations.ps1")
+    $invoiceFkFunctionMatch = [regex]::Match($harnessSource, "(?m)^function Assert-PaymentEventsInvoiceForeignKey\b")
+    $invoiceFkFunctionStart = if ($invoiceFkFunctionMatch.Success) { $invoiceFkFunctionMatch.Index } else { -1 }
+    $invoiceFkFunctionEndMatch = if ($invoiceFkFunctionStart -ge 0) {
+      [regex]::Match($harnessSource.Substring($invoiceFkFunctionStart), "(?m)^function Set-PaymentEventsInvoiceForeignKeyFixture\b")
+    } else {
+      [regex]::Match("", "a^")
+    }
+    $invoiceFkFunctionEnd = if ($invoiceFkFunctionEndMatch.Success) { $invoiceFkFunctionStart + $invoiceFkFunctionEndMatch.Index } else { -1 }
+    Assert-HarnessSelfTest -Condition ($invoiceFkFunctionStart -ge 0 -and $invoiceFkFunctionEnd -gt $invoiceFkFunctionStart) -Message "Assert-PaymentEventsInvoiceForeignKey source block was not found."
+    $invoiceFkFunctionSource = $harnessSource.Substring($invoiceFkFunctionStart, $invoiceFkFunctionEnd - $invoiceFkFunctionStart)
+    Assert-InvoiceFkReferencePredicatesOutsideHaving -SourceName "Assert-PaymentEventsInvoiceForeignKey" -SourceText $invoiceFkFunctionSource -CountVariableName "v_fk_count"
+
+    $migration009 = Get-Content -Raw -Path (Join-Path $repoRoot "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql")
+    foreach ($needle in @(
+      "get_payment_events_invoice_fk_compatible_delete_action",
+      "assert_payment_events_invoice_fk_legacy_compatible",
+      "normalize_payment_events_invoice_fk",
+      "DROP CONSTRAINT payment_events_invoice_id_fkey",
+      "ADD CONSTRAINT payment_events_invoice_id_fkey",
+      "FOREIGN KEY (invoice_id) REFERENCES public.invoices(id) ON DELETE SET NULL",
+      "v_delete_action_actual = 'NO ACTION'",
+      "v_delete_action_actual NOT IN ('SET NULL', 'NO ACTION')",
+      "con.contype::text = 'f'",
+      "array_agg(src.attname::text ORDER BY src_ord.ordinality)",
+      "array_agg(ref.attname::text ORDER BY ref_ord.ordinality)"
+    )) {
+      Assert-HarnessSelfTest -Condition ($migration009.Contains($needle)) -Message "Migration 009 invoice FK compatibility guard missing: $needle"
+    }
+    Assert-HarnessSelfTest -Condition ($migration009 -notmatch "payment_events_invoice_id_fkey[\s\S]{0,200}ON DELETE RESTRICT") -Message "Migration 009 should not whitelist RESTRICT for payment_events.invoice_id."
     Assert-RollbackRunnerPgTempHelpersAreIsolated
 
     $script:HarnessStepCounter = 0
@@ -1156,9 +1321,30 @@ VALUES (
 )
 ON CONFLICT (id) DO NOTHING;
 
+INSERT INTO public.clients (id, merchant_id, full_name, email)
+VALUES (
+  '10000000-0000-4000-8000-000000000011',
+  '10000000-0000-4000-8000-000000000001',
+  'Harness Client',
+  'harness-client@example.test'
+)
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO public.invoices (id, merchant_id, client_id, invoice_number, status, grand_total)
+VALUES (
+  '10000000-0000-4000-8000-000000000021',
+  '10000000-0000-4000-8000-000000000001',
+  '10000000-0000-4000-8000-000000000011',
+  'HARNESS-INV-001',
+  'open',
+  1000
+)
+ON CONFLICT (id) DO NOTHING;
+
 INSERT INTO public.payment_events (
   id,
   merchant_id,
+  invoice_id,
   event_type,
   processor,
   processor_ref,
@@ -1171,6 +1357,7 @@ VALUES
   (
     '20000000-0000-4000-8000-000000000001',
     NULL,
+    NULL,
     'historical.ownerless',
     'paystack',
     'legacy-ownerless-ref',
@@ -1182,6 +1369,7 @@ VALUES
   (
     '20000000-0000-4000-8000-000000000002',
     '10000000-0000-4000-8000-000000000001',
+    '10000000-0000-4000-8000-000000000021',
     'merchant.owned',
     'paystack',
     'merchant-owned-ref',
@@ -1448,6 +1636,7 @@ BEGIN
     FROM public.payment_events
     WHERE id = '20000000-0000-4000-8000-000000000001'
       AND merchant_id IS NULL
+      AND invoice_id IS NULL
       AND processor = 'paystack'
       AND processor_ref = 'legacy-ownerless-ref'
       AND processed_at IS NULL
@@ -1462,6 +1651,7 @@ BEGIN
     FROM public.payment_events
     WHERE id = '20000000-0000-4000-8000-000000000002'
       AND merchant_id = '10000000-0000-4000-8000-000000000001'
+      AND invoice_id = '10000000-0000-4000-8000-000000000021'
       AND processor = 'paystack'
       AND processor_ref = 'merchant-owned-ref'
       AND processed_at = '2026-06-06T00:01:00Z'::timestamptz
@@ -1484,6 +1674,203 @@ END
 "@
 
   Invoke-PsqlSql -Sql $sql -Description $Description
+}
+
+function Assert-PaymentEventsInvoiceForeignKey {
+  param(
+    [Parameter(Mandatory = $true)][string]$Description,
+    [Parameter(Mandatory = $true)]
+    [ValidateSet("SET NULL", "NO ACTION", "CASCADE", "SET DEFAULT")]
+    [string]$ExpectedDeleteAction
+  )
+
+  $sql = @"
+DO `$`$
+DECLARE
+  v_fk_count INTEGER;
+  v_delete_action TEXT;
+BEGIN
+  SELECT
+    count(*)::integer,
+    max(CASE con.confdeltype::text
+      WHEN 'a' THEN 'NO ACTION'
+      WHEN 'r' THEN 'RESTRICT'
+      WHEN 'c' THEN 'CASCADE'
+      WHEN 'n' THEN 'SET NULL'
+      WHEN 'd' THEN 'SET DEFAULT'
+      ELSE 'UNKNOWN:' || con.confdeltype::text
+    END)
+  INTO
+    v_fk_count,
+    v_delete_action
+  FROM pg_constraint con
+  JOIN pg_class ref_cls ON ref_cls.oid = con.confrelid
+  JOIN pg_namespace ref_ns ON ref_ns.oid = ref_cls.relnamespace
+  CROSS JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS src_ord(attnum, ordinality)
+  JOIN pg_attribute src
+    ON src.attrelid = con.conrelid
+   AND src.attnum = src_ord.attnum
+  CROSS JOIN LATERAL unnest(con.confkey) WITH ORDINALITY AS ref_ord(attnum, ordinality)
+  JOIN pg_attribute ref
+    ON ref.attrelid = con.confrelid
+   AND ref.attnum = ref_ord.attnum
+   AND ref_ord.ordinality = src_ord.ordinality
+  WHERE con.conrelid = 'public.payment_events'::regclass
+    AND con.conname = 'payment_events_invoice_id_fkey'
+    AND con.contype::text = 'f'
+    AND con.convalidated
+    AND ref_ns.nspname::text = 'public'
+    AND ref_cls.relname::text = 'invoices'
+  GROUP BY con.conname, con.confdeltype
+  HAVING array_agg(src.attname::text ORDER BY src_ord.ordinality) = ARRAY['invoice_id']::text[]
+     AND array_agg(ref.attname::text ORDER BY ref_ord.ordinality) = ARRAY['id']::text[];
+
+  IF COALESCE(v_fk_count, 0) <> 1 THEN
+    RAISE EXCEPTION 'expected exactly one validated payment_events_invoice_id_fkey to public.invoices(id), got %',
+      COALESCE(v_fk_count, 0);
+  END IF;
+
+  IF v_delete_action <> '$ExpectedDeleteAction' THEN
+    RAISE EXCEPTION 'payment_events_invoice_id_fkey expected %, got %',
+      '$ExpectedDeleteAction',
+      v_delete_action;
+  END IF;
+END
+`$`$;
+"@
+
+  Invoke-PsqlSql -Sql $sql -Description $Description
+}
+
+function Set-PaymentEventsInvoiceForeignKeyFixture {
+  param(
+    [Parameter(Mandatory = $true)]
+    [ValidateSet(
+      "legacy-no-action",
+      "wrong-name",
+      "wrong-referenced-table",
+      "wrong-referenced-column",
+      "multiple-candidates",
+      "additional-conflicting",
+      "unvalidated",
+      "cascade",
+      "set-default",
+      "not-null",
+      "wrong-type",
+      "missing-target"
+    )]
+    [string]$Scenario
+  )
+
+  $dropExpected = "ALTER TABLE public.payment_events DROP CONSTRAINT IF EXISTS payment_events_invoice_id_fkey;"
+  $sql = switch ($Scenario) {
+    "legacy-no-action" {
+      @"
+$dropExpected
+ALTER TABLE public.payment_events
+  ADD CONSTRAINT payment_events_invoice_id_fkey
+  FOREIGN KEY (invoice_id) REFERENCES public.invoices(id) ON DELETE NO ACTION;
+"@
+    }
+    "wrong-name" {
+      @"
+$dropExpected
+ALTER TABLE public.payment_events
+  ADD CONSTRAINT payment_events_invoice_id_wrong_name_fkey
+  FOREIGN KEY (invoice_id) REFERENCES public.invoices(id) ON DELETE NO ACTION;
+"@
+    }
+    "wrong-referenced-table" {
+      @"
+$dropExpected
+CREATE TABLE IF NOT EXISTS public.fixture_wrong_invoices (id uuid PRIMARY KEY);
+INSERT INTO public.fixture_wrong_invoices (id)
+VALUES ('10000000-0000-4000-8000-000000000021')
+ON CONFLICT (id) DO NOTHING;
+ALTER TABLE public.payment_events
+  ADD CONSTRAINT payment_events_invoice_id_fkey
+  FOREIGN KEY (invoice_id) REFERENCES public.fixture_wrong_invoices(id) ON DELETE NO ACTION;
+"@
+    }
+    "wrong-referenced-column" {
+      @"
+$dropExpected
+ALTER TABLE public.invoices ADD COLUMN IF NOT EXISTS alternate_id uuid UNIQUE;
+UPDATE public.invoices
+SET alternate_id = id
+WHERE id = '10000000-0000-4000-8000-000000000021';
+ALTER TABLE public.payment_events
+  ADD CONSTRAINT payment_events_invoice_id_fkey
+  FOREIGN KEY (invoice_id) REFERENCES public.invoices(alternate_id) ON DELETE NO ACTION;
+"@
+    }
+    "multiple-candidates" {
+      @"
+ALTER TABLE public.payment_events
+  ADD CONSTRAINT payment_events_invoice_id_additional_fkey
+  FOREIGN KEY (invoice_id) REFERENCES public.invoices(id) ON DELETE NO ACTION;
+"@
+    }
+    "additional-conflicting" {
+      @"
+CREATE TABLE IF NOT EXISTS public.fixture_wrong_invoices (id uuid PRIMARY KEY);
+INSERT INTO public.fixture_wrong_invoices (id)
+VALUES ('10000000-0000-4000-8000-000000000021')
+ON CONFLICT (id) DO NOTHING;
+ALTER TABLE public.payment_events
+  ADD CONSTRAINT payment_events_invoice_id_conflicting_fkey
+  FOREIGN KEY (invoice_id) REFERENCES public.fixture_wrong_invoices(id) ON DELETE NO ACTION;
+"@
+    }
+    "unvalidated" {
+      @"
+$dropExpected
+ALTER TABLE public.payment_events
+  ADD CONSTRAINT payment_events_invoice_id_fkey
+  FOREIGN KEY (invoice_id) REFERENCES public.invoices(id) ON DELETE NO ACTION NOT VALID;
+"@
+    }
+    "cascade" {
+      @"
+$dropExpected
+ALTER TABLE public.payment_events
+  ADD CONSTRAINT payment_events_invoice_id_fkey
+  FOREIGN KEY (invoice_id) REFERENCES public.invoices(id) ON DELETE CASCADE;
+"@
+    }
+    "set-default" {
+      @"
+$dropExpected
+ALTER TABLE public.payment_events
+  ADD CONSTRAINT payment_events_invoice_id_fkey
+  FOREIGN KEY (invoice_id) REFERENCES public.invoices(id) ON DELETE SET DEFAULT;
+"@
+    }
+    "not-null" {
+      @"
+UPDATE public.payment_events
+SET invoice_id = '10000000-0000-4000-8000-000000000021'
+WHERE invoice_id IS NULL;
+ALTER TABLE public.payment_events ALTER COLUMN invoice_id SET NOT NULL;
+"@
+    }
+    "wrong-type" {
+      @"
+$dropExpected
+ALTER TABLE public.payment_events
+  ALTER COLUMN invoice_id TYPE text USING invoice_id::text;
+"@
+    }
+    "missing-target" {
+      @"
+DELETE FROM public.payment_events;
+$dropExpected
+DROP TABLE public.invoices CASCADE;
+"@
+    }
+  }
+
+  Invoke-PsqlSql -Sql $sql -Description "Create payment_events invoice FK fixture: $Scenario"
 }
 
 function Assert-PaymentEventsProcessorDefault {
@@ -2199,6 +2586,39 @@ ALTER TABLE public.payment_events
   Assert-PaymentEventsProcessedAtDefault -Description "Assert failed Migration A leaves rejected payment_events.processed_at default unchanged" -ExpectedDefaultState "current_date"
   Assert-PaymentEventsLegacyRowsPreserved -Description "Assert failed Migration A leaves payment_events rows unchanged after processed_at default rejection"
   Add-PassResult -Results $results -Message "Migration A blocks incompatible payment_events.processed_at defaults before DDL"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture -IncludePaymentEventsPrerequisite
+  Set-PaymentEventsInvoiceForeignKeyFixture -Scenario "legacy-no-action"
+  Assert-PaymentEventsInvoiceForeignKey -Description "Assert legacy payment_events invoice FK fixture starts as NO ACTION" -ExpectedDeleteAction "NO ACTION"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Run Migration A to normalize legacy payment_events invoice FK"
+  Assert-PaymentEventsInvoiceForeignKey -Description "Assert Migration A normalizes payment_events invoice FK to SET NULL" -ExpectedDeleteAction "SET NULL"
+  Assert-PaymentEventsLegacyRowsPreserved -Description "Assert Migration A preserves payment_events rows while normalizing invoice FK"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Rerun Migration A after invoice FK normalization"
+  Assert-PaymentEventsInvoiceForeignKey -Description "Assert rerun keeps payment_events invoice FK canonical" -ExpectedDeleteAction "SET NULL"
+  Assert-PaymentEventsLegacyRowsPreserved -Description "Assert rerun preserves payment_events rows after invoice FK normalization"
+  Add-PassResult -Results $results -Message "Migration A normalizes exact legacy payment_events invoice FK NO ACTION to SET NULL idempotently"
+
+  foreach ($invoiceFkScenario in @(
+    "wrong-name",
+    "wrong-referenced-table",
+    "wrong-referenced-column",
+    "multiple-candidates",
+    "additional-conflicting",
+    "unvalidated",
+    "cascade",
+    "set-default",
+    "not-null",
+    "wrong-type",
+    "missing-target"
+  )) {
+    Reset-DisposableDatabase
+    Initialize-CoreFixture -IncludePaymentEventsPrerequisite
+    Set-PaymentEventsInvoiceForeignKeyFixture -Scenario $invoiceFkScenario
+    Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Expect Migration A to fail on payment_events invoice FK fixture $invoiceFkScenario" -ExpectFailure
+    Assert-RelationAbsent -QualifiedName "public.payment_sessions"
+    Add-PassResult -Results $results -Message "Migration A rejects payment_events invoice FK fixture $invoiceFkScenario"
+  }
 
   Reset-DisposableDatabase
   Initialize-CoreFixture -IncludeCanonicalPaymentRecordsSecurityPrerequisite

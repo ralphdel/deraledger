@@ -542,6 +542,180 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION pg_temp.get_payment_events_invoice_fk_compatible_delete_action()
+RETURNS TEXT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_invoice_id_attnum SMALLINT;
+  v_invoice_id_type TEXT;
+  v_invoice_id_not_null BOOLEAN;
+  v_candidate_count INTEGER;
+  v_named_count INTEGER;
+  v_exact_reference_count INTEGER;
+  v_conflicting_count INTEGER;
+  v_delete_action_actual TEXT;
+BEGIN
+  SELECT
+    a.attnum,
+    a.atttypid::regtype::text,
+    a.attnotnull
+  INTO
+    v_invoice_id_attnum,
+    v_invoice_id_type,
+    v_invoice_id_not_null
+  FROM pg_attribute a
+  WHERE a.attrelid = 'public.payment_events'::regclass
+    AND a.attname = 'invoice_id'
+    AND a.attnum > 0
+    AND NOT a.attisdropped;
+
+  IF v_invoice_id_attnum IS NULL THEN
+    RAISE EXCEPTION 'Migration A compatibility failure: schema=public object=payment_events.invoice_id expected=column actual=missing';
+  END IF;
+
+  IF v_invoice_id_type <> 'uuid' THEN
+    RAISE EXCEPTION 'Migration A compatibility failure: schema=public object=payment_events.invoice_id expected=type:uuid actual=type:%',
+      v_invoice_id_type;
+  END IF;
+
+  IF v_invoice_id_not_null IS DISTINCT FROM false THEN
+    RAISE EXCEPTION 'Migration A compatibility failure: schema=public object=payment_events.invoice_id expected=nullable:true actual=nullable:false';
+  END IF;
+
+  WITH fk_candidates AS (
+    SELECT
+      con.conname::text AS constraint_name,
+      array_agg(src.attname::text ORDER BY src_ord.ordinality) AS local_columns,
+      ref_ns.nspname::text AS referenced_schema,
+      ref_cls.relname::text AS referenced_table,
+      array_agg(ref.attname::text ORDER BY ref_ord.ordinality) AS referenced_columns,
+      CASE con.confdeltype::text
+        WHEN 'a' THEN 'NO ACTION'
+        WHEN 'r' THEN 'RESTRICT'
+        WHEN 'c' THEN 'CASCADE'
+        WHEN 'n' THEN 'SET NULL'
+        WHEN 'd' THEN 'SET DEFAULT'
+        ELSE 'UNKNOWN:' || con.confdeltype::text
+      END AS delete_action,
+      con.convalidated AS is_validated
+    FROM pg_constraint con
+    JOIN pg_class ref_cls ON ref_cls.oid = con.confrelid
+    JOIN pg_namespace ref_ns ON ref_ns.oid = ref_cls.relnamespace
+    CROSS JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS src_ord(attnum, ordinality)
+    JOIN pg_attribute src
+      ON src.attrelid = con.conrelid
+     AND src.attnum = src_ord.attnum
+    CROSS JOIN LATERAL unnest(con.confkey) WITH ORDINALITY AS ref_ord(attnum, ordinality)
+    JOIN pg_attribute ref
+      ON ref.attrelid = con.confrelid
+     AND ref.attnum = ref_ord.attnum
+     AND ref_ord.ordinality = src_ord.ordinality
+    WHERE con.conrelid = 'public.payment_events'::regclass
+      AND con.contype::text = 'f'
+      AND EXISTS (
+        SELECT 1
+        FROM unnest(con.conkey) AS key_attnum(attnum)
+        WHERE key_attnum.attnum = v_invoice_id_attnum
+      )
+    GROUP BY con.conname, ref_ns.nspname, ref_cls.relname, con.confdeltype, con.convalidated
+  )
+  SELECT
+    count(*)::integer,
+    count(*) FILTER (WHERE constraint_name = 'payment_events_invoice_id_fkey')::integer,
+    count(*) FILTER (
+      WHERE local_columns = ARRAY['invoice_id']::text[]
+        AND referenced_schema = 'public'
+        AND referenced_table = 'invoices'
+        AND referenced_columns = ARRAY['id']::text[]
+    )::integer,
+    count(*) FILTER (
+      WHERE constraint_name <> 'payment_events_invoice_id_fkey'
+        OR local_columns <> ARRAY['invoice_id']::text[]
+        OR referenced_schema <> 'public'
+        OR referenced_table <> 'invoices'
+        OR referenced_columns <> ARRAY['id']::text[]
+        OR is_validated IS DISTINCT FROM true
+        OR delete_action NOT IN ('SET NULL', 'NO ACTION')
+    )::integer,
+    max(delete_action)
+  INTO
+    v_candidate_count,
+    v_named_count,
+    v_exact_reference_count,
+    v_conflicting_count,
+    v_delete_action_actual
+  FROM fk_candidates;
+
+  IF v_candidate_count <> 1 THEN
+    RAISE EXCEPTION 'Migration A compatibility failure: schema=public object=payment_events.invoice_id expected=exactly one foreign key actual=%',
+      v_candidate_count;
+  END IF;
+
+  IF v_named_count <> 1 THEN
+    RAISE EXCEPTION 'Migration A compatibility failure: schema=public object=payment_events.payment_events_invoice_id_fkey expected=foreign key actual=missing or wrong name';
+  END IF;
+
+  IF v_exact_reference_count <> 1 THEN
+    RAISE EXCEPTION 'Migration A compatibility failure: schema=public object=payment_events.payment_events_invoice_id_fkey expected=invoice_id references public.invoices(id) actual=incompatible reference';
+  END IF;
+
+  IF v_conflicting_count <> 0 THEN
+    RAISE EXCEPTION 'Migration A compatibility failure: schema=public object=payment_events.payment_events_invoice_id_fkey expected=validated SET NULL or legacy NO ACTION actual=incompatible foreign key';
+  END IF;
+
+  IF v_delete_action_actual NOT IN ('SET NULL', 'NO ACTION') THEN
+    RAISE EXCEPTION 'Migration A compatibility failure: schema=public object=payment_events.payment_events_invoice_id_fkey expected=on delete SET NULL or legacy NO ACTION actual=%',
+      v_delete_action_actual;
+  END IF;
+
+  RETURN v_delete_action_actual;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION pg_temp.assert_payment_events_invoice_fk_legacy_compatible()
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  PERFORM pg_temp.get_payment_events_invoice_fk_compatible_delete_action();
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION pg_temp.normalize_payment_events_invoice_fk()
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_delete_action_actual TEXT;
+BEGIN
+  v_delete_action_actual := pg_temp.get_payment_events_invoice_fk_compatible_delete_action();
+
+  IF v_delete_action_actual = 'NO ACTION' THEN
+    ALTER TABLE public.payment_events
+      DROP CONSTRAINT payment_events_invoice_id_fkey;
+    ALTER TABLE public.payment_events
+      ADD CONSTRAINT payment_events_invoice_id_fkey
+      FOREIGN KEY (invoice_id) REFERENCES public.invoices(id) ON DELETE SET NULL;
+  END IF;
+
+  v_delete_action_actual := pg_temp.get_payment_events_invoice_fk_compatible_delete_action();
+  IF v_delete_action_actual <> 'SET NULL' THEN
+    RAISE EXCEPTION 'Migration A verification failed: schema=public object=payment_events.payment_events_invoice_id_fkey expected=on delete SET NULL actual=%',
+      v_delete_action_actual;
+  END IF;
+
+  PERFORM pg_temp.assert_public_foreign_key(
+    'payment_events',
+    'payment_events_invoice_id_fkey',
+    ARRAY['invoice_id'],
+    'invoices',
+    ARRAY['id'],
+    'SET NULL'
+  );
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION pg_temp.assert_public_unique_contains(
   p_table_name TEXT,
   p_expected_fragments TEXT[]
@@ -1518,23 +1692,7 @@ BEGIN
     ELSE
       RAISE EXCEPTION 'Migration A compatibility failure: schema=public object=payment_events.payment_events_merchant_id_fkey expected=foreign key actual=missing';
     END IF;
-    IF EXISTS (
-      SELECT 1
-      FROM pg_constraint
-      WHERE conrelid = 'public.payment_events'::regclass
-        AND conname = 'payment_events_invoice_id_fkey'
-    ) THEN
-      PERFORM pg_temp.assert_public_foreign_key(
-        'payment_events',
-        'payment_events_invoice_id_fkey',
-        ARRAY['invoice_id'],
-        'invoices',
-        ARRAY['id'],
-        'SET NULL'
-      );
-    ELSE
-      RAISE EXCEPTION 'Migration A compatibility failure: schema=public object=payment_events.payment_events_invoice_id_fkey expected=foreign key actual=missing';
-    END IF;
+    PERFORM pg_temp.assert_payment_events_invoice_fk_legacy_compatible();
     PERFORM pg_temp.assert_public_index_definition(
       'idx_payment_events_created_at',
       'CREATE INDEX idx_payment_events_created_at ON public.payment_events USING btree (created_at DESC)',
@@ -2116,6 +2274,8 @@ ALTER TABLE public.payment_events
 ALTER TABLE public.payment_events
   ALTER COLUMN processed_at DROP NOT NULL,
   ALTER COLUMN processed_at DROP DEFAULT;
+
+SELECT pg_temp.normalize_payment_events_invoice_fk();
 
 DO $$
 DECLARE
@@ -4428,6 +4588,16 @@ BEGIN
     'merchants',
     ARRAY['id'],
     'CASCADE'
+  );
+  PERFORM pg_temp.assert_public_column_definition('payment_events', 'invoice_id', 'uuid', false, NULL);
+  PERFORM pg_temp.assert_payment_events_invoice_fk_legacy_compatible();
+  PERFORM pg_temp.assert_public_foreign_key(
+    'payment_events',
+    'payment_events_invoice_id_fkey',
+    ARRAY['invoice_id'],
+    'invoices',
+    ARRAY['id'],
+    'SET NULL'
   );
   PERFORM pg_temp.assert_public_column_definition('payment_events', 'amount_kobo', 'int8', false, NULL);
   PERFORM pg_temp.assert_public_column_definition('payment_events', 'processed_at', 'timestamptz', false, NULL);
