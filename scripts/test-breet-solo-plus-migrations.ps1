@@ -521,6 +521,61 @@ function Assert-HarnessSelfTest {
   }
 }
 
+function Get-ContainingPowerShellFunctionName {
+  param($Node, [object[]]$Functions)
+  $matches=@($Functions | Where-Object {
+    $_.Extent.StartOffset -le $Node.Extent.StartOffset -and $_.Extent.EndOffset -ge $Node.Extent.EndOffset
+  } | Sort-Object { $_.Extent.EndOffset - $_.Extent.StartOffset })
+  if($matches.Count -eq 0){return ''}
+  return $matches[0].Name
+}
+
+function Assert-ProductionRehearsalArchitectureAst {
+  param([string]$HelperPath,[string]$GeneratorPath)
+  $helperTokens=$null;$helperErrors=$null;$generatorTokens=$null;$generatorErrors=$null
+  $helperAst=[Management.Automation.Language.Parser]::ParseFile($HelperPath,[ref]$helperTokens,[ref]$helperErrors)
+  $generatorAst=[Management.Automation.Language.Parser]::ParseFile($GeneratorPath,[ref]$generatorTokens,[ref]$generatorErrors)
+  Assert-HarnessSelfTest (@($helperErrors).Count -eq 0 -and @($generatorErrors).Count -eq 0) 'production rehearsal helper or generator has AST errors.'
+  $helperFunctions=@($helperAst.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst]},$true))
+  $generatorFunctions=@($generatorAst.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst]},$true))
+  foreach($group in @($helperFunctions|Group-Object Name)){Assert-HarnessSelfTest ($group.Count -eq 1) "canonical helper function cardinality invalid: $($group.Name)"}
+  $sharedNames=@($helperFunctions.Name|Where-Object {$_ -in $generatorFunctions.Name})
+  Assert-HarnessSelfTest ($sharedNames.Count -eq 0) "generator shadows canonical helper functions: $($sharedNames -join ',')"
+  foreach($obsolete in @('Assert-DRCondition','ConvertTo-DRTarget','ConvertTo-DRSqlLiteral','ConvertFrom-DRControlRow','Assert-DRRunnerText','Assert-DRMarkers','Assert-DRGitState')){
+    Assert-HarnessSelfTest (@(($helperFunctions+$generatorFunctions)|Where-Object Name -eq $obsolete).Count -eq 0) "obsolete DR shadow remains: $obsolete"
+  }
+
+  $readHostCommands=@($helperAst.FindAll({param($node)$node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Read-Host'},$true))
+  Assert-HarnessSelfTest ($readHostCommands.Count -eq 1 -and (Get-ContainingPowerShellFunctionName $readHostCommands[0] $helperFunctions) -eq 'New-ProductionRehearsalRuntimeContext') 'Read-Host exists outside the approved credential provider.'
+  $resolverCommands=@($helperAst.FindAll({param($node)
+    if($node -isnot [Management.Automation.Language.CommandAst]){return $false}
+    $name=$node.GetCommandName();if($name -notin @('Test-Path','Get-Command')){return $false}
+    return $node.Extent.Text -match '(?i)(PsqlPath|PgDumpPath|\.exe)'
+  },$true))
+  foreach($command in $resolverCommands){Assert-HarnessSelfTest ((Get-ContainingPowerShellFunctionName $command $helperFunctions) -eq 'New-ProductionRehearsalRuntimeContext') 'executable resolution exists outside the approved resolver.'}
+
+  $helperStarts=@($helperAst.FindAll({param($node)$node -is [Management.Automation.Language.InvokeMemberExpressionAst] -and $node.Extent.Text -match '\[System\.Diagnostics\.Process\]::Start'},$true))
+  $generatorStarts=@($generatorAst.FindAll({param($node)$node -is [Management.Automation.Language.InvokeMemberExpressionAst] -and $node.Extent.Text -match '\[System\.Diagnostics\.Process\]::Start'},$true))
+  Assert-HarnessSelfTest ($helperStarts.Count -eq 1 -and (Get-ContainingPowerShellFunctionName $helperStarts[0] $helperFunctions) -eq 'Invoke-ProcessStart' -and $generatorStarts.Count -eq 0) 'direct Process.Start exists outside the approved process-start adapter.'
+
+  $packageCalls=@($generatorAst.FindAll({param($node)$node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'New-ProductionRehearsalPackage'},$true))
+  Assert-HarnessSelfTest ($packageCalls.Count -eq 1) 'package generation call cardinality is invalid.'
+  $packageAssignments=@($generatorAst.FindAll({param($node)$node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Extent.Text -match 'PackageGenerationBoundary'},$true))
+  Assert-HarnessSelfTest (@($packageAssignments|Where-Object {$_.Extent.StartOffset -le $packageCalls[0].Extent.StartOffset -and $_.Extent.EndOffset -ge $packageCalls[0].Extent.EndOffset}).Count -eq 1) 'package generation call exists outside its approved boundary.'
+
+  foreach($astRecord in @(@{Ast=$helperAst;Functions=$helperFunctions;Name='helper'},@{Ast=$generatorAst;Functions=$generatorFunctions;Name='generator'})){
+    $directSql=@($astRecord.Ast.FindAll({param($node)$node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -match '^(psql|pg_dump)(\.exe)?$'},$true))
+    Assert-HarnessSelfTest ($directSql.Count -eq 0) "direct SQL executable invocation found in $($astRecord.Name)."
+  }
+  $invokeRehearsal=@($helperFunctions|Where-Object Name -eq 'Invoke-Rehearsal')
+  Assert-HarnessSelfTest ($invokeRehearsal.Count -eq 1 -and $invokeRehearsal[0].Extent.Text -notmatch 'Invoke-NativeChecked' -and $invokeRehearsal[0].Extent.Text -match 'Invoke-RehearsalProcess') 'SQL execution bypasses the approved rehearsal process boundary.'
+  $artifactFunction=@($helperFunctions|Where-Object Name -eq 'Assert-ArtifactIntegrity')
+  $artifactReturns=@($artifactFunction[0].FindAll({param($node)$node -is [Management.Automation.Language.ReturnStatementAst]},$true))
+  $bypassVariables=@($helperAst.FindAll({param($node)$node -is [Management.Automation.Language.VariableExpressionAst] -and $node.VariablePath.UserPath -eq 'SkipEmbeddedContract'},$true)) + @($generatorAst.FindAll({param($node)$node -is [Management.Automation.Language.VariableExpressionAst] -and $node.VariablePath.UserPath -eq 'SkipEmbeddedContract'},$true))
+  $bypassMembers=@($helperAst.FindAll({param($node)$node -is [Management.Automation.Language.MemberExpressionAst] -and $node.Member.Value -eq 'SkipEmbeddedContract'},$true)) + @($generatorAst.FindAll({param($node)$node -is [Management.Automation.Language.MemberExpressionAst] -and $node.Member.Value -eq 'SkipEmbeddedContract'},$true))
+  Assert-HarnessSelfTest ($artifactFunction.Count -eq 1 -and $artifactReturns.Count -eq 0 -and $bypassVariables.Count -eq 0 -and $bypassMembers.Count -eq 0) 'artifact integrity contains a bypass or early return.'
+}
+
 function New-InvoiceFkControlState {
   param(
     [string]$InvoiceIdType = "uuid",
@@ -870,6 +925,62 @@ function Run-HarnessSelfTests {
     }
     Assert-HarnessSelfTest -Condition ($migration009 -notmatch "payment_events_invoice_id_fkey[\s\S]{0,200}ON DELETE RESTRICT") -Message "Migration 009 should not whitelist RESTRICT for payment_events.invoice_id."
     Assert-RollbackRunnerPgTempHelpersAreIsolated
+
+    $rehearsalGenerator = Join-Path $repoRoot "scripts/new-production-rehearsal-package.ps1"
+    $rehearsalHelper = Join-Path $repoRoot "scripts/production-rehearsal-validation.ps1"
+    Assert-HarnessSelfTest -Condition (Test-Path -LiteralPath $rehearsalGenerator) -Message "production rehearsal package generator is missing."
+    Assert-HarnessSelfTest -Condition (Test-Path -LiteralPath $rehearsalHelper) -Message "production rehearsal canonical helper is missing."
+    Assert-ProductionRehearsalArchitectureAst -HelperPath $rehearsalHelper -GeneratorPath $rehearsalGenerator
+    $helperTokens = $null
+    $helperErrors = $null
+    $helperAst = [System.Management.Automation.Language.Parser]::ParseFile($rehearsalHelper, [ref]$helperTokens, [ref]$helperErrors)
+    $expectedRuntimeFunctions = @("Assert-Condition","Sha256","Join-NativeArguments","Get-WrapperBodyHash","Get-DescriptorWrapperBodyHash","Invoke-ProcessStart","Invoke-GitText","Get-EnvironmentSnapshot","Restore-Environment","Clear-PostgresRoutingEnvironment","ConvertTo-BooleanStrict","ConvertTo-IntegerStrict","Get-ControlRequiredKeys","Convert-ControlRow","Assert-ControlAccepted","New-ControlSql","Parse-Manifest","Get-ExecutableRunnerLines","Assert-RunnerContract","Assert-ArtifactIntegrity","Assert-GitState","Parse-TargetDatabaseUrl","Assert-PasswordFreeDatabaseUrl","ConvertTo-SqlLiteral","New-TemporaryPgPassFile","Invoke-NativeChecked","Assert-RunnerMarkers","Invoke-OfflineMutationCase","Invoke-OfflineValidation","Invoke-Rehearsal","New-RehearsalRuntimeContext","New-ProductionRehearsalRuntimeContext","Get-ProductionArtifactDescriptor","Invoke-RehearsalProcess","Assert-RehearsalProcessResult","Invoke-RehearsalLifecycle","Assert-ControlProofEqual")
+    $helperFunctions = @($helperAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) | ForEach-Object { $_.Name })
+    foreach ($functionName in $expectedRuntimeFunctions) { Assert-HarnessSelfTest -Condition (@($helperFunctions | Where-Object { $_ -eq $functionName }).Count -eq 1) -Message "canonical runtime function cardinality invalid: $functionName" }
+    $generatorSource = Get-Content -Raw -LiteralPath $rehearsalGenerator
+    $helperSource = Get-Content -Raw -LiteralPath $rehearsalHelper
+    foreach ($boundary in @("ArtifactProvider","GitStateProvider","CredentialProvider","ExecutableResolver","ProcessAdapter","FileSystemAdapter","PackageGenerationBoundary","SqlExecutionBoundary")) {
+      Assert-HarnessSelfTest -Condition ($helperSource.Contains($boundary) -and $generatorSource.Contains($boundary)) -Message "injectable rehearsal boundary is missing from production or offline architecture: $boundary"
+    }
+    Assert-HarnessSelfTest -Condition ($helperSource -match "function Assert-GitState[\s\S]+GitStateProvider" -and $helperSource -match "function Invoke-OfflineValidation[\s\S]+Assert-ArtifactIntegrity \`$Context" -and $helperSource -match "function Invoke-Rehearsal[\s\S]+Assert-ControlProofEqual") -Message "production and offline paths do not share canonical acceptance functions."
+    Assert-HarnessSelfTest -Condition ($generatorSource -match "Replace-SinglePlaceholder[\s\S]+__SHARED_VALIDATION_HELPERS__") -Message "generator lacks fail-closed helper placeholder replacement."
+    Assert-HarnessSelfTest -Condition ($generatorSource -match "CANONICAL_HELPER_SHA256" -and $generatorSource -match "EMBEDDED_HELPER_SHA256" -and $generatorSource -match "ARTIFACT_HELPER_BODY_HASH_MISMATCH") -Message "generator lacks canonical helper integrity contract."
+    $generatorOffline = Invoke-CapturedProcess -FilePath "powershell.exe" -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $rehearsalGenerator, "-OfflineValidateOnly") -WorkingDirectory $repoRoot -TimeoutSeconds 60
+    $offlineBoundaryLine=@(($generatorOffline.Stdout -split "`r`n|`n")|Where-Object {$_ -like 'OFFLINE_BOUNDARIES|*'})
+    Assert-HarnessSelfTest -Condition ($offlineBoundaryLine.Count -eq 1) -Message "offline boundary evidence cardinality invalid."
+    $offlineBoundaryProof=if($offlineBoundaryLine.Count -eq 1){$offlineBoundaryLine[0].Substring(19)|ConvertFrom-Json}else{$null}
+    Assert-HarnessSelfTest -Condition ($generatorOffline.ExitCode -eq 0 -and $generatorOffline.Stdout -match "Generator OfflineValidateOnly: PASS" -and $null -ne $offlineBoundaryProof -and $offlineBoundaryProof.CredentialProvider -eq 0 -and $offlineBoundaryProof.PsqlResolver -eq 0 -and $offlineBoundaryProof.PgDumpResolver -eq 0 -and $offlineBoundaryProof.ProcessAdapter -eq 0 -and $offlineBoundaryProof.PackageGenerationBoundary -eq 0 -and $offlineBoundaryProof.SqlExecutionBoundary -eq 0) -Message "production rehearsal generator offline validation failed or crossed a forbidden boundary: $($generatorOffline.Stderr) $($generatorOffline.Stdout)"
+    $generatorMutations = Invoke-CapturedProcess -FilePath "powershell.exe" -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $rehearsalGenerator, "-RunOfflineMutationTests") -WorkingDirectory $repoRoot -TimeoutSeconds 120
+    $declaredMatch = [regex]::Match($generatorMutations.Stdout, "Mutation cases declared: (\d+)")
+    $executedMatch = [regex]::Match($generatorMutations.Stdout, "Mutation cases executed: (\d+)")
+    Assert-HarnessSelfTest -Condition ($generatorMutations.ExitCode -eq 0 -and $declaredMatch.Success -and $executedMatch.Success -and $declaredMatch.Groups[1].Value -eq $executedMatch.Groups[1].Value -and [int]$declaredMatch.Groups[1].Value -gt 0 -and $generatorMutations.Stdout -match "Production rehearsal generator offline mutation tests passed") -Message "production rehearsal generator mutation tests failed: $($generatorMutations.Stderr) $($generatorMutations.Stdout)"
+    $architectureCaseIds = @(
+      "ARCH-ARTIFACT-VALID","ARCH-ARTIFACT-RUNNER-HASH-MISMATCH","ARCH-ARTIFACT-HELPER-HASH-MISMATCH","ARCH-ARTIFACT-NAMESPACE-MISMATCH",
+      "ARCH-GIT-VALID","ARCH-GIT-WRONG-BRANCH","ARCH-GIT-STAGED","ARCH-GIT-DIRTY",
+      "ARCH-CONTROL-VALID","ARCH-CONTROL-DATABASE-MISMATCH","ARCH-CONTROL-PROTECTED-FLAG-TRUE","ARCH-CONTROL-FINGERPRINT-MISMATCH",
+      "ARCH-OFFLINE-NO-CREDENTIAL-PROMPT","ARCH-OFFLINE-NO-PSQL-RESOLUTION","ARCH-OFFLINE-NO-PGDUMP-RESOLUTION","ARCH-OFFLINE-NO-REAL-PROCESS-START","ARCH-OFFLINE-NO-PACKAGE-GENERATION","ARCH-OFFLINE-NO-SQL-EXECUTION",
+      "ARCH-PROCESS-LARGE-OUTPUT","ARCH-PROCESS-TIMEOUT","ARCH-PROCESS-NONZERO-EXIT","ARCH-PROCESS-REDACTION",
+      "ARCH-CLEANUP-SUCCESS","ARCH-CLEANUP-FAILURE","ARCH-CLEANUP-TIMEOUT","ARCH-EVIDENCE-BEFORE-CLEANUP","ARCH-ENVIRONMENT-RESTORE-SUCCESS","ARCH-ENVIRONMENT-RESTORE-FAILURE"
+    )
+    $caseRows = @(($generatorMutations.Stdout -split "`r`n|`n") | Where-Object { $_ -like "CASE|*" } | ForEach-Object { $_.Substring(5) | ConvertFrom-Json })
+    Assert-HarnessSelfTest -Condition ($caseRows.Count -eq $architectureCaseIds.Count) -Message "structured architecture evidence count mismatch."
+    foreach ($caseId in $architectureCaseIds) {
+      $matches = @($caseRows | Where-Object { $_.case_id -eq $caseId })
+      Assert-HarnessSelfTest -Condition ($matches.Count -eq 1) -Message "structured architecture case cardinality invalid: $caseId"
+      $case = $matches[0]
+      Assert-HarnessSelfTest -Condition ($case.setup_executed -and -not [string]::IsNullOrWhiteSpace($case.production_function_invoked) -and $case.expected_outcome -eq $case.observed_outcome -and $case.expected_error_classification -eq $case.observed_error_classification -and $null -ne $case.boundary_invocation_counts -and -not [string]::IsNullOrWhiteSpace($case.cleanup_result)) -Message "structured architecture evidence is incomplete: $caseId"
+    }
+    foreach ($case in @($caseRows | Where-Object { $_.category -eq "offline-boundary" })) {
+      Assert-HarnessSelfTest -Condition ($case.boundary_invocation_counts.CredentialProvider -eq 0 -and $case.boundary_invocation_counts.ExecutableResolver -eq 0 -and $case.boundary_invocation_counts.ProcessAdapter -eq 0 -and $case.boundary_invocation_counts.PackageGenerationBoundary -eq 0 -and $case.boundary_invocation_counts.SqlExecutionBoundary -eq 0) -Message "offline boundary invocation count is non-zero: $($case.case_id)"
+    }
+    foreach ($case in @($caseRows | Where-Object { $_.category -eq "process" })) {
+      Assert-HarnessSelfTest -Condition ($case.boundary_invocation_counts.ProcessAdapter -eq 1 -and $case.boundary_invocation_counts.SqlExecutionBoundary -eq 1) -Message "process architecture case did not execute injected adapters: $($case.case_id)"
+    }
+    $parityRows=@(($generatorMutations.Stdout -split "`r`n|`n")|Where-Object {$_ -like 'PARITY|*'}|ForEach-Object {$_.Substring(7)|ConvertFrom-Json})
+    Assert-HarnessSelfTest -Condition ($parityRows.Count -eq 28 -and @($parityRows|Group-Object function|Where-Object Count -ne 1).Count -eq 0 -and @($parityRows|Where-Object classification -eq 'unexplained').Count -eq 0) -Message "machine parity classification is incomplete, duplicated, or unexplained."
+    foreach($parity in @($parityRows|Where-Object classification -eq 'adapter-plumbing')){Assert-HarnessSelfTest -Condition (@($parity.named_tests).Count -gt 0) -Message "adapter parity row lacks named tests: $($parity.function)"}
+    $pgpassRows=@(($generatorMutations.Stdout -split "`r`n|`n")|Where-Object {$_ -like 'PGPASS|*'}|ForEach-Object {$_.Substring(7)|ConvertFrom-Json})
+    Assert-HarnessSelfTest -Condition ($pgpassRows.Count -eq 1 -and $pgpassRows[0].utf8_no_bom -and $pgpassRows[0].exact_bytes -and $pgpassRows[0].hostname_prefix -and -not $pgpassRows[0].credential_in_evidence -and $pgpassRows[0].cleanup -eq 'verified') -Message "pgpass byte or cleanup proof failed."
 
     $script:HarnessStepCounter = 0
     $script:HarnessProgressMessages.Clear()

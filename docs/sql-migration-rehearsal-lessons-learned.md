@@ -234,6 +234,42 @@ Rules here apply to migrations, staging wrappers, rollback-only rehearsals, read
 - Status: Corrected.
 - Applicable commit: `2d0cfee4f81aa1c6416e65ad8eac60701d878ec5`; prior `beecef35` artifacts are stale.
 
+### ARTIFACT-002 - Generated Rehearsal Wrapper Omitted the Production-Proof Contract
+
+- Context: Rollback-only production rehearsal package generation.
+- Exact symptom or error: An independently reviewed bundle had a correct runner and correct migration copies, but its generated wrapper performed only basic token/hash checks before starting psql.
+- Root cause: Artifact generation validated the SQL bundle but treated the execution wrapper as a thin launcher rather than as the production safety boundary.
+- Unsafe assumption: A correct rollback-only SQL runner is sufficient to make a production rehearsal package executable.
+- Durable correction: A production rehearsal package is incomplete unless its wrapper independently implements and tests identity, credential, environment, CONTROL parsing, pre/post fingerprint, rollback proof, session/lock/prepared-transaction, timeout, process-tree, evidence-preservation, and cleanup controls before it can be considered executable.
+- Prevention rule: Wrapper generation must be tracked, template-driven, database-free testable, and independently reviewed before any user-run pre-execution validation.
+- Required regression: Tracked wrapper generator/template, database-free offline validation mode, mutation tests for every fail-closed control, and independent review before any user-run pre-execution validation.
+- Relevant files or migrations: Commit 16 rollback-only rehearsal generator and wrapper.
+- Status: Documented.
+- Applicable commit: Commit 16 artifact tooling correction work.
+
+### ARTIFACT-003 - Target URL Validation Accepted Missing Identity Components
+
+- Symptom: The rehearsal wrapper accepted target URLs without a host or username and reported database identity as true whenever `current_database()` was merely non-empty.
+- Root cause: Structured URL validation checked only scheme/path shape, while the CONTROL SQL used a tautological non-empty database test.
+- Durable rule: A target must contain an explicit host, username, and database, and preflight/postflight must compare `current_database()` to the validated expected database using a safely encoded temporary SQL literal.
+- Required regression: Missing-host, missing-user, malformed URL/query, password, SSL, and exact identity-match/mismatch fixtures through the real wrapper helpers.
+- Status: Corrected in source; local database-free validation required.
+
+### ARTIFACT-004 - Mutation Matrix Reported Coverage Without Executing Mutations
+
+- Symptom: The offline mutation matrix counted non-empty case names while executing only a valid package and one effective-COMMIT mutation.
+- Root cause: Declarative labels were mistaken for executed regression cases.
+- Durable rule: Every declared mutation requires a unique case ID, executed setup, the real shared production function, observed outcome, classified error, boundary invocation counts, and cleanup result; declared and executed counts must match exactly. Authentic offline mutation testing requires injectable production boundaries. Production and tests must use the same parsing, integrity, acceptance, process, and lifecycle functions. Test-only validators and wrappers are prohibited.
+- Required regression: URL, identity, CONTROL, runner, artifact-integrity, process, credential-cleanup, and environment-restoration cases using the canonical production functions with isolated temporary artifacts and injected adapters. Offline cases must prove credential, executable-resolution, native-process, package-generation, and SQL boundary counts remain zero.
+- Final architecture requirements:
+  - Production and temporary artifacts must pass the same complete descriptor-driven integrity function; test-only artifact bypasses and early returns are prohibited.
+  - Temporary pgpass files must be exact UTF-8 without BOM, must preserve the expected hostname prefix, must never enter evidence, and must be deleted on every path.
+  - Baseline parity must be computed for every baseline function and classified as exact, named adapter plumbing, documented intentional correction, or unexplained. Acceptance requires zero unexplained differences; fixed expected counts are not evidence.
+  - Native-process tests must execute deterministic local child processes for concurrent stdout/stderr draining, non-zero exit, timeout and descendant-tree termination, redaction before persistence, and process disposal.
+  - The actual offline command must build an injected fake runtime context and invoke the real offline validation path while reporting zero credential, psql resolver, pg_dump resolver, process, package-generation, and SQL boundary calls.
+  - The independent harness must parse both helper and generator ASTs and reject duplicate helpers, DR/test validator shadows, credential/executable/process/package/SQL boundary bypasses, and artifact-integrity bypass variables or members.
+- Status: Corrected in source; independent offline architecture review required before package generation.
+
 ### ROLLBACK-001 - Outer Rollback Contract
 
 - Context: Rollback-only production rehearsal package.
@@ -410,6 +446,7 @@ Known internal `"char"` fields to check include `pg_constraint.contype`, `pg_con
 - 2026-08-05: Added `VALIDATION-007` from merchant FK shape being mistaken for complete merchant-linkage compatibility.
 - 2026-08-05: Added `MIGRATION-001` from Migration 009 rejecting an exact legacy invoice FK before it could normalize it.
 - 2026-08-05: Added `VALIDATION-008` from non-aggregated referenced-table catalog columns being placed in HAVING.
+- 2026-08-05: Added `ARTIFACT-002` from a generated rollback-only rehearsal wrapper omitting the production-proof contract.
 
 ## VALIDATION-004 - Negative Fixture Failed During Setup
 
