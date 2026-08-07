@@ -264,7 +264,7 @@ function Test-WrapperTemplateStaticContract {
     "PGGSSENCMODE`", `"disable",
     "Invoke-NativeChecked",
     "ReadToEndAsync",
-    "taskkill.exe /PID",
+    "DuplicateOriginalHandle",
     "finally",
     "Restore-Environment",
     "ROLLBACK COMMAND COMPLETED",
@@ -499,7 +499,7 @@ function New-ArchitectureTestContext {
     $processAdapter = {
       param($request)
       [void]($Counts.ProcessAdapter++)
-      Invoke-NativeChecked $request.FilePath $request.Arguments $request.StdoutPath $request.StderrPath $request.TimeoutSeconds $request.SensitiveValues
+      Invoke-NativeChecked $request.FilePath $request.Arguments $request.StdoutPath $request.StderrPath $request.TimeoutSeconds $request.SensitiveValues $request.ProcessPlatform
     }.GetNewClosure()
   } else {
     $processAdapter = { param($request) [void]($Counts.ProcessAdapter++);if($request.FilePath -match '(?i)(^|\\)(psql|pg_dump)\.exe$'){throw 'FORBIDDEN_REAL_DATABASE_PROCESS'};return $ProcessResult.PSObject.Copy() }.GetNewClosure()
@@ -658,7 +658,6 @@ function Invoke-ControlGuardCases {
   $acceptCases=@(
     @{Id='RV.CONTROL.DATABASE_IDENTITY';Old='database_matches=true';New='database_matches=false'},
     @{Id='RV.CONTROL.SERVER_MAJOR';Old='server_major=17';New='server_major=16'},
-    @{Id='RV.CONTROL.TLS_ACTIVE';Old='tls_active=true';New='tls_active=false'},
     @{Id='RV.CONTROL.PAYMENT_EVENTS_PRESENT';Old='payment_events_present=true';New='payment_events_present=false'},
     @{Id='RV.CONTROL.MERCHANT_ID_UUID';Old='payment_events_merchant_id_uuid=true';New='payment_events_merchant_id_uuid=false'},
     @{Id='RV.CONTROL.MERCHANT_ID_NULLABLE';Old='payment_events_merchant_id_nullable=true';New='payment_events_merchant_id_nullable=false'},
@@ -672,7 +671,16 @@ function Invoke-ControlGuardCases {
     @{Id='RV.CONTROL.CONFLICTING_LOCKS';Old='conflicting_lock_count=0';New='conflicting_lock_count=1'},
     @{Id='RV.CONTROL.PREPARED_TRANSACTIONS';Old='prepared_transaction_count=0';New='prepared_transaction_count=1'}
   )
-  foreach($case in $acceptCases){$text=$sample.Replace($case.Old,$case.New);Add-ObservedGuard $Evidence $Inventory $case.Id 'Assert-ControlAccepted' {Assert-ControlAccepted (Convert-ControlRow $text)}}
+  foreach($case in $acceptCases){$text=$sample.Replace($case.Old,$case.New);Add-ObservedGuard $Evidence $Inventory $case.Id 'Assert-ControlAccepted' {Assert-ControlAccepted (Convert-ControlRow $text) $true}}
+  Add-ObservedGuard $Evidence $Inventory 'RV.CONTROL.TLS_ACTIVE' 'Assert-ControlAccepted' {Assert-ControlAccepted (Convert-ControlRow $sample) $false}
+
+  $tlsResult=[pscustomobject]@{ExitCode=0;TimedOut=$false;Stdout='SSL connection (protocol: TLSv1.3, cipher: TLS_AES_256_GCM_SHA384, compression: off, ALPN: none)';Stderr='';DurationMs=1;ProcessTreeTerminated=$false;Disposed=$true}
+  $missingTls=$tlsResult.PSObject.Copy();$missingTls.Stdout=''
+  Add-ObservedGuard $Evidence $Inventory 'RV.REHEARSAL.TLS_EVIDENCE_REQUIRED' 'Assert-Psql17ClientTls' {Assert-Psql17ClientTls $missingTls}
+  $contradictoryTls=$tlsResult.PSObject.Copy();$contradictoryTls.Stdout+="`nSSL is not in use"
+  Add-ObservedGuard $Evidence $Inventory 'RV.REHEARSAL.TLS_CONTRADICTORY' 'Assert-Psql17ClientTls' {Assert-Psql17ClientTls $contradictoryTls}
+  $missingClause=$tlsResult.PSObject.Copy();$missingClause.Stdout='Connected to the requested database.'
+  Add-ObservedGuard $Evidence $Inventory 'RV.REHEARSAL.TLS_EVIDENCE_COUNT' 'Assert-Psql17ClientTls' {Assert-Psql17ClientTls $missingClause}
   Add-ObservedGuard $Evidence $Inventory 'RV.CONTROL.PROOF_EQUAL' 'Assert-ControlProofEqual' {$before=Convert-ControlRow $sample;$after=Convert-ControlRow ($sample -replace '[0-9a-f]{64}$',('f'*64));Assert-ControlProofEqual $before $after}
 }
 
@@ -821,7 +829,9 @@ function Invoke-ArtifactGuardCases {
 function Invoke-CoreGuardCases {
   param($Evidence,$Inventory,$Fixture,[string]$Root)
   $result=[pscustomobject]@{ExitCode=0;TimedOut=$false;Stdout='';Stderr='';DurationMs=0;ProcessTreeTerminated=$false;Disposed=$true}
-  $timeout=$result.PSObject.Copy();$timeout.TimedOut=$true
+  $treeFailure=$result.PSObject.Copy();$treeFailure.TimedOut=$true
+  Add-ObservedGuard $Evidence $Inventory 'RV.PROCESS.TREE_TERMINATION' 'Assert-RehearsalProcessResult' {Assert-RehearsalProcessResult $treeFailure 'guard-test'}
+  $timeout=$result.PSObject.Copy();$timeout.TimedOut=$true;$timeout.ProcessTreeTerminated=$true
   Add-ObservedGuard $Evidence $Inventory 'RV.PROCESS.TIMEOUT' 'Assert-RehearsalProcessResult' {Assert-RehearsalProcessResult $timeout 'guard-test'}
   $nonzero=$result.PSObject.Copy();$nonzero.ExitCode=9
   Add-ObservedGuard $Evidence $Inventory 'RV.PROCESS.NONZERO_EXIT' 'Assert-RehearsalProcessResult' {Assert-RehearsalProcessResult $nonzero 'guard-test'}
@@ -1054,7 +1064,7 @@ function Invoke-RehearsalGuardCases {
 
     $counts=New-ArchitectureBoundaryCounts;$context=New-ArchitectureTestContext $fixture.Descriptor $counts $git $success -AllowCredential
     $context.ExecutableResolver={param($path)$true}
-    $context.ProcessAdapter={param($request)[pscustomobject]@{ExitCode=0;TimedOut=$false;Stdout='not encrypted';Stderr='';DurationMs=0;ProcessTreeTerminated=$false;Disposed=$true}}
+    $context.ProcessAdapter={param($request)[pscustomobject]@{ExitCode=0;TimedOut=$false;Stdout='SSL connection (malformed)';Stderr='';DurationMs=0;ProcessTreeTerminated=$false;Disposed=$true}}
     Add-ObservedGuard $Evidence $Inventory 'RV.REHEARSAL.TLS' 'Invoke-Rehearsal' {Invoke-Rehearsal $context $null $caseRoot}
 
     $numbers=@(6..17|ForEach-Object{'{0:D3}' -f $_})
@@ -1071,7 +1081,7 @@ function Invoke-RehearsalGuardCases {
         $content=if($processState.Call -eq 3){'pre-schema'}else{'post-schema'}
         [IO.File]::WriteAllText([string]$request.Arguments[$fileIndex+1],$content)
       }
-      $stdout=switch($processState.Call){1{'SSL connection'}2{$sample}4{$markers}default{''}}
+      $stdout=switch($processState.Call){1{'SSL connection (protocol: TLSv1.3, cipher: TLS_AES_256_GCM_SHA384, compression: off, ALPN: none)'}2{$sample}4{$markers}default{''}}
       [pscustomobject]@{ExitCode=0;TimedOut=$false;Stdout=$stdout;Stderr='';DurationMs=0;ProcessTreeTerminated=$false;Disposed=$true}
     }.GetNewClosure()
     Add-ObservedGuard $Evidence $Inventory 'RV.REHEARSAL.SCHEMA_HASH' 'Invoke-Rehearsal' {Invoke-Rehearsal $context $null $caseRoot}
@@ -1204,6 +1214,60 @@ function Add-AuthenticGitOutputNormalizationCases {
   }
 }
 
+function Add-AuthenticTlsContractCases {
+  param($Evidence)
+  $sample=Get-OfflineControlSample
+  $backendTlsFalse=$sample.Replace('tls_active=true','tls_active=false')
+  $validTls=[pscustomobject]@{ExitCode=0;TimedOut=$false;Stdout='SSL connection (protocol: TLSv1.3, cipher: TLS_AES_256_GCM_SHA384, compression: off, ALPN: none)';Stderr='';DurationMs=1;ProcessTreeTerminated=$false;Disposed=$true}
+
+  $counts=New-ArchitectureBoundaryCounts
+  Add-ArchitectureCaseEvidence $Evidence 'ARCH-TLS-DIRECT' 'tls-contract' 'Assert-Psql17ClientTls/Assert-ControlAccepted' 'pass' '' $counts {
+    $clientTlsActive=Assert-Psql17ClientTls $validTls
+    Assert-ControlAccepted (Convert-ControlRow $sample) $clientTlsActive
+  }
+  $counts=New-ArchitectureBoundaryCounts
+  Add-ArchitectureCaseEvidence $Evidence 'ARCH-TLS-POOLER-TERMINATION' 'tls-contract' 'Assert-Psql17ClientTls/Assert-ControlAccepted' 'pass' '' $counts {
+    $clientTlsActive=Assert-Psql17ClientTls $validTls
+    Assert-ControlAccepted (Convert-ControlRow $backendTlsFalse) $clientTlsActive
+  }
+  $counts=New-ArchitectureBoundaryCounts
+  Add-ArchitectureCaseEvidence $Evidence 'ARCH-TLS-CLIENT-FALSE-BACKEND-TRUE' 'tls-contract' 'Assert-ControlAccepted' 'fail' 'Client TLS is not active' $counts {
+    Assert-ControlAccepted (Convert-ControlRow $sample) $false
+  }
+  $counts=New-ArchitectureBoundaryCounts
+  Add-ArchitectureCaseEvidence $Evidence 'ARCH-TLS-CLIENT-FALSE-BACKEND-FALSE' 'tls-contract' 'Assert-ControlAccepted' 'fail' 'Client TLS is not active' $counts {
+    Assert-ControlAccepted (Convert-ControlRow $backendTlsFalse) $false
+  }
+  $counts=New-ArchitectureBoundaryCounts
+  Add-ArchitectureCaseEvidence $Evidence 'ARCH-TLS-SSLMODE-REQUIRED' 'tls-contract' 'Parse-TargetDatabaseUrl' 'fail' 'DatabaseUrl must contain exactly one sslmode=require' $counts {
+    Parse-TargetDatabaseUrl 'postgresql://user@example.invalid/database' | Out-Null
+  }
+  $malformed=$validTls.PSObject.Copy();$malformed.Stdout='SSL connection (protocol: TLSv1.3, cipher: TLS_AES_256_GCM_SHA384)'
+  $counts=New-ArchitectureBoundaryCounts
+  Add-ArchitectureCaseEvidence $Evidence 'ARCH-TLS-CONNINFO-MALFORMED' 'tls-contract' 'Assert-Psql17ClientTls' 'fail' 'PG17 client TLS evidence has an unexpected format' $counts {
+    Assert-Psql17ClientTls $malformed
+  }
+  $ambiguous=$validTls.PSObject.Copy();$ambiguous.Stdout=$validTls.Stdout+"`n"+$validTls.Stdout
+  $counts=New-ArchitectureBoundaryCounts
+  Add-ArchitectureCaseEvidence $Evidence 'ARCH-TLS-CONNINFO-AMBIGUOUS' 'tls-contract' 'Assert-Psql17ClientTls' 'fail' 'Expected exactly one PG17 client TLS evidence clause' $counts {
+    Assert-Psql17ClientTls $ambiguous
+  }
+  $nonzero=$validTls.PSObject.Copy();$nonzero.ExitCode=9
+  $counts=New-ArchitectureBoundaryCounts
+  Add-ArchitectureCaseEvidence $Evidence 'ARCH-TLS-CONNINFO-NONZERO' 'tls-contract' 'Assert-Psql17ClientTls' 'fail' 'PROCESS_NONZERO_EXIT:conninfo:9' $counts {
+    Assert-Psql17ClientTls $nonzero
+  }
+}
+
+function New-TestProcessPlatform {
+  param($BasePlatform, [hashtable]$Overrides=@{})
+  $properties=[ordered]@{}
+  foreach($name in @('CaptureRoot','SnapshotEntries','CaptureDescendant','IsAlive','Terminate','WaitForExit','Dispose','NowFileTime')){
+    $properties[$name]=if($Overrides.ContainsKey($name)){$Overrides[$name]}else{$BasePlatform.$name}
+  }
+  [pscustomobject]$properties
+}
+
 function Run-AuthenticArchitectureProofCases {
   param($Artifacts, [string]$WrapperPath, [string]$TemporaryRoot)
   Assert-True (-not ([IO.Path]::GetFullPath($TemporaryRoot)).StartsWith(([IO.Path]::GetFullPath($RepoRoot).TrimEnd('\')+'\'),[StringComparison]::OrdinalIgnoreCase)) 'architecture temporary files must remain outside the repository'
@@ -1232,11 +1296,12 @@ function Run-AuthenticArchitectureProofCases {
     @{Id='ARCH-GIT-DIRTY';State=[pscustomobject]@{Branch=$validGit.Branch;Head=$validGit.Head;Staged=@();Modified=@('x')};Outcome='fail';Error='tracked worktree modifications present'}
   )){$counts=New-ArchitectureBoundaryCounts;$context=New-ArchitectureTestContext $descriptor $counts $gitCase.State $successProcess;Add-ArchitectureCaseEvidence $evidence $gitCase.Id 'git' 'Assert-GitState' $gitCase.Outcome $gitCase.Error $counts {Assert-GitState $context}}
   Add-AuthenticGitOutputNormalizationCases $evidence $TemporaryRoot
+  Add-AuthenticTlsContractCases $evidence
 
   $sample="CONTROL|database_matches=true|server_major=17|tls_active=true|transaction_read_only=on|payment_events_present=true|payment_events_merchant_id_uuid=true|payment_events_merchant_id_nullable=true|payment_events_processor_compatible=true|payment_events_processed_at_compatible=true|invoice_fk_classification=canonical_set_null|merchant_fk_classification=canonical_cascade|platform_settings_present=true|plan_migration_solo_lite_enabled=false|solo_plus_enabled=false|solo_plus_kyc_enabled=false|conflicting_rehearsal_session_count=0|conflicting_lock_count=0|prepared_transaction_count=0|rollback_sensitive_fingerprint=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-  $counts=New-ArchitectureBoundaryCounts;Add-ArchitectureCaseEvidence $evidence 'ARCH-CONTROL-VALID' 'control' 'Convert-ControlRow/Assert-ControlAccepted' 'pass' '' $counts {$map=Convert-ControlRow $sample;Assert-ControlAccepted $map}
-  $counts=New-ArchitectureBoundaryCounts;Add-ArchitectureCaseEvidence $evidence 'ARCH-CONTROL-DATABASE-MISMATCH' 'control' 'Convert-ControlRow/Assert-ControlAccepted' 'fail' 'CONTROL database identity mismatch' $counts {$map=Convert-ControlRow ($sample.Replace('database_matches=true','database_matches=false'));Assert-ControlAccepted $map}
-  $counts=New-ArchitectureBoundaryCounts;Add-ArchitectureCaseEvidence $evidence 'ARCH-CONTROL-PROTECTED-FLAG-TRUE' 'control' 'Convert-ControlRow/Assert-ControlAccepted' 'fail' 'Protected feature flag changed: solo_plus_enabled' $counts {$map=Convert-ControlRow ($sample.Replace('solo_plus_enabled=false','solo_plus_enabled=true'));Assert-ControlAccepted $map}
+  $counts=New-ArchitectureBoundaryCounts;Add-ArchitectureCaseEvidence $evidence 'ARCH-CONTROL-VALID' 'control' 'Convert-ControlRow/Assert-ControlAccepted' 'pass' '' $counts {$map=Convert-ControlRow $sample;Assert-ControlAccepted $map $true}
+  $counts=New-ArchitectureBoundaryCounts;Add-ArchitectureCaseEvidence $evidence 'ARCH-CONTROL-DATABASE-MISMATCH' 'control' 'Convert-ControlRow/Assert-ControlAccepted' 'fail' 'CONTROL database identity mismatch' $counts {$map=Convert-ControlRow ($sample.Replace('database_matches=true','database_matches=false'));Assert-ControlAccepted $map $true}
+  $counts=New-ArchitectureBoundaryCounts;Add-ArchitectureCaseEvidence $evidence 'ARCH-CONTROL-PROTECTED-FLAG-TRUE' 'control' 'Convert-ControlRow/Assert-ControlAccepted' 'fail' 'Protected feature flag changed: solo_plus_enabled' $counts {$map=Convert-ControlRow ($sample.Replace('solo_plus_enabled=false','solo_plus_enabled=true'));Assert-ControlAccepted $map $true}
   $counts=New-ArchitectureBoundaryCounts;Add-ArchitectureCaseEvidence $evidence 'ARCH-CONTROL-FINGERPRINT-MISMATCH' 'control' 'Assert-ControlProofEqual' 'fail' 'CONTROL proof mismatch: rollback_sensitive_fingerprint' $counts {$before=Convert-ControlRow $sample;$after=Convert-ControlRow ($sample.Replace('0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef','ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'));Assert-ControlProofEqual $before $after}
 
   $script:OfflineMutationCase=''
@@ -1256,28 +1321,162 @@ function Run-AuthenticArchitectureProofCases {
   }
 
   $sleeperScript=Join-Path $TemporaryRoot 'native-sleeper.ps1';Write-Utf8NoBom $sleeperScript 'Start-Sleep -Seconds 30'
+  $counts=New-ArchitectureBoundaryCounts;$context=New-ArchitectureTestContext $descriptor $counts $validGit $successProcess -UseRealProcess
+  Add-ArchitectureCaseEvidence $evidence 'ARCH-PROCESS-TIMEOUT-PARENT-ONLY' 'process' 'Invoke-RehearsalProcess/Invoke-NativeChecked' 'fail' 'PROCESS_TIMEOUT:parent-only' $counts {
+    $r=Invoke-RehearsalProcess $context $powerShellExe @('-NoProfile','-File',$sleeperScript) (Join-Path $TemporaryRoot 'parent-only.out') (Join-Path $TemporaryRoot 'parent-only.err') 1
+    Assert-Condition $r.ProcessTreeTerminated 'PROCESS_TREE_NOT_TERMINATED';Assert-Condition $r.IdentityCaptureSucceeded 'ROOT_IDENTITY_NOT_CAPTURED'
+    Assert-Condition ($r.SurvivingOriginalProcessCount -eq 0) 'ORIGINAL_PROCESS_SURVIVED';Assert-Condition ($r.RetainedIdentityCount -eq 1) 'ROOT_IDENTITY_CARDINALITY_INVALID'
+    Assert-Condition ($r.RetainedIdentityCount -eq $r.DisposedIdentityCount) 'ROOT_IDENTITY_HANDLE_NOT_DISPOSED';Assert-Condition $r.Disposed 'PROCESS_NOT_DISPOSED'
+    Assert-RehearsalProcessResult $r 'parent-only'
+  }
+
   $timeoutScript=Join-Path $TemporaryRoot 'native-timeout.ps1'
   Write-Utf8NoBom $timeoutScript "param([string]`$PowerShellPath,[string]`$SleeperPath,[string]`$PidPath);`$child=Start-Process -FilePath `$PowerShellPath -ArgumentList @('-NoProfile','-File',`$SleeperPath) -WindowStyle Hidden -PassThru;[IO.File]::WriteAllText(`$PidPath,[string]`$child.Id);Start-Sleep -Seconds 30"
   $descendantPidPath=Join-Path $TemporaryRoot 'native-descendant.pid'
   $counts=New-ArchitectureBoundaryCounts;$context=New-ArchitectureTestContext $descriptor $counts $validGit $successProcess -UseRealProcess
   Add-ArchitectureCaseEvidence $evidence 'ARCH-PROCESS-TIMEOUT' 'process' 'Invoke-RehearsalProcess/Invoke-NativeChecked' 'fail' 'PROCESS_TIMEOUT:timeout' $counts {
     $r=Invoke-RehearsalProcess $context $powerShellExe @('-NoProfile','-File',$timeoutScript,$powerShellExe,$sleeperScript,$descendantPidPath) (Join-Path $TemporaryRoot 'timeout.out') (Join-Path $TemporaryRoot 'timeout.err') 2
-    Assert-Condition $r.ProcessTreeTerminated 'PROCESS_TREE_NOT_TERMINATED';Assert-Condition $r.Disposed 'PROCESS_NOT_DISPOSED'
+    Assert-Condition $r.ProcessTreeTerminated 'PROCESS_TREE_NOT_TERMINATED';Assert-Condition $r.IdentityCaptureSucceeded 'PROCESS_IDENTITY_CAPTURE_FAILED'
+    Assert-Condition ($r.SurvivingOriginalProcessCount -eq 0) 'ORIGINAL_PROCESS_SURVIVED';Assert-Condition ($r.RetainedIdentityCount -ge 2) 'DESCENDANT_IDENTITY_NOT_RETAINED'
+    Assert-Condition ($r.RetainedIdentityCount -eq $r.DisposedIdentityCount) 'PROCESS_IDENTITY_HANDLE_NOT_DISPOSED';Assert-Condition $r.Disposed 'PROCESS_NOT_DISPOSED'
     Assert-Condition (Test-Path -LiteralPath $descendantPidPath) 'DESCENDANT_PID_NOT_CAPTURED'
     $descendantPid=[int](Get-Content -Raw -LiteralPath $descendantPidPath)
-    for($poll=0;$poll -lt 50;$poll++){
-      $parentAlive=$null -ne (Get-Process -Id $r.ProcessId -ErrorAction SilentlyContinue)
-      $descendantAlive=$null -ne (Get-Process -Id $descendantPid -ErrorAction SilentlyContinue)
-      if(-not $parentAlive -and -not $descendantAlive){break}
-      Start-Sleep -Milliseconds 100
-    }
-    $parentAlive=$null -ne (Get-Process -Id $r.ProcessId -ErrorAction SilentlyContinue)
-    $descendantAlive=$null -ne (Get-Process -Id $descendantPid -ErrorAction SilentlyContinue)
-    if($parentAlive){Stop-Process -Id $r.ProcessId -Force -ErrorAction SilentlyContinue}
-    if($descendantAlive){Stop-Process -Id $descendantPid -Force -ErrorAction SilentlyContinue}
-    Assert-Condition (-not $parentAlive) 'TIMED_OUT_PARENT_SURVIVED'
-    Assert-Condition (-not $descendantAlive) 'TIMED_OUT_DESCENDANT_SURVIVED'
+    Assert-Condition ($null -eq (Get-Process -Id $descendantPid -ErrorAction SilentlyContinue)) 'TIMED_OUT_DESCENDANT_SURVIVED'
     Assert-RehearsalProcessResult $r 'timeout'
+  }
+
+  $exitedChildScript=Join-Path $TemporaryRoot 'native-exited-child.ps1';Write-Utf8NoBom $exitedChildScript 'Start-Sleep -Milliseconds 250'
+  $exitedParentScript=Join-Path $TemporaryRoot 'native-exited-descendant-parent.ps1'
+  Write-Utf8NoBom $exitedParentScript "param([string]`$PowerShellPath,[string]`$ChildPath,[string]`$PidPath);`$child=Start-Process -FilePath `$PowerShellPath -ArgumentList @('-NoProfile','-File',`$ChildPath) -WindowStyle Hidden -PassThru;[IO.File]::WriteAllText(`$PidPath,[string]`$child.Id);Start-Sleep -Seconds 30"
+  $exitedPidPath=Join-Path $TemporaryRoot 'native-exited-descendant.pid'
+  $counts=New-ArchitectureBoundaryCounts;$context=New-ArchitectureTestContext $descriptor $counts $validGit $successProcess -UseRealProcess
+  Add-ArchitectureCaseEvidence $evidence 'ARCH-PROCESS-TIMEOUT-DESCENDANT-ALREADY-EXITED' 'process' 'Invoke-RehearsalProcess/Invoke-NativeChecked' 'fail' 'PROCESS_TIMEOUT:already-exited' $counts {
+    $r=Invoke-RehearsalProcess $context $powerShellExe @('-NoProfile','-File',$exitedParentScript,$powerShellExe,$exitedChildScript,$exitedPidPath) (Join-Path $TemporaryRoot 'already-exited.out') (Join-Path $TemporaryRoot 'already-exited.err') 2
+    $exitedPid=[int](Get-Content -Raw -LiteralPath $exitedPidPath)
+    Assert-Condition ($null -eq (Get-Process -Id $exitedPid -ErrorAction SilentlyContinue)) 'ALREADY_EXITED_DESCENDANT_STILL_ALIVE'
+    Assert-Condition ($r.ProcessTreeTerminated -and $r.IdentityCaptureSucceeded -and $r.SurvivingOriginalProcessCount -eq 0 -and $r.Disposed) 'ALREADY_EXITED_TIMEOUT_CLEANUP_FAILED'
+    Assert-Condition ($r.RetainedIdentityCount -eq $r.DisposedIdentityCount) 'ALREADY_EXITED_HANDLE_DISPOSAL_FAILED'
+    Assert-RehearsalProcessResult $r 'already-exited'
+  }
+
+  $basePlatform=New-WindowsProcessPlatform
+  $rootCaptureFailurePlatform=New-TestProcessPlatform $basePlatform @{CaptureRoot={param($process)throw 'INJECTED_ROOT_IDENTITY_CAPTURE_FAILURE'}}
+  $counts=New-ArchitectureBoundaryCounts;$context=New-ArchitectureTestContext $descriptor $counts $validGit $successProcess -UseRealProcess
+  Add-ArchitectureCaseEvidence $evidence 'ARCH-PROCESS-TIMEOUT-ROOT-IDENTITY-CAPTURE-FAILURE' 'process' 'Invoke-RehearsalProcess/Invoke-NativeChecked' 'fail' 'PROCESS_TREE_TERMINATION_FAILED:root-identity' $counts {
+    $r=Invoke-RehearsalProcess $context $powerShellExe @('-NoProfile','-File',$sleeperScript) (Join-Path $TemporaryRoot 'root-identity.out') (Join-Path $TemporaryRoot 'root-identity.err') 1 @() $rootCaptureFailurePlatform
+    Assert-Condition (-not $r.IdentityCaptureSucceeded -and -not $r.ProcessTreeTerminated) 'ROOT_IDENTITY_CAPTURE_FAILURE_NOT_REJECTED'
+    Assert-Condition ($r.RetainedIdentityCount -eq 0 -and $r.DisposedIdentityCount -eq 0 -and $r.Disposed) 'ROOT_IDENTITY_FAILURE_DISPOSAL_INVALID'
+    Assert-RehearsalProcessResult $r 'root-identity'
+  }
+
+  $descendantCaptureFailurePlatform=New-TestProcessPlatform $basePlatform @{CaptureDescendant={param($entry)throw 'INJECTED_DESCENDANT_IDENTITY_CAPTURE_FAILURE'}}
+  $captureFailurePidPath=Join-Path $TemporaryRoot 'native-capture-failure-descendant.pid'
+  $counts=New-ArchitectureBoundaryCounts;$context=New-ArchitectureTestContext $descriptor $counts $validGit $successProcess -UseRealProcess
+  Add-ArchitectureCaseEvidence $evidence 'ARCH-PROCESS-TIMEOUT-DESCENDANT-IDENTITY-CAPTURE-FAILURE' 'process' 'Invoke-RehearsalProcess/Invoke-NativeChecked' 'fail' 'PROCESS_TREE_TERMINATION_FAILED:descendant-identity' $counts {
+    $cleanupIdentity=$null
+    try {
+      $r=Invoke-RehearsalProcess $context $powerShellExe @('-NoProfile','-File',$timeoutScript,$powerShellExe,$sleeperScript,$captureFailurePidPath) (Join-Path $TemporaryRoot 'descendant-identity.out') (Join-Path $TemporaryRoot 'descendant-identity.err') 2 @() $descendantCaptureFailurePlatform
+      Assert-Condition (-not $r.IdentityCaptureSucceeded -and -not $r.ProcessTreeTerminated) 'DESCENDANT_IDENTITY_CAPTURE_FAILURE_NOT_REJECTED'
+      Assert-Condition ($r.RetainedIdentityCount -eq $r.DisposedIdentityCount -and $r.Disposed) 'DESCENDANT_IDENTITY_FAILURE_DISPOSAL_INVALID'
+      if(Test-Path -LiteralPath $captureFailurePidPath){
+        $captureFailurePid=[int](Get-Content -Raw -LiteralPath $captureFailurePidPath)
+        $cleanupIdentity=& $basePlatform.CaptureDescendant ([pscustomobject]@{ProcessId=$captureFailurePid;ParentProcessId=$r.ProcessId})
+      }
+      Assert-RehearsalProcessResult $r 'descendant-identity'
+    } finally {
+      if($null -ne $cleanupIdentity){[void](& $basePlatform.Terminate $cleanupIdentity);[void](& $basePlatform.WaitForExit $cleanupIdentity 5000);& $basePlatform.Dispose $cleanupIdentity}
+    }
+  }
+
+  $terminationCalls=@{}
+  $terminationFailure={
+    param($identity)
+    $key=Get-NativeIdentityKey $identity
+    $terminationCalls[$key]=1+[int]$terminationCalls[$key]
+    if($terminationCalls[$key] -eq 1){return $false}
+    return [bool](& $basePlatform.Terminate $identity)
+  }.GetNewClosure()
+  $terminationFailurePlatform=New-TestProcessPlatform $basePlatform @{Terminate=$terminationFailure}
+  $counts=New-ArchitectureBoundaryCounts;$context=New-ArchitectureTestContext $descriptor $counts $validGit $successProcess -UseRealProcess
+  Add-ArchitectureCaseEvidence $evidence 'ARCH-PROCESS-TIMEOUT-TERMINATION-COMMAND-FAILURE' 'process' 'Invoke-RehearsalProcess/Invoke-NativeChecked/Assert-RehearsalProcessResult' 'fail' 'PROCESS_TREE_TERMINATION_FAILED:termination-failure' $counts {
+    $r=Invoke-RehearsalProcess $context $powerShellExe @('-NoProfile','-File',$sleeperScript) (Join-Path $TemporaryRoot 'termination-failure.out') (Join-Path $TemporaryRoot 'termination-failure.err') 1 @() $terminationFailurePlatform
+    Assert-Condition (-not $r.TerminationCommandSucceeded -and -not $r.ProcessTreeTerminated) 'TERMINATION_COMMAND_FAILURE_NOT_RECORDED'
+    Assert-Condition ($r.SurvivingOriginalProcessCount -gt 0) 'TERMINATION_FAILURE_SURVIVOR_NOT_RECORDED'
+    Assert-Condition ($r.RetainedIdentityCount -eq $r.DisposedIdentityCount -and $r.Disposed) 'TERMINATION_FAILURE_HANDLE_DISPOSAL_FAILED'
+    Assert-RehearsalProcessResult $r 'termination-failure'
+  }
+
+  $suppressedDescendantKeys=@{}
+  $suppressDescendantOnce={
+    param($identity)
+    $key=Get-NativeIdentityKey $identity
+    if(-not $identity.IsRoot -and -not $suppressedDescendantKeys.ContainsKey($key)){$suppressedDescendantKeys[$key]=$true;return $true}
+    return [bool](& $basePlatform.Terminate $identity)
+  }.GetNewClosure()
+  $survivorPlatform=New-TestProcessPlatform $basePlatform @{Terminate=$suppressDescendantOnce}
+  $survivorPidPath=Join-Path $TemporaryRoot 'native-surviving-descendant.pid'
+  $counts=New-ArchitectureBoundaryCounts;$context=New-ArchitectureTestContext $descriptor $counts $validGit $successProcess -UseRealProcess
+  Add-ArchitectureCaseEvidence $evidence 'ARCH-PROCESS-TIMEOUT-DESCENDANT-SURVIVES' 'process' 'Invoke-RehearsalProcess/Invoke-NativeChecked/Assert-RehearsalProcessResult' 'fail' 'PROCESS_TREE_TERMINATION_FAILED:descendant-survives' $counts {
+    $r=Invoke-RehearsalProcess $context $powerShellExe @('-NoProfile','-File',$timeoutScript,$powerShellExe,$sleeperScript,$survivorPidPath) (Join-Path $TemporaryRoot 'descendant-survives.out') (Join-Path $TemporaryRoot 'descendant-survives.err') 2 @() $survivorPlatform
+    Assert-Condition (-not $r.ProcessTreeTerminated -and $r.SurvivingOriginalProcessCount -gt 0) 'SURVIVING_DESCENDANT_NOT_REJECTED'
+    Assert-Condition ($r.RetainedIdentityCount -eq $r.DisposedIdentityCount -and $r.Disposed) 'SURVIVOR_HANDLE_DISPOSAL_FAILED'
+    Assert-RehearsalProcessResult $r 'descendant-survives'
+  }
+
+  $lateParentScript=Join-Path $TemporaryRoot 'native-late-descendant-parent.ps1'
+  Write-Utf8NoBom $lateParentScript "param([string]`$PowerShellPath,[string]`$SleeperPath,[string]`$PidPath);Start-Sleep -Milliseconds 1200;`$child=Start-Process -FilePath `$PowerShellPath -ArgumentList @('-NoProfile','-File',`$SleeperPath) -WindowStyle Hidden -PassThru;[IO.File]::WriteAllText(`$PidPath,[string]`$child.Id);Start-Sleep -Seconds 30"
+  $latePidPath=Join-Path $TemporaryRoot 'native-late-descendant.pid'
+  $lateState=[pscustomobject]@{SnapshotCall=0;RootPid=0}
+  $lateCaptureRoot={param($process);$identity=& $basePlatform.CaptureRoot $process;$lateState.RootPid=$identity.ProcessId;return $identity}.GetNewClosure()
+  $lateSnapshot={
+    param()
+    $lateState.SnapshotCall++
+    if($lateState.SnapshotCall -eq 1){Start-Sleep -Milliseconds 700;return @()}
+    if($lateState.SnapshotCall -eq 2){return @()}
+    if(Test-Path -LiteralPath $latePidPath){return @([pscustomobject]@{ProcessId=[int](Get-Content -Raw -LiteralPath $latePidPath);ParentProcessId=$lateState.RootPid})}
+    return @()
+  }.GetNewClosure()
+  $latePlatform=New-TestProcessPlatform $basePlatform @{CaptureRoot=$lateCaptureRoot;SnapshotEntries=$lateSnapshot}
+  $counts=New-ArchitectureBoundaryCounts;$context=New-ArchitectureTestContext $descriptor $counts $validGit $successProcess -UseRealProcess
+  Add-ArchitectureCaseEvidence $evidence 'ARCH-PROCESS-TIMEOUT-LATE-DESCENDANT' 'process' 'Invoke-RehearsalProcess/Invoke-NativeChecked' 'fail' 'PROCESS_TIMEOUT:late-descendant' $counts {
+    $r=Invoke-RehearsalProcess $context $powerShellExe @('-NoProfile','-File',$lateParentScript,$powerShellExe,$sleeperScript,$latePidPath) (Join-Path $TemporaryRoot 'late-descendant.out') (Join-Path $TemporaryRoot 'late-descendant.err') 1 @() $latePlatform
+    Assert-Condition (Test-Path -LiteralPath $latePidPath) 'LATE_DESCENDANT_NOT_CREATED'
+    $latePid=[int](Get-Content -Raw -LiteralPath $latePidPath)
+    Assert-Condition $r.IdentityCaptureSucceeded 'LATE_DESCENDANT_IDENTITY_CAPTURE_FAILED'
+    Assert-Condition ($r.RetainedIdentityCount -ge 2) "LATE_DESCENDANT_NOT_RETAINED:$($r.RetainedIdentityCount)"
+    Assert-Condition $r.ProcessTreeTerminated "LATE_DESCENDANT_TREE_NOT_TERMINATED:survivors=$($r.SurvivingOriginalProcessCount):termination=$($r.TerminationCommandSucceeded)"
+    Assert-Condition ($null -eq (Get-Process -Id $latePid -ErrorAction SilentlyContinue)) 'LATE_DESCENDANT_SURVIVED'
+    Assert-Condition ($r.RetainedIdentityCount -eq $r.DisposedIdentityCount -and $r.Disposed) 'LATE_DESCENDANT_HANDLE_DISPOSAL_FAILED'
+    Assert-RehearsalProcessResult $r 'late-descendant'
+  }
+
+  $pidReuseState=[pscustomobject]@{SnapshotCall=0;RootPid=0;Unrelated=$null;TerminateCalled=$false;CandidateDisposed=$false}
+  $reuseCaptureRoot={param($process);$identity=& $basePlatform.CaptureRoot $process;$pidReuseState.RootPid=$identity.ProcessId;return $identity}.GetNewClosure()
+  $reuseSnapshot={
+    param()
+    $pidReuseState.SnapshotCall++
+    if($pidReuseState.SnapshotCall -le 2){return @()}
+    if($pidReuseState.SnapshotCall -eq 3){
+      $pidReuseState.Unrelated=Start-Process -FilePath $powerShellExe -ArgumentList @('-NoProfile','-File',$sleeperScript) -WindowStyle Hidden -PassThru
+      return @([pscustomobject]@{ProcessId=$pidReuseState.Unrelated.Id;ParentProcessId=$pidReuseState.RootPid})
+    }
+    return @()
+  }.GetNewClosure()
+  $reuseTerminate={param($identity);if($null -ne $pidReuseState.Unrelated -and $identity.ProcessId -eq $pidReuseState.Unrelated.Id){$pidReuseState.TerminateCalled=$true};return [bool](& $basePlatform.Terminate $identity)}.GetNewClosure()
+  $reuseDispose={param($identity);if($null -ne $pidReuseState.Unrelated -and $identity.ProcessId -eq $pidReuseState.Unrelated.Id){$pidReuseState.CandidateDisposed=$true};& $basePlatform.Dispose $identity}.GetNewClosure()
+  $reusePlatform=New-TestProcessPlatform $basePlatform @{CaptureRoot=$reuseCaptureRoot;SnapshotEntries=$reuseSnapshot;Terminate=$reuseTerminate;Dispose=$reuseDispose}
+  $counts=New-ArchitectureBoundaryCounts;$context=New-ArchitectureTestContext $descriptor $counts $validGit $successProcess -UseRealProcess
+  Add-ArchitectureCaseEvidence $evidence 'ARCH-PROCESS-TIMEOUT-PID-REUSE' 'process' 'Invoke-RehearsalProcess/Invoke-NativeChecked' 'fail' 'PROCESS_TIMEOUT:pid-reuse' $counts {
+    try {
+      $r=Invoke-RehearsalProcess $context $powerShellExe @('-NoProfile','-File',$sleeperScript) (Join-Path $TemporaryRoot 'pid-reuse.out') (Join-Path $TemporaryRoot 'pid-reuse.err') 1 @() $reusePlatform
+      Assert-Condition ($null -ne $pidReuseState.Unrelated -and -not $pidReuseState.Unrelated.HasExited) 'PID_REUSE_FIXTURE_NOT_ALIVE'
+      Assert-Condition (-not $pidReuseState.TerminateCalled) 'PID_REUSE_UNRELATED_PROCESS_TERMINATED'
+      Assert-Condition $pidReuseState.CandidateDisposed 'PID_REUSE_CANDIDATE_HANDLE_NOT_DISPOSED'
+      Assert-Condition ($r.ProcessTreeTerminated -and $r.RetainedIdentityCount -eq 1 -and $r.RetainedIdentityCount -eq $r.DisposedIdentityCount -and $r.Disposed) 'PID_REUSE_TIMEOUT_CLEANUP_FAILED'
+      Assert-RehearsalProcessResult $r 'pid-reuse'
+    } finally {
+      if($null -ne $pidReuseState.Unrelated){if(-not $pidReuseState.Unrelated.HasExited){$pidReuseState.Unrelated.Kill();[void]$pidReuseState.Unrelated.WaitForExit(5000)};$pidReuseState.Unrelated.Dispose()}
+    }
   }
 
   $nonzeroScript=Join-Path $TemporaryRoot 'native-nonzero.ps1';Write-Utf8NoBom $nonzeroScript "[Console]::Error.Write('deterministic failure');exit 9"
@@ -1370,7 +1569,13 @@ function Invoke-FunctionParityClassification {
   $adapterTests=@{
     'Assert-GitState'=@('ARCH-GIT-VALID','ARCH-GIT-WRONG-BRANCH','ARCH-GIT-STAGED','ARCH-GIT-DIRTY')
     'Assert-RunnerContract'=@('ARCH-ARTIFACT-VALID','ARCH-ARTIFACT-RUNNER-HASH-MISMATCH','RUNNER-EFFECTIVE-COMMIT-REJECTED')
-    'Invoke-NativeChecked'=@('ARCH-PROCESS-LARGE-OUTPUT','ARCH-PROCESS-TIMEOUT','ARCH-PROCESS-NONZERO-EXIT','ARCH-PROCESS-REDACTION')
+    'Invoke-NativeChecked'=@(
+      'ARCH-PROCESS-LARGE-OUTPUT','ARCH-PROCESS-TIMEOUT-PARENT-ONLY','ARCH-PROCESS-TIMEOUT',
+      'ARCH-PROCESS-TIMEOUT-DESCENDANT-ALREADY-EXITED','ARCH-PROCESS-TIMEOUT-ROOT-IDENTITY-CAPTURE-FAILURE',
+      'ARCH-PROCESS-TIMEOUT-DESCENDANT-IDENTITY-CAPTURE-FAILURE','ARCH-PROCESS-TIMEOUT-TERMINATION-COMMAND-FAILURE',
+      'ARCH-PROCESS-TIMEOUT-DESCENDANT-SURVIVES','ARCH-PROCESS-TIMEOUT-LATE-DESCENDANT',
+      'ARCH-PROCESS-TIMEOUT-PID-REUSE','ARCH-PROCESS-NONZERO-EXIT','ARCH-PROCESS-REDACTION'
+    )
     'Invoke-OfflineValidation'=@('ARCH-OFFLINE-NO-CREDENTIAL-PROMPT','ARCH-OFFLINE-NO-PSQL-RESOLUTION','ARCH-OFFLINE-NO-PGDUMP-RESOLUTION','ARCH-OFFLINE-NO-REAL-PROCESS-START','ARCH-OFFLINE-NO-PACKAGE-GENERATION','ARCH-OFFLINE-NO-SQL-EXECUTION')
     'Invoke-Rehearsal'=@('STATIC-INVOKE-REHEARSAL-BOUNDARIES')
     'Parse-Manifest'=@('ARCH-ARTIFACT-VALID')
@@ -1381,6 +1586,7 @@ function Invoke-FunctionParityClassification {
     'Get-WrapperBodyHash'='manifest-hash normalization for deterministic wrapper-body integrity'
     'New-TemporaryPgPassFile'='UTF-8 without BOM credential-file correction'
     'Invoke-GitText'='empty Git output normalizes to a true zero-line collection'
+    'New-ControlSql'='backend TLS remains diagnostic while PG17 conninfo proves client TLS'
   }
   $guardObservationTests=@{
     'Assert-Condition'=@('RV.PROCESS.TIMEOUT')
@@ -1458,7 +1664,7 @@ function Run-OfflineMutationTests {
     Assert-True ($invokeRehearsalAst.Count -eq 1 -and $invokeRehearsalAst[0].Extent.Text -match 'CredentialProvider' -and $invokeRehearsalAst[0].Extent.Text -match 'ExecutableResolver' -and $invokeRehearsalAst[0].Extent.Text -match 'Invoke-RehearsalLifecycle') 'INVOKE_REHEARSAL_BOUNDARY_STATIC_PROOF_FAILED'
     $executedProofIds += 'STATIC-INVOKE-REHEARSAL-BOUNDARIES'
     $executedProofIds += Test-PgPassRawBytes
-    foreach ($needle in @("OfflineValidateOnly","Convert-ControlRow","Assert-RunnerContract","New-TemporaryPgPassFile","ReadToEndAsync","taskkill.exe","Restore-Environment")) {
+    foreach ($needle in @("OfflineValidateOnly","Convert-ControlRow","Assert-RunnerContract","New-TemporaryPgPassFile","ReadToEndAsync","DuplicateOriginalHandle","Restore-Environment")) {
       Assert-True ($wrapperText.Contains($needle)) "expanded wrapper missing $needle"
     }
 

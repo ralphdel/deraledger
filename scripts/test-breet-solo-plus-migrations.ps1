@@ -558,6 +558,18 @@ function Assert-ProductionRehearsalArchitectureAst {
   $generatorStarts=@($generatorAst.FindAll({param($node)$node -is [Management.Automation.Language.InvokeMemberExpressionAst] -and $node.Extent.Text -match '\[System\.Diagnostics\.Process\]::Start'},$true))
   Assert-HarnessSelfTest ($helperStarts.Count -eq 1 -and (Get-ContainingPowerShellFunctionName $helperStarts[0] $helperFunctions) -eq 'Invoke-ProcessStart' -and $generatorStarts.Count -eq 0) 'direct Process.Start exists outside the approved process-start adapter.'
 
+  $pidOnlyStops=@($helperAst.FindAll({param($node)
+    if($node -isnot [Management.Automation.Language.CommandAst]){return $false}
+    $name=$node.GetCommandName()
+    return ($name -eq 'Stop-Process' -and $node.Extent.Text -match '(?i)(?:^|\s)-Id(?:\s|$)') -or
+      ($name -match '^taskkill(?:\.exe)?$' -and $node.Extent.Text -match '(?i)(?:^|\s)/PID(?:\s|$)')
+  },$true))
+  Assert-HarnessSelfTest ($pidOnlyStops.Count -eq 0) 'identity-sensitive production timeout cleanup contains PID-only termination.'
+  $helperSource=[IO.File]::ReadAllText($HelperPath)
+  foreach($nativePrimitive in @('DuplicateOriginalHandle','OpenIdentityHandle','GetCreationTime','TerminateProcess','WaitForSingleObject','SafeHandleZeroOrMinusOneIsInvalid')){
+    Assert-HarnessSelfTest $helperSource.Contains($nativePrimitive) "retained-handle process primitive is missing: $nativePrimitive"
+  }
+
   $packageCalls=@($generatorAst.FindAll({param($node)$node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'New-ProductionRehearsalPackage'},$true))
   $productionPackageCalls=@($packageCalls|Where-Object {(Get-ContainingPowerShellFunctionName $_ $generatorFunctions) -eq ''})
   Assert-HarnessSelfTest ($productionPackageCalls.Count -eq 1) 'production package generation call cardinality is invalid.'
@@ -992,7 +1004,9 @@ function Run-HarnessSelfTests {
       @{Id='DUPLICATE-ID';Mutator={param($helper,$generator)$text=Get-Content -Raw $helper;$text=$text.Replace("'RV.PROCESS.NONZERO_EXIT'","'RV.PROCESS.TIMEOUT'");[IO.File]::WriteAllText($helper,$text,[Text.UTF8Encoding]::new($false))}},
       @{Id='DYNAMIC-ID';Mutator={param($helper,$generator)$text=Get-Content -Raw $helper;$text=$text.Replace("'RV.PROCESS.NONZERO_EXIT'",'$script:DynamicGuardId');[IO.File]::WriteAllText($helper,$text,[Text.UTF8Encoding]::new($false))}},
       @{Id='COMPOUND-CONDITION';Mutator={param($helper,$generator)$text=Get-Content -Raw $helper;$text=$text.Replace('($Result.ExitCode -eq 0) "PROCESS_NONZERO_EXIT:', '(($Result.ExitCode -eq 0) -and $true) "PROCESS_NONZERO_EXIT:');[IO.File]::WriteAllText($helper,$text,[Text.UTF8Encoding]::new($false))}},
-      @{Id='DIRECT-THROW';Mutator={param($helper,$generator)$text=Get-Content -Raw $helper;$old='Assert-Condition ($Result.ExitCode -eq 0) "PROCESS_NONZERO_EXIT:${Operation}:$($Result.ExitCode)" ''RV.PROCESS.NONZERO_EXIT'' ''PROCESS_NONZERO_EXIT''';$text=$text.Replace($old,'if ($Result.ExitCode -ne 0) { throw "PROCESS_NONZERO_EXIT" }');[IO.File]::WriteAllText($helper,$text,[Text.UTF8Encoding]::new($false))}}
+      @{Id='DIRECT-THROW';Mutator={param($helper,$generator)$text=Get-Content -Raw $helper;$old='Assert-Condition ($Result.ExitCode -eq 0) "PROCESS_NONZERO_EXIT:${Operation}:$($Result.ExitCode)" ''RV.PROCESS.NONZERO_EXIT'' ''PROCESS_NONZERO_EXIT''';$text=$text.Replace($old,'if ($Result.ExitCode -ne 0) { throw "PROCESS_NONZERO_EXIT" }');[IO.File]::WriteAllText($helper,$text,[Text.UTF8Encoding]::new($false))}},
+      @{Id='PID-ONLY-STOP-PROCESS';Mutator={param($helper,$generator)$text=Get-Content -Raw $helper;$needle='function Invoke-RetainedIdentityCleanup($Platform, [object[]]$Identities) {';$text=$text.Replace($needle,$needle+"`r`n  Stop-Process -Id 1 -Force");[IO.File]::WriteAllText($helper,$text,[Text.UTF8Encoding]::new($false))}},
+      @{Id='PID-ONLY-TASKKILL';Mutator={param($helper,$generator)$text=Get-Content -Raw $helper;$needle='function Invoke-RetainedIdentityCleanup($Platform, [object[]]$Identities) {';$text=$text.Replace($needle,$needle+"`r`n  taskkill.exe /PID 1 /T /F");[IO.File]::WriteAllText($helper,$text,[Text.UTF8Encoding]::new($false))}}
     )){
       Assert-RehearsalGuardAstMutationRejected -HelperPath $rehearsalHelper -GeneratorPath $rehearsalGenerator -TemporaryRoot $tempDir -MutationId $mutation.Id -Mutator $mutation.Mutator
     }
@@ -1000,7 +1014,7 @@ function Run-HarnessSelfTests {
     $helperTokens = $null
     $helperErrors = $null
     $helperAst = [System.Management.Automation.Language.Parser]::ParseFile($rehearsalHelper, [ref]$helperTokens, [ref]$helperErrors)
-    $expectedRuntimeFunctions = @("Assert-Condition","Sha256","Join-NativeArguments","Get-WrapperBodyHash","Get-DescriptorWrapperBodyHash","Invoke-ProcessStart","Invoke-GitText","Get-EnvironmentSnapshot","Restore-Environment","Clear-PostgresRoutingEnvironment","ConvertTo-BooleanStrict","ConvertTo-IntegerStrict","Get-ControlRequiredKeys","Convert-ControlRow","Assert-ControlAccepted","New-ControlSql","Parse-Manifest","Get-ExecutableRunnerLines","Assert-RunnerContract","Assert-ArtifactIntegrity","Assert-GitState","Parse-TargetDatabaseUrl","Assert-PasswordFreeDatabaseUrl","ConvertTo-SqlLiteral","New-TemporaryPgPassFile","Invoke-NativeChecked","Assert-RunnerMarkers","Invoke-OfflineValidation","Invoke-Rehearsal","New-RehearsalRuntimeContext","New-ProductionRehearsalRuntimeContext","Get-ProductionArtifactDescriptor","Invoke-RehearsalProcess","Assert-RehearsalProcessResult","Invoke-RehearsalLifecycle","Assert-ControlProofEqual")
+    $expectedRuntimeFunctions = @("Assert-Condition","Sha256","Join-NativeArguments","Get-WrapperBodyHash","Get-DescriptorWrapperBodyHash","Invoke-ProcessStart","Invoke-GitText","Get-EnvironmentSnapshot","Restore-Environment","Clear-PostgresRoutingEnvironment","ConvertTo-BooleanStrict","ConvertTo-IntegerStrict","Get-ControlRequiredKeys","Convert-ControlRow","Assert-ControlAccepted","New-ControlSql","Parse-Manifest","Get-ExecutableRunnerLines","Assert-RunnerContract","Assert-ArtifactIntegrity","Assert-GitState","Parse-TargetDatabaseUrl","Assert-PasswordFreeDatabaseUrl","ConvertTo-SqlLiteral","New-TemporaryPgPassFile","Initialize-DeraLedgerProcessNative","New-WindowsProcessPlatform","Get-NativeIdentityKey","Add-RetainedDescendants","Wait-RetainedIdentities","Invoke-RetainedIdentityCleanup","Invoke-NativeChecked","Assert-RunnerMarkers","Invoke-OfflineValidation","Invoke-Rehearsal","New-RehearsalRuntimeContext","New-ProductionRehearsalRuntimeContext","Get-ProductionArtifactDescriptor","Invoke-RehearsalProcess","Assert-RehearsalProcessResult","Invoke-RehearsalLifecycle","Assert-ControlProofEqual")
     $helperFunctions = @($helperAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) | ForEach-Object { $_.Name })
     foreach ($functionName in $expectedRuntimeFunctions) { Assert-HarnessSelfTest -Condition (@($helperFunctions | Where-Object { $_ -eq $functionName }).Count -eq 1) -Message "canonical runtime function cardinality invalid: $functionName" }
     $generatorSource = Get-Content -Raw -LiteralPath $rehearsalGenerator

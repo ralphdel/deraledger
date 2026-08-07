@@ -18,7 +18,7 @@ function New-ProductionRehearsalRuntimeContext {
     -GitStateProvider { [pscustomobject]@{ Branch=Invoke-GitText @("branch","--show-current"); Head=Invoke-GitText @("rev-parse","HEAD"); Staged=@(Invoke-GitText @("diff","--cached","--name-only")); Modified=@(Invoke-GitText @("diff","--name-only")) } } `
     -CredentialProvider { Read-Host "Database password" -AsSecureString } `
     -ExecutableResolver { param($path) Test-Path -LiteralPath $path } `
-    -ProcessAdapter { param($request) Invoke-NativeChecked $request.FilePath $request.Arguments $request.StdoutPath $request.StderrPath $request.TimeoutSeconds $request.SensitiveValues } `
+    -ProcessAdapter { param($request) Invoke-NativeChecked $request.FilePath $request.Arguments $request.StdoutPath $request.StderrPath $request.TimeoutSeconds $request.SensitiveValues $request.ProcessPlatform } `
     -FileSystemAdapter ([pscustomobject]@{
       Exists={param($path)Test-Path -LiteralPath $path}
       ReadText={param($path)Get-Content -Raw -LiteralPath $path}
@@ -53,8 +53,15 @@ function Get-ProductionArtifactDescriptor {
 }
 
 function Invoke-RehearsalProcess {
-  param($Context, [string]$FilePath, [string[]]$Arguments, [string]$StdoutPath, [string]$StderrPath, [int]$TimeoutSeconds, [string[]]$SensitiveValues=@())
-  $request = [pscustomobject]@{FilePath=$FilePath;Arguments=$Arguments;StdoutPath=$StdoutPath;StderrPath=$StderrPath;TimeoutSeconds=$TimeoutSeconds;SensitiveValues=@($SensitiveValues)}
+  param(
+    $Context, [string]$FilePath, [string[]]$Arguments, [string]$StdoutPath, [string]$StderrPath,
+    [int]$TimeoutSeconds, [string[]]$SensitiveValues=@(), $ProcessPlatform=$null
+  )
+  $request = [pscustomobject]@{
+    FilePath=$FilePath;Arguments=$Arguments;StdoutPath=$StdoutPath;StderrPath=$StderrPath
+    TimeoutSeconds=$TimeoutSeconds;SensitiveValues=@($SensitiveValues)
+    ProcessPlatform=$ProcessPlatform
+  }
   $result = & $Context.SqlExecutionBoundary $Context $request
   foreach ($value in @($SensitiveValues | Where-Object { -not [string]::IsNullOrEmpty($_) })) {
     $result.Stdout = $result.Stdout.Replace($value,"[REDACTED]")
@@ -69,8 +76,25 @@ function Invoke-RehearsalProcess {
 
 function Assert-RehearsalProcessResult {
   param($Result, [string]$Operation)
+  $treeTerminationAccepted = -not $Result.TimedOut -or $Result.ProcessTreeTerminated
+  Assert-Condition $treeTerminationAccepted "PROCESS_TREE_TERMINATION_FAILED:${Operation}" 'RV.PROCESS.TREE_TERMINATION' 'PROCESS_TREE_TERMINATION_FAILED'
   Assert-Condition (-not $Result.TimedOut) "PROCESS_TIMEOUT:${Operation}" 'RV.PROCESS.TIMEOUT' 'PROCESS_TIMEOUT'
   Assert-Condition ($Result.ExitCode -eq 0) "PROCESS_NONZERO_EXIT:${Operation}:$($Result.ExitCode)" 'RV.PROCESS.NONZERO_EXIT' 'PROCESS_NONZERO_EXIT'
+}
+
+function Assert-Psql17ClientTls {
+  param($Result)
+  Assert-RehearsalProcessResult $Result "conninfo"
+  $output = [string]$Result.Stdout
+  Assert-Condition (-not [string]::IsNullOrWhiteSpace($output)) "Client TLS evidence is missing" 'RV.REHEARSAL.TLS_EVIDENCE_REQUIRED' 'REHEARSAL_TLS_EVIDENCE_MISSING'
+  $contradictory = [regex]::IsMatch($output, '(?i)\b(?:without SSL|non-SSL connection|SSL disabled|SSL is not in use)\b')
+  Assert-Condition (-not $contradictory) "Client TLS evidence is contradictory" 'RV.REHEARSAL.TLS_CONTRADICTORY' 'REHEARSAL_TLS_EVIDENCE_CONTRADICTORY'
+  $sslMatches = @([regex]::Matches($output, '(?i)SSL connection\s*\((?<details>[^\r\n()]*)\)'))
+  Assert-Condition ($sslMatches.Count -eq 1) "Expected exactly one PG17 client TLS evidence clause" 'RV.REHEARSAL.TLS_EVIDENCE_COUNT' 'REHEARSAL_TLS_EVIDENCE_COUNT_INVALID'
+  $details = $sslMatches[0].Groups['details'].Value
+  $valid = [regex]::IsMatch($details, '^protocol:\s*TLSv1\.(?:2|3),\s*cipher:\s*[A-Za-z0-9_-]+,\s*compression:\s*off,\s*ALPN:\s*(?:none|[A-Za-z0-9_.-]+)$')
+  Assert-Condition $valid "PG17 client TLS evidence has an unexpected format" 'RV.REHEARSAL.TLS' 'REHEARSAL_TLS_CONFIRMATION_FAILED'
+  return $true
 }
 
 function Invoke-RehearsalLifecycle {
@@ -251,10 +275,11 @@ function Convert-ControlRow([string]$Output) {
   return $map
 }
 
-function Assert-ControlAccepted([hashtable]$Map) {
+function Assert-ControlAccepted([hashtable]$Map, [bool]$ClientTlsActive) {
   Assert-Condition ($Map["database_matches"] -eq "true") "CONTROL database identity mismatch" 'RV.CONTROL.DATABASE_IDENTITY' 'CONTROL_DATABASE_MISMATCH'
   Assert-Condition ($Map["server_major"] -eq "17") "CONTROL server major is not 17" 'RV.CONTROL.SERVER_MAJOR' 'CONTROL_SERVER_MAJOR_INVALID'
-  Assert-Condition ($Map["tls_active"] -eq "true") "CONTROL TLS is not active" 'RV.CONTROL.TLS_ACTIVE' 'CONTROL_TLS_INACTIVE'
+  Assert-Condition $ClientTlsActive "Client TLS is not active" 'RV.CONTROL.TLS_ACTIVE' 'CONTROL_TLS_INACTIVE'
+  # CONTROL tls_active describes the pooler-to-backend leg and remains diagnostic.
   Assert-Condition ($Map["payment_events_present"] -eq "true") "CONTROL payment_events missing" 'RV.CONTROL.PAYMENT_EVENTS_PRESENT' 'CONTROL_PAYMENT_EVENTS_MISSING'
   Assert-Condition ($Map["payment_events_merchant_id_uuid"] -eq "true") "CONTROL merchant_id is not uuid" 'RV.CONTROL.MERCHANT_ID_UUID' 'CONTROL_MERCHANT_ID_TYPE_INVALID'
   Assert-Condition ($Map["payment_events_merchant_id_nullable"] -eq "true") "CONTROL merchant_id is not nullable" 'RV.CONTROL.MERCHANT_ID_NULLABLE' 'CONTROL_MERCHANT_ID_NULLABILITY_INVALID'
@@ -328,6 +353,7 @@ SELECT concat_ws('|',
   'CONTROL',
   'database_matches=' || (current_database() = $expectedDatabaseLiteral)::text,
   'server_major=' || ((current_setting('server_version_num')::int / 10000)::text),
+  -- This backend-visible value is diagnostic; client-to-pooler TLS is proven by PG17 \conninfo.
   'tls_active=' || COALESCE((SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()), false)::text,
   'transaction_read_only=' || current_setting('transaction_read_only'),
   'payment_events_present=' || ss.payment_events_present::text,
@@ -575,7 +601,218 @@ function New-TemporaryPgPassFile([string]$HostName, [string]$Port, [string]$Data
   }
 }
 
-function Invoke-NativeChecked([string]$FilePath, [string[]]$Arguments, [string]$StdoutPath, [string]$StderrPath, [int]$TimeoutSeconds, [string[]]$SensitiveValues=@()) {
+function Initialize-DeraLedgerProcessNative {
+  if ($null -ne ('DeraLedger.Rehearsal.ProcessNative' -as [type])) { return }
+  Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+
+namespace DeraLedger.Rehearsal {
+  public sealed class KernelHandle : SafeHandleZeroOrMinusOneIsInvalid {
+    public KernelHandle() : base(true) {}
+    public KernelHandle(IntPtr value) : base(true) { SetHandle(value); }
+    protected override bool ReleaseHandle() { return ProcessNative.CloseHandle(handle); }
+  }
+
+  public struct ProcessEntry {
+    public int ProcessId;
+    public int ParentProcessId;
+  }
+
+  public static class ProcessNative {
+    private const uint PROCESS_TERMINATE = 0x0001;
+    private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+    private const uint SYNCHRONIZE = 0x00100000;
+    private const uint TH32CS_SNAPPROCESS = 0x00000002;
+    private const uint DUPLICATE_SAME_ACCESS = 0x00000002;
+    private const uint WAIT_OBJECT_0 = 0x00000000;
+    private const uint WAIT_TIMEOUT = 0x00000102;
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct PROCESSENTRY32 {
+      public uint dwSize;
+      public uint cntUsage;
+      public uint th32ProcessID;
+      public IntPtr th32DefaultHeapID;
+      public uint th32ModuleID;
+      public uint cntThreads;
+      public uint th32ParentProcessID;
+      public int pcPriClassBase;
+      public uint dwFlags;
+      [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string szExeFile;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr GetCurrentProcess();
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool DuplicateHandle(IntPtr sourceProcess, IntPtr sourceHandle, IntPtr targetProcess, out IntPtr targetHandle, uint desiredAccess, bool inheritHandle, uint options);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr OpenProcess(uint access, bool inheritHandle, int processId);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool GetProcessTimes(KernelHandle process, out long creation, out long exit, out long kernel, out long user);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool TerminateProcess(KernelHandle process, uint exitCode);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern uint WaitForSingleObject(KernelHandle handle, uint milliseconds);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern bool Process32FirstW(KernelHandle snapshot, ref PROCESSENTRY32 entry);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern bool Process32NextW(KernelHandle snapshot, ref PROCESSENTRY32 entry);
+    [DllImport("kernel32.dll", SetLastError = true)] internal static extern bool CloseHandle(IntPtr handle);
+
+    public static KernelHandle DuplicateOriginalHandle(IntPtr sourceHandle) {
+      IntPtr duplicate;
+      IntPtr current = GetCurrentProcess();
+      if (!DuplicateHandle(current, sourceHandle, current, out duplicate, 0, false, DUPLICATE_SAME_ACCESS)) throw new Win32Exception(Marshal.GetLastWin32Error());
+      return new KernelHandle(duplicate);
+    }
+
+    public static KernelHandle OpenIdentityHandle(int processId) {
+      IntPtr value = OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, false, processId);
+      return value == IntPtr.Zero ? null : new KernelHandle(value);
+    }
+
+    public static long GetCreationTime(KernelHandle process) {
+      long creation, exit, kernel, user;
+      if (!GetProcessTimes(process, out creation, out exit, out kernel, out user)) throw new Win32Exception(Marshal.GetLastWin32Error());
+      return creation;
+    }
+
+    public static bool IsAlive(KernelHandle process) {
+      uint result = WaitForSingleObject(process, 0);
+      if (result == WAIT_TIMEOUT) return true;
+      if (result == WAIT_OBJECT_0) return false;
+      throw new Win32Exception(Marshal.GetLastWin32Error());
+    }
+
+    public static bool Terminate(KernelHandle process) {
+      if (!IsAlive(process)) return true;
+      return TerminateProcess(process, 124);
+    }
+
+    public static bool WaitForExit(KernelHandle process, int milliseconds) {
+      uint result = WaitForSingleObject(process, (uint)milliseconds);
+      if (result == WAIT_OBJECT_0) return true;
+      if (result == WAIT_TIMEOUT) return false;
+      throw new Win32Exception(Marshal.GetLastWin32Error());
+    }
+
+    public static void ThrowIdentityCaptureFailed() {
+      throw new InvalidOperationException("PROCESS_IDENTITY_CAPTURE_FAILED");
+    }
+
+    public static void Rethrow(Exception error) {
+      throw error;
+    }
+
+    public static ProcessEntry[] SnapshotProcesses() {
+      using (KernelHandle snapshot = new KernelHandle(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0))) {
+        if (snapshot.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+        var rows = new List<ProcessEntry>();
+        var entry = new PROCESSENTRY32();
+        entry.dwSize = (uint)Marshal.SizeOf(typeof(PROCESSENTRY32));
+        if (!Process32FirstW(snapshot, ref entry)) throw new Win32Exception(Marshal.GetLastWin32Error());
+        do {
+          rows.Add(new ProcessEntry { ProcessId = (int)entry.th32ProcessID, ParentProcessId = (int)entry.th32ParentProcessID });
+          entry.dwSize = (uint)Marshal.SizeOf(typeof(PROCESSENTRY32));
+        } while (Process32NextW(snapshot, ref entry));
+        return rows.ToArray();
+      }
+    }
+  }
+}
+'@
+}
+
+function New-WindowsProcessPlatform {
+  Initialize-DeraLedgerProcessNative
+  [pscustomobject]@{
+    CaptureRoot = {
+      param($process)
+      $handle = [DeraLedger.Rehearsal.ProcessNative]::DuplicateOriginalHandle($process.Handle)
+      try {
+        $creation = [DeraLedger.Rehearsal.ProcessNative]::GetCreationTime($handle)
+        [pscustomobject]@{ProcessId=$process.Id;CreationTime=$creation;Handle=$handle;IsRoot=$true;ParentKey='';TerminationBoundary=0L}
+      } catch {
+        $captureError = $_.Exception
+        $handle.Dispose()
+        [DeraLedger.Rehearsal.ProcessNative]::Rethrow($captureError)
+      }
+    }
+    SnapshotEntries = { @([DeraLedger.Rehearsal.ProcessNative]::SnapshotProcesses()) }
+    CaptureDescendant = {
+      param($entry)
+      $handle = [DeraLedger.Rehearsal.ProcessNative]::OpenIdentityHandle([int]$entry.ProcessId)
+      if ($null -eq $handle -or $handle.IsInvalid) {
+        if ($null -ne $handle) { $handle.Dispose() }
+        $stillPresent = @([DeraLedger.Rehearsal.ProcessNative]::SnapshotProcesses() | Where-Object { $_.ProcessId -eq $entry.ProcessId -and $_.ParentProcessId -eq $entry.ParentProcessId }).Count -gt 0
+        if ($stillPresent) { [DeraLedger.Rehearsal.ProcessNative]::ThrowIdentityCaptureFailed() }
+        return $null
+      }
+      try {
+        $creation = [DeraLedger.Rehearsal.ProcessNative]::GetCreationTime($handle)
+        [pscustomobject]@{ProcessId=[int]$entry.ProcessId;CreationTime=$creation;Handle=$handle;IsRoot=$false;ParentKey='';TerminationBoundary=0L}
+      } catch {
+        $captureError = $_.Exception
+        $handle.Dispose()
+        [DeraLedger.Rehearsal.ProcessNative]::Rethrow($captureError)
+      }
+    }
+    IsAlive = { param($identity) [DeraLedger.Rehearsal.ProcessNative]::IsAlive($identity.Handle) }
+    Terminate = { param($identity) [DeraLedger.Rehearsal.ProcessNative]::Terminate($identity.Handle) }
+    WaitForExit = { param($identity,$milliseconds) [DeraLedger.Rehearsal.ProcessNative]::WaitForExit($identity.Handle,[int]$milliseconds) }
+    Dispose = { param($identity) $identity.Handle.Dispose() }
+    NowFileTime = { [DateTime]::UtcNow.ToFileTimeUtc() }
+  }
+}
+
+function Get-NativeIdentityKey($Identity) {
+  return "$($Identity.ProcessId):$($Identity.CreationTime)"
+}
+
+function Add-RetainedDescendants($Platform, $Captured, $IdentityKeys) {
+  $added = [Collections.Generic.List[object]]::new()
+  foreach ($entry in @(& $Platform.SnapshotEntries)) {
+    $parentCandidates = @($Captured | Where-Object { $_.ProcessId -eq [int]$entry.ParentProcessId })
+    if ($parentCandidates.Count -eq 0) { continue }
+    $identity = & $Platform.CaptureDescendant $entry
+    if ($null -eq $identity) { continue }
+    $retain = $false
+    try {
+      $eligibleParents = @($parentCandidates | Where-Object {
+        $_.CreationTime -le $identity.CreationTime -and ($_.TerminationBoundary -eq 0 -or $identity.CreationTime -le $_.TerminationBoundary)
+      } | Sort-Object CreationTime -Descending)
+      if ($eligibleParents.Count -eq 0) { continue }
+      $identity.ParentKey = Get-NativeIdentityKey $eligibleParents[0]
+      $key = Get-NativeIdentityKey $identity
+      if ($IdentityKeys.ContainsKey($key)) { continue }
+      $IdentityKeys[$key] = $true
+      $Captured.Add($identity)
+      $added.Add($identity)
+      $retain = $true
+    } finally {
+      if (-not $retain) { & $Platform.Dispose $identity }
+    }
+  }
+  return @($added)
+}
+
+function Wait-RetainedIdentities($Platform, [object[]]$Identities, [int]$TimeoutMilliseconds = 5000) {
+  $survivors = [Collections.Generic.List[object]]::new()
+  foreach ($identity in @($Identities)) {
+    if (-not (& $Platform.WaitForExit $identity $TimeoutMilliseconds)) { $survivors.Add($identity) }
+  }
+  return @($survivors)
+}
+
+function Invoke-RetainedIdentityCleanup($Platform, [object[]]$Identities) {
+  foreach ($identity in @($Identities)) {
+    try { if (& $Platform.IsAlive $identity) { [void](& $Platform.Terminate $identity) } } catch {}
+  }
+  [void](Wait-RetainedIdentities $Platform $Identities 5000)
+}
+
+function Invoke-NativeChecked(
+  [string]$FilePath, [string[]]$Arguments, [string]$StdoutPath, [string]$StderrPath,
+  [int]$TimeoutSeconds, [string[]]$SensitiveValues=@(),
+  $ProcessPlatform=$null
+) {
   $started = [Diagnostics.Stopwatch]::StartNew()
   $psi = [System.Diagnostics.ProcessStartInfo]::new()
   $psi.FileName = $FilePath
@@ -585,14 +822,84 @@ function Invoke-NativeChecked([string]$FilePath, [string[]]$Arguments, [string]$
   $psi.Arguments = Join-NativeArguments $Arguments
   $process = $null
   $result = $null
+  $captured = [Collections.Generic.List[object]]::new()
+  $identityKeys = @{}
+  $disposedIdentityCount = 0
+  if ($null -eq $ProcessPlatform) { $ProcessPlatform = New-WindowsProcessPlatform }
   try {
     $process = Invoke-ProcessStart $psi
+    $rootIdentity = $null
+    $rootCaptureSucceeded = $false
+    try {
+      $rootIdentity = & $ProcessPlatform.CaptureRoot $process
+      if ($null -ne $rootIdentity) {
+        $captured.Add($rootIdentity)
+        $identityKeys[(Get-NativeIdentityKey $rootIdentity)] = $true
+        $rootCaptureSucceeded = $true
+      }
+    } catch {}
     $stdoutTask = $process.StandardOutput.ReadToEndAsync()
     $stderrTask = $process.StandardError.ReadToEndAsync()
     $timedOut = -not $process.WaitForExit($TimeoutSeconds * 1000)
+    $processTreeTerminated = $false
+    $terminationCommandSucceeded = $false
+    $identityCaptureSucceeded = $rootCaptureSucceeded
+    $treeStable = $false
+    $survivors = @()
     if ($timedOut) {
-      try { & taskkill.exe /PID $process.Id /T /F 2>&1 | Out-Null } catch { try { $process.Kill() } catch {} }
-      [void]$process.WaitForExit(5000)
+      try {
+        if ($rootCaptureSucceeded) {
+          try {
+          $stableScans = 0
+          for ($scan = 0; $scan -lt 20 -and $stableScans -lt 2; $scan++) {
+            $newIdentities = @(Add-RetainedDescendants $ProcessPlatform $captured $identityKeys)
+            if ($newIdentities.Count -eq 0) { $stableScans++; Start-Sleep -Milliseconds 100 } else { $stableScans = 0 }
+          }
+            if ($stableScans -lt 2) { $identityCaptureSucceeded = $false }
+          } catch {
+            $identityCaptureSucceeded = $false
+          }
+        }
+
+        $terminationCommandSucceeded = $identityCaptureSucceeded
+        if ($rootCaptureSucceeded) {
+          foreach ($identity in @($captured)) {
+            $terminated = $false
+            try { $terminated = [bool](& $ProcessPlatform.Terminate $identity) } catch {}
+            $identity.TerminationBoundary = [long](& $ProcessPlatform.NowFileTime)
+            if (-not $terminated) { $terminationCommandSucceeded = $false }
+          }
+        }
+
+        $survivors = @(Wait-RetainedIdentities $ProcessPlatform @($captured) 5000)
+        if ($survivors.Count -gt 0) { $terminationCommandSucceeded = $false }
+
+        $stableScans = 0
+        for ($scan = 0; $scan -lt 20 -and $stableScans -lt 2; $scan++) {
+          $late = @()
+          try { $late = @(Add-RetainedDescendants $ProcessPlatform $captured $identityKeys) } catch { $identityCaptureSucceeded = $false; break }
+          if ($late.Count -eq 0) {
+            $stableScans++
+            Start-Sleep -Milliseconds 100
+            continue
+          }
+          $stableScans = 0
+          foreach ($identity in $late) {
+            $terminated = $false
+            try { $terminated = [bool](& $ProcessPlatform.Terminate $identity) } catch {}
+            $identity.TerminationBoundary = [long](& $ProcessPlatform.NowFileTime)
+            if (-not $terminated) { $terminationCommandSucceeded = $false }
+          }
+          $lateSurvivors = @(Wait-RetainedIdentities $ProcessPlatform $late 5000)
+          if ($lateSurvivors.Count -gt 0) { $terminationCommandSucceeded = $false }
+        }
+        $treeStable = $stableScans -ge 2
+        $survivors = @($captured | Where-Object { try { & $ProcessPlatform.IsAlive $_ } catch { $true } })
+        $processTreeTerminated = $identityCaptureSucceeded -and $terminationCommandSucceeded -and $treeStable -and $survivors.Count -eq 0
+      } finally {
+        if (-not $processTreeTerminated) { Invoke-RetainedIdentityCleanup $ProcessPlatform @($captured) }
+        if (-not $rootCaptureSucceeded -and -not $process.HasExited) { try { $process.Kill(); [void]$process.WaitForExit(5000) } catch {} }
+      }
     } else {
       $process.WaitForExit()
     }
@@ -607,10 +914,17 @@ function Invoke-NativeChecked([string]$FilePath, [string[]]$Arguments, [string]$
     [IO.File]::WriteAllText($StderrPath,$stderr,$encoding)
     $result = [pscustomobject]@{
       ExitCode=if($timedOut){124}else{$process.ExitCode}; TimedOut=$timedOut; Stdout=$stdout; Stderr=$stderr
-      DurationMs=$started.ElapsedMilliseconds; ProcessId=$process.Id; ProcessTreeTerminated=$timedOut; Disposed=$false
+      DurationMs=$started.ElapsedMilliseconds; ProcessId=$process.Id; ProcessTreeTerminated=$processTreeTerminated
+      TerminationCommandSucceeded=$terminationCommandSucceeded; IdentityCaptureSucceeded=$identityCaptureSucceeded
+      SurvivingOriginalProcessCount=@($survivors).Count; RetainedIdentityCount=$captured.Count
+      DisposedIdentityCount=0; Disposed=$false
     }
   } finally {
     $started.Stop()
+    foreach ($identity in @($captured)) {
+      try { & $ProcessPlatform.Dispose $identity; $disposedIdentityCount++ } catch {}
+    }
+    if ($null -ne $result) { $result.DisposedIdentityCount = $disposedIdentityCount }
     if ($null -ne $process) {
       $process.Dispose()
       if ($null -ne $result) { $result.Disposed = $true }
@@ -634,7 +948,7 @@ function Invoke-OfflineValidation {
   Assert-ArtifactIntegrity $Context
   $sample = "banner`r`nCONTROL|database_matches=true|server_major=17|tls_active=true|transaction_read_only=on|payment_events_present=true|payment_events_merchant_id_uuid=true|payment_events_merchant_id_nullable=true|payment_events_processor_compatible=true|payment_events_processed_at_compatible=true|invoice_fk_classification=canonical_set_null|merchant_fk_classification=canonical_cascade|platform_settings_present=true|plan_migration_solo_lite_enabled=false|solo_plus_enabled=false|solo_plus_kyc_enabled=false|conflicting_rehearsal_session_count=0|conflicting_lock_count=0|prepared_transaction_count=0|rollback_sensitive_fingerprint=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   $map = Convert-ControlRow $sample
-  Assert-ControlAccepted $map
+  Assert-ControlAccepted $map $true
   $target = Parse-TargetDatabaseUrl $ValidationTargetUrl
   Assert-Condition ($target.Database -eq "database") "structured URL parser returned the wrong database" 'RV.OFFLINE.URL_DATABASE' 'OFFLINE_URL_DATABASE_MISMATCH'
   Write-Output "OfflineValidateOnly: PASS"
@@ -672,12 +986,11 @@ function Invoke-Rehearsal {
     Assert-Condition (-not ([IO.Path]::GetFullPath($script:ControlSqlFileToDelete)).StartsWith(([IO.Path]::GetFullPath($RepoRoot).TrimEnd('\') + '\'),[StringComparison]::OrdinalIgnoreCase)) "Temporary SQL file must be outside repository" 'RV.REHEARSAL.CONTROL_SQL_PATH' 'REHEARSAL_CONTROL_SQL_PATH_INVALID'
     & $Context.FileSystemAdapter.WriteText $script:ControlSqlFileToDelete (New-ControlSql $database)
     $conn = Invoke-RehearsalProcess $Context $PsqlPath @("-X","-w","-h",$hostName,"-p",$port,"-U",$userName,"-d",$database,"-c","\conninfo") (Join-Path $EvidenceRoot "$EvidencePrefix-conninfo.stdout.txt") (Join-Path $EvidenceRoot "$EvidencePrefix-conninfo.stderr.txt") 60
-    Assert-RehearsalProcessResult $conn "conninfo"
-    Assert-Condition ($conn.Stdout -match "SSL connection") "TLS confirmation failed" 'RV.REHEARSAL.TLS' 'REHEARSAL_TLS_CONFIRMATION_FAILED'
+    $clientTlsActive = Assert-Psql17ClientTls $conn
     $pre = Invoke-RehearsalProcess $Context $PsqlPath @("-X","-w","-q","-A","-t","-v","ON_ERROR_STOP=1","-h",$hostName,"-p",$port,"-U",$userName,"-d",$database,"-f",$script:ControlSqlFileToDelete) (Join-Path $EvidenceRoot "$EvidencePrefix-preflight.stdout.txt") (Join-Path $EvidenceRoot "$EvidencePrefix-preflight.stderr.txt") 120
     Assert-RehearsalProcessResult $pre "preflight"
     $preControl = Convert-ControlRow $pre.Stdout
-    Assert-ControlAccepted $preControl
+    Assert-ControlAccepted $preControl $clientTlsActive
     $preDump = Join-Path $EvidenceRoot "$EvidencePrefix-pre-schema.sql"
     $postDump = Join-Path $EvidenceRoot "$EvidencePrefix-post-schema.sql"
     $dump1 = Invoke-RehearsalProcess $Context $PgDumpPath @("--schema-only","--schema=public","--no-owner","--no-privileges","-h",$hostName,"-p",$port,"-U",$userName,"-d",$database,"--file",$preDump) (Join-Path $EvidenceRoot "$EvidencePrefix-pre-schema.stdout.txt") (Join-Path $EvidenceRoot "$EvidencePrefix-pre-schema.stderr.txt") 300
@@ -693,7 +1006,7 @@ function Invoke-Rehearsal {
     $post = Invoke-RehearsalProcess $Context $PsqlPath @("-X","-w","-q","-A","-t","-v","ON_ERROR_STOP=1","-h",$hostName,"-p",$port,"-U",$userName,"-d",$database,"-f",$script:ControlSqlFileToDelete) (Join-Path $EvidenceRoot "$EvidencePrefix-postflight.stdout.txt") (Join-Path $EvidenceRoot "$EvidencePrefix-postflight.stderr.txt") 120
     Assert-RehearsalProcessResult $post "postflight"
     $postControl = Convert-ControlRow $post.Stdout
-    Assert-ControlAccepted $postControl
+    Assert-ControlAccepted $postControl $clientTlsActive
     Assert-ControlProofEqual $preControl $postControl
     Write-Output "Rehearsal accepted: True"
   } { @($script:PgPassFileToDelete,$script:ControlSqlFileToDelete) } { } $snapshot
