@@ -304,6 +304,34 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION pg_temp.assert_payment_events_server_side_security_compatible()
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  -- Legacy deployments may have RLS enabled, but payment_events remains an
+  -- internal table only when no browser-facing policy or table privilege exists.
+  IF EXISTS (
+    SELECT 1
+    FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename = 'payment_events'
+  ) THEN
+    RAISE EXCEPTION 'Migration A compatibility failure: schema=public object=table payment_events expected=no RLS policies actual=policy present';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM information_schema.role_table_grants
+    WHERE table_schema = 'public'
+      AND table_name = 'payment_events'
+      AND grantee IN ('PUBLIC', 'anon', 'authenticated')
+  ) THEN
+    RAISE EXCEPTION 'Migration A compatibility failure: schema=public object=table payment_events expected=no browser role grants actual=grant present';
+  END IF;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION pg_temp.assert_public_primary_key(
   p_table_name TEXT,
   p_expected_columns TEXT[]
@@ -1714,20 +1742,10 @@ BEGIN
       'idempotency_key IS NOT NULL'
     );
     PERFORM pg_temp.assert_public_trigger_function('payment_events', 'trg_payment_events_updated_at', 'touch_updated_at');
-    -- Canonical state: payment_events is an internal service-side audit/recovery table.
-    -- It must not rely on browser-facing RLS policies and must not expose direct table
-    -- privileges to anon/authenticated/public roles. Browser-role grants are repaired
-    -- later through the shared table-access manifest so staging default privileges
-    -- cannot block compatible structural reconciliation.
-    PERFORM pg_temp.assert_public_rls_state('payment_events', false);
-    IF EXISTS (
-      SELECT 1
-      FROM pg_policies
-      WHERE schemaname = 'public'
-        AND tablename = 'payment_events'
-    ) THEN
-      RAISE EXCEPTION 'Migration A compatibility failure: schema=public object=table payment_events expected=no RLS policies actual=policy present';
-    END IF;
+    -- Legacy deployments may retain RLS enabled. Migration 017 owns the final
+    -- disabled-RLS normalization; this compatibility gate preserves the internal
+    -- table invariant by rejecting browser-facing policies and direct grants.
+    PERFORM pg_temp.assert_payment_events_server_side_security_compatible();
   END IF;
 
   IF to_regclass('public.payment_providers') IS NOT NULL THEN
@@ -4571,15 +4589,7 @@ BEGIN
     v_team_provider_batches
   );
 
-  PERFORM pg_temp.assert_public_rls_state('payment_events', false);
-  IF EXISTS (
-    SELECT 1
-    FROM pg_policies
-    WHERE schemaname = 'public'
-      AND tablename = 'payment_events'
-  ) THEN
-    RAISE EXCEPTION 'Migration A verification failed: public.payment_events unexpectedly has RLS policies';
-  END IF;
+  PERFORM pg_temp.assert_payment_events_server_side_security_compatible();
   PERFORM pg_temp.assert_public_column_definition('payment_events', 'merchant_id', 'uuid', false, NULL);
   PERFORM pg_temp.assert_public_foreign_key(
     'payment_events',

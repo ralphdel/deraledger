@@ -1007,6 +1007,15 @@ function Run-HarnessSelfTests {
       Assert-HarnessSelfTest -Condition ($migration009.Contains($needle)) -Message "Migration 009 invoice FK compatibility guard missing: $needle"
     }
     Assert-HarnessSelfTest -Condition ($migration009 -notmatch "payment_events_invoice_id_fkey[\s\S]{0,200}ON DELETE RESTRICT") -Message "Migration 009 should not whitelist RESTRICT for payment_events.invoice_id."
+    $paymentEventsSecurityHelper = [regex]::Match(
+      $migration009,
+      "(?ms)^CREATE OR REPLACE FUNCTION pg_temp\.assert_payment_events_server_side_security_compatible\(\).*?^\$\$;"
+    )
+    Assert-HarnessSelfTest -Condition $paymentEventsSecurityHelper.Success -Message "Migration 009 payment_events server-side security compatibility helper is missing."
+    Assert-HarnessSelfTest -Condition ((@([regex]::Matches($migration009, "PERFORM pg_temp\.assert_payment_events_server_side_security_compatible\(\);"))).Count -eq 2) -Message "Migration 009 must apply the payment_events server-side security compatibility helper at both compatibility checkpoints."
+    Assert-HarnessSelfTest -Condition ($migration009 -notmatch "assert_public_rls_state\('payment_events', false\)") -Message "Migration 009 must tolerate safe legacy payment_events RLS enabled state."
+    Assert-HarnessSelfTest -Condition ($paymentEventsSecurityHelper.Value -match "pg_policies" -and $paymentEventsSecurityHelper.Value -match "information_schema\.role_table_grants" -and $paymentEventsSecurityHelper.Value -match "grantee IN \('PUBLIC', 'anon', 'authenticated'\)") -Message "Migration 009 payment_events RLS compatibility must retain browser policy and grant rejection."
+    Assert-HarnessSelfTest -Condition ($harnessSource -match "Create production-like safe RLS-enabled payment_events fixture" -and $harnessSource -match "Create RLS-enabled payment_events browser policy fixture" -and $harnessSource -match "Create RLS-disabled payment_events browser grant fixture" -and $harnessSource -match "Migration 017 disables payment_events RLS after full 009-017 chain") -Message "payment_events RLS compatibility regression fixtures are incomplete."
     Assert-RollbackRunnerPgTempHelpersAreIsolated
 
     $rehearsalGenerator = Join-Path $repoRoot "scripts/new-production-rehearsal-package.ps1"
@@ -1506,6 +1515,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_events_idempotency
   WHERE idempotency_key IS NOT NULL;
 
 ALTER TABLE public.payment_events DISABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.payment_events FROM PUBLIC;
+REVOKE ALL ON TABLE public.payment_events FROM anon;
+REVOKE ALL ON TABLE public.payment_events FROM authenticated;
 DROP TRIGGER IF EXISTS trg_payment_events_updated_at ON public.payment_events;
 CREATE TRIGGER trg_payment_events_updated_at
 BEFORE UPDATE ON public.payment_events
@@ -2274,6 +2286,33 @@ END
   Invoke-PsqlSql -Sql $sql -Description $Description
 }
 
+function Assert-PaymentEventsRlsState {
+  param(
+    [Parameter(Mandatory = $true)][string]$Description,
+    [Parameter(Mandatory = $true)][bool]$ExpectedEnabled
+  )
+
+  $expectedLiteral = if ($ExpectedEnabled) { 'true' } else { 'false' }
+  $sql = @"
+DO `$$
+DECLARE
+  v_rls_enabled BOOLEAN;
+BEGIN
+  SELECT relrowsecurity
+  INTO v_rls_enabled
+  FROM pg_class
+  WHERE oid = 'public.payment_events'::regclass;
+
+  IF v_rls_enabled IS DISTINCT FROM $expectedLiteral THEN
+    RAISE EXCEPTION 'payment_events RLS state mismatch: expected %, got %', $expectedLiteral, v_rls_enabled;
+  END IF;
+END
+`$$;
+"@
+
+  Invoke-PsqlSql -Sql $sql -Description $Description
+}
+
 function Assert-PaymentEventsForeignKeyRejectsInvalidMerchant {
   param([Parameter(Mandatory = $true)][string]$Description)
 
@@ -2354,7 +2393,50 @@ function Run-Harness {
   Assert-PaymentEventsProcessedAtCanonical -Description "Assert Migration A preserves canonical nullable payment_events.processed_at without a default"
   Assert-PaymentEventsMerchantIdNullable -Description "Assert Migration A canonical payment_events.merchant_id nullability"
   Assert-PaymentEventsForeignKeyRejectsInvalidMerchant -Description "Assert Migration A rejects invalid non-null payment_events merchant ownership"
-  Add-PassResult -Results $results -Message "Migration A accepts canonical preexisting payment_events and repairs hostile browser grants"
+  Add-PassResult -Results $results -Message "Migration A accepts canonical server-only preexisting payment_events"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture -IncludeCanonicalPaymentRecordsSecurityPrerequisite -IncludePaymentEventsPrerequisite
+  Invoke-PsqlSql -Description "Create production-like safe RLS-enabled payment_events fixture" -Sql @"
+ALTER TABLE public.payment_events ENABLE ROW LEVEL SECURITY;
+"@
+  Assert-PaymentEventsRlsState -Description "Assert production-like fixture starts with payment_events RLS enabled" -ExpectedEnabled $true
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Run Migration A with safe RLS-enabled payment_events"
+  Invoke-PsqlFile -RelativePath "supabase/tests/phase2_breet_payment_substrate_reconciliation.sql" -Description "Run Migration A SQL assertions with safe RLS-enabled payment_events"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Rerun Migration A with safe RLS-enabled payment_events"
+  Assert-PaymentEventsRlsState -Description "Assert Migration A preserves safe legacy payment_events RLS enabled state" -ExpectedEnabled $true
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_02_solo_plus_payment_lifecycle.sql" -Description "Run Migration B after safe RLS-enabled payment_events"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260710_01_solo_plus_review_decision_rpc.sql" -Description "Run Commit 9 migration after safe RLS-enabled payment_events"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260711_01_solo_plus_activation_rpc.sql" -Description "Run Commit 10 migration after safe RLS-enabled payment_events"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260718_01_solo_plus_payment_recovery.sql" -Description "Run Commit 12 migration after safe RLS-enabled payment_events"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260728_00_authorization_hardening.sql" -Description "Run Commit 13 migration after safe RLS-enabled payment_events"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260728_01_verification_disclosure_acknowledgement_rpc.sql" -Description "Run Commit 14 migration after safe RLS-enabled payment_events"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260731_00_verification_disclosure_identity_hardening.sql" -Description "Run Commit 15 migration after safe RLS-enabled payment_events"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260803_00_payment_events_legacy_merchant_compatibility.sql" -Description "Run Migration 017 after safe RLS-enabled payment_events"
+  Assert-PaymentEventsRlsState -Description "Assert Migration 017 disables payment_events RLS after full 009-017 chain" -ExpectedEnabled $false
+  Add-PassResult -Results $results -Message "Full 009-017 chain accepts safe legacy payment_events RLS and Migration 017 disables it"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture -IncludeCanonicalPaymentRecordsSecurityPrerequisite -IncludePaymentEventsPrerequisite
+  Invoke-PsqlSql -Description "Create RLS-enabled payment_events browser policy fixture" -Sql @"
+ALTER TABLE public.payment_events ENABLE ROW LEVEL SECURITY;
+CREATE POLICY payment_events_browser_read
+  ON public.payment_events
+  FOR SELECT
+  USING (true);
+"@
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Expect Migration A to reject RLS-enabled payment_events browser policy" -ExpectFailure
+  Assert-RelationAbsent -QualifiedName "public.payment_sessions"
+  Add-PassResult -Results $results -Message "Migration A rejects RLS-enabled payment_events browser policies before DDL"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture -IncludeCanonicalPaymentRecordsSecurityPrerequisite -IncludePaymentEventsPrerequisite
+  Invoke-PsqlSql -Description "Create RLS-disabled payment_events browser grant fixture" -Sql @"
+GRANT SELECT ON TABLE public.payment_events TO authenticated;
+"@
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Expect Migration A to reject RLS-disabled payment_events browser grant" -ExpectFailure
+  Assert-RelationAbsent -QualifiedName "public.payment_sessions"
+  Add-PassResult -Results $results -Message "Migration A rejects RLS-disabled payment_events browser grants before DDL"
 
   Reset-DisposableDatabase
   Initialize-CoreFixture -IncludeCanonicalPaymentRecordsSecurityPrerequisite -IncludePaymentEventsPrerequisite
