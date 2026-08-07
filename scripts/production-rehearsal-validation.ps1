@@ -1,5 +1,22 @@
 Set-StrictMode -Version Latest
 
+function Get-TrustedMigrationSpecification {
+  @(
+    [pscustomobject]@{ Number='006'; SourcePath='supabase/staging/006_solo_plus_prerequisites.sql'; SourceFile='006_solo_plus_prerequisites.sql'; GeneratedFileName='006_solo_plus_prerequisites.sql'; Strip=$false }
+    [pscustomobject]@{ Number='007'; SourcePath='supabase/staging/007_solo_plus_case_foundation.sql'; SourceFile='007_solo_plus_case_foundation.sql'; GeneratedFileName='007_solo_plus_case_foundation.sql'; Strip=$false }
+    [pscustomobject]@{ Number='008'; SourcePath='supabase/staging/008_solo_plus_transactional_repository_rpcs.sql'; SourceFile='008_solo_plus_transactional_repository_rpcs.sql'; GeneratedFileName='008_solo_plus_transactional_repository_rpcs.sql'; Strip=$false }
+    [pscustomobject]@{ Number='009'; SourcePath='supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql'; SourceFile='20260707_01_breet_payment_substrate_reconciliation.sql'; GeneratedFileName='009_20260707_01_breet_payment_substrate_reconciliation.sql'; Strip=$true }
+    [pscustomobject]@{ Number='010'; SourcePath='supabase/migrations/20260707_02_solo_plus_payment_lifecycle.sql'; SourceFile='20260707_02_solo_plus_payment_lifecycle.sql'; GeneratedFileName='010_20260707_02_solo_plus_payment_lifecycle.sql'; Strip=$true }
+    [pscustomobject]@{ Number='011'; SourcePath='supabase/migrations/20260710_01_solo_plus_review_decision_rpc.sql'; SourceFile='20260710_01_solo_plus_review_decision_rpc.sql'; GeneratedFileName='011_20260710_01_solo_plus_review_decision_rpc.sql'; Strip=$true }
+    [pscustomobject]@{ Number='012'; SourcePath='supabase/migrations/20260711_01_solo_plus_activation_rpc.sql'; SourceFile='20260711_01_solo_plus_activation_rpc.sql'; GeneratedFileName='012_20260711_01_solo_plus_activation_rpc.sql'; Strip=$true }
+    [pscustomobject]@{ Number='013'; SourcePath='supabase/migrations/20260718_01_solo_plus_payment_recovery.sql'; SourceFile='20260718_01_solo_plus_payment_recovery.sql'; GeneratedFileName='013_20260718_01_solo_plus_payment_recovery.sql'; Strip=$false }
+    [pscustomobject]@{ Number='014'; SourcePath='supabase/migrations/20260728_00_authorization_hardening.sql'; SourceFile='20260728_00_authorization_hardening.sql'; GeneratedFileName='014_20260728_00_authorization_hardening.sql'; Strip=$true }
+    [pscustomobject]@{ Number='015'; SourcePath='supabase/migrations/20260728_01_verification_disclosure_acknowledgement_rpc.sql'; SourceFile='20260728_01_verification_disclosure_acknowledgement_rpc.sql'; GeneratedFileName='015_20260728_01_verification_disclosure_acknowledgement_rpc.sql'; Strip=$false }
+    [pscustomobject]@{ Number='016'; SourcePath='supabase/migrations/20260731_00_verification_disclosure_identity_hardening.sql'; SourceFile='20260731_00_verification_disclosure_identity_hardening.sql'; GeneratedFileName='016_20260731_00_verification_disclosure_identity_hardening.sql'; Strip=$true }
+    [pscustomobject]@{ Number='017'; SourcePath='supabase/migrations/20260803_00_payment_events_legacy_merchant_compatibility.sql'; SourceFile='20260803_00_payment_events_legacy_merchant_compatibility.sql'; GeneratedFileName='017_20260803_00_payment_events_legacy_merchant_compatibility.sql'; Strip=$true }
+  )
+}
+
 function New-RehearsalRuntimeContext {
   param(
     $ArtifactProvider, $GitStateProvider, $CredentialProvider, $ExecutableResolver,
@@ -34,18 +51,16 @@ function New-ProductionRehearsalRuntimeContext {
 }
 
 function Get-ProductionArtifactDescriptor {
-  $orderedMigrationPaths = @($ExpectedMigrationHashes.Keys | Sort-Object {
-    $leaf = (Split-Path -Leaf $_) -replace '^\d{3}_', ''
-    [array]::IndexOf($ExpectedMigrationOrder, $leaf)
-  })
+  $migrationSpecification = @(Get-TrustedMigrationSpecification)
   [pscustomobject]@{
     FullCommit=$ExpectedCommit; ShortCommit=$ShortCommit; Namespace=$ArtifactIdentity
     Bundle=(Split-Path -Parent $RunnerPath); WrapperPath=$PSCommandPath; ManifestPath=$ManifestPath
-    RunnerPath=$RunnerPath; TokenPath=$TokenFilePath; MigrationPaths=$orderedMigrationPaths
-    RunnerHash=$ExpectedRunnerHash; ManifestHash=$ExpectedManifestHash; TokenHash=$ExpectedTokenFileHash
+    RunnerPath=$RunnerPath; TokenPath=$TokenFilePath; MigrationPaths=@($ExpectedMigrationPaths)
+    RunnerHash=$ExpectedRunnerHash; ManifestHash=$ExpectedManifestHash; TokenHash=$ExpectedTokenFileHash; ConfirmationToken=$ExpectedToken
     MigrationHashes=$ExpectedMigrationHashes; CanonicalHelperHash=$ExpectedCanonicalHelperHash
     EmbeddedHelperHash=$ExpectedEmbeddedHelperHash; WrapperHash=$ExpectedWrapperHash
-    WrapperBodyHash=$ExpectedWrapperBodyHash; ExpectedMigrationOrder=@($ExpectedMigrationOrder)
+    WrapperBodyHash=$ExpectedWrapperBodyHash; ExpectedMigrationOrder=@($migrationSpecification | ForEach-Object { $_.SourceFile })
+    MigrationSpecification=$migrationSpecification
     HelperStartMarker=("# BEGIN EMBEDDED " + "CANONICAL REHEARSAL HELPER")
     HelperEndMarker=("# END EMBEDDED " + "CANONICAL REHEARSAL HELPER")
     StaleNamespaces=@($StaleCommitNamespaces)
@@ -439,8 +454,8 @@ function Assert-ArtifactIntegrity {
   Assert-Condition ($null -ne $descriptor) "ARTIFACT_DESCRIPTOR_MISSING" 'RV.ARTIFACT.DESCRIPTOR' 'ARTIFACT_DESCRIPTOR_MISSING'
   foreach ($field in @(
     "FullCommit","ShortCommit","Namespace","Bundle","WrapperPath","ManifestPath","RunnerPath","TokenPath",
-    "MigrationPaths","RunnerHash","ManifestHash","TokenHash","MigrationHashes","CanonicalHelperHash",
-    "EmbeddedHelperHash","WrapperHash","WrapperBodyHash","ExpectedMigrationOrder",
+    "MigrationPaths","RunnerHash","ManifestHash","TokenHash","ConfirmationToken","MigrationHashes","CanonicalHelperHash",
+    "EmbeddedHelperHash","WrapperHash","WrapperBodyHash","ExpectedMigrationOrder","MigrationSpecification",
     "HelperStartMarker","HelperEndMarker","StaleNamespaces"
   )) { Assert-Condition ($null -ne $descriptor.$field) "ARTIFACT_DESCRIPTOR_FIELD_MISSING:$field" 'RV.ARTIFACT.DESCRIPTOR_FIELD' 'ARTIFACT_DESCRIPTOR_FIELD_MISSING' }
   Assert-Condition ($descriptor.FullCommit -match '^[a-f0-9]{40}$') "ARTIFACT_COMMIT_INVALID" 'RV.ARTIFACT.COMMIT_FORMAT' 'ARTIFACT_COMMIT_INVALID'
@@ -448,6 +463,23 @@ function Assert-ArtifactIntegrity {
   Assert-Condition ([IO.Path]::GetFileName($descriptor.Bundle) -eq $descriptor.Namespace) "ARTIFACT_NAMESPACE_MISMATCH" 'RV.ARTIFACT.BUNDLE_NAMESPACE' 'ARTIFACT_NAMESPACE_MISMATCH'
   Assert-Condition (@($descriptor.MigrationPaths).Count -eq 12) "ARTIFACT_MIGRATION_COUNT_INVALID" 'RV.ARTIFACT.MIGRATION_COUNT' 'ARTIFACT_MIGRATION_COUNT_INVALID'
   Assert-Condition (@($descriptor.ExpectedMigrationOrder).Count -eq 12) "ARTIFACT_MIGRATION_ORDER_COUNT_INVALID" 'RV.ARTIFACT.ORDER_COUNT' 'ARTIFACT_MIGRATION_ORDER_COUNT_INVALID'
+  $canonicalFilenameMatches = @($descriptor.MigrationSpecification).Count -eq 12
+  if ($canonicalFilenameMatches) {
+    for ($i = 0; $i -lt 12; $i++) {
+      $trustedMigration = $descriptor.MigrationSpecification[$i]
+      $expectedNumber = '{0:D3}' -f ($i + 6)
+      $canonicalFilenameMatches = $trustedMigration.Number -ceq $expectedNumber
+      if ($canonicalFilenameMatches) { $canonicalFilenameMatches = $trustedMigration.SourceFile -ceq (Split-Path -Leaf $trustedMigration.SourcePath) }
+      if ($canonicalFilenameMatches) { $canonicalFilenameMatches = $trustedMigration.GeneratedFileName.StartsWith(($expectedNumber + '_'), [StringComparison]::Ordinal) }
+      if ($canonicalFilenameMatches) { $canonicalFilenameMatches = (Split-Path -Leaf $descriptor.MigrationPaths[$i]) -ceq $trustedMigration.GeneratedFileName }
+      if ($canonicalFilenameMatches) {
+        $canonicalPath = Join-Path $descriptor.Bundle $trustedMigration.GeneratedFileName
+        $canonicalFilenameMatches = [IO.Path]::GetFullPath($descriptor.MigrationPaths[$i]).Equals([IO.Path]::GetFullPath($canonicalPath), [StringComparison]::OrdinalIgnoreCase)
+      }
+      if (-not $canonicalFilenameMatches) { break }
+    }
+  }
+  Assert-Condition $canonicalFilenameMatches "ARTIFACT_CANONICAL_MIGRATION_FILENAME_MISMATCH" 'RV.ARTIFACT.CANONICAL_FILENAME' 'ARTIFACT_CANONICAL_MIGRATION_FILENAME_MISMATCH'
   foreach ($path in @($descriptor.WrapperPath,$descriptor.ManifestPath,$descriptor.RunnerPath,$descriptor.TokenPath) + @($descriptor.MigrationPaths)) {
     $artifactFileExists = & $Context.FileSystemAdapter.Exists $path
     Assert-Condition $artifactFileExists "ARTIFACT_FILE_MISSING" 'RV.ARTIFACT.FILE_EXISTS' 'ARTIFACT_FILE_MISSING'
@@ -488,6 +520,8 @@ function Assert-ArtifactIntegrity {
   Assert-Condition ($actualManifestHash -eq $descriptor.ManifestHash) "ARTIFACT_MANIFEST_HASH_MISMATCH" 'RV.ARTIFACT.MANIFEST_HASH' 'ARTIFACT_MANIFEST_HASH_MISMATCH'
   $actualTokenHash = & $Context.FileSystemAdapter.Hash $descriptor.TokenPath
   Assert-Condition ($actualTokenHash -eq $descriptor.TokenHash) "ARTIFACT_TOKEN_HASH_MISMATCH" 'RV.ARTIFACT.TOKEN_HASH' 'ARTIFACT_TOKEN_HASH_MISMATCH'
+  $actualToken = ([string](& $Context.FileSystemAdapter.ReadText $descriptor.TokenPath)).Trim()
+  Assert-Condition ($actualToken -ceq $descriptor.ConfirmationToken) "ARTIFACT_TOKEN_CONTENT_MISMATCH" 'RV.ARTIFACT.TOKEN_CONTENT' 'ARTIFACT_TOKEN_CONTENT_MISMATCH'
   foreach ($path in @($descriptor.MigrationPaths)) {
     Assert-Condition ($descriptor.MigrationHashes.ContainsKey($path)) "ARTIFACT_MIGRATION_HASH_MISSING" 'RV.ARTIFACT.MIGRATION_HASH_PRESENT' 'ARTIFACT_MIGRATION_HASH_MISSING'
     $actualMigrationHash = & $Context.FileSystemAdapter.Hash $path
@@ -505,6 +539,7 @@ function Assert-ArtifactIntegrity {
   Assert-Condition ($manifest.Fields["RUNNER_SHA256"] -eq $descriptor.RunnerHash) "ARTIFACT_MANIFEST_RUNNER_HASH_MISMATCH" 'RV.ARTIFACT.MANIFEST_RUNNER_HASH' 'ARTIFACT_MANIFEST_RUNNER_HASH_MISMATCH'
   Assert-Condition ($manifest.Fields["TOKEN_FILE"] -eq $descriptor.TokenPath) "ARTIFACT_MANIFEST_TOKEN_PATH_MISMATCH" 'RV.ARTIFACT.MANIFEST_TOKEN_PATH' 'ARTIFACT_MANIFEST_TOKEN_PATH_MISMATCH'
   Assert-Condition ($manifest.Fields["TOKEN_FILE_SHA256"] -eq $descriptor.TokenHash) "ARTIFACT_MANIFEST_TOKEN_HASH_MISMATCH" 'RV.ARTIFACT.MANIFEST_TOKEN_HASH' 'ARTIFACT_MANIFEST_TOKEN_HASH_MISMATCH'
+  Assert-Condition ($manifest.Fields["CONFIRMATION_TOKEN"] -ceq $descriptor.ConfirmationToken) "ARTIFACT_MANIFEST_TOKEN_MISMATCH" 'RV.ARTIFACT.MANIFEST_TOKEN' 'ARTIFACT_MANIFEST_TOKEN_MISMATCH'
   Assert-Condition ($manifest.Fields["CANONICAL_HELPER_SHA256"] -eq $descriptor.CanonicalHelperHash) "ARTIFACT_MANIFEST_CANONICAL_HELPER_HASH_MISMATCH" 'RV.ARTIFACT.MANIFEST_CANONICAL_HELPER_HASH' 'ARTIFACT_MANIFEST_CANONICAL_HELPER_HASH_MISMATCH'
   Assert-Condition ($manifest.Fields["EMBEDDED_HELPER_SHA256"] -eq $descriptor.EmbeddedHelperHash) "ARTIFACT_MANIFEST_EMBEDDED_HELPER_HASH_MISMATCH" 'RV.ARTIFACT.MANIFEST_EMBEDDED_HELPER_HASH' 'ARTIFACT_MANIFEST_EMBEDDED_HELPER_HASH_MISMATCH'
   Assert-Condition ($manifest.Fields["TIMESTAMP_IS_SOURCE_FRESHNESS_PROOF"] -eq "false") "manifest must disclaim timestamp freshness" 'RV.ARTIFACT.MANIFEST_TIMESTAMP_DISCLAIMER' 'ARTIFACT_MANIFEST_TIMESTAMP_INVALID'
@@ -515,10 +550,12 @@ function Assert-ArtifactIntegrity {
   for ($i = 0; $i -lt 12; $i++) {
     $parts = @($manifest.Migrations[$i] -split '\|')
     $expectedNumber = '{0:D3}' -f ($i + 6)
+    $trustedMigration = $descriptor.MigrationSpecification[$i]
     Assert-Condition ($parts.Count -eq 6) "ARTIFACT_MANIFEST_MIGRATION_ROW_INVALID:$expectedNumber" 'RV.ARTIFACT.MANIFEST_MIGRATION_ROW_SHAPE' 'ARTIFACT_MANIFEST_MIGRATION_ROW_INVALID'
     Assert-Condition ($parts[0] -eq $expectedNumber) "ARTIFACT_MANIFEST_MIGRATION_ROW_INVALID:$expectedNumber" 'RV.ARTIFACT.MANIFEST_MIGRATION_NUMBER' 'ARTIFACT_MANIFEST_MIGRATION_ROW_INVALID'
-    Assert-Condition ((Split-Path -Leaf $parts[1]) -eq $descriptor.ExpectedMigrationOrder[$i]) "ARTIFACT_MANIFEST_MIGRATION_SOURCE_MISMATCH:$expectedNumber" 'RV.ARTIFACT.MANIFEST_MIGRATION_SOURCE' 'ARTIFACT_MANIFEST_MIGRATION_SOURCE_MISMATCH'
-    Assert-Condition ($parts[2] -eq $descriptor.MigrationPaths[$i]) "ARTIFACT_MANIFEST_MIGRATION_PATH_MISMATCH:$expectedNumber" 'RV.ARTIFACT.MANIFEST_MIGRATION_PATH' 'ARTIFACT_MANIFEST_MIGRATION_PATH_MISMATCH'
+    Assert-Condition ($parts[1] -ceq $trustedMigration.SourcePath) "ARTIFACT_MANIFEST_MIGRATION_SOURCE_MISMATCH:$expectedNumber" 'RV.ARTIFACT.MANIFEST_MIGRATION_SOURCE' 'ARTIFACT_MANIFEST_MIGRATION_SOURCE_MISMATCH'
+    $expectedManifestPath = $trustedMigration.GeneratedFileName
+    Assert-Condition ($parts[2] -ceq $expectedManifestPath) "ARTIFACT_MANIFEST_MIGRATION_PATH_MISMATCH:$expectedNumber" 'RV.ARTIFACT.MANIFEST_MIGRATION_PATH' 'ARTIFACT_MANIFEST_MIGRATION_PATH_MISMATCH'
     Assert-Condition ($parts[4] -match '^source_sha256=[A-Fa-f0-9]{64}$') "ARTIFACT_MANIFEST_SOURCE_HASH_INVALID:$expectedNumber" 'RV.ARTIFACT.MANIFEST_SOURCE_HASH' 'ARTIFACT_MANIFEST_SOURCE_HASH_INVALID'
     Assert-Condition ($parts[5] -eq ('generated_sha256=' + $descriptor.MigrationHashes[$descriptor.MigrationPaths[$i]])) "ARTIFACT_MANIFEST_MIGRATION_HASH_MISMATCH:$expectedNumber" 'RV.ARTIFACT.MANIFEST_MIGRATION_HASH' 'ARTIFACT_MANIFEST_MIGRATION_HASH_MISMATCH'
   }
@@ -954,6 +991,13 @@ function Invoke-OfflineValidation {
   Write-Output "OfflineValidateOnly: PASS"
 }
 
+function Invoke-ArtifactValidationOnly {
+  param($Context = $null)
+  if ($null -eq $Context) { $Context = New-ProductionRehearsalRuntimeContext }
+  Assert-ArtifactIntegrity $Context
+  Write-Output "ArtifactValidationOnly: PASS - finalized runtime artifacts accepted; credential and database boundaries not reached"
+}
+
 function Invoke-Rehearsal {
   param($Context = $null, [scriptblock]$ControlSqlPathFactory = $null, [string]$EvidenceRoot = '')
   if ($null -eq $Context) { $Context = New-ProductionRehearsalRuntimeContext }
@@ -961,7 +1005,7 @@ function Invoke-Rehearsal {
   Assert-Condition $ExecuteRehearsal "Explicit -ExecuteRehearsal mode is required" 'RV.REHEARSAL.MODE' 'REHEARSAL_MODE_REQUIRED'
   Assert-Condition ($ConfirmationToken -eq $ExpectedToken) "Wrong confirmation token" 'RV.REHEARSAL.CONFIRMATION_TOKEN' 'REHEARSAL_CONFIRMATION_TOKEN_INVALID'
   Assert-GitState $Context
-  Assert-ArtifactIntegrity $Context
+  Invoke-ArtifactValidationOnly $Context | Out-Null
   $target = Parse-TargetDatabaseUrl $DatabaseUrl
   $psqlExists = & $Context.ExecutableResolver $PsqlPath
   Assert-Condition $psqlExists "PsqlPath does not exist" 'RV.REHEARSAL.PSQL_PATH' 'REHEARSAL_PSQL_PATH_MISSING'

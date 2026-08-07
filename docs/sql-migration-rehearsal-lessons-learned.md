@@ -270,6 +270,17 @@ Rules here apply to migrations, staging wrappers, rollback-only rehearsals, read
   - The independent harness must parse both helper and generator ASTs and reject duplicate helpers, DR/test validator shadows, credential/executable/process/package/SQL boundary bypasses, and artifact-integrity bypass variables or members.
 - Status: Corrected in source; independent offline architecture review required before package generation.
 
+### ARTIFACT-005 - Finalized Manifest Paths Were Not Accepted by the Production Descriptor
+
+- Symptom: The production wrapper rejected the finalized package before credentials with `RV.ARTIFACT.MANIFEST_MIGRATION_PATH` for migration `006`.
+- Root cause: `Get-ProductionArtifactDescriptor` reconstructed ordered migration paths by stripping every three-digit filename prefix and sorting hashtable keys against source filenames. The staging migration filenames for `006` through `008` retain those prefixes, so all three received a sort key of `-1` and depended on hashtable enumeration. In the failed package, slot `006` resolved to the generated `008` file and slot `008` resolved to the generated `006` file; `007` aligned only by accident. The manifest itself stored machine-specific absolute generated paths, while offline fixtures bypassed this production reconstruction by reading manifest rows directly in order.
+- Why prior gates missed it: Offline/static/package review did not execute the finalized wrapper's `Get-ProductionArtifactDescriptor -> Assert-ArtifactIntegrity` path. Hash and helper equivalence proved byte integrity, but not production runtime acceptance of the final split layout.
+- Durable correction: One source-controlled `Get-TrustedMigrationSpecification` defines the ordered migration number, canonical source, generated filename, and transaction-envelope policy for `006` through `017`. Package generation, production descriptor construction, manifest mapping, and runtime integrity validation consume that same specification; order is never reconstructed from hashtable enumeration. Manifest migration entries contain one exact case-sensitive package-relative leaf filename, and the wrapper embeds finalized absolute paths that must independently match the trusted generated filename and approved bundle root before file and hash validation. Separators, rooted paths, traversal, case changes, missing values, duplicate mappings, and wrong number/file pairs are rejected.
+- Permanent regression rule: No production rehearsal package is approvable until its FINALIZED artifact layout passes the SAME pre-credential runtime artifact-validation path used by the production wrapper.
+- Required regression: Execute the generated wrapper's `-ArtifactValidationOnly` entrypoint against a root-wrapper/root-manifest plus temporary-package split fixture; cover migrations `006` through `017`, the old ordering defect, wrong/missing/duplicate/traversal/outside/case/separator paths, mutation after hashing, moved package roots, and credential/database boundary sentinels. Agreement between descriptor and manifest is insufficient if both can be correlatedly wrong. Runtime validation must bind both to an independent trusted canonical migration specification, with correlated descriptor-plus-manifest swaps, duplicates, renames, substitutions, and case changes rejected.
+- Prevention rule: Static/hash equivalence is insufficient evidence for runtime artifact acceptance. The generator must run finalized bytes through the exact wrapper artifact validator before reporting package generation success.
+- Status: Corrected in source; offline finalized-layout validation required before package generation.
+
 ### ROLLBACK-001 - Outer Rollback Contract
 
 - Context: Rollback-only production rehearsal package.
@@ -447,6 +458,7 @@ Known internal `"char"` fields to check include `pg_constraint.contype`, `pg_con
 - 2026-08-05: Added `MIGRATION-001` from Migration 009 rejecting an exact legacy invoice FK before it could normalize it.
 - 2026-08-05: Added `VALIDATION-008` from non-aggregated referenced-table catalog columns being placed in HAVING.
 - 2026-08-05: Added `ARTIFACT-002` from a generated rollback-only rehearsal wrapper omitting the production-proof contract.
+- 2026-08-07: Added `ARTIFACT-005` after finalized manifest migration paths passed static review but failed the production wrapper's exact artifact validator.
 
 ## VALIDATION-004 - Negative Fixture Failed During Setup
 

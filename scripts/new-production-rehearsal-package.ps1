@@ -18,20 +18,7 @@ if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
   $RepoRoot = Split-Path -Parent $PSScriptRoot
 }
 
-$MigrationPlan = @(
-  @{ Number = "006"; Path = "supabase/staging/006_solo_plus_prerequisites.sql"; Strip = $false },
-  @{ Number = "007"; Path = "supabase/staging/007_solo_plus_case_foundation.sql"; Strip = $false },
-  @{ Number = "008"; Path = "supabase/staging/008_solo_plus_transactional_repository_rpcs.sql"; Strip = $false },
-  @{ Number = "009"; Path = "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql"; Strip = $true },
-  @{ Number = "010"; Path = "supabase/migrations/20260707_02_solo_plus_payment_lifecycle.sql"; Strip = $true },
-  @{ Number = "011"; Path = "supabase/migrations/20260710_01_solo_plus_review_decision_rpc.sql"; Strip = $true },
-  @{ Number = "012"; Path = "supabase/migrations/20260711_01_solo_plus_activation_rpc.sql"; Strip = $true },
-  @{ Number = "013"; Path = "supabase/migrations/20260718_01_solo_plus_payment_recovery.sql"; Strip = $false },
-  @{ Number = "014"; Path = "supabase/migrations/20260728_00_authorization_hardening.sql"; Strip = $true },
-  @{ Number = "015"; Path = "supabase/migrations/20260728_01_verification_disclosure_acknowledgement_rpc.sql"; Strip = $false },
-  @{ Number = "016"; Path = "supabase/migrations/20260731_00_verification_disclosure_identity_hardening.sql"; Strip = $true },
-  @{ Number = "017"; Path = "supabase/migrations/20260803_00_payment_events_legacy_merchant_compatibility.sql"; Strip = $true }
-)
+$MigrationPlan = @(Get-TrustedMigrationSpecification)
 
 function Assert-True {
   param([bool]$Condition, [string]$Message)
@@ -176,6 +163,7 @@ function Get-WrapperTemplate {
 param(
   [switch]$OfflineValidateOnly,
   [string]$OfflineMutationCase = "",
+  [switch]$ArtifactValidationOnly,
   [switch]$ExecuteRehearsal,
   [string]$ConfirmationToken = "",
   [string]$DatabaseUrl = "",
@@ -206,7 +194,7 @@ $ExpectedWrapperHash = "__FINAL_WRAPPER_SHA256__"
 $ExpectedWrapperBodyHash = "__FINAL_WRAPPER_BODY_SHA256__"
 $ExpectedCanonicalHelperHash = "__CANONICAL_HELPER_SHA256__"
 $ExpectedEmbeddedHelperHash = "__EMBEDDED_HELPER_SHA256__"
-$ExpectedMigrationOrder = @("__MIGRATION_ORDER__")
+$ExpectedMigrationPaths = @(__MIGRATION_PATHS__)
 $ExpectedMigrationHashes = @{
 __MIGRATION_HASH_TABLE__
 }
@@ -217,9 +205,10 @@ $script:PgPassFileToDelete = $null
 $script:ControlSqlFileToDelete = $null
 
 try {
-  $selectedModes = @($OfflineValidateOnly, $ExecuteRehearsal) | Where-Object { $_ }
-  Assert-Condition (@($selectedModes).Count -eq 1) "Choose exactly one mode: -OfflineValidateOnly or -ExecuteRehearsal" 'WRAPPER.MODE.COUNT' 'WRAPPER_MODE_COUNT_INVALID'
+  $selectedModes = @($OfflineValidateOnly, $ArtifactValidationOnly, $ExecuteRehearsal) | Where-Object { $_ }
+  Assert-Condition (@($selectedModes).Count -eq 1) "Choose exactly one mode: -OfflineValidateOnly, -ArtifactValidationOnly, or -ExecuteRehearsal" 'WRAPPER.MODE.COUNT' 'WRAPPER_MODE_COUNT_INVALID'
   if ($OfflineValidateOnly) { Invoke-OfflineValidation; return }
+  if ($ArtifactValidationOnly) { Invoke-ArtifactValidationOnly; return }
   Invoke-Rehearsal
 } catch {
   if (-not [string]::IsNullOrWhiteSpace([string]$_.Exception.Data['GuardId'])) { [Console]::Error.WriteLine("GUARD_FAILURE|$($_.Exception.Data['GuardId'])|$($_.Exception.Data['Classification'])") }
@@ -282,7 +271,8 @@ function Test-WrapperTemplateStaticContract {
 function New-TestArtifactSet {
   param(
     [string]$Root,
-    [string]$FullCommit = 'abcdef1234567890abcdef1234567890abcdef12'
+    [string]$FullCommit = 'abcdef1234567890abcdef1234567890abcdef12',
+    [string]$BundleRoot = ''
   )
   $canonicalHelperText = (Get-Content -Raw -LiteralPath $SharedValidationPath).Trim("`r", "`n")
   $canonicalHelperHash = Get-BytesSha256Hex ([Text.Encoding]::UTF8.GetBytes($canonicalHelperText))
@@ -290,18 +280,21 @@ function New-TestArtifactSet {
   $namespaceSuffix = if ($shortCommit -eq 'abcdef1') { 'test' } else { 'fixture' }
   $namespace = "deraledger-production-rehearsal-$shortCommit-$namespaceSuffix"
   $confirmationToken = "CONFIRM-$shortCommit-0123456789ABCDEF01234567"
-  $bundle = Join-Path $Root $namespace
+  if ([string]::IsNullOrWhiteSpace($BundleRoot)) { $BundleRoot = $Root }
+  New-Item -ItemType Directory -Path $BundleRoot -Force | Out-Null
+  $bundle = Join-Path $BundleRoot $namespace
   New-Item -ItemType Directory -Path $bundle -Force | Out-Null
   $migrationRows = @()
   $hashTableLines = @()
+  $migrationPaths = @()
   foreach ($migration in $MigrationPlan) {
-    $name = "{0}_{1}" -f $migration.Number, (Split-Path -Leaf $migration.Path)
-    if ($migration.Number -in @("006","007","008")) { $name = Split-Path -Leaf $migration.Path }
+    $name = $migration.GeneratedFileName
     $path = Join-Path $bundle $name
     Set-Content -LiteralPath $path -Value "-- $($migration.Number)`nSELECT '$($migration.Number)';" -Encoding ASCII
     $hash = Get-Sha256Hex $path
-    $migrationRows += "$($migration.Number)|$($migration.Path)|$path|stripped=$($migration.Strip)|source_sha256=$hash|generated_sha256=$hash"
+    $migrationRows += "$($migration.Number)|$($migration.SourcePath)|$name|stripped=$($migration.Strip)|source_sha256=$hash|generated_sha256=$hash"
     $hashTableLines += "  '$path' = '$hash'"
+    $migrationPaths += $path
   }
   $runner = Join-Path $bundle "$shortCommit-production-rollback-only-rehearsal.sql"
   $runnerLines = [System.Collections.Generic.List[string]]::new()
@@ -309,11 +302,12 @@ function New-TestArtifactSet {
   $runnerLines.Add("BEGIN;")
   $runnerLines.Add("SET LOCAL lock_timeout = '10s';")
   foreach ($migration in $MigrationPlan) {
-    $file = ($migrationRows | Where-Object { $_ -like "$($migration.Number)|*" }) -split "\|" | Select-Object -Index 2
+    $fileName = $migration.GeneratedFileName
+    $file = Join-Path $bundle $fileName
     $include = ($file -replace "\\","/")
-    $runnerLines.Add("\echo RUNNING MIGRATION $($migration.Number) $($migration.Path)")
+    $runnerLines.Add("\echo RUNNING MIGRATION $($migration.Number) $($migration.SourcePath)")
     $runnerLines.Add("\i '$include'")
-    $runnerLines.Add("\echo PASSED MIGRATION $($migration.Number) $($migration.Path)")
+    $runnerLines.Add("\echo PASSED MIGRATION $($migration.Number) $($migration.SourcePath)")
   }
   $runnerLines.Add("\echo ALL MIGRATIONS EXECUTED INSIDE OUTER TRANSACTION")
   $runnerLines.Add("ROLLBACK;")
@@ -345,14 +339,15 @@ function New-TestArtifactSet {
     "EMBEDDED_HELPER_END_MARKER=# END EMBEDDED CANONICAL REHEARSAL HELPER",
     "HELPER_ENCODING=UTF-8-no-BOM",
     "HELPER_NEWLINE_POLICY=preserve-canonical-normalize-boundary-newlines",
-    "STALE_ARTIFACT_EXCLUSIONS=2d0cfee4,beecef35,752c41b",
+    "CONFIRMATION_TOKEN=$confirmationToken",
+    "STALE_ARTIFACT_EXCLUSIONS=2d0cfee4,beecef35,752c41b,88845a2,cbec7fd",
     "MIGRATIONS="
   ) + $migrationRows
   Set-Content -LiteralPath $manifest -Value $manifestLines -Encoding ASCII
   [pscustomobject]@{
     Bundle = $bundle; Runner = $runner; Manifest = $manifest; Wrapper = $wrapper; TokenFile = $tokenFile
     HashLines = ($hashTableLines -join "`n"); FullCommit = $FullCommit; ShortCommit = $shortCommit
-    Namespace = $namespace; ConfirmationToken = $confirmationToken
+    Namespace = $namespace; ConfirmationToken = $confirmationToken; MigrationPaths = @($migrationPaths)
   }
 }
 
@@ -391,7 +386,7 @@ function Expand-WrapperTemplate {
   Assert-Condition ($null -ne $Expansion) 'wrapper expansion values are required' 'GEN.WRAPPER.EXPANSION_REQUIRED' 'WRAPPER_EXPANSION_REQUIRED'
   $runnerHash = Get-Sha256Hex $Artifacts.Runner
   $tokenHash = Get-Sha256Hex $Artifacts.TokenFile
-  $order = (($MigrationPlan | ForEach-Object { Split-Path -Leaf $_.Path }) -join '","')
+  $migrationPaths = (@($Artifacts.MigrationPaths) | ForEach-Object { "'" + ($_ -replace "'", "''") + "'" }) -join ","
   $text = if ([string]::IsNullOrEmpty($TemplateOverride)) { Get-WrapperTemplate } else { $TemplateOverride }
   $sharedHelperText = Get-Content -Raw -LiteralPath $SharedValidationPath
   $helperHash = Get-BytesSha256Hex ([Text.Encoding]::UTF8.GetBytes($sharedHelperText.Trim("`r", "`n")))
@@ -410,7 +405,7 @@ function Expand-WrapperTemplate {
     '__TOKEN_FILE_PATH__' = $Artifacts.TokenFile
     '__RUNNER_SHA256__' = $runnerHash
     '__TOKEN_FILE_SHA256__' = $tokenHash
-    '__MIGRATION_ORDER__' = $order
+    '__MIGRATION_PATHS__' = $migrationPaths
     '__MIGRATION_HASH_TABLE__' = $Artifacts.HashLines
   }
   foreach ($replacement in $staticReplacements.GetEnumerator()) {
@@ -444,8 +439,7 @@ function New-TestArtifactDescriptor {
   $canonicalHelper = (Get-Content -Raw -LiteralPath $SharedValidationPath).Trim("`r","`n")
   $helperHash = Get-BytesSha256Hex ([Text.Encoding]::UTF8.GetBytes($canonicalHelper))
   $wrapperText = Get-Content -Raw -LiteralPath $WrapperPath
-  $manifest = Parse-Manifest $Artifacts.Manifest
-  $migrationPaths = @($manifest.Migrations | ForEach-Object { ($_ -split '\|')[2] })
+  $migrationPaths = @($Artifacts.MigrationPaths)
   $migrationHashes = @{}
   foreach ($path in $migrationPaths) { $migrationHashes[$path] = Get-Sha256Hex $path }
   [pscustomobject]@{
@@ -455,14 +449,15 @@ function New-TestArtifactDescriptor {
     WrapperPath=$WrapperPath; ManifestPath=$Artifacts.Manifest; RunnerPath=$Artifacts.Runner; TokenPath=$Artifacts.TokenFile
     MigrationPaths=$migrationPaths; RunnerHash=(Get-TestWrapperExpectedValue $wrapperText 'ExpectedRunnerHash')
     ManifestHash=(Get-TestWrapperExpectedValue $wrapperText 'ExpectedManifestHash')
-    TokenHash=(Get-TestWrapperExpectedValue $wrapperText 'ExpectedTokenFileHash'); MigrationHashes=$migrationHashes
+    TokenHash=(Get-TestWrapperExpectedValue $wrapperText 'ExpectedTokenFileHash'); ConfirmationToken=$Expansion.ConfirmationToken; MigrationHashes=$migrationHashes
     CanonicalHelperHash=(Get-TestWrapperExpectedValue $wrapperText 'ExpectedCanonicalHelperHash')
     EmbeddedHelperHash=(Get-TestWrapperExpectedValue $wrapperText 'ExpectedEmbeddedHelperHash')
     WrapperHash=(Get-TestWrapperExpectedValue $wrapperText 'ExpectedWrapperHash')
     WrapperBodyHash=(Get-TestWrapperExpectedValue $wrapperText 'ExpectedWrapperBodyHash')
-    ExpectedMigrationOrder=@($MigrationPlan | ForEach-Object { Split-Path -Leaf $_.Path })
+    ExpectedMigrationOrder=@($MigrationPlan | ForEach-Object { $_.SourceFile })
+    MigrationSpecification=@($MigrationPlan)
     HelperStartMarker='# BEGIN EMBEDDED CANONICAL REHEARSAL HELPER'; HelperEndMarker='# END EMBEDDED CANONICAL REHEARSAL HELPER'
-    StaleNamespaces=@('2d0cfee4','beecef35','752c41b')
+    StaleNamespaces=@('2d0cfee4','beecef35','752c41b','88845a2','cbec7fd')
   }
 }
 
@@ -532,6 +527,24 @@ function New-OfflineValidationFixture {
   $processResult=[pscustomobject]@{ExitCode=0;TimedOut=$false;Stdout='offline';Stderr='';DurationMs=0;ProcessTreeTerminated=$false;Disposed=$true}
   $context=New-ArchitectureTestContext $descriptor $counts $gitState $processResult
   [pscustomobject]@{Artifacts=$artifacts;Wrapper=$artifacts.Wrapper;Descriptor=$descriptor;Counts=$counts;Context=$context}
+}
+
+function Invoke-FinalizedArtifactValidation {
+  param([Parameter(Mandatory = $true)][string]$WrapperPath, [scriptblock]$Invocation = $null)
+  $stdoutPath = Join-Path ([IO.Path]::GetTempPath()) ("deraledger-artifact-validation-" + [guid]::NewGuid().ToString("N") + ".stdout")
+  $stderrPath = Join-Path ([IO.Path]::GetTempPath()) ("deraledger-artifact-validation-" + [guid]::NewGuid().ToString("N") + ".stderr")
+  try {
+    $result = if ($null -eq $Invocation) {
+      $powerShell = (Get-Process -Id $PID).Path
+      Invoke-NativeChecked $powerShell @('-NoProfile','-ExecutionPolicy','Bypass','-File',$WrapperPath,'-ArtifactValidationOnly') $stdoutPath $stderrPath 120
+    } else {
+      & $Invocation $WrapperPath
+    }
+    Assert-Condition ($result.ExitCode -eq 0) ("Finalized artifact runtime validation failed: " + ([string]$result.Stderr).Trim()) 'GEN.PACKAGE.ARTIFACT_VALIDATION_EXIT' 'PACKAGE_ARTIFACT_VALIDATION_FAILED'
+    Assert-Condition ([string]$result.Stdout -match 'ArtifactValidationOnly: PASS - finalized runtime artifacts accepted; credential and database boundaries not reached') "Finalized artifact runtime validation marker missing" 'GEN.PACKAGE.ARTIFACT_VALIDATION_MARKER' 'PACKAGE_ARTIFACT_VALIDATION_MARKER_MISSING'
+  } finally {
+    Remove-Item -LiteralPath $stdoutPath,$stderrPath -Force -ErrorAction SilentlyContinue
+  }
 }
 
 function Invoke-GeneratorOfflineValidation {
@@ -779,6 +792,7 @@ function Invoke-ArtifactGuardCases {
     @{Id='RV.ARTIFACT.BUNDLE_NAMESPACE';M={param($f,$d)$d.Namespace='wrong-namespace'}},
     @{Id='RV.ARTIFACT.MIGRATION_COUNT';M={param($f,$d)$d.MigrationPaths=@($d.MigrationPaths[0..10])}},
     @{Id='RV.ARTIFACT.ORDER_COUNT';M={param($f,$d)$d.ExpectedMigrationOrder=@($d.ExpectedMigrationOrder[0..10])}},
+    @{Id='RV.ARTIFACT.CANONICAL_FILENAME';M={param($f,$d)$paths=@($d.MigrationPaths);$paths[0]=$paths[1];$d.MigrationPaths=$paths}},
     @{Id='RV.ARTIFACT.FILE_EXISTS';M={param($f,$d)$d.TokenPath=Join-Path $f.Artifacts.Bundle 'abcdef1-missing-token.txt'}},
     @{Id='RV.ARTIFACT.PATH_CONTAINED';M={param($f,$d)$outside=Join-Path (Split-Path -Parent $f.Artifacts.Bundle) 'abcdef1-outside-runner.sql';Copy-Item $f.Artifacts.Runner $outside;$d.RunnerPath=$outside;$d.RunnerHash=Get-Sha256Hex $outside}},
     @{Id='RV.ARTIFACT.PATH_NAMING';M={param($f,$d)$bad=Join-Path $f.Artifacts.Bundle 'bad-token.txt';Copy-Item $f.Artifacts.TokenFile $bad;$d.TokenPath=$bad;$d.TokenHash=Get-Sha256Hex $bad}},
@@ -795,6 +809,7 @@ function Invoke-ArtifactGuardCases {
     @{Id='RV.ARTIFACT.RUNNER_HASH';M={param($f,$d)Add-Content $f.Artifacts.Runner '-- mutation'}},
     @{Id='RV.ARTIFACT.MANIFEST_HASH';M={param($f,$d)Add-Content $f.Artifacts.Manifest 'MUTATION=true'}},
     @{Id='RV.ARTIFACT.TOKEN_HASH';M={param($f,$d)Add-Content $f.Artifacts.TokenFile 'mutation'}},
+    @{Id='RV.ARTIFACT.TOKEN_CONTENT';M={param($f,$d)$d.ConfirmationToken='CONFIRM-abcdef1-FFFFFFFFFFFFFFFFFFFFFFFF'}},
     @{Id='RV.ARTIFACT.MIGRATION_HASH_PRESENT';M={param($f,$d)$copy=@{};foreach($key in $d.MigrationHashes.Keys){if($key -ne $d.MigrationPaths[0]){$copy[$key]=$d.MigrationHashes[$key]}};$d.MigrationHashes=$copy}},
     @{Id='RV.ARTIFACT.MIGRATION_HASH';M={param($f,$d)$d.MigrationHashes[$d.MigrationPaths[0]]='A'*64}}
   )
@@ -811,6 +826,7 @@ function Invoke-ArtifactGuardCases {
     @{Id='RV.ARTIFACT.MANIFEST_RUNNER_HASH';Old='RUNNER_SHA256=';New='RUNNER_SHA256=wrong#'},
     @{Id='RV.ARTIFACT.MANIFEST_TOKEN_PATH';Old='TOKEN_FILE=';New='TOKEN_FILE=wrong#'},
     @{Id='RV.ARTIFACT.MANIFEST_TOKEN_HASH';Old='TOKEN_FILE_SHA256=';New='TOKEN_FILE_SHA256=wrong#'},
+    @{Id='RV.ARTIFACT.MANIFEST_TOKEN';Old='CONFIRMATION_TOKEN=';New='CONFIRMATION_TOKEN=wrong#'},
     @{Id='RV.ARTIFACT.MANIFEST_CANONICAL_HELPER_HASH';Old='CANONICAL_HELPER_SHA256=';New='CANONICAL_HELPER_SHA256=wrong#'},
     @{Id='RV.ARTIFACT.MANIFEST_EMBEDDED_HELPER_HASH';Old='EMBEDDED_HELPER_SHA256=';New='EMBEDDED_HELPER_SHA256=wrong#'},
     @{Id='RV.ARTIFACT.MANIFEST_TIMESTAMP_DISCLAIMER';Old='TIMESTAMP_IS_SOURCE_FRESHNESS_PROOF=false';New='TIMESTAMP_IS_SOURCE_FRESHNESS_PROOF=true'},
@@ -918,6 +934,13 @@ function Invoke-GeneratorGuardCases {
   $expansion=New-TestWrapperExpansion $artifacts
   Add-ObservedGuard $Evidence $Inventory 'GEN.WRAPPER.BODY_HASH_STABLE' 'Expand-WrapperTemplate' {try{Expand-WrapperTemplate -Artifacts $artifacts -WrapperPath $artifacts.Wrapper -Expansion $expansion -BodyHashProbe {param($path)'0'*64}}finally{Remove-Item -LiteralPath $unstableRoot -Recurse -Force -ErrorAction SilentlyContinue}}
 
+  Add-ObservedGuard $Evidence $Inventory 'GEN.PACKAGE.ARTIFACT_VALIDATION_EXIT' 'Invoke-FinalizedArtifactValidation' {
+    Invoke-FinalizedArtifactValidation -WrapperPath $Fixture.Wrapper -Invocation { param($path) [pscustomobject]@{ExitCode=1;Stdout='';Stderr='rejected'} }
+  }
+  Add-ObservedGuard $Evidence $Inventory 'GEN.PACKAGE.ARTIFACT_VALIDATION_MARKER' 'Invoke-FinalizedArtifactValidation' {
+    Invoke-FinalizedArtifactValidation -WrapperPath $Fixture.Wrapper -Invocation { param($path) [pscustomobject]@{ExitCode=0;Stdout='missing marker';Stderr=''} }
+  }
+
   $originalCommit=$script:Commit;$originalOutputRoot=$script:OutputRoot
   try{
     $script:Commit=''
@@ -999,6 +1022,185 @@ function Invoke-ProductionExpansionFinalizationRegressions {
     Remove-Item -LiteralPath $fixtureRoot -Recurse -Force -ErrorAction SilentlyContinue
   }
   return $caseCount
+}
+
+function Invoke-FinalizedLayoutArtifactRegressions {
+  param([string]$Root)
+  $evidence = [Collections.Generic.List[object]]::new()
+  $layoutRoot = Join-Path $Root 'finalized-layout-repository-root'
+  $bundleRoot = Join-Path $Root 'finalized-layout-temp-root'
+  New-Item -ItemType Directory -Path $layoutRoot,$bundleRoot -Force | Out-Null
+
+  function Add-FinalizedLayoutEvidence {
+    param([string]$Id,[string]$Expected,[string]$Observed)
+    Assert-True (@($evidence | Where-Object case_id -eq $Id).Count -eq 0) "duplicate finalized-layout case: $Id"
+    Assert-True ($Expected -eq $Observed) "finalized-layout outcome mismatch: $Id expected=$Expected observed=$Observed"
+    $evidence.Add([pscustomobject]@{case_id=$Id;expected=$Expected;observed=$Observed;execution_count=1;cleanup='verified'})
+  }
+
+  function Invoke-ManifestMutation {
+    param([string]$Id,[int]$RowIndex,[scriptblock]$Mutation,[string]$ExpectedGuard='RV.ARTIFACT.MANIFEST_MIGRATION_PATH')
+    $caseRoot = Join-Path $Root ("finalized-" + ($Id -replace '[^A-Za-z0-9-]','-'))
+    $caseBundleRoot = Join-Path $caseRoot 'temp'
+    New-Item -ItemType Directory -Path $caseRoot,$caseBundleRoot -Force | Out-Null
+    try {
+      $caseArtifacts = New-TestArtifactSet -Root $caseRoot -BundleRoot $caseBundleRoot
+      $caseExpansion = New-TestWrapperExpansion $caseArtifacts
+      Expand-WrapperTemplate -Artifacts $caseArtifacts -WrapperPath $caseArtifacts.Wrapper -Expansion $caseExpansion
+      $caseDescriptor = New-TestArtifactDescriptor $caseArtifacts $caseArtifacts.Wrapper $caseExpansion
+      $lines = @(Get-Content -LiteralPath $caseArtifacts.Manifest)
+      $migrationLineIndexes = @(for($lineIndex=0;$lineIndex-lt$lines.Count;$lineIndex++){if($lines[$lineIndex]-match '^\d{3}\|'){$lineIndex}})
+      & $Mutation $lines $migrationLineIndexes $caseArtifacts
+      Set-Content -LiteralPath $caseArtifacts.Manifest -Value $lines -Encoding ASCII
+      $caseDescriptor.ManifestHash = Get-Sha256Hex $caseArtifacts.Manifest
+      $counts = New-ArchitectureBoundaryCounts
+      $git = [pscustomobject]@{Branch='fix/payment-events-legacy-merchant-compatibility';Head=$caseDescriptor.FullCommit;Staged=@();Modified=@()}
+      $process = [pscustomobject]@{ExitCode=0;TimedOut=$false;Stdout='';Stderr='';Disposed=$true}
+      $context = New-ArchitectureTestContext $caseDescriptor $counts $git $process
+      $observed = 'PASS'
+      try { Invoke-ArtifactValidationOnly $context | Out-Null } catch { $observed = [string]$_.Exception.Data['GuardId'] }
+      Add-FinalizedLayoutEvidence $Id $ExpectedGuard $observed
+      Assert-True ($counts.CredentialProvider -eq 0 -and $counts.ExecutableResolver -eq 0 -and $counts.ProcessAdapter -eq 0 -and $counts.PackageGenerationBoundary -eq 0 -and $counts.SqlExecutionBoundary -eq 0) "forbidden boundary reached: $Id"
+    } finally {
+      Remove-Item -LiteralPath $caseRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+  }
+
+  function Invoke-CorrelatedPathMutation {
+    param([string]$Id,[scriptblock]$Mutation)
+    $caseRoot = Join-Path $Root ("corr-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+    $caseBundleRoot = Join-Path $caseRoot 'temp'
+    New-Item -ItemType Directory -Path $caseRoot,$caseBundleRoot -Force | Out-Null
+    try {
+      $caseArtifacts = New-TestArtifactSet -Root $caseRoot -BundleRoot $caseBundleRoot
+      $caseExpansion = New-TestWrapperExpansion $caseArtifacts
+      Expand-WrapperTemplate -Artifacts $caseArtifacts -WrapperPath $caseArtifacts.Wrapper -Expansion $caseExpansion
+      $caseDescriptor = New-TestArtifactDescriptor $caseArtifacts $caseArtifacts.Wrapper $caseExpansion
+      $caseDescriptor.MigrationPaths = @($caseDescriptor.MigrationPaths)
+      $lines = @(Get-Content -LiteralPath $caseArtifacts.Manifest)
+      $migrationLineIndexes = @(for($lineIndex=0;$lineIndex-lt$lines.Count;$lineIndex++){if($lines[$lineIndex]-match '^\d{3}\|'){$lineIndex}})
+      & $Mutation $caseDescriptor $lines $migrationLineIndexes $caseArtifacts
+      Set-Content -LiteralPath $caseArtifacts.Manifest -Value $lines -Encoding ASCII
+      $caseDescriptor.ManifestHash = Get-Sha256Hex $caseArtifacts.Manifest
+      $counts = New-ArchitectureBoundaryCounts
+      $git = [pscustomobject]@{Branch='fix/payment-events-legacy-merchant-compatibility';Head=$caseDescriptor.FullCommit;Staged=@();Modified=@()}
+      $process = [pscustomobject]@{ExitCode=0;TimedOut=$false;Stdout='';Stderr='';Disposed=$true}
+      $context = New-ArchitectureTestContext $caseDescriptor $counts $git $process
+      $observed = 'PASS'
+      try { Invoke-ArtifactValidationOnly $context | Out-Null } catch { $observed = [string]$_.Exception.Data['GuardId'] }
+      Add-FinalizedLayoutEvidence $Id 'RV.ARTIFACT.CANONICAL_FILENAME' $observed
+      Assert-True ($counts.CredentialProvider -eq 0 -and $counts.ExecutableResolver -eq 0 -and $counts.ProcessAdapter -eq 0 -and $counts.PackageGenerationBoundary -eq 0 -and $counts.SqlExecutionBoundary -eq 0) "forbidden boundary reached: $Id"
+    } finally {
+      Remove-Item -LiteralPath $caseRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+  }
+
+  try {
+    $artifacts = New-TestArtifactSet -Root $layoutRoot -BundleRoot $bundleRoot
+    $expansion = New-TestWrapperExpansion $artifacts
+    Expand-WrapperTemplate -Artifacts $artifacts -WrapperPath $artifacts.Wrapper -Expansion $expansion
+    $descriptor = New-TestArtifactDescriptor $artifacts $artifacts.Wrapper $expansion
+    $counts = New-ArchitectureBoundaryCounts
+    $git = [pscustomobject]@{Branch='fix/payment-events-legacy-merchant-compatibility';Head=$descriptor.FullCommit;Staged=@();Modified=@()}
+    $process = [pscustomobject]@{ExitCode=0;TimedOut=$false;Stdout='';Stderr='';Disposed=$true}
+    $context = New-ArchitectureTestContext $descriptor $counts $git $process
+    Invoke-ArtifactValidationOnly $context | Out-Null
+    Add-FinalizedLayoutEvidence 'FINALIZED-SPLIT-LAYOUT-PASS' 'PASS' 'PASS'
+    Assert-True ($counts.CredentialProvider -eq 0 -and $counts.ExecutableResolver -eq 0 -and $counts.ProcessAdapter -eq 0 -and $counts.PackageGenerationBoundary -eq 0 -and $counts.SqlExecutionBoundary -eq 0) 'artifact-only mode crossed a forbidden boundary'
+    Add-FinalizedLayoutEvidence 'FINALIZED-CREDENTIAL-DB-BOUNDARIES-ZERO' 'PASS' 'PASS'
+
+    $childResult = Invoke-FinalizedArtifactValidation -WrapperPath $artifacts.Wrapper -Invocation {
+      param($path)
+      $stdout = Join-Path $Root 'artifact-child.stdout'; $stderr = Join-Path $Root 'artifact-child.stderr'
+      try {
+        $powerShell = (Get-Process -Id $PID).Path
+        Invoke-NativeChecked $powerShell @('-NoProfile','-ExecutionPolicy','Bypass','-File',$path,'-ArtifactValidationOnly') $stdout $stderr 120
+      } finally {
+        Remove-Item -LiteralPath $stdout,$stderr -Force -ErrorAction SilentlyContinue
+      }
+    }
+    Add-FinalizedLayoutEvidence 'FINALIZED-WRAPPER-ENTRYPOINT-PASS' 'PASS' 'PASS'
+
+    $descriptorLeavesMatchSpecification = $true
+    $manifestLeavesMatchSpecification = $true
+    for($i=0;$i-lt 12;$i++) {
+      $row = @((Parse-Manifest $artifacts.Manifest).Migrations[$i] -split '\|')
+      $resolved = Join-Path $artifacts.Bundle $row[2]
+      $trustedMigration = $descriptor.MigrationSpecification[$i]
+      if ((Split-Path -Leaf $descriptor.MigrationPaths[$i]) -cne $trustedMigration.GeneratedFileName) { $descriptorLeavesMatchSpecification = $false }
+      if ($row[2] -cne $trustedMigration.GeneratedFileName) { $manifestLeavesMatchSpecification = $false }
+      Assert-True ([IO.Path]::GetFullPath($resolved).Equals([IO.Path]::GetFullPath($artifacts.MigrationPaths[$i]),[StringComparison]::OrdinalIgnoreCase)) "resolved migration mismatch: $i"
+      Assert-True ((Get-Sha256Hex $resolved) -eq (($row[5] -split '=',2)[1])) "resolved migration bytes mismatch: $i"
+    }
+    Add-FinalizedLayoutEvidence 'FINALIZED-DESCRIPTOR-LEAVES-MATCH-SPECIFICATION' $true $descriptorLeavesMatchSpecification
+    Add-FinalizedLayoutEvidence 'FINALIZED-MANIFEST-LEAVES-MATCH-SPECIFICATION' $true $manifestLeavesMatchSpecification
+    Add-FinalizedLayoutEvidence 'FINALIZED-ALL-MIGRATION-BYTES-EXACT' 'PASS' 'PASS'
+
+    $scrambled = @($descriptor.MigrationPaths[2],$descriptor.MigrationPaths[1],$descriptor.MigrationPaths[0]) + @($descriptor.MigrationPaths[3..11])
+    $legacyDescriptor = $descriptor.PSObject.Copy(); $legacyDescriptor.MigrationPaths = $scrambled
+    $legacyContext = New-ArchitectureTestContext $legacyDescriptor (New-ArchitectureBoundaryCounts) $git $process
+    $legacyObserved = 'PASS'; try { Invoke-ArtifactValidationOnly $legacyContext | Out-Null } catch { $legacyObserved = [string]$_.Exception.Data['GuardId'] }
+    Assert-True ($legacyObserved -eq 'RV.ARTIFACT.CANONICAL_FILENAME') 'old defect shape did not reproduce the production guard'
+    Invoke-ArtifactValidationOnly $context | Out-Null
+    Add-FinalizedLayoutEvidence 'FINALIZED-OLD-1B84250-ORDERING-SHAPE' 'PASS' 'PASS'
+
+    Invoke-ManifestMutation 'FINALIZED-WRONG-006-PATH' 0 {param($lines,$indexes,$a)$parts=@($lines[$indexes[0]]-split '\|');$parts[2]='wrong-006.sql';$lines[$indexes[0]]=$parts-join '|'}
+    Invoke-ManifestMutation 'FINALIZED-WRONG-017-PATH' 11 {param($lines,$indexes,$a)$parts=@($lines[$indexes[11]]-split '\|');$parts[2]='wrong-017.sql';$lines[$indexes[11]]=$parts-join '|'}
+    Invoke-ManifestMutation 'FINALIZED-006-POINTS-TO-007' 0 {param($lines,$indexes,$a)$p0=@($lines[$indexes[0]]-split '\|');$p1=@($lines[$indexes[1]]-split '\|');$p0[2]=$p1[2];$lines[$indexes[0]]=$p0-join '|'}
+    Invoke-ManifestMutation 'FINALIZED-PATH-TRAVERSAL' 0 {param($lines,$indexes,$a)$parts=@($lines[$indexes[0]]-split '\|');$parts[2]='..\006_solo_plus_prerequisites.sql';$lines[$indexes[0]]=$parts-join '|'}
+    Invoke-ManifestMutation 'FINALIZED-PATH-OUTSIDE' 0 {param($lines,$indexes,$a)$parts=@($lines[$indexes[0]]-split '\|');$parts[2]=[IO.Path]::GetFullPath((Join-Path $a.Bundle '..\outside.sql'));$lines[$indexes[0]]=$parts-join '|'}
+    Invoke-ManifestMutation 'FINALIZED-DUPLICATE-PATH' 1 {param($lines,$indexes,$a)$p0=@($lines[$indexes[0]]-split '\|');$p1=@($lines[$indexes[1]]-split '\|');$p1[2]=$p0[2];$lines[$indexes[1]]=$p1-join '|'}
+    Invoke-ManifestMutation 'FINALIZED-MISSING-PATH' 0 {param($lines,$indexes,$a)$parts=@($lines[$indexes[0]]-split '\|');$parts[2]='';$lines[$indexes[0]]=$parts-join '|'}
+    Invoke-ManifestMutation 'FINALIZED-WRONG-NUMBER-FILENAME' 0 {param($lines,$indexes,$a)$parts=@($lines[$indexes[0]]-split '\|');$parts[0]='007';$lines[$indexes[0]]=$parts-join '|'} 'RV.ARTIFACT.MANIFEST_MIGRATION_NUMBER'
+    Invoke-ManifestMutation 'FINALIZED-SEPARATOR-NORMALIZATION' 0 {param($lines,$indexes,$a)$parts=@($lines[$indexes[0]]-split '\|');$parts[2]='.\006_solo_plus_prerequisites.sql';$lines[$indexes[0]]=$parts-join '|'}
+    Invoke-ManifestMutation 'FINALIZED-WINDOWS-CASE' 0 {param($lines,$indexes,$a)$parts=@($lines[$indexes[0]]-split '\|');$parts[2]=$parts[2].ToUpperInvariant();$lines[$indexes[0]]=$parts-join '|'}
+
+    Invoke-CorrelatedPathMutation 'FINALIZED-CORRELATED-006-TO-007' {
+      param($d,$lines,$indexes,$a)
+      $d.MigrationPaths[0]=$d.MigrationPaths[1]
+      $parts=@($lines[$indexes[0]]-split '\|');$parts[2]=$d.MigrationSpecification[1].GeneratedFileName;$lines[$indexes[0]]=$parts-join '|'
+    }
+    Invoke-CorrelatedPathMutation 'FINALIZED-CORRELATED-006-008-SWAP' {
+      param($d,$lines,$indexes,$a)
+      $first=$d.MigrationPaths[0];$d.MigrationPaths[0]=$d.MigrationPaths[2];$d.MigrationPaths[2]=$first
+      $firstParts=@($lines[$indexes[0]]-split '\|');$thirdParts=@($lines[$indexes[2]]-split '\|')
+      $firstName=$firstParts[2];$firstParts[2]=$thirdParts[2];$thirdParts[2]=$firstName
+      $lines[$indexes[0]]=$firstParts-join '|';$lines[$indexes[2]]=$thirdParts-join '|'
+    }
+    Invoke-CorrelatedPathMutation 'FINALIZED-CORRELATED-DUPLICATE-007' {
+      param($d,$lines,$indexes,$a)
+      $d.MigrationPaths[0]=$d.MigrationPaths[1]
+      $parts=@($lines[$indexes[0]]-split '\|');$parts[2]=$d.MigrationSpecification[1].GeneratedFileName;$lines[$indexes[0]]=$parts-join '|'
+    }
+    Invoke-CorrelatedPathMutation 'FINALIZED-CORRELATED-PLAUSIBLE-RENAME' {
+      param($d,$lines,$indexes,$a)
+      $name='006_solo_plus_prerequisites_v2.sql';$d.MigrationPaths[0]=Join-Path $a.Bundle $name
+      $parts=@($lines[$indexes[0]]-split '\|');$parts[2]=$name;$lines[$indexes[0]]=$parts-join '|'
+    }
+    Invoke-CorrelatedPathMutation 'FINALIZED-CORRELATED-CASE-CHANGE' {
+      param($d,$lines,$indexes,$a)
+      $name=$d.MigrationSpecification[0].GeneratedFileName.ToUpperInvariant();$d.MigrationPaths[0]=Join-Path $a.Bundle $name
+      $parts=@($lines[$indexes[0]]-split '\|');$parts[2]=$name;$lines[$indexes[0]]=$parts-join '|'
+    }
+
+    $staleDescriptor = $descriptor.PSObject.Copy();$staleDescriptor.Namespace='deraledger-production-rehearsal-2d0cfee4-stale'
+    $staleContext = New-ArchitectureTestContext $staleDescriptor (New-ArchitectureBoundaryCounts) $git $process
+    $observed='PASS';try{Invoke-ArtifactValidationOnly $staleContext|Out-Null}catch{$observed=[string]$_.Exception.Data['GuardId']}
+    Add-FinalizedLayoutEvidence 'FINALIZED-STALE-NAMESPACE' 'RV.ARTIFACT.BUNDLE_NAMESPACE' $observed
+
+    $changedPath=$artifacts.MigrationPaths[0];$originalBytes=[IO.File]::ReadAllBytes($changedPath)
+    try {[IO.File]::WriteAllText($changedPath,'changed after manifest',[Text.UTF8Encoding]::new($false));$observed='PASS';try{Invoke-ArtifactValidationOnly $context|Out-Null}catch{$observed=[string]$_.Exception.Data['GuardId']};Add-FinalizedLayoutEvidence 'FINALIZED-MUTATION-AFTER-HASH' 'RV.ARTIFACT.MIGRATION_HASH' $observed} finally {[IO.File]::WriteAllBytes($changedPath,$originalBytes)}
+
+    $movedDescriptor=$descriptor.PSObject.Copy();$movedDescriptor.Bundle=Join-Path (Join-Path $Root 'moved') $descriptor.Namespace
+    $movedContext=New-ArchitectureTestContext $movedDescriptor (New-ArchitectureBoundaryCounts) $git $process
+    $observed='PASS';try{Invoke-ArtifactValidationOnly $movedContext|Out-Null}catch{$observed=[string]$_.Exception.Data['GuardId']}
+    Add-FinalizedLayoutEvidence 'FINALIZED-PACKAGE-PATH-CHANGED' 'RV.ARTIFACT.CANONICAL_FILENAME' $observed
+  } finally {
+    Remove-Item -LiteralPath $layoutRoot,$bundleRoot -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  Assert-True (@($evidence | Group-Object case_id | Where-Object Count -ne 1).Count -eq 0) 'finalized-layout case cardinality invalid'
+  Write-Host ('FINALIZED_LAYOUT_SUMMARY|' + ([ordered]@{declared=$evidence.Count;executed=@($evidence|Where-Object execution_count -eq 1).Count;credential_db_boundaries=0}|ConvertTo-Json -Compress))
+  return $evidence.Count
 }
 
 function Invoke-ChildGuard {
@@ -1637,6 +1839,8 @@ function Run-OfflineMutationTests {
     $wrapper = $fixture.Wrapper
     $finalizationCaseCount = Invoke-ProductionExpansionFinalizationRegressions $tmp
     Write-Output ("Production expansion finalization cases: " + $finalizationCaseCount)
+    $finalizedLayoutCaseCount = Invoke-FinalizedLayoutArtifactRegressions $tmp
+    Write-Output ("Finalized layout artifact cases: " + $finalizedLayoutCaseCount)
     $wrapperText = Get-Content -Raw -LiteralPath $wrapper
     $helperStartMarker = "# BEGIN EMBEDDED CANONICAL REHEARSAL HELPER"
     $helperEndMarker = "# END EMBEDDED CANONICAL REHEARSAL HELPER"
@@ -1692,8 +1896,8 @@ function Run-OfflineMutationTests {
 
     Invoke-FunctionParityClassification -ExecutedProofIds $executedProofIds
 
-    $declaredCount=@($inventory).Count + @($script:LastArchitectureEvidence).Count + @($embeddingExecuted.Keys).Count + $finalizationCaseCount
-    $executedCount=@($guardEvidence).Count + @($script:LastArchitectureEvidence).Count + @($embeddingExecuted.Keys).Count + $finalizationCaseCount
+    $declaredCount=@($inventory).Count + @($script:LastArchitectureEvidence).Count + @($embeddingExecuted.Keys).Count + $finalizationCaseCount + $finalizedLayoutCaseCount
+    $executedCount=@($guardEvidence).Count + @($script:LastArchitectureEvidence).Count + @($embeddingExecuted.Keys).Count + $finalizationCaseCount + $finalizedLayoutCaseCount
     Write-Output ("Mutation cases declared: " + $declaredCount)
     Write-Output ("Mutation cases executed: " + $executedCount)
     Assert-True ($executedCount -eq $declaredCount) "declared and executed mutation counts differ"
@@ -1721,6 +1925,7 @@ function New-ProductionRehearsalPackage {
 
   $migrationRows = @()
   $hashTableLines = @()
+  $migrationPaths = @()
   $runnerLines = [System.Collections.Generic.List[string]]::new()
   $runnerLines.Add("\set ON_ERROR_STOP on")
   $runnerLines.Add("BEGIN;")
@@ -1729,23 +1934,23 @@ function New-ProductionRehearsalPackage {
   $runnerLines.Add("SET LOCAL idle_in_transaction_session_timeout = '20min';")
 
   foreach ($migration in $MigrationPlan) {
-    $sourceBytes = Get-GitBlobBytes -Commit $fullCommit -Path $migration.Path
+    $sourceBytes = Get-GitBlobBytes -Commit $fullCommit -Path $migration.SourcePath
     $generatedBytes = $sourceBytes
     if ($migration.Strip) {
-      $generatedBytes = Remove-TopLevelTransactionEnvelopeBytes -Bytes $sourceBytes -Path $migration.Path
+      $generatedBytes = Remove-TopLevelTransactionEnvelopeBytes -Bytes $sourceBytes -Path $migration.SourcePath
     }
 
-    $leaf = Split-Path -Leaf $migration.Path
-    $targetName = if ($migration.Number -in @("006", "007", "008")) { $leaf } else { "$($migration.Number)_$leaf" }
+    $targetName = $migration.GeneratedFileName
     $targetPath = Join-Path $bundle $targetName
     [System.IO.File]::WriteAllBytes($targetPath, $generatedBytes)
     $sourceHash = Get-BytesSha256Hex $sourceBytes
     $generatedHash = Get-Sha256Hex $targetPath
-    $migrationRows += "$($migration.Number)|$($migration.Path)|$targetPath|stripped=$($migration.Strip)|source_sha256=$sourceHash|generated_sha256=$generatedHash"
+    $migrationRows += "$($migration.Number)|$($migration.SourcePath)|$targetName|stripped=$($migration.Strip)|source_sha256=$sourceHash|generated_sha256=$generatedHash"
     $hashTableLines += "  '$targetPath' = '$generatedHash'"
-    $runnerLines.Add("\echo RUNNING MIGRATION $($migration.Number) $($migration.Path)")
+    $migrationPaths += $targetPath
+    $runnerLines.Add("\echo RUNNING MIGRATION $($migration.Number) $($migration.SourcePath)")
     $runnerLines.Add("\i '$($targetPath -replace '\\','/')'")
-    $runnerLines.Add("\echo PASSED MIGRATION $($migration.Number) $($migration.Path)")
+    $runnerLines.Add("\echo PASSED MIGRATION $($migration.Number) $($migration.SourcePath)")
   }
 
   $runnerLines.Add("\echo ALL MIGRATIONS EXECUTED INSIDE OUTER TRANSACTION")
@@ -1787,10 +1992,11 @@ function New-ProductionRehearsalPackage {
   ) + $migrationRows
   Set-Content -LiteralPath $manifest -Value $manifestLines -Encoding ASCII
 
-  $artifacts = [pscustomobject]@{ Bundle = $bundle; Runner = $runner; Manifest = $manifest; TokenFile = $tokenFile; HashLines = ($hashTableLines -join "`n") }
+  $artifacts = [pscustomobject]@{ Bundle = $bundle; Runner = $runner; Manifest = $manifest; TokenFile = $tokenFile; HashLines = ($hashTableLines -join "`n"); MigrationPaths = @($migrationPaths) }
   $expansion = New-WrapperExpansion -FullCommit $fullCommit -ShortCommit $short -Namespace $identity `
     -ConfirmationToken $token -RepoRootPath $RepoRoot -Branch 'fix/payment-events-legacy-merchant-compatibility'
   Expand-WrapperTemplate -Artifacts $artifacts -WrapperPath $wrapper -Expansion $expansion
+  Invoke-FinalizedArtifactValidation -WrapperPath $wrapper
   Write-Output "BUNDLE=$bundle"
   Write-Output "RUNNER=$runner"
   Write-Output "MANIFEST=$manifest"

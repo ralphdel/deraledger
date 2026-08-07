@@ -566,6 +566,7 @@ function Assert-ProductionRehearsalArchitectureAst {
   },$true))
   Assert-HarnessSelfTest ($pidOnlyStops.Count -eq 0) 'identity-sensitive production timeout cleanup contains PID-only termination.'
   $helperSource=[IO.File]::ReadAllText($HelperPath)
+  $generatorSource=[IO.File]::ReadAllText($GeneratorPath)
   foreach($nativePrimitive in @('DuplicateOriginalHandle','OpenIdentityHandle','GetCreationTime','TerminateProcess','WaitForSingleObject','SafeHandleZeroOrMinusOneIsInvalid')){
     Assert-HarnessSelfTest $helperSource.Contains($nativePrimitive) "retained-handle process primitive is missing: $nativePrimitive"
   }
@@ -575,6 +576,11 @@ function Assert-ProductionRehearsalArchitectureAst {
   Assert-HarnessSelfTest ($productionPackageCalls.Count -eq 1) 'production package generation call cardinality is invalid.'
   $packageAssignments=@($generatorAst.FindAll({param($node)$node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Extent.Text -match 'PackageGenerationBoundary'},$true))
   Assert-HarnessSelfTest (@($packageAssignments|Where-Object {$_.Extent.StartOffset -le $productionPackageCalls[0].Extent.StartOffset -and $_.Extent.EndOffset -ge $productionPackageCalls[0].Extent.EndOffset}).Count -eq 1) 'package generation call exists outside its approved boundary.'
+  $packageFunction=@($generatorFunctions|Where-Object Name -eq 'New-ProductionRehearsalPackage')
+  $finalizedValidationCalls=@($packageFunction[0].FindAll({param($node)$node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Invoke-FinalizedArtifactValidation'},$true))
+  $expansionCalls=@($packageFunction[0].FindAll({param($node)$node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Expand-WrapperTemplate'},$true))
+  $successWrites=@($packageFunction[0].FindAll({param($node)$node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Write-Output'},$true))
+  Assert-HarnessSelfTest ($finalizedValidationCalls.Count -eq 1 -and $expansionCalls.Count -eq 1 -and $successWrites.Count -gt 0 -and $expansionCalls[0].Extent.StartOffset -lt $finalizedValidationCalls[0].Extent.StartOffset -and $finalizedValidationCalls[0].Extent.StartOffset -lt $successWrites[0].Extent.StartOffset) 'generator does not validate finalized wrapper bytes before reporting package success.'
 
   foreach($astRecord in @(@{Ast=$helperAst;Functions=$helperFunctions;Name='helper'},@{Ast=$generatorAst;Functions=$generatorFunctions;Name='generator'})){
     $directSql=@($astRecord.Ast.FindAll({param($node)$node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -match '^(psql|pg_dump)(\.exe)?$'},$true))
@@ -582,15 +588,23 @@ function Assert-ProductionRehearsalArchitectureAst {
   }
   $invokeRehearsal=@($helperFunctions|Where-Object Name -eq 'Invoke-Rehearsal')
   Assert-HarnessSelfTest ($invokeRehearsal.Count -eq 1 -and $invokeRehearsal[0].Extent.Text -notmatch 'Invoke-NativeChecked' -and $invokeRehearsal[0].Extent.Text -match 'Invoke-RehearsalProcess') 'SQL execution bypasses the approved rehearsal process boundary.'
+  $artifactOnly=@($helperFunctions|Where-Object Name -eq 'Invoke-ArtifactValidationOnly')
+  Assert-HarnessSelfTest ($artifactOnly.Count -eq 1 -and $artifactOnly[0].Extent.Text -match 'Assert-ArtifactIntegrity' -and $artifactOnly[0].Extent.Text -notmatch 'CredentialProvider|ExecutableResolver|ProcessAdapter|SqlExecutionBoundary') 'artifact-only mode does not terminate at the pre-credential shared validator.'
+  Assert-HarnessSelfTest ($invokeRehearsal[0].Extent.Text -match 'Invoke-ArtifactValidationOnly[\s\S]+CredentialProvider') 'production rehearsal does not traverse the shared artifact-only validator before credentials.'
   $artifactFunction=@($helperFunctions|Where-Object Name -eq 'Assert-ArtifactIntegrity')
   $artifactReturns=@($artifactFunction[0].FindAll({param($node)$node -is [Management.Automation.Language.ReturnStatementAst]},$true))
   $bypassVariables=@($helperAst.FindAll({param($node)$node -is [Management.Automation.Language.VariableExpressionAst] -and $node.VariablePath.UserPath -eq 'SkipEmbeddedContract'},$true)) + @($generatorAst.FindAll({param($node)$node -is [Management.Automation.Language.VariableExpressionAst] -and $node.VariablePath.UserPath -eq 'SkipEmbeddedContract'},$true))
   $bypassMembers=@($helperAst.FindAll({param($node)$node -is [Management.Automation.Language.MemberExpressionAst] -and $node.Member.Value -eq 'SkipEmbeddedContract'},$true)) + @($generatorAst.FindAll({param($node)$node -is [Management.Automation.Language.MemberExpressionAst] -and $node.Member.Value -eq 'SkipEmbeddedContract'},$true))
   Assert-HarnessSelfTest ($artifactFunction.Count -eq 1 -and $artifactReturns.Count -eq 0 -and $bypassVariables.Count -eq 0 -and $bypassMembers.Count -eq 0) 'artifact integrity contains a bypass or early return.'
+  $trustedSpecificationFunction=@($helperFunctions|Where-Object Name -eq 'Get-TrustedMigrationSpecification')
+  Assert-HarnessSelfTest ($trustedSpecificationFunction.Count -eq 1) 'trusted migration specification function cardinality is invalid.'
+  Assert-HarnessSelfTest ($generatorSource -match '(?m)^\$MigrationPlan\s*=\s*@\(Get-TrustedMigrationSpecification\)\s*$') 'generator does not consume the canonical trusted migration specification.'
+  Assert-HarnessSelfTest ($artifactFunction[0].Extent.Text -match 'MigrationSpecification' -and $artifactFunction[0].Extent.Text -match 'RV\.ARTIFACT\.CANONICAL_FILENAME') 'artifact integrity does not bind generated filenames to the trusted migration specification.'
 
   $productionGeneratorFunctions=@(
     'Replace-SinglePlaceholder','Get-GitBlobBytes','Remove-TopLevelTransactionEnvelopeBytes',
-    'Test-WrapperTemplateStaticContract','New-WrapperExpansion','Expand-WrapperTemplate','New-ProductionRehearsalPackage'
+    'Test-WrapperTemplateStaticContract','New-WrapperExpansion','Expand-WrapperTemplate',
+    'Invoke-FinalizedArtifactValidation','New-ProductionRehearsalPackage'
   )
   $guardRows=[Collections.Generic.List[object]]::new()
   foreach($astRecord in @(
@@ -1014,7 +1028,7 @@ function Run-HarnessSelfTests {
     $helperTokens = $null
     $helperErrors = $null
     $helperAst = [System.Management.Automation.Language.Parser]::ParseFile($rehearsalHelper, [ref]$helperTokens, [ref]$helperErrors)
-    $expectedRuntimeFunctions = @("Assert-Condition","Sha256","Join-NativeArguments","Get-WrapperBodyHash","Get-DescriptorWrapperBodyHash","Invoke-ProcessStart","Invoke-GitText","Get-EnvironmentSnapshot","Restore-Environment","Clear-PostgresRoutingEnvironment","ConvertTo-BooleanStrict","ConvertTo-IntegerStrict","Get-ControlRequiredKeys","Convert-ControlRow","Assert-ControlAccepted","New-ControlSql","Parse-Manifest","Get-ExecutableRunnerLines","Assert-RunnerContract","Assert-ArtifactIntegrity","Assert-GitState","Parse-TargetDatabaseUrl","Assert-PasswordFreeDatabaseUrl","ConvertTo-SqlLiteral","New-TemporaryPgPassFile","Initialize-DeraLedgerProcessNative","New-WindowsProcessPlatform","Get-NativeIdentityKey","Add-RetainedDescendants","Wait-RetainedIdentities","Invoke-RetainedIdentityCleanup","Invoke-NativeChecked","Assert-RunnerMarkers","Invoke-OfflineValidation","Invoke-Rehearsal","New-RehearsalRuntimeContext","New-ProductionRehearsalRuntimeContext","Get-ProductionArtifactDescriptor","Invoke-RehearsalProcess","Assert-RehearsalProcessResult","Invoke-RehearsalLifecycle","Assert-ControlProofEqual")
+    $expectedRuntimeFunctions = @("Assert-Condition","Sha256","Join-NativeArguments","Get-WrapperBodyHash","Get-DescriptorWrapperBodyHash","Invoke-ProcessStart","Invoke-GitText","Get-EnvironmentSnapshot","Restore-Environment","Clear-PostgresRoutingEnvironment","ConvertTo-BooleanStrict","ConvertTo-IntegerStrict","Get-ControlRequiredKeys","Convert-ControlRow","Assert-ControlAccepted","New-ControlSql","Parse-Manifest","Get-ExecutableRunnerLines","Assert-RunnerContract","Assert-ArtifactIntegrity","Assert-GitState","Parse-TargetDatabaseUrl","Assert-PasswordFreeDatabaseUrl","ConvertTo-SqlLiteral","New-TemporaryPgPassFile","Initialize-DeraLedgerProcessNative","New-WindowsProcessPlatform","Get-NativeIdentityKey","Add-RetainedDescendants","Wait-RetainedIdentities","Invoke-RetainedIdentityCleanup","Invoke-NativeChecked","Assert-RunnerMarkers","Invoke-OfflineValidation","Invoke-Rehearsal","New-RehearsalRuntimeContext","New-ProductionRehearsalRuntimeContext","Get-TrustedMigrationSpecification","Get-ProductionArtifactDescriptor","Invoke-RehearsalProcess","Assert-RehearsalProcessResult","Invoke-RehearsalLifecycle","Assert-ControlProofEqual")
     $helperFunctions = @($helperAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) | ForEach-Object { $_.Name })
     foreach ($functionName in $expectedRuntimeFunctions) { Assert-HarnessSelfTest -Condition (@($helperFunctions | Where-Object { $_ -eq $functionName }).Count -eq 1) -Message "canonical runtime function cardinality invalid: $functionName" }
     $generatorSource = Get-Content -Raw -LiteralPath $rehearsalGenerator
