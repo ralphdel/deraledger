@@ -158,9 +158,12 @@ function Write-Utf8NoBom {
 function Get-WrapperBodyHashForFile {
   param([string]$Path)
   $text = Get-Content -Raw -LiteralPath $Path
-  $text = [regex]::Replace($text, "(?m)^(\`$ExpectedWrapperHash = ')[^']+(')", '$1__WRAPPER_SHA256__$2')
-  $text = [regex]::Replace($text, "(?m)^(\`$ExpectedWrapperBodyHash = ')[^']+(')", '$1__WRAPPER_BODY_SHA256__$2')
-  $text = [regex]::Replace($text, "(?m)^(\`$ExpectedManifestHash = ')[^']+(')", '$1__MANIFEST_SHA256__$2')
+  $wrapperHashSlot = "__" + "FINAL_WRAPPER_SHA256__"
+  $wrapperBodyHashSlot = "__" + "FINAL_WRAPPER_BODY_SHA256__"
+  $manifestHashSlot = "__" + "FINAL_MANIFEST_SHA256__"
+  $text = [regex]::Replace($text, "(?m)^(\s*\`$ExpectedWrapperHash\s*=\s*)[^\r\n]*$", ('$1"' + $wrapperHashSlot + '"'))
+  $text = [regex]::Replace($text, "(?m)^(\s*\`$ExpectedWrapperBodyHash\s*=\s*)[^\r\n]*$", ('$1"' + $wrapperBodyHashSlot + '"'))
+  $text = [regex]::Replace($text, "(?m)^(\s*\`$ExpectedManifestHash\s*=\s*)[^\r\n]*$", ('$1"' + $manifestHashSlot + '"'))
   $bytes = [System.Text.Encoding]::UTF8.GetBytes($text)
   $sha = [System.Security.Cryptography.SHA256]::Create()
   try { return ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace("-", "").ToUpperInvariant() }
@@ -196,11 +199,11 @@ $ExpectedToken = "__CONFIRMATION_TOKEN__"
 $ManifestPath = "__MANIFEST_PATH__"
 $RunnerPath = "__RUNNER_PATH__"
 $TokenFilePath = "__TOKEN_FILE_PATH__"
-$ExpectedManifestHash = "__MANIFEST_SHA256__"
+$ExpectedManifestHash = "__FINAL_MANIFEST_SHA256__"
 $ExpectedRunnerHash = "__RUNNER_SHA256__"
 $ExpectedTokenFileHash = "__TOKEN_FILE_SHA256__"
-$ExpectedWrapperHash = "__WRAPPER_SHA256__"
-$ExpectedWrapperBodyHash = "__WRAPPER_BODY_SHA256__"
+$ExpectedWrapperHash = "__FINAL_WRAPPER_SHA256__"
+$ExpectedWrapperBodyHash = "__FINAL_WRAPPER_BODY_SHA256__"
 $ExpectedCanonicalHelperHash = "__CANONICAL_HELPER_SHA256__"
 $ExpectedEmbeddedHelperHash = "__EMBEDDED_HELPER_SHA256__"
 $ExpectedMigrationOrder = @("__MIGRATION_ORDER__")
@@ -277,10 +280,17 @@ function Test-WrapperTemplateStaticContract {
 }
 
 function New-TestArtifactSet {
-  param([string]$Root)
+  param(
+    [string]$Root,
+    [string]$FullCommit = 'abcdef1234567890abcdef1234567890abcdef12'
+  )
   $canonicalHelperText = (Get-Content -Raw -LiteralPath $SharedValidationPath).Trim("`r", "`n")
   $canonicalHelperHash = Get-BytesSha256Hex ([Text.Encoding]::UTF8.GetBytes($canonicalHelperText))
-  $bundle = Join-Path $Root "deraledger-production-rehearsal-abcdef1-test"
+  $shortCommit = $FullCommit.Substring(0, 7)
+  $namespaceSuffix = if ($shortCommit -eq 'abcdef1') { 'test' } else { 'fixture' }
+  $namespace = "deraledger-production-rehearsal-$shortCommit-$namespaceSuffix"
+  $confirmationToken = "CONFIRM-$shortCommit-0123456789ABCDEF01234567"
+  $bundle = Join-Path $Root $namespace
   New-Item -ItemType Directory -Path $bundle -Force | Out-Null
   $migrationRows = @()
   $hashTableLines = @()
@@ -293,7 +303,7 @@ function New-TestArtifactSet {
     $migrationRows += "$($migration.Number)|$($migration.Path)|$path|stripped=$($migration.Strip)|source_sha256=$hash|generated_sha256=$hash"
     $hashTableLines += "  '$path' = '$hash'"
   }
-  $runner = Join-Path $bundle "abcdef1-production-rollback-only-rehearsal.sql"
+  $runner = Join-Path $bundle "$shortCommit-production-rollback-only-rehearsal.sql"
   $runnerLines = [System.Collections.Generic.List[string]]::new()
   $runnerLines.Add("\set ON_ERROR_STOP on")
   $runnerLines.Add("BEGIN;")
@@ -309,14 +319,14 @@ function New-TestArtifactSet {
   $runnerLines.Add("ROLLBACK;")
   $runnerLines.Add("\echo ROLLBACK COMMAND COMPLETED")
   Set-Content -LiteralPath $runner -Value $runnerLines -Encoding ASCII
-  $tokenFile = Join-Path $bundle "abcdef1-production-rehearsal-confirmation-token.txt"
-  Set-Content -LiteralPath $tokenFile -Value "CONFIRM-abcdef1-test" -Encoding ASCII
-  $manifest = Join-Path $Root "abcdef1-production-rehearsal-bundle-manifest.txt"
-  $wrapper = Join-Path $Root "abcdef1-production-rollback-only-rehearsal.ps1"
+  $tokenFile = Join-Path $bundle "$shortCommit-production-rehearsal-confirmation-token.txt"
+  Set-Content -LiteralPath $tokenFile -Value $confirmationToken -Encoding ASCII
+  $manifest = Join-Path $Root "$shortCommit-production-rehearsal-bundle-manifest.txt"
+  $wrapper = Join-Path $Root "$shortCommit-production-rollback-only-rehearsal.ps1"
   $manifestLines = @(
-    "COMMIT=abcdef1234567890abcdef1234567890abcdef12",
-    "SHORT=abcdef1",
-    "ARTIFACT_IDENTITY=deraledger-production-rehearsal-abcdef1-test",
+    "COMMIT=$FullCommit",
+    "SHORT=$shortCommit",
+    "ARTIFACT_IDENTITY=$namespace",
     "GENERATED_AT_UTC=2026-08-05T00:00:00Z",
     "TIMESTAMP_IS_SOURCE_FRESHNESS_PROOF=false",
     "BUNDLE=$bundle",
@@ -339,66 +349,117 @@ function New-TestArtifactSet {
     "MIGRATIONS="
   ) + $migrationRows
   Set-Content -LiteralPath $manifest -Value $manifestLines -Encoding ASCII
-  [pscustomobject]@{ Bundle = $bundle; Runner = $runner; Manifest = $manifest; Wrapper = $wrapper; TokenFile = $tokenFile; HashLines = ($hashTableLines -join "`n") }
+  [pscustomobject]@{
+    Bundle = $bundle; Runner = $runner; Manifest = $manifest; Wrapper = $wrapper; TokenFile = $tokenFile
+    HashLines = ($hashTableLines -join "`n"); FullCommit = $FullCommit; ShortCommit = $shortCommit
+    Namespace = $namespace; ConfirmationToken = $confirmationToken
+  }
+}
+
+function New-WrapperExpansion {
+  param(
+    [Parameter(Mandatory = $true)][string]$FullCommit,
+    [Parameter(Mandatory = $true)][string]$ShortCommit,
+    [Parameter(Mandatory = $true)][string]$Namespace,
+    [Parameter(Mandatory = $true)][string]$ConfirmationToken,
+    [Parameter(Mandatory = $true)][string]$RepoRootPath,
+    [Parameter(Mandatory = $true)][string]$Branch
+  )
+  Assert-Condition ($FullCommit -match '^[a-f0-9]{40}$') 'wrapper expansion commit is invalid' 'GEN.WRAPPER.EXPANSION_COMMIT' 'WRAPPER_EXPANSION_COMMIT_INVALID'
+  Assert-Condition ($ShortCommit -eq $FullCommit.Substring(0, 7)) 'wrapper expansion short commit is invalid' 'GEN.WRAPPER.EXPANSION_SHORT' 'WRAPPER_EXPANSION_SHORT_COMMIT_INVALID'
+  Assert-Condition ($Namespace -match ('^deraledger-production-rehearsal-' + [regex]::Escape($ShortCommit) + '-[a-z0-9]+$')) 'wrapper expansion namespace is invalid' 'GEN.WRAPPER.EXPANSION_NAMESPACE' 'WRAPPER_EXPANSION_NAMESPACE_INVALID'
+  Assert-Condition ($ConfirmationToken -match ('^CONFIRM-' + [regex]::Escape($ShortCommit) + '-[A-F0-9]{24}$')) 'wrapper expansion confirmation token is invalid' 'GEN.WRAPPER.EXPANSION_TOKEN' 'WRAPPER_EXPANSION_TOKEN_INVALID'
+  [pscustomobject]@{
+    FullCommit = $FullCommit
+    ShortCommit = $ShortCommit
+    Namespace = $Namespace
+    ConfirmationToken = $ConfirmationToken
+    RepoRootPath = $RepoRootPath
+    Branch = $Branch
+  }
+}
+
+function New-TestWrapperExpansion {
+  param($Artifacts)
+  New-WrapperExpansion -FullCommit $Artifacts.FullCommit -ShortCommit $Artifacts.ShortCommit `
+    -Namespace $Artifacts.Namespace -ConfirmationToken $Artifacts.ConfirmationToken `
+    -RepoRootPath $RepoRoot -Branch 'fix/payment-events-legacy-merchant-compatibility'
 }
 
 function Expand-WrapperTemplate {
-  param($Artifacts, [string]$WrapperPath, [scriptblock]$BodyHashProbe = $null)
-  $manifestHash = Get-Sha256Hex $Artifacts.Manifest
+  param($Artifacts, [string]$WrapperPath, $Expansion, [string]$TemplateOverride = '', [scriptblock]$BodyHashProbe = $null)
+  Assert-Condition ($null -ne $Expansion) 'wrapper expansion values are required' 'GEN.WRAPPER.EXPANSION_REQUIRED' 'WRAPPER_EXPANSION_REQUIRED'
   $runnerHash = Get-Sha256Hex $Artifacts.Runner
   $tokenHash = Get-Sha256Hex $Artifacts.TokenFile
   $order = (($MigrationPlan | ForEach-Object { Split-Path -Leaf $_.Path }) -join '","')
-  $text = Get-WrapperTemplate
+  $text = if ([string]::IsNullOrEmpty($TemplateOverride)) { Get-WrapperTemplate } else { $TemplateOverride }
   $sharedHelperText = Get-Content -Raw -LiteralPath $SharedValidationPath
-  $text = Replace-SinglePlaceholder $text "__SHARED_VALIDATION_HELPERS__" $sharedHelperText
   $helperHash = Get-BytesSha256Hex ([Text.Encoding]::UTF8.GetBytes($sharedHelperText.Trim("`r", "`n")))
-  $text = $text.Replace("__CANONICAL_HELPER_SHA256__", $helperHash)
-  $text = $text.Replace("__EMBEDDED_HELPER_SHA256__", $helperHash)
-  $text = $text.Replace("__REPO_ROOT__", $RepoRoot)
-  $text = $text.Replace("__BRANCH__", "fix/payment-events-legacy-merchant-compatibility")
-  $text = $text.Replace("__COMMIT__", "abcdef1234567890abcdef1234567890abcdef12")
-  $text = $text.Replace("__SHORT_COMMIT__", "abcdef1")
-  $text = $text.Replace("__ARTIFACT_IDENTITY__", "deraledger-production-rehearsal-abcdef1-test")
-  $text = $text.Replace("__CONFIRMATION_TOKEN__", "CONFIRM-abcdef1-test")
-  $text = $text.Replace("__MANIFEST_PATH__", $Artifacts.Manifest)
-  $text = $text.Replace("__RUNNER_PATH__", $Artifacts.Runner)
-  $text = $text.Replace("__TOKEN_FILE_PATH__", $Artifacts.TokenFile)
-  $text = $text.Replace("__MANIFEST_SHA256__", $manifestHash)
-  $text = $text.Replace("__RUNNER_SHA256__", $runnerHash)
-  $text = $text.Replace("__TOKEN_FILE_SHA256__", $tokenHash)
-  $text = $text.Replace("__MIGRATION_ORDER__", $order)
-  $text = $text.Replace("__MIGRATION_HASH_TABLE__", $Artifacts.HashLines)
+  $staticReplacements = [ordered]@{
+    '__SHARED_VALIDATION_HELPERS__' = $sharedHelperText
+    '__CANONICAL_HELPER_SHA256__' = $helperHash
+    '__EMBEDDED_HELPER_SHA256__' = $helperHash
+    '__REPO_ROOT__' = $Expansion.RepoRootPath
+    '__BRANCH__' = $Expansion.Branch
+    '__COMMIT__' = $Expansion.FullCommit
+    '__SHORT_COMMIT__' = $Expansion.ShortCommit
+    '__ARTIFACT_IDENTITY__' = $Expansion.Namespace
+    '__CONFIRMATION_TOKEN__' = $Expansion.ConfirmationToken
+    '__MANIFEST_PATH__' = $Artifacts.Manifest
+    '__RUNNER_PATH__' = $Artifacts.Runner
+    '__TOKEN_FILE_PATH__' = $Artifacts.TokenFile
+    '__RUNNER_SHA256__' = $runnerHash
+    '__TOKEN_FILE_SHA256__' = $tokenHash
+    '__MIGRATION_ORDER__' = $order
+    '__MIGRATION_HASH_TABLE__' = $Artifacts.HashLines
+  }
+  foreach ($replacement in $staticReplacements.GetEnumerator()) {
+    $text = Replace-SinglePlaceholder $text $replacement.Key $replacement.Value
+  }
   Write-Utf8NoBom $WrapperPath $text
   $bodyHash = Get-WrapperBodyHashForFile $WrapperPath
   $manifestText = Get-Content -Raw -LiteralPath $Artifacts.Manifest
-  $manifestText = $manifestText.Replace("__WRAPPER_SHA256_PENDING__",$bodyHash).Replace("__WRAPPER_BODY_SHA256_PENDING__",$bodyHash)
+  $manifestText = Replace-SinglePlaceholder $manifestText '__WRAPPER_SHA256_PENDING__' $bodyHash
+  $manifestText = Replace-SinglePlaceholder $manifestText '__WRAPPER_BODY_SHA256_PENDING__' $bodyHash
   Set-Content -LiteralPath $Artifacts.Manifest -Value $manifestText -Encoding ASCII
   $finalManifestHash = Get-Sha256Hex $Artifacts.Manifest
-  $current = Get-Content -Raw -LiteralPath $WrapperPath
-  $current = [regex]::Replace($current, "(?m)^\`$ExpectedManifestHash = '[^']+'", "`$ExpectedManifestHash = '$finalManifestHash'")
-  $current = [regex]::Replace($current, "(?m)^\`$ExpectedWrapperHash = '[^']+'", "`$ExpectedWrapperHash = '$bodyHash'")
-  $current = [regex]::Replace($current, "(?m)^\`$ExpectedWrapperBodyHash = '[^']+'", "`$ExpectedWrapperBodyHash = '$bodyHash'")
-  Write-Utf8NoBom $WrapperPath $current
+  $text = Replace-SinglePlaceholder $text '__FINAL_MANIFEST_SHA256__' $finalManifestHash
+  $text = Replace-SinglePlaceholder $text '__FINAL_WRAPPER_SHA256__' $bodyHash
+  $text = Replace-SinglePlaceholder $text '__FINAL_WRAPPER_BODY_SHA256__' $bodyHash
+  Assert-Condition ($text -notmatch '__[A-Z0-9_]+__') 'wrapper contains an unresolved placeholder' 'GEN.WRAPPER.UNRESOLVED_PLACEHOLDER' 'WRAPPER_PLACEHOLDER_UNRESOLVED'
+  Write-Utf8NoBom $WrapperPath $text
   $stabilizedBodyHash = if ($null -eq $BodyHashProbe) { Get-WrapperBodyHashForFile $WrapperPath } else { & $BodyHashProbe $WrapperPath }
   Assert-Condition ($stabilizedBodyHash -eq $bodyHash) "wrapper body hash did not stabilize" 'GEN.WRAPPER.BODY_HASH_STABLE' 'WRAPPER_BODY_HASH_UNSTABLE'
 }
 
+function Get-TestWrapperExpectedValue {
+  param([string]$WrapperText, [string]$VariableName)
+  $match = [regex]::Match($WrapperText, ('(?m)^\$' + [regex]::Escape($VariableName) + '\s*=\s*["'']([^"'']*)["'']\s*$'))
+  Assert-True $match.Success "wrapper expected value is missing: $VariableName"
+  return $match.Groups[1].Value
+}
+
 function New-TestArtifactDescriptor {
-  param($Artifacts, [string]$WrapperPath)
+  param($Artifacts, [string]$WrapperPath, $Expansion)
   $canonicalHelper = (Get-Content -Raw -LiteralPath $SharedValidationPath).Trim("`r","`n")
   $helperHash = Get-BytesSha256Hex ([Text.Encoding]::UTF8.GetBytes($canonicalHelper))
+  $wrapperText = Get-Content -Raw -LiteralPath $WrapperPath
   $manifest = Parse-Manifest $Artifacts.Manifest
   $migrationPaths = @($manifest.Migrations | ForEach-Object { ($_ -split '\|')[2] })
   $migrationHashes = @{}
   foreach ($path in $migrationPaths) { $migrationHashes[$path] = Get-Sha256Hex $path }
   [pscustomobject]@{
-    FullCommit='abcdef1234567890abcdef1234567890abcdef12'; ShortCommit='abcdef1'
-    Namespace='deraledger-production-rehearsal-abcdef1-test'; Bundle=$Artifacts.Bundle
+    FullCommit=(Get-TestWrapperExpectedValue $wrapperText 'ExpectedCommit')
+    ShortCommit=(Get-TestWrapperExpectedValue $wrapperText 'ShortCommit')
+    Namespace=(Get-TestWrapperExpectedValue $wrapperText 'ArtifactIdentity'); Bundle=$Artifacts.Bundle
     WrapperPath=$WrapperPath; ManifestPath=$Artifacts.Manifest; RunnerPath=$Artifacts.Runner; TokenPath=$Artifacts.TokenFile
-    MigrationPaths=$migrationPaths; RunnerHash=Get-Sha256Hex $Artifacts.Runner; ManifestHash=Get-Sha256Hex $Artifacts.Manifest
-    TokenHash=Get-Sha256Hex $Artifacts.TokenFile; MigrationHashes=$migrationHashes
-    CanonicalHelperHash=$helperHash; EmbeddedHelperHash=$helperHash
-    WrapperHash=$manifest.Fields['WRAPPER_SHA256']; WrapperBodyHash=$manifest.Fields['WRAPPER_BODY_SHA256']
+    MigrationPaths=$migrationPaths; RunnerHash=(Get-TestWrapperExpectedValue $wrapperText 'ExpectedRunnerHash')
+    ManifestHash=(Get-TestWrapperExpectedValue $wrapperText 'ExpectedManifestHash')
+    TokenHash=(Get-TestWrapperExpectedValue $wrapperText 'ExpectedTokenFileHash'); MigrationHashes=$migrationHashes
+    CanonicalHelperHash=(Get-TestWrapperExpectedValue $wrapperText 'ExpectedCanonicalHelperHash')
+    EmbeddedHelperHash=(Get-TestWrapperExpectedValue $wrapperText 'ExpectedEmbeddedHelperHash')
+    WrapperHash=(Get-TestWrapperExpectedValue $wrapperText 'ExpectedWrapperHash')
+    WrapperBodyHash=(Get-TestWrapperExpectedValue $wrapperText 'ExpectedWrapperBodyHash')
     ExpectedMigrationOrder=@($MigrationPlan | ForEach-Object { Split-Path -Leaf $_.Path })
     HelperStartMarker='# BEGIN EMBEDDED CANONICAL REHEARSAL HELPER'; HelperEndMarker='# END EMBEDDED CANONICAL REHEARSAL HELPER'
     StaleNamespaces=@('2d0cfee4','beecef35','752c41b')
@@ -463,8 +524,9 @@ function New-ArchitectureTestContext {
 function New-OfflineValidationFixture {
   param([string]$Root)
   $artifacts=New-TestArtifactSet $Root
-  Expand-WrapperTemplate -Artifacts $artifacts -WrapperPath $artifacts.Wrapper
-  $descriptor=New-TestArtifactDescriptor $artifacts $artifacts.Wrapper
+  $expansion=New-TestWrapperExpansion $artifacts
+  Expand-WrapperTemplate -Artifacts $artifacts -WrapperPath $artifacts.Wrapper -Expansion $expansion
+  $descriptor=New-TestArtifactDescriptor $artifacts $artifacts.Wrapper $expansion
   $counts=New-ArchitectureBoundaryCounts
   $gitState=[pscustomobject]@{Branch='fix/payment-events-legacy-merchant-compatibility';Head=$descriptor.FullCommit;Staged=@();Modified=@()}
   $processResult=[pscustomobject]@{ExitCode=0;TimedOut=$false;Stdout='offline';Stderr='';DurationMs=0;ProcessTreeTerminated=$false;Disposed=$true}
@@ -825,9 +887,26 @@ function Invoke-GeneratorGuardCases {
   Add-ObservedGuard $Evidence $Inventory 'GEN.WRAPPER.STALE_NAMESPACE' 'Test-WrapperTemplateStaticContract' {Test-WrapperTemplateStaticContract -TemplateOverride ($template+"`n# 2d0cfee4-production-rehearsal")}
   Add-ObservedGuard $Evidence $Inventory 'GEN.WRAPPER.INTEGRITY_BYPASS' 'Test-WrapperTemplateStaticContract' {Test-WrapperTemplateStaticContract -TemplateOverride ($template+"`n# SkipEmbeddedContract")}
 
+  $validCommit = 'abcdef1234567890abcdef1234567890abcdef12'
+  $validToken = 'CONFIRM-abcdef1-0123456789ABCDEF01234567'
+  Add-ObservedGuard $Evidence $Inventory 'GEN.WRAPPER.EXPANSION_COMMIT' 'New-WrapperExpansion' {New-WrapperExpansion -FullCommit 'bad' -ShortCommit 'abcdef1' -Namespace 'deraledger-production-rehearsal-abcdef1-test' -ConfirmationToken $validToken -RepoRootPath $RepoRoot -Branch 'fix/payment-events-legacy-merchant-compatibility'|Out-Null}
+  Add-ObservedGuard $Evidence $Inventory 'GEN.WRAPPER.EXPANSION_SHORT' 'New-WrapperExpansion' {New-WrapperExpansion -FullCommit $validCommit -ShortCommit 'bad' -Namespace 'deraledger-production-rehearsal-bad-test' -ConfirmationToken $validToken -RepoRootPath $RepoRoot -Branch 'fix/payment-events-legacy-merchant-compatibility'|Out-Null}
+  Add-ObservedGuard $Evidence $Inventory 'GEN.WRAPPER.EXPANSION_NAMESPACE' 'New-WrapperExpansion' {New-WrapperExpansion -FullCommit $validCommit -ShortCommit 'abcdef1' -Namespace 'wrong-namespace' -ConfirmationToken $validToken -RepoRootPath $RepoRoot -Branch 'fix/payment-events-legacy-merchant-compatibility'|Out-Null}
+  Add-ObservedGuard $Evidence $Inventory 'GEN.WRAPPER.EXPANSION_TOKEN' 'New-WrapperExpansion' {New-WrapperExpansion -FullCommit $validCommit -ShortCommit 'abcdef1' -Namespace 'deraledger-production-rehearsal-abcdef1-test' -ConfirmationToken 'CONFIRM-abcdef1-test' -RepoRootPath $RepoRoot -Branch 'fix/payment-events-legacy-merchant-compatibility'|Out-Null}
+
+  $placeholderRoot=Join-Path $Root 'placeholder-wrapper';New-Item -ItemType Directory -Path $placeholderRoot|Out-Null
+  $placeholderArtifacts=New-TestArtifactSet $placeholderRoot
+  $placeholderExpansion=New-TestWrapperExpansion $placeholderArtifacts
+  Add-ObservedGuard $Evidence $Inventory 'GEN.WRAPPER.EXPANSION_REQUIRED' 'Expand-WrapperTemplate' {try{Expand-WrapperTemplate -Artifacts $placeholderArtifacts -WrapperPath $placeholderArtifacts.Wrapper -Expansion $null}finally{Remove-Item -LiteralPath $placeholderRoot -Recurse -Force -ErrorAction SilentlyContinue}}
+  $placeholderRoot=Join-Path $Root 'unresolved-wrapper';New-Item -ItemType Directory -Path $placeholderRoot|Out-Null
+  $placeholderArtifacts=New-TestArtifactSet $placeholderRoot
+  $placeholderExpansion=New-TestWrapperExpansion $placeholderArtifacts
+  Add-ObservedGuard $Evidence $Inventory 'GEN.WRAPPER.UNRESOLVED_PLACEHOLDER' 'Expand-WrapperTemplate' {try{Expand-WrapperTemplate -Artifacts $placeholderArtifacts -WrapperPath $placeholderArtifacts.Wrapper -Expansion $placeholderExpansion -TemplateOverride ($template+"`n# __UNRESOLVED_FIXTURE__")}finally{Remove-Item -LiteralPath $placeholderRoot -Recurse -Force -ErrorAction SilentlyContinue}}
+
   $unstableRoot=Join-Path $Root 'unstable-wrapper';New-Item -ItemType Directory -Path $unstableRoot|Out-Null
   $artifacts=New-TestArtifactSet $unstableRoot
-  Add-ObservedGuard $Evidence $Inventory 'GEN.WRAPPER.BODY_HASH_STABLE' 'Expand-WrapperTemplate' {try{Expand-WrapperTemplate $artifacts $artifacts.Wrapper {param($path)'0'*64}}finally{Remove-Item -LiteralPath $unstableRoot -Recurse -Force -ErrorAction SilentlyContinue}}
+  $expansion=New-TestWrapperExpansion $artifacts
+  Add-ObservedGuard $Evidence $Inventory 'GEN.WRAPPER.BODY_HASH_STABLE' 'Expand-WrapperTemplate' {try{Expand-WrapperTemplate -Artifacts $artifacts -WrapperPath $artifacts.Wrapper -Expansion $expansion -BodyHashProbe {param($path)'0'*64}}finally{Remove-Item -LiteralPath $unstableRoot -Recurse -Force -ErrorAction SilentlyContinue}}
 
   $originalCommit=$script:Commit;$originalOutputRoot=$script:OutputRoot
   try{
@@ -839,6 +918,77 @@ function Invoke-GeneratorGuardCases {
     $script:OutputRoot=$Root;$existing=Join-Path $Root 'existing-bundle';New-Item -ItemType Directory -Path $existing -Force|Out-Null
     Add-ObservedGuard $Evidence $Inventory 'GEN.PACKAGE.BUNDLE_EXISTS' 'New-ProductionRehearsalPackage' {New-ProductionRehearsalPackage {param($value)[pscustomobject]@{Commit=('a'*40);ExitCode=0}} {param($short)'existing-bundle'}}
   }finally{$script:Commit=$originalCommit;$script:OutputRoot=$originalOutputRoot}
+}
+
+function Invoke-ProductionExpansionFinalizationRegressions {
+  param([string]$Root)
+  $caseCount = 0
+  $fullCommit = 'b52694183b722144349f26d1dc3dc2e57532715e'
+  $fixtureRoot = Join-Path $Root 'production-expansion-finalization'
+  New-Item -ItemType Directory -Path $fixtureRoot -Force | Out-Null
+  try {
+    $artifacts = New-TestArtifactSet -Root $fixtureRoot -FullCommit $fullCommit
+    $expansion = New-TestWrapperExpansion $artifacts
+    Expand-WrapperTemplate -Artifacts $artifacts -WrapperPath $artifacts.Wrapper -Expansion $expansion
+    $wrapperText = Get-Content -Raw -LiteralPath $artifacts.Wrapper
+    $expectedValues = @($expansion.FullCommit, $expansion.ShortCommit, $expansion.Namespace, $expansion.ConfirmationToken)
+    Assert-True (@($expectedValues | Where-Object { -not $wrapperText.Contains($_) }).Count -eq 0) 'production expansion omitted an explicit identity value'
+    Assert-True (-not $wrapperText.Contains('abcdef1234567890abcdef1234567890abcdef12') -and -not $wrapperText.Contains('CONFIRM-abcdef1-test') -and $wrapperText -notmatch '__[A-Z0-9_]+__') 'production expansion leaked fixture values or placeholders'
+    $counts = New-ArchitectureBoundaryCounts
+    $gitState = [pscustomobject]@{ Branch = 'fix/payment-events-legacy-merchant-compatibility'; Head = $fullCommit; Staged = @(); Modified = @() }
+    $process = [pscustomobject]@{ ExitCode = 0; TimedOut = $false; Stdout = ''; Stderr = ''; DurationMs = 0; ProcessTreeTerminated = $false; Disposed = $true }
+    Assert-ArtifactIntegrity (New-ArchitectureTestContext (New-TestArtifactDescriptor $artifacts $artifacts.Wrapper $expansion) $counts $gitState $process)
+    $caseCount++
+
+    $quoteRoot = Join-Path $Root 'quote-agnostic-finalization'
+    New-Item -ItemType Directory -Path $quoteRoot -Force | Out-Null
+    try {
+      $quoteArtifacts = New-TestArtifactSet -Root $quoteRoot -FullCommit $fullCommit
+      $quoteExpansion = New-TestWrapperExpansion $quoteArtifacts
+      $quoteTemplate = Get-WrapperTemplate
+      foreach ($slot in @('FINAL_MANIFEST','FINAL_WRAPPER','FINAL_WRAPPER_BODY')) {
+        $doubleQuotedPlaceholder = '"' + '__' + $slot + '_SHA256__' + '"'
+        $singleQuotedPlaceholder = "'" + '__' + $slot + '_SHA256__' + "'"
+        $quoteTemplate = $quoteTemplate.Replace($doubleQuotedPlaceholder, $singleQuotedPlaceholder)
+      }
+      Expand-WrapperTemplate -Artifacts $quoteArtifacts -WrapperPath $quoteArtifacts.Wrapper -Expansion $quoteExpansion -TemplateOverride $quoteTemplate
+      $quoteCounts = New-ArchitectureBoundaryCounts
+      Assert-ArtifactIntegrity (New-ArchitectureTestContext (New-TestArtifactDescriptor $quoteArtifacts $quoteArtifacts.Wrapper $quoteExpansion) $quoteCounts $gitState $process)
+      $caseCount++
+    } finally {
+      Remove-Item -LiteralPath $quoteRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    $wrongManifestText = Get-Content -Raw -LiteralPath $artifacts.Wrapper
+    $wrongManifestText = [regex]::Replace($wrongManifestText, '(?m)^(\$ExpectedManifestHash\s*=\s*)["''][^"'']*["'']$', ('$1"' + ('A' * 64) + '"'))
+    Write-Utf8NoBom $artifacts.Wrapper $wrongManifestText
+    $wrongManifestRejected = $false
+    try {
+      Assert-ArtifactIntegrity (New-ArchitectureTestContext (New-TestArtifactDescriptor $artifacts $artifacts.Wrapper $expansion) (New-ArchitectureBoundaryCounts) $gitState $process)
+    } catch {
+      $wrongManifestRejected = ([string]$_.Exception.Data['GuardId'] -eq 'RV.ARTIFACT.MANIFEST_HASH')
+    }
+    Assert-True $wrongManifestRejected 'wrong finalized manifest hash was not rejected'
+    $caseCount++
+
+    $missingRejected = $false
+    try {
+      Expand-WrapperTemplate -Artifacts $artifacts -WrapperPath $artifacts.Wrapper -Expansion $expansion -TemplateOverride ((Get-WrapperTemplate).Replace('__COMMIT__', 'missing'))
+    } catch {
+      $missingRejected = ([string]$_.Exception.Data['GuardId'] -eq 'GEN.PLACEHOLDER.COUNT')
+    }
+    $duplicateRejected = $false
+    try {
+      Expand-WrapperTemplate -Artifacts $artifacts -WrapperPath $artifacts.Wrapper -Expansion $expansion -TemplateOverride ((Get-WrapperTemplate).Replace('__COMMIT__', '__COMMIT____COMMIT__'))
+    } catch {
+      $duplicateRejected = ([string]$_.Exception.Data['GuardId'] -eq 'GEN.PLACEHOLDER.COUNT')
+    }
+    Assert-True ($missingRejected -and $duplicateRejected) 'missing or duplicate finalization placeholder was not rejected'
+    $caseCount++
+  } finally {
+    Remove-Item -LiteralPath $fixtureRoot -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  return $caseCount
 }
 
 function Invoke-ChildGuard {
@@ -936,7 +1086,7 @@ function Run-AuthenticArchitectureProofCases {
   Assert-True (-not ([IO.Path]::GetFullPath($TemporaryRoot)).StartsWith(([IO.Path]::GetFullPath($RepoRoot).TrimEnd('\')+'\'),[StringComparison]::OrdinalIgnoreCase)) 'architecture temporary files must remain outside the repository'
   $script:PgEnvNames=@("PGSSLMODE","PGGSSENCMODE","PGPASSFILE","PGPASSWORD","PGHOST","PGPORT","PGUSER","PGDATABASE","PGCONNECT_TIMEOUT","PGAPPNAME","PGSERVICE","PGSERVICEFILE")
   $evidence = [Collections.Generic.List[object]]::new()
-  $descriptor=New-TestArtifactDescriptor $Artifacts $WrapperPath
+  $descriptor=New-TestArtifactDescriptor $Artifacts $WrapperPath (New-TestWrapperExpansion $Artifacts)
   $validGit=[pscustomobject]@{Branch='fix/payment-events-legacy-merchant-compatibility';Head=$descriptor.FullCommit;Staged=@();Modified=@()}
   $successProcess=[pscustomobject]@{ExitCode=0;TimedOut=$false;Stdout='ok';Stderr='';DurationMs=1;ProcessTreeTerminated=$false}
 
@@ -1155,6 +1305,8 @@ function Run-OfflineMutationTests {
     $fixture = New-OfflineValidationFixture $tmp
     $artifacts = $fixture.Artifacts
     $wrapper = $fixture.Wrapper
+    $finalizationCaseCount = Invoke-ProductionExpansionFinalizationRegressions $tmp
+    Write-Output ("Production expansion finalization cases: " + $finalizationCaseCount)
     $wrapperText = Get-Content -Raw -LiteralPath $wrapper
     $helperStartMarker = "# BEGIN EMBEDDED CANONICAL REHEARSAL HELPER"
     $helperEndMarker = "# END EMBEDDED CANONICAL REHEARSAL HELPER"
@@ -1210,8 +1362,8 @@ function Run-OfflineMutationTests {
 
     Invoke-FunctionParityClassification -ExecutedProofIds $executedProofIds
 
-    $declaredCount=@($inventory).Count + @($script:LastArchitectureEvidence).Count + @($embeddingExecuted.Keys).Count
-    $executedCount=@($guardEvidence).Count + @($script:LastArchitectureEvidence).Count + @($embeddingExecuted.Keys).Count
+    $declaredCount=@($inventory).Count + @($script:LastArchitectureEvidence).Count + @($embeddingExecuted.Keys).Count + $finalizationCaseCount
+    $executedCount=@($guardEvidence).Count + @($script:LastArchitectureEvidence).Count + @($embeddingExecuted.Keys).Count + $finalizationCaseCount
     Write-Output ("Mutation cases declared: " + $declaredCount)
     Write-Output ("Mutation cases executed: " + $executedCount)
     Assert-True ($executedCount -eq $declaredCount) "declared and executed mutation counts differ"
@@ -1306,7 +1458,9 @@ function New-ProductionRehearsalPackage {
   Set-Content -LiteralPath $manifest -Value $manifestLines -Encoding ASCII
 
   $artifacts = [pscustomobject]@{ Bundle = $bundle; Runner = $runner; Manifest = $manifest; TokenFile = $tokenFile; HashLines = ($hashTableLines -join "`n") }
-  Expand-WrapperTemplate -Artifacts $artifacts -WrapperPath $wrapper
+  $expansion = New-WrapperExpansion -FullCommit $fullCommit -ShortCommit $short -Namespace $identity `
+    -ConfirmationToken $token -RepoRootPath $RepoRoot -Branch 'fix/payment-events-legacy-merchant-compatibility'
+  Expand-WrapperTemplate -Artifacts $artifacts -WrapperPath $wrapper -Expansion $expansion
   Write-Output "BUNDLE=$bundle"
   Write-Output "RUNNER=$runner"
   Write-Output "MANIFEST=$manifest"

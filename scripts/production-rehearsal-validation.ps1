@@ -129,9 +129,12 @@ function Join-NativeArguments([string[]]$Arguments) {
 
 function Get-WrapperBodyHash {
   $text = Get-Content -Raw -LiteralPath $PSCommandPath
-  $normalized = $text -replace [regex]::Escape($ExpectedWrapperHash), "__WRAPPER_SHA256__"
-  $normalized = $normalized -replace [regex]::Escape($ExpectedWrapperBodyHash), "__WRAPPER_BODY_SHA256__"
-  $normalized = $normalized -replace [regex]::Escape($ExpectedManifestHash), ("__" + "MANIFEST_SHA256__")
+  $wrapperHashSlot = "__" + "FINAL_WRAPPER_SHA256__"
+  $wrapperBodyHashSlot = "__" + "FINAL_WRAPPER_BODY_SHA256__"
+  $manifestHashSlot = "__" + "FINAL_MANIFEST_SHA256__"
+  $normalized = [regex]::Replace($text, "(?m)^(\s*\`$ExpectedWrapperHash\s*=\s*)[^\r\n]*$", ('$1"' + $wrapperHashSlot + '"'))
+  $normalized = [regex]::Replace($normalized, "(?m)^(\s*\`$ExpectedWrapperBodyHash\s*=\s*)[^\r\n]*$", ('$1"' + $wrapperBodyHashSlot + '"'))
+  $normalized = [regex]::Replace($normalized, "(?m)^(\s*\`$ExpectedManifestHash\s*=\s*)[^\r\n]*$", ('$1"' + $manifestHashSlot + '"'))
   $bytes = [System.Text.Encoding]::UTF8.GetBytes($normalized)
   $sha = [System.Security.Cryptography.SHA256]::Create()
   try { return ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace("-", "").ToUpperInvariant() }
@@ -357,9 +360,12 @@ function Parse-Manifest {
 
 function Get-DescriptorWrapperBodyHash {
   param([string]$WrapperText)
-  $normalized = [regex]::Replace($WrapperText, "(?m)^(\`$ExpectedWrapperHash = ')[^']+(')", '$1__WRAPPER_SHA256__$2')
-  $normalized = [regex]::Replace($normalized, "(?m)^(\`$ExpectedWrapperBodyHash = ')[^']+(')", '$1__WRAPPER_BODY_SHA256__$2')
-  $normalized = [regex]::Replace($normalized, "(?m)^(\`$ExpectedManifestHash = ')[^']+(')", ('$1' + '__' + 'MANIFEST_SHA256__' + '$2'))
+  $wrapperHashSlot = "__" + "FINAL_WRAPPER_SHA256__"
+  $wrapperBodyHashSlot = "__" + "FINAL_WRAPPER_BODY_SHA256__"
+  $manifestHashSlot = "__" + "FINAL_MANIFEST_SHA256__"
+  $normalized = [regex]::Replace($WrapperText, "(?m)^(\s*\`$ExpectedWrapperHash\s*=\s*)[^\r\n]*$", ('$1"' + $wrapperHashSlot + '"'))
+  $normalized = [regex]::Replace($normalized, "(?m)^(\s*\`$ExpectedWrapperBodyHash\s*=\s*)[^\r\n]*$", ('$1"' + $wrapperBodyHashSlot + '"'))
+  $normalized = [regex]::Replace($normalized, "(?m)^(\s*\`$ExpectedManifestHash\s*=\s*)[^\r\n]*$", ('$1"' + $manifestHashSlot + '"'))
   $sha = [Security.Cryptography.SHA256]::Create()
   try { return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($normalized)))).Replace("-","").ToUpperInvariant() }
   finally { $sha.Dispose() }

@@ -578,7 +578,7 @@ function Assert-ProductionRehearsalArchitectureAst {
 
   $productionGeneratorFunctions=@(
     'Replace-SinglePlaceholder','Get-GitBlobBytes','Remove-TopLevelTransactionEnvelopeBytes',
-    'Test-WrapperTemplateStaticContract','Expand-WrapperTemplate','New-ProductionRehearsalPackage'
+    'Test-WrapperTemplateStaticContract','New-WrapperExpansion','Expand-WrapperTemplate','New-ProductionRehearsalPackage'
   )
   $guardRows=[Collections.Generic.List[object]]::new()
   foreach($astRecord in @(
