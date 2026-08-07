@@ -155,11 +155,17 @@ function Invoke-GitText([string[]]$Arguments) {
   $psi.Arguments = Join-NativeArguments $Arguments
   $process = Invoke-ProcessStart $psi
   try {
-    $stdout = $process.StandardOutput.ReadToEnd().Trim()
+    $stdout = $process.StandardOutput.ReadToEnd()
     $stderr = $process.StandardError.ReadToEnd().Trim()
     $process.WaitForExit()
     Assert-Condition ($process.ExitCode -eq 0) "git failed: $stderr" 'RV.GIT.COMMAND_EXIT' 'GIT_COMMAND_FAILED'
-    return $stdout
+
+    # Preserve native zero/one/many output as a zero/one/many line collection.
+    $lines = @(
+      [regex]::Split($stdout, "\r\n|\n|\r") |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+    return @($lines)
   } finally {
     $process.Dispose()
   }

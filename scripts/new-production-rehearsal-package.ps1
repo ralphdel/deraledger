@@ -1081,6 +1081,129 @@ function Invoke-RehearsalGuardCases {
   }
 }
 
+function Invoke-WithinAuthenticGitFixture {
+  param([string]$FixtureRoot, [scriptblock]$Body)
+  $originalRepoRoot = $script:RepoRoot
+  try {
+    $script:RepoRoot = $FixtureRoot
+    return @(& $Body)
+  } finally {
+    $script:RepoRoot = $originalRepoRoot
+  }
+}
+
+function New-AuthenticGitFixture {
+  param([string]$Root, [string]$Name)
+  $fixtureRoot = Join-Path $Root $Name
+  New-Item -ItemType Directory -Path $fixtureRoot -Force | Out-Null
+  Invoke-WithinAuthenticGitFixture $fixtureRoot {
+    Invoke-GitText @('init', '-q') | Out-Null
+    Invoke-GitText @('config', 'user.email', 'rehearsal-fixture@example.invalid') | Out-Null
+    Invoke-GitText @('config', 'user.name', 'Rehearsal Fixture') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $script:RepoRoot 'tracked.txt'), 'baseline', [Text.UTF8Encoding]::new($false))
+    Invoke-GitText @('add', '--', 'tracked.txt') | Out-Null
+    Invoke-GitText @('commit', '-q', '-m', 'fixture baseline') | Out-Null
+  } | Out-Null
+  return $fixtureRoot
+}
+
+function Invoke-AuthenticGitStateCase {
+  param(
+    [string]$FixtureRoot,
+    [string[]]$ExpectedStaged = @(),
+    [string[]]$ExpectedModified = @()
+  )
+  $originalRepoRoot = $script:RepoRoot
+  $originalBranch = Get-Variable -Scope Script -Name ExpectedBranch -ErrorAction SilentlyContinue
+  $originalCommit = Get-Variable -Scope Script -Name ExpectedCommit -ErrorAction SilentlyContinue
+  try {
+    $script:RepoRoot = $FixtureRoot
+    $context = New-ProductionRehearsalRuntimeContext
+    $state = & $context.GitStateProvider
+    $staged = @($state.Staged)
+    $modified = @($state.Modified)
+    Assert-True ($staged.Count -eq @($ExpectedStaged).Count) 'git staged output count mismatch'
+    Assert-True (($staged -join "`n") -ceq (@($ExpectedStaged) -join "`n")) 'git staged output lines mismatch'
+    Assert-True ($modified.Count -eq @($ExpectedModified).Count) 'git modified output count mismatch'
+    Assert-True (($modified -join "`n") -ceq (@($ExpectedModified) -join "`n")) 'git modified output lines mismatch'
+    $script:ExpectedBranch = $state.Branch
+    $script:ExpectedCommit = $state.Head
+    Assert-GitState $context
+  } finally {
+    $script:RepoRoot = $originalRepoRoot
+    if ($null -eq $originalBranch) { Remove-Variable -Scope Script -Name ExpectedBranch -ErrorAction SilentlyContinue }
+    else { $script:ExpectedBranch = $originalBranch.Value }
+    if ($null -eq $originalCommit) { Remove-Variable -Scope Script -Name ExpectedCommit -ErrorAction SilentlyContinue }
+    else { $script:ExpectedCommit = $originalCommit.Value }
+  }
+}
+
+function Add-AuthenticGitOutputNormalizationCases {
+  param($Evidence, [string]$Root)
+  $fixtureRoot = Join-Path $Root 'git-output-normalization'
+  New-Item -ItemType Directory -Path $fixtureRoot -Force | Out-Null
+  try {
+    $clean = New-AuthenticGitFixture $fixtureRoot 'clean'
+    $counts = New-ArchitectureBoundaryCounts
+    Add-ArchitectureCaseEvidence $Evidence 'ARCH-GIT-OUTPUT-CLEAN-STAGED' 'git-output' 'Invoke-GitText/Assert-GitState' 'pass' '' $counts {
+      Invoke-AuthenticGitStateCase $clean @() @()
+    } 'temporary Git fixture cleaned'
+    $counts = New-ArchitectureBoundaryCounts
+    Add-ArchitectureCaseEvidence $Evidence 'ARCH-GIT-OUTPUT-CLEAN-MODIFIED' 'git-output' 'Invoke-GitText/Assert-GitState' 'pass' '' $counts {
+      Invoke-AuthenticGitStateCase $clean @() @()
+    } 'temporary Git fixture cleaned'
+
+    $oneStaged = New-AuthenticGitFixture $fixtureRoot 'one-staged'
+    [IO.File]::WriteAllText((Join-Path $oneStaged 'one.txt'), 'one', [Text.UTF8Encoding]::new($false))
+    Invoke-WithinAuthenticGitFixture $oneStaged { Invoke-GitText @('add', '--', 'one.txt') | Out-Null } | Out-Null
+    $counts = New-ArchitectureBoundaryCounts
+    Add-ArchitectureCaseEvidence $Evidence 'ARCH-GIT-OUTPUT-ONE-STAGED' 'git-output' 'Invoke-GitText/Assert-GitState' 'fail' 'staged files present' $counts {
+      Invoke-AuthenticGitStateCase $oneStaged @('one.txt') @()
+    } 'temporary Git fixture cleaned'
+
+    $manyStaged = New-AuthenticGitFixture $fixtureRoot 'many-staged'
+    [IO.File]::WriteAllText((Join-Path $manyStaged 'one.txt'), 'one', [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $manyStaged 'two.txt'), 'two', [Text.UTF8Encoding]::new($false))
+    Invoke-WithinAuthenticGitFixture $manyStaged { Invoke-GitText @('add', '--', 'one.txt', 'two.txt') | Out-Null } | Out-Null
+    $counts = New-ArchitectureBoundaryCounts
+    Add-ArchitectureCaseEvidence $Evidence 'ARCH-GIT-OUTPUT-MANY-STAGED' 'git-output' 'Invoke-GitText/Assert-GitState' 'fail' 'staged files present' $counts {
+      Invoke-AuthenticGitStateCase $manyStaged @('one.txt', 'two.txt') @()
+    } 'temporary Git fixture cleaned'
+
+    $oneModified = New-AuthenticGitFixture $fixtureRoot 'one-modified'
+    [IO.File]::WriteAllText((Join-Path $oneModified 'tracked.txt'), 'changed', [Text.UTF8Encoding]::new($false))
+    $counts = New-ArchitectureBoundaryCounts
+    Add-ArchitectureCaseEvidence $Evidence 'ARCH-GIT-OUTPUT-ONE-MODIFIED' 'git-output' 'Invoke-GitText/Assert-GitState' 'fail' 'tracked worktree modifications present' $counts {
+      Invoke-AuthenticGitStateCase $oneModified @() @('tracked.txt')
+    } 'temporary Git fixture cleaned'
+
+    $whitespace = New-AuthenticGitFixture $fixtureRoot 'whitespace'
+    $counts = New-ArchitectureBoundaryCounts
+    Add-ArchitectureCaseEvidence $Evidence 'ARCH-GIT-OUTPUT-WHITESPACE' 'git-output' 'Invoke-GitText' 'pass' '' $counts {
+      $lines = @(Invoke-WithinAuthenticGitFixture $whitespace { Invoke-GitText @('for-each-ref', '--format=   ', 'refs/heads') })
+      Assert-True ($lines.Count -eq 0) 'whitespace-only git output did not normalize to zero lines'
+    } 'temporary Git fixture cleaned'
+
+    $nonzero = New-AuthenticGitFixture $fixtureRoot 'nonzero'
+    $counts = New-ArchitectureBoundaryCounts
+    Add-ArchitectureCaseEvidence $Evidence 'ARCH-GIT-OUTPUT-NONZERO' 'git-output' 'Invoke-GitText' 'pass' '' $counts {
+      $observedGuard = $null
+      $observedClassification = $null
+      try {
+        Invoke-WithinAuthenticGitFixture $nonzero { Invoke-GitText @('definitely-not-a-git-command') | Out-Null } | Out-Null
+      } catch {
+        $observedGuard = [string]$_.Exception.Data['GuardId']
+        $observedClassification = [string]$_.Exception.Data['Classification']
+      }
+      Assert-True ($observedGuard -eq 'RV.GIT.COMMAND_EXIT') 'git nonzero exit did not emit the expected guard'
+      Assert-True ($observedClassification -eq 'GIT_COMMAND_FAILED') 'git nonzero exit did not emit the expected classification'
+    } 'temporary Git fixture cleaned'
+  } finally {
+    Remove-Item -LiteralPath $fixtureRoot -Recurse -Force -ErrorAction SilentlyContinue
+    Assert-True (-not (Test-Path -LiteralPath $fixtureRoot)) 'git output fixture cleanup failed'
+  }
+}
+
 function Run-AuthenticArchitectureProofCases {
   param($Artifacts, [string]$WrapperPath, [string]$TemporaryRoot)
   Assert-True (-not ([IO.Path]::GetFullPath($TemporaryRoot)).StartsWith(([IO.Path]::GetFullPath($RepoRoot).TrimEnd('\')+'\'),[StringComparison]::OrdinalIgnoreCase)) 'architecture temporary files must remain outside the repository'
@@ -1108,6 +1231,7 @@ function Run-AuthenticArchitectureProofCases {
     @{Id='ARCH-GIT-STAGED';State=[pscustomobject]@{Branch=$validGit.Branch;Head=$validGit.Head;Staged=@('x');Modified=@()};Outcome='fail';Error='staged files present'},
     @{Id='ARCH-GIT-DIRTY';State=[pscustomobject]@{Branch=$validGit.Branch;Head=$validGit.Head;Staged=@();Modified=@('x')};Outcome='fail';Error='tracked worktree modifications present'}
   )){$counts=New-ArchitectureBoundaryCounts;$context=New-ArchitectureTestContext $descriptor $counts $gitCase.State $successProcess;Add-ArchitectureCaseEvidence $evidence $gitCase.Id 'git' 'Assert-GitState' $gitCase.Outcome $gitCase.Error $counts {Assert-GitState $context}}
+  Add-AuthenticGitOutputNormalizationCases $evidence $TemporaryRoot
 
   $sample="CONTROL|database_matches=true|server_major=17|tls_active=true|transaction_read_only=on|payment_events_present=true|payment_events_merchant_id_uuid=true|payment_events_merchant_id_nullable=true|payment_events_processor_compatible=true|payment_events_processed_at_compatible=true|invoice_fk_classification=canonical_set_null|merchant_fk_classification=canonical_cascade|platform_settings_present=true|plan_migration_solo_lite_enabled=false|solo_plus_enabled=false|solo_plus_kyc_enabled=false|conflicting_rehearsal_session_count=0|conflicting_lock_count=0|prepared_transaction_count=0|rollback_sensitive_fingerprint=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   $counts=New-ArchitectureBoundaryCounts;Add-ArchitectureCaseEvidence $evidence 'ARCH-CONTROL-VALID' 'control' 'Convert-ControlRow/Assert-ControlAccepted' 'pass' '' $counts {$map=Convert-ControlRow $sample;Assert-ControlAccepted $map}
@@ -1246,7 +1370,6 @@ function Invoke-FunctionParityClassification {
   $adapterTests=@{
     'Assert-GitState'=@('ARCH-GIT-VALID','ARCH-GIT-WRONG-BRANCH','ARCH-GIT-STAGED','ARCH-GIT-DIRTY')
     'Assert-RunnerContract'=@('ARCH-ARTIFACT-VALID','ARCH-ARTIFACT-RUNNER-HASH-MISMATCH','RUNNER-EFFECTIVE-COMMIT-REJECTED')
-    'Invoke-GitText'=@('PARITY-INVOKE-GIT-TEXT')
     'Invoke-NativeChecked'=@('ARCH-PROCESS-LARGE-OUTPUT','ARCH-PROCESS-TIMEOUT','ARCH-PROCESS-NONZERO-EXIT','ARCH-PROCESS-REDACTION')
     'Invoke-OfflineValidation'=@('ARCH-OFFLINE-NO-CREDENTIAL-PROMPT','ARCH-OFFLINE-NO-PSQL-RESOLUTION','ARCH-OFFLINE-NO-PGDUMP-RESOLUTION','ARCH-OFFLINE-NO-REAL-PROCESS-START','ARCH-OFFLINE-NO-PACKAGE-GENERATION','ARCH-OFFLINE-NO-SQL-EXECUTION')
     'Invoke-Rehearsal'=@('STATIC-INVOKE-REHEARSAL-BOUNDARIES')
@@ -1257,6 +1380,7 @@ function Invoke-FunctionParityClassification {
     'Parse-TargetDatabaseUrl'='structured URL security correction'
     'Get-WrapperBodyHash'='manifest-hash normalization for deterministic wrapper-body integrity'
     'New-TemporaryPgPassFile'='UTF-8 without BOM credential-file correction'
+    'Invoke-GitText'='empty Git output normalizes to a true zero-line collection'
   }
   $guardObservationTests=@{
     'Assert-Condition'=@('RV.PROCESS.TIMEOUT')
