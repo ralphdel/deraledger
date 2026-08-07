@@ -559,9 +559,10 @@ function Assert-ProductionRehearsalArchitectureAst {
   Assert-HarnessSelfTest ($helperStarts.Count -eq 1 -and (Get-ContainingPowerShellFunctionName $helperStarts[0] $helperFunctions) -eq 'Invoke-ProcessStart' -and $generatorStarts.Count -eq 0) 'direct Process.Start exists outside the approved process-start adapter.'
 
   $packageCalls=@($generatorAst.FindAll({param($node)$node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'New-ProductionRehearsalPackage'},$true))
-  Assert-HarnessSelfTest ($packageCalls.Count -eq 1) 'package generation call cardinality is invalid.'
+  $productionPackageCalls=@($packageCalls|Where-Object {(Get-ContainingPowerShellFunctionName $_ $generatorFunctions) -eq ''})
+  Assert-HarnessSelfTest ($productionPackageCalls.Count -eq 1) 'production package generation call cardinality is invalid.'
   $packageAssignments=@($generatorAst.FindAll({param($node)$node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Extent.Text -match 'PackageGenerationBoundary'},$true))
-  Assert-HarnessSelfTest (@($packageAssignments|Where-Object {$_.Extent.StartOffset -le $packageCalls[0].Extent.StartOffset -and $_.Extent.EndOffset -ge $packageCalls[0].Extent.EndOffset}).Count -eq 1) 'package generation call exists outside its approved boundary.'
+  Assert-HarnessSelfTest (@($packageAssignments|Where-Object {$_.Extent.StartOffset -le $productionPackageCalls[0].Extent.StartOffset -and $_.Extent.EndOffset -ge $productionPackageCalls[0].Extent.EndOffset}).Count -eq 1) 'package generation call exists outside its approved boundary.'
 
   foreach($astRecord in @(@{Ast=$helperAst;Functions=$helperFunctions;Name='helper'},@{Ast=$generatorAst;Functions=$generatorFunctions;Name='generator'})){
     $directSql=@($astRecord.Ast.FindAll({param($node)$node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -match '^(psql|pg_dump)(\.exe)?$'},$true))
@@ -574,6 +575,62 @@ function Assert-ProductionRehearsalArchitectureAst {
   $bypassVariables=@($helperAst.FindAll({param($node)$node -is [Management.Automation.Language.VariableExpressionAst] -and $node.VariablePath.UserPath -eq 'SkipEmbeddedContract'},$true)) + @($generatorAst.FindAll({param($node)$node -is [Management.Automation.Language.VariableExpressionAst] -and $node.VariablePath.UserPath -eq 'SkipEmbeddedContract'},$true))
   $bypassMembers=@($helperAst.FindAll({param($node)$node -is [Management.Automation.Language.MemberExpressionAst] -and $node.Member.Value -eq 'SkipEmbeddedContract'},$true)) + @($generatorAst.FindAll({param($node)$node -is [Management.Automation.Language.MemberExpressionAst] -and $node.Member.Value -eq 'SkipEmbeddedContract'},$true))
   Assert-HarnessSelfTest ($artifactFunction.Count -eq 1 -and $artifactReturns.Count -eq 0 -and $bypassVariables.Count -eq 0 -and $bypassMembers.Count -eq 0) 'artifact integrity contains a bypass or early return.'
+
+  $productionGeneratorFunctions=@(
+    'Replace-SinglePlaceholder','Get-GitBlobBytes','Remove-TopLevelTransactionEnvelopeBytes',
+    'Test-WrapperTemplateStaticContract','Expand-WrapperTemplate','New-ProductionRehearsalPackage'
+  )
+  $guardRows=[Collections.Generic.List[object]]::new()
+  foreach($astRecord in @(
+    @{Ast=$helperAst;Functions=$helperFunctions;Path=$HelperPath;ProductionFunctions=@($helperFunctions.Name);IncludeTopLevel=$false},
+    @{Ast=$generatorAst;Functions=$generatorFunctions;Path=$GeneratorPath;ProductionFunctions=$productionGeneratorFunctions;IncludeTopLevel=$true}
+  )){
+    $guardCommands=@($astRecord.Ast.FindAll({param($node)$node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Assert-Condition'},$true))
+    foreach($command in $guardCommands){
+      $owner=Get-ContainingPowerShellFunctionName $command $astRecord.Functions
+      $isProduction=($astRecord.ProductionFunctions -contains $owner) -or ($astRecord.IncludeTopLevel -and [string]::IsNullOrWhiteSpace($owner))
+      if(-not $isProduction){continue}
+      Assert-HarnessSelfTest ($command.CommandElements.Count -ge 5) "production guard metadata is missing: $($astRecord.Path):$($command.Extent.StartLineNumber)"
+      $guardId=$null;$classification=$null
+      try{$guardId=$command.CommandElements[3].SafeGetValue();$classification=$command.CommandElements[4].SafeGetValue()}catch{Assert-HarnessSelfTest $false "production guard ID or classification is dynamic: $($astRecord.Path):$($command.Extent.StartLineNumber)"}
+      Assert-HarnessSelfTest ($guardId -match '^(RV|GEN)\.[A-Z0-9_.]+$') "production guard ID is invalid: $guardId"
+      Assert-HarnessSelfTest ($classification -match '^[A-Z0-9_]+$') "production guard classification is invalid: $guardId"
+      $compound=@($command.CommandElements[1].FindAll({param($node)$node -is [Management.Automation.Language.BinaryExpressionAst] -and $node.Operator -in @([Management.Automation.Language.TokenKind]::And,[Management.Automation.Language.TokenKind]::Or)},$true))
+      Assert-HarnessSelfTest ($compound.Count -eq 0) "compound production guard was not decomposed: $guardId"
+      $guardRows.Add([pscustomobject]@{guard_id=$guardId;classification=$classification;source=[IO.Path]::GetFileName($astRecord.Path)})
+    }
+
+    $throws=@($astRecord.Ast.FindAll({param($node)$node -is [Management.Automation.Language.ThrowStatementAst]},$true))
+    foreach($throw in $throws){
+      $owner=Get-ContainingPowerShellFunctionName $throw $astRecord.Functions
+      $isProduction=($astRecord.ProductionFunctions -contains $owner) -or ($astRecord.IncludeTopLevel -and [string]::IsNullOrWhiteSpace($owner))
+      if(-not $isProduction){continue}
+      $allowedPrimitive=$owner -eq 'Assert-Condition'
+      $allowedOperationalRethrow=$owner -eq 'Invoke-RehearsalLifecycle' -and $throw.Extent.Text -eq 'throw $bodyFailure'
+      $allowedTopLevelRethrow=[string]::IsNullOrWhiteSpace($owner) -and $throw.Extent.Text -eq 'throw'
+      Assert-HarnessSelfTest ($allowedPrimitive -or $allowedOperationalRethrow -or $allowedTopLevelRethrow) "direct production validation throw remains: $($astRecord.Path):$($throw.Extent.StartLineNumber)"
+    }
+  }
+  Assert-HarnessSelfTest (@($guardRows|Group-Object guard_id|Where-Object Count -ne 1).Count -eq 0) 'production guard IDs are duplicated.'
+  $script:HarnessStaticGuardRows=@($guardRows)
+}
+
+function Assert-RehearsalGuardAstMutationRejected {
+  param([string]$HelperPath,[string]$GeneratorPath,[string]$TemporaryRoot,[string]$MutationId,[scriptblock]$Mutator)
+  $caseRoot=Join-Path $TemporaryRoot ("guard-ast-"+$MutationId.ToLowerInvariant())
+  New-Item -ItemType Directory -Path $caseRoot -Force|Out-Null
+  $helperCopy=Join-Path $caseRoot 'production-rehearsal-validation.ps1'
+  $generatorCopy=Join-Path $caseRoot 'new-production-rehearsal-package.ps1'
+  Copy-Item -LiteralPath $HelperPath -Destination $helperCopy
+  Copy-Item -LiteralPath $GeneratorPath -Destination $generatorCopy
+  try{
+    & $Mutator $helperCopy $generatorCopy
+    $rejected=$false
+    try{Assert-ProductionRehearsalArchitectureAst -HelperPath $helperCopy -GeneratorPath $generatorCopy}catch{$rejected=$true}
+    Assert-HarnessSelfTest $rejected "guard AST mutation was accepted: $MutationId"
+  }finally{
+    Remove-Item -LiteralPath $caseRoot -Recurse -Force -ErrorAction SilentlyContinue
+  }
 }
 
 function New-InvoiceFkControlState {
@@ -931,10 +988,19 @@ function Run-HarnessSelfTests {
     Assert-HarnessSelfTest -Condition (Test-Path -LiteralPath $rehearsalGenerator) -Message "production rehearsal package generator is missing."
     Assert-HarnessSelfTest -Condition (Test-Path -LiteralPath $rehearsalHelper) -Message "production rehearsal canonical helper is missing."
     Assert-ProductionRehearsalArchitectureAst -HelperPath $rehearsalHelper -GeneratorPath $rehearsalGenerator
+    foreach($mutation in @(
+      @{Id='DUPLICATE-ID';Mutator={param($helper,$generator)$text=Get-Content -Raw $helper;$text=$text.Replace("'RV.PROCESS.NONZERO_EXIT'","'RV.PROCESS.TIMEOUT'");[IO.File]::WriteAllText($helper,$text,[Text.UTF8Encoding]::new($false))}},
+      @{Id='DYNAMIC-ID';Mutator={param($helper,$generator)$text=Get-Content -Raw $helper;$text=$text.Replace("'RV.PROCESS.NONZERO_EXIT'",'$script:DynamicGuardId');[IO.File]::WriteAllText($helper,$text,[Text.UTF8Encoding]::new($false))}},
+      @{Id='COMPOUND-CONDITION';Mutator={param($helper,$generator)$text=Get-Content -Raw $helper;$text=$text.Replace('($Result.ExitCode -eq 0) "PROCESS_NONZERO_EXIT:', '(($Result.ExitCode -eq 0) -and $true) "PROCESS_NONZERO_EXIT:');[IO.File]::WriteAllText($helper,$text,[Text.UTF8Encoding]::new($false))}},
+      @{Id='DIRECT-THROW';Mutator={param($helper,$generator)$text=Get-Content -Raw $helper;$old='Assert-Condition ($Result.ExitCode -eq 0) "PROCESS_NONZERO_EXIT:${Operation}:$($Result.ExitCode)" ''RV.PROCESS.NONZERO_EXIT'' ''PROCESS_NONZERO_EXIT''';$text=$text.Replace($old,'if ($Result.ExitCode -ne 0) { throw "PROCESS_NONZERO_EXIT" }');[IO.File]::WriteAllText($helper,$text,[Text.UTF8Encoding]::new($false))}}
+    )){
+      Assert-RehearsalGuardAstMutationRejected -HelperPath $rehearsalHelper -GeneratorPath $rehearsalGenerator -TemporaryRoot $tempDir -MutationId $mutation.Id -Mutator $mutation.Mutator
+    }
+    Assert-ProductionRehearsalArchitectureAst -HelperPath $rehearsalHelper -GeneratorPath $rehearsalGenerator
     $helperTokens = $null
     $helperErrors = $null
     $helperAst = [System.Management.Automation.Language.Parser]::ParseFile($rehearsalHelper, [ref]$helperTokens, [ref]$helperErrors)
-    $expectedRuntimeFunctions = @("Assert-Condition","Sha256","Join-NativeArguments","Get-WrapperBodyHash","Get-DescriptorWrapperBodyHash","Invoke-ProcessStart","Invoke-GitText","Get-EnvironmentSnapshot","Restore-Environment","Clear-PostgresRoutingEnvironment","ConvertTo-BooleanStrict","ConvertTo-IntegerStrict","Get-ControlRequiredKeys","Convert-ControlRow","Assert-ControlAccepted","New-ControlSql","Parse-Manifest","Get-ExecutableRunnerLines","Assert-RunnerContract","Assert-ArtifactIntegrity","Assert-GitState","Parse-TargetDatabaseUrl","Assert-PasswordFreeDatabaseUrl","ConvertTo-SqlLiteral","New-TemporaryPgPassFile","Invoke-NativeChecked","Assert-RunnerMarkers","Invoke-OfflineMutationCase","Invoke-OfflineValidation","Invoke-Rehearsal","New-RehearsalRuntimeContext","New-ProductionRehearsalRuntimeContext","Get-ProductionArtifactDescriptor","Invoke-RehearsalProcess","Assert-RehearsalProcessResult","Invoke-RehearsalLifecycle","Assert-ControlProofEqual")
+    $expectedRuntimeFunctions = @("Assert-Condition","Sha256","Join-NativeArguments","Get-WrapperBodyHash","Get-DescriptorWrapperBodyHash","Invoke-ProcessStart","Invoke-GitText","Get-EnvironmentSnapshot","Restore-Environment","Clear-PostgresRoutingEnvironment","ConvertTo-BooleanStrict","ConvertTo-IntegerStrict","Get-ControlRequiredKeys","Convert-ControlRow","Assert-ControlAccepted","New-ControlSql","Parse-Manifest","Get-ExecutableRunnerLines","Assert-RunnerContract","Assert-ArtifactIntegrity","Assert-GitState","Parse-TargetDatabaseUrl","Assert-PasswordFreeDatabaseUrl","ConvertTo-SqlLiteral","New-TemporaryPgPassFile","Invoke-NativeChecked","Assert-RunnerMarkers","Invoke-OfflineValidation","Invoke-Rehearsal","New-RehearsalRuntimeContext","New-ProductionRehearsalRuntimeContext","Get-ProductionArtifactDescriptor","Invoke-RehearsalProcess","Assert-RehearsalProcessResult","Invoke-RehearsalLifecycle","Assert-ControlProofEqual")
     $helperFunctions = @($helperAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) | ForEach-Object { $_.Name })
     foreach ($functionName in $expectedRuntimeFunctions) { Assert-HarnessSelfTest -Condition (@($helperFunctions | Where-Object { $_ -eq $functionName }).Count -eq 1) -Message "canonical runtime function cardinality invalid: $functionName" }
     $generatorSource = Get-Content -Raw -LiteralPath $rehearsalGenerator
@@ -954,21 +1020,12 @@ function Run-HarnessSelfTests {
     $declaredMatch = [regex]::Match($generatorMutations.Stdout, "Mutation cases declared: (\d+)")
     $executedMatch = [regex]::Match($generatorMutations.Stdout, "Mutation cases executed: (\d+)")
     Assert-HarnessSelfTest -Condition ($generatorMutations.ExitCode -eq 0 -and $declaredMatch.Success -and $executedMatch.Success -and $declaredMatch.Groups[1].Value -eq $executedMatch.Groups[1].Value -and [int]$declaredMatch.Groups[1].Value -gt 0 -and $generatorMutations.Stdout -match "Production rehearsal generator offline mutation tests passed") -Message "production rehearsal generator mutation tests failed: $($generatorMutations.Stderr) $($generatorMutations.Stdout)"
-    $architectureCaseIds = @(
-      "ARCH-ARTIFACT-VALID","ARCH-ARTIFACT-RUNNER-HASH-MISMATCH","ARCH-ARTIFACT-HELPER-HASH-MISMATCH","ARCH-ARTIFACT-NAMESPACE-MISMATCH",
-      "ARCH-GIT-VALID","ARCH-GIT-WRONG-BRANCH","ARCH-GIT-STAGED","ARCH-GIT-DIRTY",
-      "ARCH-CONTROL-VALID","ARCH-CONTROL-DATABASE-MISMATCH","ARCH-CONTROL-PROTECTED-FLAG-TRUE","ARCH-CONTROL-FINGERPRINT-MISMATCH",
-      "ARCH-OFFLINE-NO-CREDENTIAL-PROMPT","ARCH-OFFLINE-NO-PSQL-RESOLUTION","ARCH-OFFLINE-NO-PGDUMP-RESOLUTION","ARCH-OFFLINE-NO-REAL-PROCESS-START","ARCH-OFFLINE-NO-PACKAGE-GENERATION","ARCH-OFFLINE-NO-SQL-EXECUTION",
-      "ARCH-PROCESS-LARGE-OUTPUT","ARCH-PROCESS-TIMEOUT","ARCH-PROCESS-NONZERO-EXIT","ARCH-PROCESS-REDACTION",
-      "ARCH-CLEANUP-SUCCESS","ARCH-CLEANUP-FAILURE","ARCH-CLEANUP-TIMEOUT","ARCH-EVIDENCE-BEFORE-CLEANUP","ARCH-ENVIRONMENT-RESTORE-SUCCESS","ARCH-ENVIRONMENT-RESTORE-FAILURE"
-    )
     $caseRows = @(($generatorMutations.Stdout -split "`r`n|`n") | Where-Object { $_ -like "CASE|*" } | ForEach-Object { $_.Substring(5) | ConvertFrom-Json })
-    Assert-HarnessSelfTest -Condition ($caseRows.Count -eq $architectureCaseIds.Count) -Message "structured architecture evidence count mismatch."
-    foreach ($caseId in $architectureCaseIds) {
-      $matches = @($caseRows | Where-Object { $_.case_id -eq $caseId })
-      Assert-HarnessSelfTest -Condition ($matches.Count -eq 1) -Message "structured architecture case cardinality invalid: $caseId"
-      $case = $matches[0]
-      Assert-HarnessSelfTest -Condition ($case.setup_executed -and -not [string]::IsNullOrWhiteSpace($case.production_function_invoked) -and $case.expected_outcome -eq $case.observed_outcome -and $case.expected_error_classification -eq $case.observed_error_classification -and $null -ne $case.boundary_invocation_counts -and -not [string]::IsNullOrWhiteSpace($case.cleanup_result)) -Message "structured architecture evidence is incomplete: $caseId"
+    $architectureSummaryRows=@(($generatorMutations.Stdout -split "`r`n|`n")|Where-Object {$_ -like 'ARCHITECTURE_SUMMARY|*'}|ForEach-Object {$_.Substring(21)|ConvertFrom-Json})
+    Assert-HarnessSelfTest -Condition ($architectureSummaryRows.Count -eq 1 -and $caseRows.Count -eq $architectureSummaryRows[0].declared -and $architectureSummaryRows[0].declared -eq $architectureSummaryRows[0].executed -and $caseRows.Count -gt 0) -Message "structured architecture evidence count mismatch."
+    Assert-HarnessSelfTest -Condition (@($caseRows|Group-Object case_id|Where-Object Count -ne 1).Count -eq 0) -Message "structured architecture case cardinality invalid."
+    foreach ($case in $caseRows) {
+      Assert-HarnessSelfTest -Condition ($case.setup_executed -and -not [string]::IsNullOrWhiteSpace($case.production_function_invoked) -and $case.expected_outcome -eq $case.observed_outcome -and $case.expected_error_classification -eq $case.observed_error_classification -and $null -ne $case.boundary_invocation_counts -and -not [string]::IsNullOrWhiteSpace($case.cleanup_result)) -Message "structured architecture evidence is incomplete: $($case.case_id)"
     }
     foreach ($case in @($caseRows | Where-Object { $_.category -eq "offline-boundary" })) {
       Assert-HarnessSelfTest -Condition ($case.boundary_invocation_counts.CredentialProvider -eq 0 -and $case.boundary_invocation_counts.ExecutableResolver -eq 0 -and $case.boundary_invocation_counts.ProcessAdapter -eq 0 -and $case.boundary_invocation_counts.PackageGenerationBoundary -eq 0 -and $case.boundary_invocation_counts.SqlExecutionBoundary -eq 0) -Message "offline boundary invocation count is non-zero: $($case.case_id)"
@@ -977,10 +1034,27 @@ function Run-HarnessSelfTests {
       Assert-HarnessSelfTest -Condition ($case.boundary_invocation_counts.ProcessAdapter -eq 1 -and $case.boundary_invocation_counts.SqlExecutionBoundary -eq 1) -Message "process architecture case did not execute injected adapters: $($case.case_id)"
     }
     $parityRows=@(($generatorMutations.Stdout -split "`r`n|`n")|Where-Object {$_ -like 'PARITY|*'}|ForEach-Object {$_.Substring(7)|ConvertFrom-Json})
-    Assert-HarnessSelfTest -Condition ($parityRows.Count -eq 28 -and @($parityRows|Group-Object function|Where-Object Count -ne 1).Count -eq 0 -and @($parityRows|Where-Object classification -eq 'unexplained').Count -eq 0) -Message "machine parity classification is incomplete, duplicated, or unexplained."
-    foreach($parity in @($parityRows|Where-Object classification -eq 'adapter-plumbing')){Assert-HarnessSelfTest -Condition (@($parity.named_tests).Count -gt 0) -Message "adapter parity row lacks named tests: $($parity.function)"}
+    Assert-HarnessSelfTest -Condition ($parityRows.Count -gt 0 -and @($parityRows|Group-Object function|Where-Object Count -ne 1).Count -eq 0 -and @($parityRows|Where-Object classification -eq 'unexplained').Count -eq 0) -Message "machine parity classification is incomplete, duplicated, or unexplained."
+    foreach($parity in @($parityRows|Where-Object classification -in @('adapter-plumbing','guard-observation'))){Assert-HarnessSelfTest -Condition (@($parity.named_tests).Count -gt 0) -Message "behavioral parity row lacks named tests: $($parity.function)"}
     $pgpassRows=@(($generatorMutations.Stdout -split "`r`n|`n")|Where-Object {$_ -like 'PGPASS|*'}|ForEach-Object {$_.Substring(7)|ConvertFrom-Json})
-    Assert-HarnessSelfTest -Condition ($pgpassRows.Count -eq 1 -and $pgpassRows[0].utf8_no_bom -and $pgpassRows[0].exact_bytes -and $pgpassRows[0].hostname_prefix -and -not $pgpassRows[0].credential_in_evidence -and $pgpassRows[0].cleanup -eq 'verified') -Message "pgpass byte or cleanup proof failed."
+    Assert-HarnessSelfTest -Condition ($pgpassRows.Count -gt 0 -and @($pgpassRows | Where-Object { -not $_.utf8_no_bom -or -not $_.exact_bytes -or -not $_.hostname_prefix -or $_.credential_in_evidence -or $_.cleanup -ne 'verified' }).Count -eq 0) -Message "pgpass byte or cleanup proof failed."
+    $inventoryRows=@(($generatorMutations.Stdout -split "`r`n|`n")|Where-Object {$_ -like 'GUARD_INVENTORY|*'}|ForEach-Object {$_.Substring(16)|ConvertFrom-Json})
+    $guardRows=@(($generatorMutations.Stdout -split "`r`n|`n")|Where-Object {$_ -like 'GUARD_CASE|*'}|ForEach-Object {$_.Substring(11)|ConvertFrom-Json})
+    $guardSummaryRows=@(($generatorMutations.Stdout -split "`r`n|`n")|Where-Object {$_ -like 'GUARD_SUMMARY|*'}|ForEach-Object {$_.Substring(14)|ConvertFrom-Json})
+    Assert-HarnessSelfTest -Condition ($inventoryRows.Count -gt 0 -and $guardRows.Count -eq $inventoryRows.Count -and $guardSummaryRows.Count -eq 1 -and $guardSummaryRows[0].unique_guards -eq $inventoryRows.Count -and $guardSummaryRows[0].observed_guards -eq $inventoryRows.Count -and $guardSummaryRows[0].missing -eq 0 -and $guardSummaryRows[0].unexpected -eq 0) -Message "exact guard-observation coverage is incomplete."
+    Assert-HarnessSelfTest -Condition (@($inventoryRows|Group-Object guard_id|Where-Object Count -ne 1).Count -eq 0 -and @($guardRows|Group-Object observed_guard_id|Where-Object Count -ne 1).Count -eq 0) -Message "guard inventory or observation cardinality is invalid."
+    $declaredGuardIds=@($inventoryRows|ForEach-Object guard_id|Sort-Object)
+    $observedGuardIds=@($guardRows|ForEach-Object observed_guard_id|Sort-Object)
+    Assert-HarnessSelfTest -Condition (@(Compare-Object $declaredGuardIds $observedGuardIds).Count -eq 0) -Message "declared and observed guard IDs differ."
+    foreach($guard in $guardRows){
+      $inventoryMatch=@($inventoryRows|Where-Object guard_id -eq $guard.observed_guard_id)
+      Assert-HarnessSelfTest -Condition ($inventoryMatch.Count -eq 1 -and $guard.guard_id -eq $guard.observed_guard_id -and $guard.expected_classification -eq $guard.observed_classification -and $guard.observed_classification -eq $inventoryMatch[0].classification -and $guard.execution_count -eq 1 -and -not [string]::IsNullOrWhiteSpace($guard.production_function_invoked) -and $guard.cleanup -eq 'verified') -Message "guard execution evidence is incomplete: $($guard.guard_id)"
+    }
+    $wrapperInventory=@($inventoryRows|Where-Object source -notin @('production-rehearsal-validation.ps1','new-production-rehearsal-package.ps1'))
+    Assert-HarnessSelfTest -Condition ($wrapperInventory.Count -eq 1 -and $wrapperInventory[0].guard_id -eq 'WRAPPER.MODE.COUNT') -Message "expanded wrapper guard inventory is missing or invalid."
+    $staticGuardIds=@($script:HarnessStaticGuardRows|ForEach-Object guard_id|Sort-Object)
+    $emittedStaticGuardIds=@($inventoryRows|Where-Object source -in @('production-rehearsal-validation.ps1','new-production-rehearsal-package.ps1')|ForEach-Object guard_id|Sort-Object)
+    Assert-HarnessSelfTest -Condition (@(Compare-Object $staticGuardIds $emittedStaticGuardIds).Count -eq 0) -Message "independent AST guard inventory differs from emitted source inventory."
 
     $script:HarnessStepCounter = 0
     $script:HarnessProgressMessages.Clear()

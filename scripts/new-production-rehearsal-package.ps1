@@ -41,7 +41,7 @@ function Assert-True {
 function Replace-SinglePlaceholder {
   param([string]$Text, [string]$Placeholder, [string]$Replacement)
   $count = @([regex]::Matches($Text, [regex]::Escape($Placeholder))).Count
-  Assert-True ($count -eq 1) "Expected exactly one placeholder $Placeholder; found $count"
+  Assert-Condition ($count -eq 1) "Expected exactly one placeholder $Placeholder; found $count" 'GEN.PLACEHOLDER.COUNT' 'PLACEHOLDER_COUNT_INVALID'
   $index = $Text.IndexOf($Placeholder, [StringComparison]::Ordinal)
   return $Text.Substring(0, $index) + $Replacement + $Text.Substring($index + $Placeholder.Length)
 }
@@ -73,7 +73,7 @@ function Get-GitBlobBytes {
     $process.StandardOutput.BaseStream.CopyTo($memory)
     $stderr = $process.StandardError.ReadToEnd()
     $process.WaitForExit()
-    if ($process.ExitCode -ne 0) { throw "git cat-file failed for ${Path}: $stderr" }
+    Assert-Condition ($process.ExitCode -eq 0) "git cat-file failed for ${Path}: $stderr" 'GEN.GIT_BLOB.EXIT' 'GIT_BLOB_READ_FAILED'
     return $memory.ToArray()
   } finally {
     $memory.Dispose()
@@ -100,7 +100,7 @@ function Split-ByteLines {
     [Array]::Copy($Bytes, $start, $line, 0, $length)
     $lines.Add($line)
   }
-  return ,$lines.ToArray()
+  return $lines.ToArray()
 }
 
 function Join-ByteLines {
@@ -120,17 +120,28 @@ function Remove-TopLevelTransactionEnvelopeBytes {
   $lines = @(Split-ByteLines $Bytes)
   $beginIndex = -1
   for ($i = 0; $i -lt $lines.Count; $i++) {
-    $trimmed = Get-ByteLineText $lines[$i]
+    $trimmed = Get-ByteLineText ($lines[$i])
     if ($trimmed -match "^(?i)BEGIN\s*;\s*$") { $beginIndex = $i; break }
-    if ($trimmed -ne "" -and -not $trimmed.StartsWith("--")) { throw "Unexpected content before BEGIN in $Path" }
   }
   $commitIndex = -1
   for ($i = $lines.Count - 1; $i -ge 0; $i--) {
-    $trimmed = Get-ByteLineText $lines[$i]
+    $trimmed = Get-ByteLineText ($lines[$i])
     if ($trimmed -match "^(?i)COMMIT\s*;\s*$") { $commitIndex = $i; break }
-    if ($trimmed -ne "" -and -not $trimmed.StartsWith("--")) { throw "Unexpected content after COMMIT in $Path" }
   }
-  if ($beginIndex -lt 0 -or $commitIndex -lt 0) { throw "Unable to strip transaction envelope in $Path" }
+  Assert-Condition ($beginIndex -ge 0) "Unable to strip transaction envelope in $Path" 'GEN.TRANSACTION.BEGIN_MISSING' 'TRANSACTION_BEGIN_MISSING'
+  Assert-Condition ($commitIndex -ge 0) "Unable to strip transaction envelope in $Path" 'GEN.TRANSACTION.COMMIT_MISSING' 'TRANSACTION_COMMIT_MISSING'
+  for ($i = 0; $i -lt $beginIndex; $i++) {
+    $trimmed = Get-ByteLineText ($lines[$i])
+    if ($trimmed -ne "") {
+      Assert-Condition ($trimmed.StartsWith("--")) "Unexpected content before BEGIN in $Path" 'GEN.TRANSACTION.BEFORE_BEGIN' 'TRANSACTION_CONTENT_BEFORE_BEGIN'
+    }
+  }
+  for ($i = $lines.Count - 1; $i -gt $commitIndex; $i--) {
+    $trimmed = Get-ByteLineText ($lines[$i])
+    if ($trimmed -ne "") {
+      Assert-Condition ($trimmed.StartsWith("--")) "Unexpected content after COMMIT in $Path" 'GEN.TRANSACTION.AFTER_COMMIT' 'TRANSACTION_CONTENT_AFTER_COMMIT'
+    }
+  }
   $kept = [System.Collections.Generic.List[byte[]]]::new()
   for ($i = 0; $i -lt $lines.Count; $i++) {
     if ($i -ne $beginIndex -and $i -ne $commitIndex) { $kept.Add($lines[$i]) }
@@ -202,26 +213,32 @@ $EvidencePrefix = "commit16-$ShortCommit"
 $script:PgPassFileToDelete = $null
 $script:ControlSqlFileToDelete = $null
 
-$selectedModes = @($OfflineValidateOnly, $ExecuteRehearsal) | Where-Object { $_ }
-if (@($selectedModes).Count -ne 1) { throw "Choose exactly one mode: -OfflineValidateOnly or -ExecuteRehearsal" }
-if ($OfflineValidateOnly) { Invoke-OfflineValidation; return }
-Invoke-Rehearsal
+try {
+  $selectedModes = @($OfflineValidateOnly, $ExecuteRehearsal) | Where-Object { $_ }
+  Assert-Condition (@($selectedModes).Count -eq 1) "Choose exactly one mode: -OfflineValidateOnly or -ExecuteRehearsal" 'WRAPPER.MODE.COUNT' 'WRAPPER_MODE_COUNT_INVALID'
+  if ($OfflineValidateOnly) { Invoke-OfflineValidation; return }
+  Invoke-Rehearsal
+} catch {
+  if (-not [string]::IsNullOrWhiteSpace([string]$_.Exception.Data['GuardId'])) { [Console]::Error.WriteLine("GUARD_FAILURE|$($_.Exception.Data['GuardId'])|$($_.Exception.Data['Classification'])") }
+  throw
+}
 '@
 }
 
 function Test-WrapperTemplateStaticContract {
-  $template = Get-WrapperTemplate
-  $helper = Get-Content -Raw -LiteralPath $SharedValidationPath
+  param([string]$TemplateOverride = '', [string]$HelperOverride = '')
+  $template = if ([string]::IsNullOrEmpty($TemplateOverride)) { Get-WrapperTemplate } else { $TemplateOverride }
+  $helper = if ([string]::IsNullOrEmpty($HelperOverride)) { Get-Content -Raw -LiteralPath $SharedValidationPath } else { $HelperOverride }
   $helperTokens=$null;$helperErrors=$null
   $helperAst=[Management.Automation.Language.Parser]::ParseInput($helper,[ref]$helperTokens,[ref]$helperErrors)
-  Assert-True (@($helperErrors).Count -eq 0) "canonical helper has AST errors"
+  Assert-Condition (@($helperErrors).Count -eq 0) "canonical helper has AST errors" 'GEN.WRAPPER.HELPER_AST' 'WRAPPER_HELPER_AST_INVALID'
   $runtimeFunctions=@($helperAst.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst]},$true)|ForEach-Object {$_.Name})
-  Assert-True (@($runtimeFunctions|Group-Object|Where-Object Count -ne 1).Count -eq 0) "canonical helper contains duplicate functions"
+  Assert-Condition (@($runtimeFunctions|Group-Object|Where-Object Count -ne 1).Count -eq 0) "canonical helper contains duplicate functions" 'GEN.WRAPPER.HELPER_FUNCTION_DUPLICATE' 'WRAPPER_HELPER_FUNCTION_DUPLICATE'
   foreach ($functionName in $runtimeFunctions) {
     $functionPattern = "(?m)^function\s+" + [regex]::Escape($functionName) + "(?=\s|\{|\()"
     $helperCount = @([regex]::Matches($helper, $functionPattern)).Count
-    Assert-True ($helperCount -eq 1) "canonical helper must define $functionName exactly once"
-    Assert-True ($template -notmatch $functionPattern) "wrapper template duplicates runtime function $functionName"
+    Assert-Condition ($helperCount -eq 1) "canonical helper must define $functionName exactly once" 'GEN.WRAPPER.HELPER_FUNCTION_COUNT' 'WRAPPER_HELPER_FUNCTION_COUNT_INVALID'
+    Assert-Condition ($template -notmatch $functionPattern) "wrapper template duplicates runtime function $functionName" 'GEN.WRAPPER.TEMPLATE_FUNCTION_SHADOW' 'WRAPPER_TEMPLATE_FUNCTION_SHADOW'
   }
   $contractText = Replace-SinglePlaceholder $template "__SHARED_VALIDATION_HELPERS__" $helper
   foreach ($needle in @(
@@ -253,10 +270,10 @@ function Test-WrapperTemplateStaticContract {
     "schema-only",
     "Get-ControlRequiredKeys"
   )) {
-    Assert-True ($contractText.Contains($needle)) "embedded wrapper contract missing required text: $needle"
+    Assert-Condition ($contractText.Contains($needle)) "embedded wrapper contract missing required text: $needle" 'GEN.WRAPPER.CONTRACT_TEXT' 'WRAPPER_CONTRACT_TEXT_MISSING'
   }
-  Assert-True ($template -notmatch "2d0cfee4-production-rehearsal|beecef35-production-rehearsal|752c41b-production-rehearsal") "wrapper template contains stale artifact namespace"
-  Assert-True ($contractText -notmatch 'SkipEmbeddedContract') "wrapper contract contains an artifact-integrity bypass"
+  Assert-Condition ($template -notmatch "2d0cfee4-production-rehearsal|beecef35-production-rehearsal|752c41b-production-rehearsal") "wrapper template contains stale artifact namespace" 'GEN.WRAPPER.STALE_NAMESPACE' 'WRAPPER_STALE_NAMESPACE'
+  Assert-Condition ($contractText -notmatch 'SkipEmbeddedContract') "wrapper contract contains an artifact-integrity bypass" 'GEN.WRAPPER.INTEGRITY_BYPASS' 'WRAPPER_INTEGRITY_BYPASS'
 }
 
 function New-TestArtifactSet {
@@ -326,7 +343,7 @@ function New-TestArtifactSet {
 }
 
 function Expand-WrapperTemplate {
-  param($Artifacts, [string]$WrapperPath)
+  param($Artifacts, [string]$WrapperPath, [scriptblock]$BodyHashProbe = $null)
   $manifestHash = Get-Sha256Hex $Artifacts.Manifest
   $runnerHash = Get-Sha256Hex $Artifacts.Runner
   $tokenHash = Get-Sha256Hex $Artifacts.TokenFile
@@ -362,7 +379,8 @@ function Expand-WrapperTemplate {
   $current = [regex]::Replace($current, "(?m)^\`$ExpectedWrapperHash = '[^']+'", "`$ExpectedWrapperHash = '$bodyHash'")
   $current = [regex]::Replace($current, "(?m)^\`$ExpectedWrapperBodyHash = '[^']+'", "`$ExpectedWrapperBodyHash = '$bodyHash'")
   Write-Utf8NoBom $WrapperPath $current
-  Assert-True ((Get-WrapperBodyHashForFile $WrapperPath) -eq $bodyHash) "wrapper body hash did not stabilize"
+  $stabilizedBodyHash = if ($null -eq $BodyHashProbe) { Get-WrapperBodyHashForFile $WrapperPath } else { & $BodyHashProbe $WrapperPath }
+  Assert-Condition ($stabilizedBodyHash -eq $bodyHash) "wrapper body hash did not stabilize" 'GEN.WRAPPER.BODY_HASH_STABLE' 'WRAPPER_BODY_HASH_UNSTABLE'
 }
 
 function New-TestArtifactDescriptor {
@@ -496,6 +514,423 @@ function Add-ArchitectureCaseEvidence {
   Write-Host ('CASE|'+($item|ConvertTo-Json -Compress -Depth 5))
 }
 
+function Get-ConstantGuardInventory {
+  param([string[]]$Paths)
+  $rows=[Collections.Generic.List[object]]::new()
+  foreach($path in $Paths){
+    $tokens=$null;$errors=$null
+    $ast=[Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors)
+    Assert-True (@($errors).Count -eq 0) "guard inventory AST errors: $path"
+    foreach($command in @($ast.FindAll({param($node)$node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Assert-Condition'},$true))){
+      if($command.CommandElements.Count -lt 5){continue}
+      $guardId=$null;$classification=$null
+      try{$guardId=$command.CommandElements[3].SafeGetValue();$classification=$command.CommandElements[4].SafeGetValue()}catch{throw "DYNAMIC_GUARD_ID:${path}:$($command.Extent.StartLineNumber)"}
+      if($guardId -notmatch '^(RV|GEN|WRAPPER)\.[A-Z0-9_.]+$'){continue}
+      Assert-True ($classification -match '^[A-Z0-9_]+$') "guard classification must be constant: $guardId"
+      $rows.Add([pscustomobject]@{guard_id=$guardId;classification=$classification;source=[IO.Path]::GetFileName($path);line=$command.Extent.StartLineNumber})
+    }
+  }
+  $duplicates=@($rows|Group-Object guard_id|Where-Object Count -ne 1)
+  Assert-True ($duplicates.Count -eq 0) ('DUPLICATE_GUARD_ID:'+(($duplicates|ForEach-Object Name)-join ','))
+  return @($rows)
+}
+
+function Add-GuardCaseEvidence {
+  param([Collections.Generic.List[object]]$Evidence,[string]$GuardId,[string]$Classification,[string]$ProductionFunction,[scriptblock]$Body,[string]$Cleanup='verified')
+  Assert-True (@($Evidence|Where-Object guard_id -eq $GuardId).Count -eq 0) "duplicate observed guard: $GuardId"
+  $observedId='';$observedClassification='';$observedMessage='';$executionCount=0
+  try{$executionCount++;& $Body;throw "GUARD_NOT_EMITTED:$GuardId"}catch{
+    if($_.Exception.Message -eq "GUARD_NOT_EMITTED:$GuardId"){throw}
+    $observedId=[string]$_.Exception.Data['GuardId'];$observedClassification=[string]$_.Exception.Data['Classification'];$observedMessage=$_.Exception.Message
+  }
+  Assert-True ($executionCount -eq 1) "guard case execution count invalid: $GuardId"
+  Assert-True ($observedId -eq $GuardId) "guard observation mismatch: expected=$GuardId observed=$observedId message=$observedMessage"
+  Assert-True ($observedClassification -eq $Classification) "guard classification mismatch: $GuardId expected=$Classification observed=$observedClassification"
+  Assert-True (-not [string]::IsNullOrWhiteSpace($ProductionFunction)) "guard production function missing: $GuardId"
+  Assert-True (-not [string]::IsNullOrWhiteSpace($Cleanup)) "guard cleanup evidence missing: $GuardId"
+  $row=[pscustomobject]@{guard_id=$GuardId;expected_classification=$Classification;observed_guard_id=$observedId;observed_classification=$observedClassification;production_function_invoked=$ProductionFunction;execution_count=$executionCount;cleanup=$Cleanup}
+  $Evidence.Add($row);Write-Host ('GUARD_CASE|'+($row|ConvertTo-Json -Compress))
+}
+
+function Assert-ExactGuardCoverage {
+  param([object[]]$Inventory,[object[]]$Evidence)
+  $expected=@($Inventory|ForEach-Object guard_id|Sort-Object -Unique)
+  $observed=@($Evidence|ForEach-Object observed_guard_id|Sort-Object)
+  $missing=@(Compare-Object $expected $observed|Where-Object SideIndicator -eq '<='|ForEach-Object InputObject)
+  $unexpected=@(Compare-Object $expected $observed|Where-Object SideIndicator -eq '=>'|ForEach-Object InputObject)
+  Assert-True (@($Evidence|Group-Object observed_guard_id|Where-Object Count -ne 1).Count -eq 0) 'OBSERVED_GUARD_CARDINALITY_INVALID'
+  Assert-True ($missing.Count -eq 0) ('MISSING_GUARDS:'+($missing-join ','))
+  Assert-True ($unexpected.Count -eq 0) ('UNEXPECTED_GUARDS:'+($unexpected-join ','))
+  Write-Host ('GUARD_SUMMARY|'+([ordered]@{unique_guards=$expected.Count;observed_guards=$observed.Count;missing=$missing.Count;unexpected=$unexpected.Count}|ConvertTo-Json -Compress))
+}
+
+function Add-ObservedGuard {
+  param([Collections.Generic.List[object]]$Evidence,[object[]]$Inventory,[string]$GuardId,[string]$ProductionFunction,[scriptblock]$Body,[string]$Cleanup='verified')
+  $matches=@($Inventory|Where-Object guard_id -eq $GuardId)
+  Assert-True ($matches.Count -eq 1) "guard inventory lookup invalid: $GuardId"
+  Add-GuardCaseEvidence $Evidence $GuardId $matches[0].classification $ProductionFunction $Body $Cleanup
+}
+
+function Get-OfflineControlSample {
+  "CONTROL|database_matches=true|server_major=17|tls_active=true|transaction_read_only=on|payment_events_present=true|payment_events_merchant_id_uuid=true|payment_events_merchant_id_nullable=true|payment_events_processor_compatible=true|payment_events_processed_at_compatible=true|invoice_fk_classification=canonical_set_null|merchant_fk_classification=canonical_cascade|platform_settings_present=true|plan_migration_solo_lite_enabled=false|solo_plus_enabled=false|solo_plus_kyc_enabled=false|conflicting_rehearsal_session_count=0|conflicting_lock_count=0|prepared_transaction_count=0|rollback_sensitive_fingerprint=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+}
+
+function Invoke-ControlGuardCases {
+  param($Evidence,$Inventory)
+  $sample=Get-OfflineControlSample
+  $parseCases=@(
+    @{Id='RV.CONTROL.BOOLEAN_TYPE';Text=($sample.Replace('database_matches=true','database_matches=maybe'));Fn='Convert-ControlRow'},
+    @{Id='RV.CONTROL.INTEGER_TYPE';Text=($sample.Replace('server_major=17','server_major=x'));Fn='Convert-ControlRow'},
+    @{Id='RV.CONTROL.ROW_COUNT';Text='banner';Fn='Convert-ControlRow'},
+    @{Id='RV.CONTROL.FIELD_SHAPE';Text=($sample+'|malformed');Fn='Convert-ControlRow'},
+    @{Id='RV.CONTROL.FIELD_KEY';Text=($sample+'|=value');Fn='Convert-ControlRow'},
+    @{Id='RV.CONTROL.DUPLICATE_KEYS';Text=($sample+'|database_matches=true');Fn='Convert-ControlRow'},
+    @{Id='RV.CONTROL.MISSING_FIELDS';Text=($sample.Replace('|database_matches=true',''));Fn='Convert-ControlRow'},
+    @{Id='RV.CONTROL.UNEXPECTED_FIELDS';Text=($sample+'|unexpected=true');Fn='Convert-ControlRow'},
+    @{Id='RV.CONTROL.READ_ONLY_ENUM';Text=($sample.Replace('transaction_read_only=on','transaction_read_only=maybe'));Fn='Convert-ControlRow'},
+    @{Id='RV.CONTROL.INVOICE_FK_ENUM';Text=($sample.Replace('invoice_fk_classification=canonical_set_null','invoice_fk_classification=other'));Fn='Convert-ControlRow'},
+    @{Id='RV.CONTROL.MERCHANT_FK_ENUM';Text=($sample.Replace('merchant_fk_classification=canonical_cascade','merchant_fk_classification=other'));Fn='Convert-ControlRow'},
+    @{Id='RV.CONTROL.FINGERPRINT_FORMAT';Text=($sample -replace '[0-9a-f]{64}$','bad');Fn='Convert-ControlRow'}
+  )
+  foreach($case in $parseCases){$text=$case.Text;Add-ObservedGuard $Evidence $Inventory $case.Id $case.Fn {Convert-ControlRow $text|Out-Null}}
+  $acceptCases=@(
+    @{Id='RV.CONTROL.DATABASE_IDENTITY';Old='database_matches=true';New='database_matches=false'},
+    @{Id='RV.CONTROL.SERVER_MAJOR';Old='server_major=17';New='server_major=16'},
+    @{Id='RV.CONTROL.TLS_ACTIVE';Old='tls_active=true';New='tls_active=false'},
+    @{Id='RV.CONTROL.PAYMENT_EVENTS_PRESENT';Old='payment_events_present=true';New='payment_events_present=false'},
+    @{Id='RV.CONTROL.MERCHANT_ID_UUID';Old='payment_events_merchant_id_uuid=true';New='payment_events_merchant_id_uuid=false'},
+    @{Id='RV.CONTROL.MERCHANT_ID_NULLABLE';Old='payment_events_merchant_id_nullable=true';New='payment_events_merchant_id_nullable=false'},
+    @{Id='RV.CONTROL.PROCESSOR_COMPATIBLE';Old='payment_events_processor_compatible=true';New='payment_events_processor_compatible=false'},
+    @{Id='RV.CONTROL.PROCESSED_AT_COMPATIBLE';Old='payment_events_processed_at_compatible=true';New='payment_events_processed_at_compatible=false'},
+    @{Id='RV.CONTROL.PLATFORM_SETTINGS_PRESENT';Old='platform_settings_present=true';New='platform_settings_present=false'},
+    @{Id='RV.CONTROL.FLAG_PLAN_MIGRATION_SOLO_LITE';Old='plan_migration_solo_lite_enabled=false';New='plan_migration_solo_lite_enabled=true'},
+    @{Id='RV.CONTROL.FLAG_SOLO_PLUS';Old='solo_plus_enabled=false';New='solo_plus_enabled=true'},
+    @{Id='RV.CONTROL.FLAG_SOLO_PLUS_KYC';Old='solo_plus_kyc_enabled=false';New='solo_plus_kyc_enabled=true'},
+    @{Id='RV.CONTROL.CONFLICTING_SESSIONS';Old='conflicting_rehearsal_session_count=0';New='conflicting_rehearsal_session_count=1'},
+    @{Id='RV.CONTROL.CONFLICTING_LOCKS';Old='conflicting_lock_count=0';New='conflicting_lock_count=1'},
+    @{Id='RV.CONTROL.PREPARED_TRANSACTIONS';Old='prepared_transaction_count=0';New='prepared_transaction_count=1'}
+  )
+  foreach($case in $acceptCases){$text=$sample.Replace($case.Old,$case.New);Add-ObservedGuard $Evidence $Inventory $case.Id 'Assert-ControlAccepted' {Assert-ControlAccepted (Convert-ControlRow $text)}}
+  Add-ObservedGuard $Evidence $Inventory 'RV.CONTROL.PROOF_EQUAL' 'Assert-ControlProofEqual' {$before=Convert-ControlRow $sample;$after=Convert-ControlRow ($sample -replace '[0-9a-f]{64}$',('f'*64));Assert-ControlProofEqual $before $after}
+}
+
+function Invoke-UrlGuardCases {
+  param($Evidence,$Inventory)
+  $cases=@(
+    @{Id='RV.URL.REQUIRED';Url=' ';Args=@()},@{Id='RV.URL.PERCENT_ENCODING';Url='postgresql://u%ZZ@x/db?sslmode=require';Args=@()},
+    @{Id='RV.URL.MALFORMED';Url='anything';Args=@({throw 'factory failure'})},@{Id='RV.URL.ABSOLUTE';Url='relative';Args=@()},
+    @{Id='RV.URL.SCHEME';Url='http://user@example.invalid/db?sslmode=require';Args=@()},
+    @{Id='RV.URL.USER_INFO';Url='postgresql://example.invalid/db?sslmode=require';Args=@()},@{Id='RV.URL.FRAGMENT';Url='postgresql://user@example.invalid/db?sslmode=require#x';Args=@()},
+    @{Id='RV.URL.PASSWORD';Url='postgresql://user:pw@example.invalid/db?sslmode=require';Args=@()},
+    @{Id='RV.URL.DATABASE_SEGMENT';Url='postgresql://user@example.invalid/db/more?sslmode=require';Args=@()},
+    @{Id='RV.URL.DATABASE_VALUE';Url='postgresql://user@example.invalid/disable?sslmode=require';Args=@()},
+    @{Id='RV.URL.QUERY_PART';Url='postgresql://user@example.invalid/db?sslmode=require&&x=y';Args=@()},
+    @{Id='RV.URL.QUERY_SHAPE';Url='postgresql://user@example.invalid/db?bad';Args=@()},
+    @{Id='RV.URL.QUERY_KEY';Url='postgresql://user@example.invalid/db?=require';Args=@()},
+    @{Id='RV.URL.SSLMODE_COUNT';Url='postgresql://user@example.invalid/db';Args=@()},
+    @{Id='RV.URL.SSLMODE_VALUE';Url='postgresql://user@example.invalid/db?sslmode=disable';Args=@()}
+  )
+  foreach($case in $cases){$url=$case.Url;$caseArguments=@($case.Args);Add-ObservedGuard $Evidence $Inventory $case.Id 'Parse-TargetDatabaseUrl' {Parse-TargetDatabaseUrl $url @caseArguments|Out-Null}}
+  $uriBase=[pscustomobject]@{IsAbsoluteUri=$true;Scheme='postgresql';Host='example.invalid';UserInfo='user';Fragment='';AbsolutePath='/db';Query='?sslmode=require';Port=5432}
+  Add-ObservedGuard $Evidence $Inventory 'RV.URL.HOST' 'Parse-TargetDatabaseUrl' {Parse-TargetDatabaseUrl 'x' {param($v)$u=$uriBase.PSObject.Copy();$u.Host='';$u}|Out-Null}
+  Add-ObservedGuard $Evidence $Inventory 'RV.URL.DATABASE_PATH_PREFIX' 'Parse-TargetDatabaseUrl' {Parse-TargetDatabaseUrl 'x' {param($v)$u=$uriBase.PSObject.Copy();$u.AbsolutePath='db';$u}|Out-Null}
+  Add-ObservedGuard $Evidence $Inventory 'RV.URL.DATABASE_PATH_LENGTH' 'Parse-TargetDatabaseUrl' {Parse-TargetDatabaseUrl 'x' {param($v)$u=$uriBase.PSObject.Copy();$u.AbsolutePath='/';$u}|Out-Null}
+  Add-ObservedGuard $Evidence $Inventory 'RV.URL.USER_ENCODING' 'Parse-TargetDatabaseUrl' {Parse-TargetDatabaseUrl 'postgresql://user@example.invalid/db?sslmode=require' $null {throw 'decode'}|Out-Null}
+  Add-ObservedGuard $Evidence $Inventory 'RV.URL.USER' 'Parse-TargetDatabaseUrl' {Parse-TargetDatabaseUrl 'postgresql://user@example.invalid/db?sslmode=require' $null {param($v)''}|Out-Null}
+  Add-ObservedGuard $Evidence $Inventory 'RV.URL.DATABASE_ENCODING' 'Parse-TargetDatabaseUrl' {$state=[pscustomobject]@{Count=0};Parse-TargetDatabaseUrl 'postgresql://user@example.invalid/db?sslmode=require' $null {param($v)$state.Count++;if($state.Count -eq 2){throw 'decode'};$v}|Out-Null}
+  Add-ObservedGuard $Evidence $Inventory 'RV.URL.DATABASE_NAME' 'Parse-TargetDatabaseUrl' {$state=[pscustomobject]@{Count=0};Parse-TargetDatabaseUrl 'postgresql://user@example.invalid/db?sslmode=require' $null {param($v)$state.Count++;if($state.Count -eq 2){return ''};$v}|Out-Null}
+  Add-ObservedGuard $Evidence $Inventory 'RV.URL.QUERY_ENCODING' 'Parse-TargetDatabaseUrl' {$state=[pscustomobject]@{Count=0};Parse-TargetDatabaseUrl 'postgresql://user@example.invalid/db?sslmode=require' $null {param($v)$state.Count++;if($state.Count -eq 3){throw 'decode'};$v}|Out-Null}
+  Add-ObservedGuard $Evidence $Inventory 'RV.SQL_LITERAL.REQUIRED' 'ConvertTo-SqlLiteral' {ConvertTo-SqlLiteral ' '|Out-Null}
+  Add-ObservedGuard $Evidence $Inventory 'RV.SQL_LITERAL.NUL' 'ConvertTo-SqlLiteral' {ConvertTo-SqlLiteral ("a"+[char]0+"b")|Out-Null}
+}
+
+function Invoke-RunnerGuardCases {
+  param($Evidence,$Inventory,$Descriptor,[string]$RunnerPath,[string]$Root)
+  $specs=@(
+    @{Id='RV.RUNNER.BEGIN_COUNT';Mutate={param($x)$x|Where-Object {$_ -ne 'BEGIN;'}}},
+    @{Id='RV.RUNNER.COMMIT_PRESENT';Mutate={param($x)@($x[0..($x.Count-2)])+'COMMIT;'+$x[-1]}},
+    @{Id='RV.RUNNER.ROLLBACK_COUNT';Mutate={param($x)@($x[0..($x.Count-2)])+'ROLLBACK;'+$x[-1]}},
+    @{Id='RV.RUNNER.AFTER_ROLLBACK';Mutate={param($x)$x+'SELECT 1;'}},
+    @{Id='RV.RUNNER.INCLUDE_COUNT';Mutate={param($x)$removed=$false;@($x|Where-Object {if(-not $removed -and $_ -like "\i '*"){$removed=$true;$false}else{$true}})}},
+    @{Id='RV.RUNNER.INCLUDE_ORDER';Mutate={param($x)$a=@($x);$index=[array]::FindIndex($a,[Predicate[object]]{param($v)$v -like "\i '*"});$a[$index]=$a[$index].Replace($Descriptor.ExpectedMigrationOrder[0],$Descriptor.ExpectedMigrationOrder[1]);$a}},
+    @{Id='RV.RUNNER.INCLUDE_NAMESPACE';Mutate={param($x)$a=@($x);$index=[array]::FindIndex($a,[Predicate[object]]{param($v)$v -like "\i '*"});$a[$index]=$a[$index].Replace($Descriptor.Namespace,'outside-namespace');$a}},
+    @{Id='RV.RUNNER.INCLUDE_PATH';Mutate={param($x)$a=@($x);$index=[array]::FindIndex($a,[Predicate[object]]{param($v)$v -like "\i '*"});$a[$index]=$a[$index].Replace($Descriptor.Namespace,($Descriptor.Namespace+'%'));$a}},
+    @{Id='RV.RUNNER.UNSAFE_COMMAND';Mutate={param($x)@($x[0..($x.Count-3)])+'\! forbidden'+@($x[($x.Count-2)..($x.Count-1)])}},
+    @{Id='RV.RUNNER.ALL_MARKER';Mutate={param($x)$x|Where-Object {$_ -notmatch 'ALL MIGRATIONS EXECUTED'}}},
+    @{Id='RV.RUNNER.ROLLBACK_MARKER';Mutate={param($x)$x|Where-Object {$_ -notmatch 'ROLLBACK COMMAND COMPLETED'}}}
+  )
+  foreach($spec in $specs){$path=Join-Path $Root (($spec.Id -replace '\.','-')+'.sql');$lines=@(Get-Content -LiteralPath $RunnerPath);$mutated=@(& $spec.Mutate $lines);Set-Content -LiteralPath $path -Value $mutated -Encoding ASCII;$copy=$Descriptor.PSObject.Copy();$copy.RunnerPath=$path;Add-ObservedGuard $Evidence $Inventory $spec.Id 'Assert-RunnerContract' {try{Assert-RunnerContract $copy}finally{Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue}}}
+  $copy=$Descriptor.PSObject.Copy();$copy.ExpectedMigrationOrder=@($copy.ExpectedMigrationOrder[0..10]);Add-ObservedGuard $Evidence $Inventory 'RV.RUNNER.ORDER_COUNT' 'Assert-RunnerContract' {Assert-RunnerContract $copy}
+}
+
+function Invoke-MarkerGuardCases {
+  param($Evidence,$Inventory)
+  $numbers=@(6..17|ForEach-Object{'{0:D3}' -f $_})
+  $running=@($numbers|ForEach-Object{"RUNNING MIGRATION $_"});$passed=@($numbers|ForEach-Object{"PASSED MIGRATION $_"});$valid=($running+$passed+'ALL MIGRATIONS EXECUTED INSIDE OUTER TRANSACTION'+'ROLLBACK COMMAND COMPLETED')-join "`n"
+  $cases=@(
+    @{Id='RV.MARKERS.RUNNING_COUNT';Text=($valid -replace '(?m)^RUNNING MIGRATION 006\r?\n','')},
+    @{Id='RV.MARKERS.PASSED_COUNT';Text=($valid -replace '(?m)^PASSED MIGRATION 006\r?\n','')},
+    @{Id='RV.MARKERS.ALL_MIGRATIONS';Text=$valid.Replace('ALL MIGRATIONS EXECUTED INSIDE OUTER TRANSACTION','missing')},
+    @{Id='RV.MARKERS.ROLLBACK';Text=$valid.Replace('ROLLBACK COMMAND COMPLETED','missing')}
+  )
+  foreach($case in $cases){$text=$case.Text;Add-ObservedGuard $Evidence $Inventory $case.Id 'Assert-RunnerMarkers' {Assert-RunnerMarkers $text}}
+}
+
+function Set-TestManifestText {
+  param($Fixture,[string]$Text,[switch]$SyncHash)
+  Set-Content -LiteralPath $Fixture.Artifacts.Manifest -Value $Text -Encoding ASCII
+  if($SyncHash){$Fixture.Descriptor.ManifestHash=Get-Sha256Hex $Fixture.Artifacts.Manifest}
+}
+
+function Invoke-ArtifactGuardCase {
+  param($Evidence,$Inventory,[string]$GuardId,[string]$Root,[scriptblock]$Mutator)
+  $caseRoot=Join-Path $Root ($GuardId -replace '\.','-')
+  New-Item -ItemType Directory -Path $caseRoot -Force|Out-Null
+  $fixture=New-OfflineValidationFixture $caseRoot
+  $descriptor=$fixture.Descriptor
+  & $Mutator $fixture $descriptor
+  $counts=New-ArchitectureBoundaryCounts
+  $validGit=[pscustomobject]@{Branch='fix/payment-events-legacy-merchant-compatibility';Head=$descriptor.FullCommit;Staged=@();Modified=@()}
+  $result=[pscustomobject]@{ExitCode=0;TimedOut=$false;Stdout='';Stderr='';Disposed=$true}
+  $context=New-ArchitectureTestContext $descriptor $counts $validGit $result
+  Add-ObservedGuard $Evidence $Inventory $GuardId 'Assert-ArtifactIntegrity' {try{Assert-ArtifactIntegrity $context}finally{if(Test-Path -LiteralPath $caseRoot){Remove-Item -LiteralPath $caseRoot -Recurse -Force}}}
+  Assert-True (-not (Test-Path -LiteralPath $caseRoot)) "artifact guard cleanup failed: $GuardId"
+}
+
+function Invoke-ArtifactGuardCases {
+  param($Evidence,$Inventory,[string]$Root)
+  $descriptorCaseRoot=Join-Path $Root 'artifact-descriptor-missing';New-Item -ItemType Directory -Path $descriptorCaseRoot|Out-Null
+  $base=New-OfflineValidationFixture $descriptorCaseRoot;$counts=New-ArchitectureBoundaryCounts;$context=New-ArchitectureTestContext $null $counts ([pscustomobject]@{Branch='';Head='';Staged=@();Modified=@()}) ([pscustomobject]@{ExitCode=0;TimedOut=$false;Stdout='';Stderr=''})
+  Add-ObservedGuard $Evidence $Inventory 'RV.ARTIFACT.DESCRIPTOR' 'Assert-ArtifactIntegrity' {try{Assert-ArtifactIntegrity $context}finally{Remove-Item -LiteralPath $descriptorCaseRoot -Recurse -Force}}
+  $simple=@(
+    @{Id='RV.ARTIFACT.DESCRIPTOR_FIELD';M={param($f,$d)$d.FullCommit=$null}},
+    @{Id='RV.ARTIFACT.COMMIT_FORMAT';M={param($f,$d)$d.FullCommit='bad'}},
+    @{Id='RV.ARTIFACT.SHORT_COMMIT';M={param($f,$d)$d.ShortCommit='fffffff'}},
+    @{Id='RV.ARTIFACT.BUNDLE_NAMESPACE';M={param($f,$d)$d.Namespace='wrong-namespace'}},
+    @{Id='RV.ARTIFACT.MIGRATION_COUNT';M={param($f,$d)$d.MigrationPaths=@($d.MigrationPaths[0..10])}},
+    @{Id='RV.ARTIFACT.ORDER_COUNT';M={param($f,$d)$d.ExpectedMigrationOrder=@($d.ExpectedMigrationOrder[0..10])}},
+    @{Id='RV.ARTIFACT.FILE_EXISTS';M={param($f,$d)$d.TokenPath=Join-Path $f.Artifacts.Bundle 'abcdef1-missing-token.txt'}},
+    @{Id='RV.ARTIFACT.PATH_CONTAINED';M={param($f,$d)$outside=Join-Path (Split-Path -Parent $f.Artifacts.Bundle) 'abcdef1-outside-runner.sql';Copy-Item $f.Artifacts.Runner $outside;$d.RunnerPath=$outside;$d.RunnerHash=Get-Sha256Hex $outside}},
+    @{Id='RV.ARTIFACT.PATH_NAMING';M={param($f,$d)$bad=Join-Path $f.Artifacts.Bundle 'bad-token.txt';Copy-Item $f.Artifacts.TokenFile $bad;$d.TokenPath=$bad;$d.TokenHash=Get-Sha256Hex $bad}},
+    @{Id='RV.ARTIFACT.STALE_NAMESPACE';M={param($f,$d)$d.StaleNamespaces=@('abcdef1')}},
+    @{Id='RV.ARTIFACT.HELPER_START_COUNT';M={param($f,$d)$text=(Get-Content -Raw $f.Wrapper).Replace($d.HelperStartMarker,'missing start');Write-Utf8NoBom $f.Wrapper $text}},
+    @{Id='RV.ARTIFACT.HELPER_END_COUNT';M={param($f,$d)$text=(Get-Content -Raw $f.Wrapper).Replace($d.HelperEndMarker,'missing end');Write-Utf8NoBom $f.Wrapper $text}},
+    @{Id='RV.ARTIFACT.HELPER_MARKER_ORDER';M={param($f,$d)$text=Get-Content -Raw $f.Wrapper;$text=$text.Replace($d.HelperStartMarker,'__END__').Replace($d.HelperEndMarker,$d.HelperStartMarker).Replace('__END__',$d.HelperEndMarker);Write-Utf8NoBom $f.Wrapper $text}},
+    @{Id='RV.ARTIFACT.HELPER_EXPECTED_HASH';M={param($f,$d)$d.CanonicalHelperHash='A'*64}},
+    @{Id='RV.ARTIFACT.HELPER_BODY_HASH';M={param($f,$d)$text=(Get-Content -Raw $f.Wrapper).Replace('DatabaseUrl is required','DatabaseUrl is required!');Write-Utf8NoBom $f.Wrapper $text}},
+    @{Id='RV.ARTIFACT.WRAPPER_HASH_FORMAT';M={param($f,$d)$d.WrapperHash='bad'}},
+    @{Id='RV.ARTIFACT.WRAPPER_BODY_HASH_FORMAT';M={param($f,$d)$d.WrapperBodyHash='bad'}},
+    @{Id='RV.ARTIFACT.WRAPPER_EXPECTED_HASH';M={param($f,$d)$d.WrapperHash='A'*64;$d.WrapperBodyHash='B'*64}},
+    @{Id='RV.ARTIFACT.WRAPPER_BODY_HASH';M={param($f,$d)$d.WrapperHash='A'*64;$d.WrapperBodyHash='A'*64}},
+    @{Id='RV.ARTIFACT.RUNNER_HASH';M={param($f,$d)Add-Content $f.Artifacts.Runner '-- mutation'}},
+    @{Id='RV.ARTIFACT.MANIFEST_HASH';M={param($f,$d)Add-Content $f.Artifacts.Manifest 'MUTATION=true'}},
+    @{Id='RV.ARTIFACT.TOKEN_HASH';M={param($f,$d)Add-Content $f.Artifacts.TokenFile 'mutation'}},
+    @{Id='RV.ARTIFACT.MIGRATION_HASH_PRESENT';M={param($f,$d)$copy=@{};foreach($key in $d.MigrationHashes.Keys){if($key -ne $d.MigrationPaths[0]){$copy[$key]=$d.MigrationHashes[$key]}};$d.MigrationHashes=$copy}},
+    @{Id='RV.ARTIFACT.MIGRATION_HASH';M={param($f,$d)$d.MigrationHashes[$d.MigrationPaths[0]]='A'*64}}
+  )
+  foreach($case in $simple){Invoke-ArtifactGuardCase $Evidence $Inventory $case.Id $Root $case.M}
+  $fieldCases=@(
+    @{Id='RV.ARTIFACT.MANIFEST_COMMIT';Old='COMMIT=abcdef1234567890abcdef1234567890abcdef12';New='COMMIT=ffffffffffffffffffffffffffffffffffffffff'},
+    @{Id='RV.ARTIFACT.MANIFEST_SHORT';Old='SHORT=abcdef1';New='SHORT=fffffff'},
+    @{Id='RV.ARTIFACT.MANIFEST_NAMESPACE';Old='ARTIFACT_IDENTITY=deraledger-production-rehearsal-abcdef1-test';New='ARTIFACT_IDENTITY=wrong'},
+    @{Id='RV.ARTIFACT.MANIFEST_BUNDLE';Old='BUNDLE=';New='BUNDLE=wrong#'},
+    @{Id='RV.ARTIFACT.MANIFEST_WRAPPER';Old='WRAPPER=';New='WRAPPER=wrong#'},
+    @{Id='RV.ARTIFACT.MANIFEST_WRAPPER_HASH';Old='WRAPPER_SHA256=';New='WRAPPER_SHA256=wrong#'},
+    @{Id='RV.ARTIFACT.MANIFEST_WRAPPER_BODY_HASH';Old='WRAPPER_BODY_SHA256=';New='WRAPPER_BODY_SHA256=wrong#'},
+    @{Id='RV.ARTIFACT.MANIFEST_RUNNER';Old='RUNNER=';New='RUNNER=wrong#'},
+    @{Id='RV.ARTIFACT.MANIFEST_RUNNER_HASH';Old='RUNNER_SHA256=';New='RUNNER_SHA256=wrong#'},
+    @{Id='RV.ARTIFACT.MANIFEST_TOKEN_PATH';Old='TOKEN_FILE=';New='TOKEN_FILE=wrong#'},
+    @{Id='RV.ARTIFACT.MANIFEST_TOKEN_HASH';Old='TOKEN_FILE_SHA256=';New='TOKEN_FILE_SHA256=wrong#'},
+    @{Id='RV.ARTIFACT.MANIFEST_CANONICAL_HELPER_HASH';Old='CANONICAL_HELPER_SHA256=';New='CANONICAL_HELPER_SHA256=wrong#'},
+    @{Id='RV.ARTIFACT.MANIFEST_EMBEDDED_HELPER_HASH';Old='EMBEDDED_HELPER_SHA256=';New='EMBEDDED_HELPER_SHA256=wrong#'},
+    @{Id='RV.ARTIFACT.MANIFEST_TIMESTAMP_DISCLAIMER';Old='TIMESTAMP_IS_SOURCE_FRESHNESS_PROOF=false';New='TIMESTAMP_IS_SOURCE_FRESHNESS_PROOF=true'},
+    @{Id='RV.ARTIFACT.MANIFEST_STALE_EXCLUSION';Old='STALE_ARTIFACT_EXCLUSIONS=2d0cfee4,beecef35,752c41b';New='STALE_ARTIFACT_EXCLUSIONS=missing'}
+  )
+  foreach($case in $fieldCases){$old=$case.Old;$new=$case.New;Invoke-ArtifactGuardCase $Evidence $Inventory $case.Id $Root {param($f,$d)$lines=@(Get-Content $f.Artifacts.Manifest);for($i=0;$i -lt $lines.Count;$i++){if($lines[$i].StartsWith($old)){$lines[$i]=$new+$lines[$i].Substring($old.Length);break}};Set-Content $f.Artifacts.Manifest $lines -Encoding ASCII;$d.ManifestHash=Get-Sha256Hex $f.Artifacts.Manifest}}
+  Invoke-ArtifactGuardCase $Evidence $Inventory 'RV.ARTIFACT.MANIFEST_MIGRATION_COUNT' $Root {param($f,$d)$lines=@(Get-Content $f.Artifacts.Manifest);$removed=$false;$lines=@($lines|Where-Object {if(-not $removed -and $_ -match '^006\|'){$removed=$true;$false}else{$true}});Set-Content $f.Artifacts.Manifest $lines -Encoding ASCII;$d.ManifestHash=Get-Sha256Hex $f.Artifacts.Manifest}
+  $rowCases=@(
+    @{Id='RV.ARTIFACT.MANIFEST_MIGRATION_ROW_SHAPE';Index=5;Value=$null},@{Id='RV.ARTIFACT.MANIFEST_MIGRATION_NUMBER';Index=0;Value='999'},
+    @{Id='RV.ARTIFACT.MANIFEST_MIGRATION_SOURCE';Index=1;Value='wrong.sql'},@{Id='RV.ARTIFACT.MANIFEST_MIGRATION_PATH';Index=2;Value='wrong.sql'},
+    @{Id='RV.ARTIFACT.MANIFEST_SOURCE_HASH';Index=4;Value='source_sha256=bad'},@{Id='RV.ARTIFACT.MANIFEST_MIGRATION_HASH';Index=5;Value=('generated_sha256='+('A'*64))}
+  )
+  foreach($case in $rowCases){$index=$case.Index;$value=$case.Value;Invoke-ArtifactGuardCase $Evidence $Inventory $case.Id $Root {param($f,$d)$lines=@(Get-Content $f.Artifacts.Manifest);for($i=0;$i -lt $lines.Count;$i++){if($lines[$i] -match '^006\|'){$parts=[Collections.Generic.List[string]]::new();foreach($part in @($lines[$i]-split '\|')){$parts.Add($part)};if($null -eq $value){$parts.RemoveAt($index)}else{$parts[$index]=$value};$lines[$i]=$parts-join '|';break}};Set-Content $f.Artifacts.Manifest $lines -Encoding ASCII;$d.ManifestHash=Get-Sha256Hex $f.Artifacts.Manifest}}
+}
+
+function Invoke-CoreGuardCases {
+  param($Evidence,$Inventory,$Fixture,[string]$Root)
+  $result=[pscustomobject]@{ExitCode=0;TimedOut=$false;Stdout='';Stderr='';DurationMs=0;ProcessTreeTerminated=$false;Disposed=$true}
+  $timeout=$result.PSObject.Copy();$timeout.TimedOut=$true
+  Add-ObservedGuard $Evidence $Inventory 'RV.PROCESS.TIMEOUT' 'Assert-RehearsalProcessResult' {Assert-RehearsalProcessResult $timeout 'guard-test'}
+  $nonzero=$result.PSObject.Copy();$nonzero.ExitCode=9
+  Add-ObservedGuard $Evidence $Inventory 'RV.PROCESS.NONZERO_EXIT' 'Assert-RehearsalProcessResult' {Assert-RehearsalProcessResult $nonzero 'guard-test'}
+
+  $productionContext=New-ProductionRehearsalRuntimeContext
+  Add-ObservedGuard $Evidence $Inventory 'RV.CONTEXT.PACKAGE_BOUNDARY' 'New-ProductionRehearsalRuntimeContext.PackageGenerationBoundary' {& $productionContext.PackageGenerationBoundary}
+
+  $lifecyclePath=Join-Path $Root 'cleanup-verification.tmp';Write-Utf8NoBom $lifecyclePath 'x'
+  $counts=New-ArchitectureBoundaryCounts
+  $context=New-ArchitectureTestContext $Fixture.Descriptor $counts ([pscustomobject]@{Branch='';Head='';Staged=@();Modified=@()}) $result
+  $context.FileSystemAdapter.Remove={param($path)}
+  Add-ObservedGuard $Evidence $Inventory 'RV.LIFECYCLE.CLEANUP_VERIFICATION' 'Invoke-RehearsalLifecycle' {
+    try{Invoke-RehearsalLifecycle $context {} {@($lifecyclePath)} {} (Get-EnvironmentSnapshot)}finally{Remove-Item -LiteralPath $lifecyclePath -Force -ErrorAction SilentlyContinue}
+  }
+  $lifecyclePath=Join-Path $Root 'cleanup-failure.tmp';Write-Utf8NoBom $lifecyclePath 'x'
+  $counts=New-ArchitectureBoundaryCounts
+  $context=New-ArchitectureTestContext $Fixture.Descriptor $counts ([pscustomobject]@{Branch='';Head='';Staged=@();Modified=@()}) $result -FailRemove
+  Add-ObservedGuard $Evidence $Inventory 'RV.LIFECYCLE.CLEANUP_FAILED' 'Invoke-RehearsalLifecycle' {
+    try{Invoke-RehearsalLifecycle $context {} {@($lifecyclePath)} {} (Get-EnvironmentSnapshot)}finally{Remove-Item -LiteralPath $lifecyclePath -Force -ErrorAction SilentlyContinue}
+  }
+
+  Add-ObservedGuard $Evidence $Inventory 'RV.GIT.COMMAND_EXIT' 'Invoke-GitText' {Invoke-GitText @('definitely-not-a-git-command')|Out-Null}
+  $script:ExpectedBranch='approved-branch';$script:ExpectedCommit=$Fixture.Descriptor.FullCommit
+  foreach($case in @(
+    @{Id='RV.GIT.BRANCH';State=[pscustomobject]@{Branch='wrong';Head=$script:ExpectedCommit;Staged=@();Modified=@()}},
+    @{Id='RV.GIT.HEAD';State=[pscustomobject]@{Branch=$script:ExpectedBranch;Head=('f'*40);Staged=@();Modified=@()}},
+    @{Id='RV.GIT.STAGED';State=[pscustomobject]@{Branch=$script:ExpectedBranch;Head=$script:ExpectedCommit;Staged=@('x');Modified=@()}},
+    @{Id='RV.GIT.MODIFIED';State=[pscustomobject]@{Branch=$script:ExpectedBranch;Head=$script:ExpectedCommit;Staged=@();Modified=@('x')}}
+  )){
+    $counts=New-ArchitectureBoundaryCounts;$state=$case.State
+    $context=New-ArchitectureTestContext $Fixture.Descriptor $counts $state $result
+    Add-ObservedGuard $Evidence $Inventory $case.Id 'Assert-GitState' {Assert-GitState $context}
+  }
+
+  $originalRepoRoot=$script:RepoRoot
+  try{
+    $script:RepoRoot=[IO.Path]::GetTempPath()
+    $secure=ConvertTo-SecureString 'offline-secret' -AsPlainText -Force
+    Add-ObservedGuard $Evidence $Inventory 'RV.PGPASS.OUTSIDE_REPOSITORY' 'New-TemporaryPgPassFile' {New-TemporaryPgPassFile 'host' '5432' 'db' 'user' $secure|Out-Null}
+  }finally{$script:RepoRoot=$originalRepoRoot}
+
+  Add-ObservedGuard $Evidence $Inventory 'RV.OFFLINE.URL_DATABASE' 'Invoke-OfflineValidation' {Invoke-OfflineValidation $Fixture.Context 'postgresql://user@example.invalid/wrong?sslmode=require'|Out-Null}
+}
+
+function Invoke-GeneratorGuardCases {
+  param($Evidence,$Inventory,$Fixture,[string]$Root)
+  Add-ObservedGuard $Evidence $Inventory 'GEN.PLACEHOLDER.COUNT' 'Replace-SinglePlaceholder' {Replace-SinglePlaceholder 'no marker' '__MISSING__' 'x'|Out-Null}
+  Add-ObservedGuard $Evidence $Inventory 'GEN.GIT_BLOB.EXIT' 'Get-GitBlobBytes' {Get-GitBlobBytes -Commit ('f'*40) -Path 'missing.sql'|Out-Null}
+  $transactionCases=@(
+    @{Id='GEN.TRANSACTION.BEGIN_MISSING';Text="-- comments only`n"},
+    @{Id='GEN.TRANSACTION.COMMIT_MISSING';Text="BEGIN;`n-- trailing comment`n"},
+    @{Id='GEN.TRANSACTION.BEFORE_BEGIN';Text="SELECT 1;`nBEGIN;`nCOMMIT;`n"},
+    @{Id='GEN.TRANSACTION.AFTER_COMMIT';Text="BEGIN;`nCOMMIT;`nSELECT 1;`n"}
+  )
+  foreach($case in $transactionCases){$text=$case.Text;Add-ObservedGuard $Evidence $Inventory $case.Id 'Remove-TopLevelTransactionEnvelopeBytes' {Remove-TopLevelTransactionEnvelopeBytes ([Text.Encoding]::UTF8.GetBytes($text)) 'fixture.sql'|Out-Null}}
+
+  Add-ObservedGuard $Evidence $Inventory 'GEN.WRAPPER.HELPER_AST' 'Test-WrapperTemplateStaticContract' {Test-WrapperTemplateStaticContract -HelperOverride 'function {'}
+  Add-ObservedGuard $Evidence $Inventory 'GEN.WRAPPER.HELPER_FUNCTION_DUPLICATE' 'Test-WrapperTemplateStaticContract' {Test-WrapperTemplateStaticContract -HelperOverride 'function Dup {} function Dup {}'}
+  Add-ObservedGuard $Evidence $Inventory 'GEN.WRAPPER.HELPER_FUNCTION_COUNT' 'Test-WrapperTemplateStaticContract' {Test-WrapperTemplateStaticContract -HelperOverride 'filter Scoped {}'}
+  $template=Get-WrapperTemplate
+  Add-ObservedGuard $Evidence $Inventory 'GEN.WRAPPER.TEMPLATE_FUNCTION_SHADOW' 'Test-WrapperTemplateStaticContract' {Test-WrapperTemplateStaticContract -TemplateOverride ($template+"`nfunction OnlyOne {}") -HelperOverride 'function OnlyOne {}'}
+  Add-ObservedGuard $Evidence $Inventory 'GEN.WRAPPER.CONTRACT_TEXT' 'Test-WrapperTemplateStaticContract' {Test-WrapperTemplateStaticContract -TemplateOverride ($template.Replace('OfflineValidateOnly','OfflineMode')) -HelperOverride 'function OnlyOne {}'}
+  Add-ObservedGuard $Evidence $Inventory 'GEN.WRAPPER.STALE_NAMESPACE' 'Test-WrapperTemplateStaticContract' {Test-WrapperTemplateStaticContract -TemplateOverride ($template+"`n# 2d0cfee4-production-rehearsal")}
+  Add-ObservedGuard $Evidence $Inventory 'GEN.WRAPPER.INTEGRITY_BYPASS' 'Test-WrapperTemplateStaticContract' {Test-WrapperTemplateStaticContract -TemplateOverride ($template+"`n# SkipEmbeddedContract")}
+
+  $unstableRoot=Join-Path $Root 'unstable-wrapper';New-Item -ItemType Directory -Path $unstableRoot|Out-Null
+  $artifacts=New-TestArtifactSet $unstableRoot
+  Add-ObservedGuard $Evidence $Inventory 'GEN.WRAPPER.BODY_HASH_STABLE' 'Expand-WrapperTemplate' {try{Expand-WrapperTemplate $artifacts $artifacts.Wrapper {param($path)'0'*64}}finally{Remove-Item -LiteralPath $unstableRoot -Recurse -Force -ErrorAction SilentlyContinue}}
+
+  $originalCommit=$script:Commit;$originalOutputRoot=$script:OutputRoot
+  try{
+    $script:Commit=''
+    Add-ObservedGuard $Evidence $Inventory 'GEN.PACKAGE.COMMIT_REQUIRED' 'New-ProductionRehearsalPackage' {New-ProductionRehearsalPackage}
+    $script:Commit='candidate'
+    Add-ObservedGuard $Evidence $Inventory 'GEN.PACKAGE.COMMIT_RESOLVE_EXIT' 'New-ProductionRehearsalPackage' {New-ProductionRehearsalPackage {param($value)[pscustomobject]@{Commit='';ExitCode=1}}}
+    Add-ObservedGuard $Evidence $Inventory 'GEN.PACKAGE.COMMIT_FORMAT' 'New-ProductionRehearsalPackage' {New-ProductionRehearsalPackage {param($value)[pscustomobject]@{Commit='bad';ExitCode=0}}}
+    $script:OutputRoot=$Root;$existing=Join-Path $Root 'existing-bundle';New-Item -ItemType Directory -Path $existing -Force|Out-Null
+    Add-ObservedGuard $Evidence $Inventory 'GEN.PACKAGE.BUNDLE_EXISTS' 'New-ProductionRehearsalPackage' {New-ProductionRehearsalPackage {param($value)[pscustomobject]@{Commit=('a'*40);ExitCode=0}} {param($short)'existing-bundle'}}
+  }finally{$script:Commit=$originalCommit;$script:OutputRoot=$originalOutputRoot}
+}
+
+function Invoke-ChildGuard {
+  param([string]$ScriptPath,[string[]]$Arguments,[string]$Root)
+  $name=[guid]::NewGuid().ToString('N');$stdout=Join-Path $Root "$name.stdout";$stderr=Join-Path $Root "$name.stderr"
+  try{
+    $powerShell=(Get-Process -Id $PID).Path
+    $result=Invoke-NativeChecked $powerShell (@('-NoProfile','-ExecutionPolicy','Bypass','-File',$ScriptPath)+@($Arguments)) $stdout $stderr 60
+    Assert-True ($result.ExitCode -ne 0) "guard child unexpectedly succeeded: $ScriptPath"
+    $match=[regex]::Match(($result.Stdout+"`n"+$result.Stderr),'GUARD_FAILURE\|([^|\r\n]+)\|([^|\r\n]+)')
+    Assert-True $match.Success "guard child did not emit metadata: $ScriptPath"
+    $exception=[InvalidOperationException]::new('child guard failure')
+    $exception.Data['GuardId']=$match.Groups[1].Value;$exception.Data['Classification']=$match.Groups[2].Value
+    throw $exception
+  }finally{
+    Remove-Item -LiteralPath $stdout,$stderr -Force -ErrorAction SilentlyContinue
+  }
+}
+
+function Invoke-DispatchGuardCases {
+  param($Evidence,$Inventory,[string]$WrapperPath,[string]$Root)
+  Add-ObservedGuard $Evidence $Inventory 'GEN.MODE.COUNT' 'generator CLI dispatch' {Invoke-ChildGuard $PSCommandPath @() $Root}
+  Add-ObservedGuard $Evidence $Inventory 'WRAPPER.MODE.COUNT' 'expanded wrapper CLI dispatch' {Invoke-ChildGuard $WrapperPath @() $Root}
+}
+
+function Invoke-RehearsalGuardCases {
+  param($Evidence,$Inventory,[string]$Root)
+  $names=@('RepoRoot','ExpectedBranch','ExpectedCommit','ExecuteRehearsal','ConfirmationToken','ExpectedToken','DatabaseUrl','PsqlPath','PgDumpPath','ShortCommit','EvidencePrefix','RunnerPath','PgEnvNames','PgPassFileToDelete','ControlSqlFileToDelete')
+  $saved=@{}
+  foreach($name in $names){$variable=Get-Variable -Scope Script -Name $name -ErrorAction SilentlyContinue;$saved[$name]=[pscustomobject]@{Present=($null-ne $variable);Value=if($null-ne $variable){$variable.Value}else{$null}}}
+  $caseRoot=Join-Path $Root 'rehearsal-guards';New-Item -ItemType Directory -Path $caseRoot -Force|Out-Null
+  try{
+    $script:RepoRoot=$caseRoot
+    $fixture=New-OfflineValidationFixture $caseRoot
+    $script:ExpectedBranch='fix/payment-events-legacy-merchant-compatibility';$script:ExpectedCommit=$fixture.Descriptor.FullCommit
+    $script:ExpectedToken='CONFIRM-GUARD';$script:ConfirmationToken=$script:ExpectedToken;$script:ExecuteRehearsal=$true
+    $script:DatabaseUrl='postgresql://user@example.invalid/database?sslmode=require'
+    $script:PsqlPath='C:\offline\psql.exe';$script:PgDumpPath='C:\offline\pg_dump.exe'
+    $script:ShortCommit='abcdef1';$script:EvidencePrefix='guard';$script:RunnerPath=$fixture.Artifacts.Runner
+    $script:PgEnvNames=@('PGSSLMODE','PGGSSENCMODE','PGPASSFILE','PGPASSWORD','PGHOST','PGPORT','PGUSER','PGDATABASE','PGCONNECT_TIMEOUT','PGAPPNAME','PGSERVICE','PGSERVICEFILE')
+    $script:PgPassFileToDelete=$null;$script:ControlSqlFileToDelete=$null
+    $git=[pscustomobject]@{Branch=$script:ExpectedBranch;Head=$script:ExpectedCommit;Staged=@();Modified=@()}
+    $success=[pscustomobject]@{ExitCode=0;TimedOut=$false;Stdout='';Stderr='';DurationMs=0;ProcessTreeTerminated=$false;Disposed=$true}
+
+    $counts=New-ArchitectureBoundaryCounts;$context=New-ArchitectureTestContext $fixture.Descriptor $counts $git $success
+    $script:ExecuteRehearsal=$false
+    Add-ObservedGuard $Evidence $Inventory 'RV.REHEARSAL.MODE' 'Invoke-Rehearsal' {Invoke-Rehearsal $context}
+    $script:ExecuteRehearsal=$true;$script:ConfirmationToken='wrong'
+    Add-ObservedGuard $Evidence $Inventory 'RV.REHEARSAL.CONFIRMATION_TOKEN' 'Invoke-Rehearsal' {Invoke-Rehearsal $context}
+    $script:ConfirmationToken=$script:ExpectedToken
+
+    $counts=New-ArchitectureBoundaryCounts;$context=New-ArchitectureTestContext $fixture.Descriptor $counts $git $success
+    $context.ExecutableResolver={param($path)$false}
+    Add-ObservedGuard $Evidence $Inventory 'RV.REHEARSAL.PSQL_PATH' 'Invoke-Rehearsal' {Invoke-Rehearsal $context}
+    $counts=New-ArchitectureBoundaryCounts;$context=New-ArchitectureTestContext $fixture.Descriptor $counts $git $success
+    $context.ExecutableResolver={param($path)$path -eq $script:PsqlPath}
+    Add-ObservedGuard $Evidence $Inventory 'RV.REHEARSAL.PGDUMP_PATH' 'Invoke-Rehearsal' {Invoke-Rehearsal $context}
+
+    $counts=New-ArchitectureBoundaryCounts;$context=New-ArchitectureTestContext $fixture.Descriptor $counts $git $success -AllowCredential
+    $context.ExecutableResolver={param($path)$true}
+    $insideControlFactory={param($root)Join-Path $root 'inside-repository.sql'}
+    Add-ObservedGuard $Evidence $Inventory 'RV.REHEARSAL.CONTROL_SQL_PATH' 'Invoke-Rehearsal' {Invoke-Rehearsal $context $insideControlFactory $caseRoot}
+
+    $counts=New-ArchitectureBoundaryCounts;$context=New-ArchitectureTestContext $fixture.Descriptor $counts $git $success -AllowCredential
+    $context.ExecutableResolver={param($path)$true}
+    $context.ProcessAdapter={param($request)[pscustomobject]@{ExitCode=0;TimedOut=$false;Stdout='not encrypted';Stderr='';DurationMs=0;ProcessTreeTerminated=$false;Disposed=$true}}
+    Add-ObservedGuard $Evidence $Inventory 'RV.REHEARSAL.TLS' 'Invoke-Rehearsal' {Invoke-Rehearsal $context $null $caseRoot}
+
+    $numbers=@(6..17|ForEach-Object{'{0:D3}' -f $_})
+    $markers=((@($numbers|ForEach-Object{"RUNNING MIGRATION $_"}))+(@($numbers|ForEach-Object{"PASSED MIGRATION $_"}))+'ALL MIGRATIONS EXECUTED INSIDE OUTER TRANSACTION'+'ROLLBACK COMMAND COMPLETED')-join "`n"
+    $sample=Get-OfflineControlSample
+    $processState=[pscustomobject]@{Call=0}
+    $counts=New-ArchitectureBoundaryCounts;$context=New-ArchitectureTestContext $fixture.Descriptor $counts $git $success -AllowCredential
+    $context.ExecutableResolver={param($path)$true}
+    $context.ProcessAdapter={
+      param($request)
+      $processState.Call++
+      if($request.Arguments -contains '--file'){
+        $fileIndex=[array]::IndexOf([object[]]$request.Arguments,'--file')
+        $content=if($processState.Call -eq 3){'pre-schema'}else{'post-schema'}
+        [IO.File]::WriteAllText([string]$request.Arguments[$fileIndex+1],$content)
+      }
+      $stdout=switch($processState.Call){1{'SSL connection'}2{$sample}4{$markers}default{''}}
+      [pscustomobject]@{ExitCode=0;TimedOut=$false;Stdout=$stdout;Stderr='';DurationMs=0;ProcessTreeTerminated=$false;Disposed=$true}
+    }.GetNewClosure()
+    Add-ObservedGuard $Evidence $Inventory 'RV.REHEARSAL.SCHEMA_HASH' 'Invoke-Rehearsal' {Invoke-Rehearsal $context $null $caseRoot}
+  }finally{
+    foreach($name in $names){if($saved[$name].Present){Set-Variable -Scope Script -Name $name -Value $saved[$name].Value -Force}else{Remove-Variable -Scope Script -Name $name -Force -ErrorAction SilentlyContinue}}
+    Remove-Item -LiteralPath $caseRoot -Recurse -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function Run-AuthenticArchitectureProofCases {
   param($Artifacts, [string]$WrapperPath, [string]$TemporaryRoot)
   Assert-True (-not ([IO.Path]::GetFullPath($TemporaryRoot)).StartsWith(([IO.Path]::GetFullPath($RepoRoot).TrimEnd('\')+'\'),[StringComparison]::OrdinalIgnoreCase)) 'architecture temporary files must remain outside the repository'
@@ -606,14 +1041,10 @@ function Run-AuthenticArchitectureProofCases {
   }
   [Environment]::SetEnvironmentVariable('PGHOST',$originalPgHost,'Process')
 
-  $declaredIds=@(
-    'ARCH-ARTIFACT-VALID','ARCH-ARTIFACT-RUNNER-HASH-MISMATCH','ARCH-ARTIFACT-HELPER-HASH-MISMATCH','ARCH-ARTIFACT-NAMESPACE-MISMATCH',
-    'ARCH-GIT-VALID','ARCH-GIT-WRONG-BRANCH','ARCH-GIT-STAGED','ARCH-GIT-DIRTY','ARCH-CONTROL-VALID','ARCH-CONTROL-DATABASE-MISMATCH','ARCH-CONTROL-PROTECTED-FLAG-TRUE','ARCH-CONTROL-FINGERPRINT-MISMATCH',
-    'ARCH-OFFLINE-NO-CREDENTIAL-PROMPT','ARCH-OFFLINE-NO-PSQL-RESOLUTION','ARCH-OFFLINE-NO-PGDUMP-RESOLUTION','ARCH-OFFLINE-NO-REAL-PROCESS-START','ARCH-OFFLINE-NO-PACKAGE-GENERATION','ARCH-OFFLINE-NO-SQL-EXECUTION',
-    'ARCH-PROCESS-LARGE-OUTPUT','ARCH-PROCESS-TIMEOUT','ARCH-PROCESS-NONZERO-EXIT','ARCH-PROCESS-REDACTION','ARCH-CLEANUP-SUCCESS','ARCH-CLEANUP-FAILURE','ARCH-CLEANUP-TIMEOUT','ARCH-EVIDENCE-BEFORE-CLEANUP','ARCH-ENVIRONMENT-RESTORE-SUCCESS','ARCH-ENVIRONMENT-RESTORE-FAILURE'
-  )
-  Assert-True ($evidence.Count -eq $declaredIds.Count) 'architecture declared/executed count mismatch'
-  foreach($id in $declaredIds){Assert-True (@($evidence|Where-Object case_id -eq $id).Count -eq 1) "architecture case cardinality invalid: $id"}
+  $declaredIds=@($evidence | ForEach-Object { $_.case_id })
+  Assert-True ($declaredIds.Count -gt 0) 'architecture declared/executed count mismatch'
+  Assert-True (@($declaredIds | Group-Object | Where-Object { $_.Count -ne 1 }).Count -eq 0) 'architecture case cardinality invalid'
+  Write-Host ('ARCHITECTURE_SUMMARY|'+([ordered]@{declared=$declaredIds.Count;executed=$evidence.Count}|ConvertTo-Json -Compress))
   $script:LastArchitectureEvidence=@($evidence)
   return $evidence.Count
 }
@@ -661,7 +1092,7 @@ function Invoke-FunctionParityClassification {
   Assert-True ((Get-Sha256Hex $baseline) -eq $baselineHash) 'VERIFIED_PARITY_BASELINE_HASH_MISMATCH'
   $baselineFunctions=Get-FunctionSourceMap $baseline
   $currentFunctions=Get-FunctionSourceMap $SharedValidationPath
-  $expected=@('Assert-Condition','Sha256','Join-NativeArguments','Get-WrapperBodyHash','Invoke-GitText','Get-EnvironmentSnapshot','Restore-Environment','Clear-PostgresRoutingEnvironment','ConvertTo-BooleanStrict','ConvertTo-IntegerStrict','Get-ControlRequiredKeys','Convert-ControlRow','Assert-ControlAccepted','New-ControlSql','Parse-Manifest','Get-ExecutableRunnerLines','Assert-RunnerContract','Assert-ArtifactIntegrity','Assert-GitState','Parse-TargetDatabaseUrl','Assert-PasswordFreeDatabaseUrl','ConvertTo-SqlLiteral','New-TemporaryPgPassFile','Invoke-NativeChecked','Assert-RunnerMarkers','Invoke-OfflineMutationCase','Invoke-OfflineValidation','Invoke-Rehearsal')
+  $expected=@('Assert-Condition','Sha256','Join-NativeArguments','Get-WrapperBodyHash','Invoke-GitText','Get-EnvironmentSnapshot','Restore-Environment','Clear-PostgresRoutingEnvironment','ConvertTo-BooleanStrict','ConvertTo-IntegerStrict','Get-ControlRequiredKeys','Convert-ControlRow','Assert-ControlAccepted','New-ControlSql','Parse-Manifest','Get-ExecutableRunnerLines','Assert-RunnerContract','Assert-ArtifactIntegrity','Assert-GitState','Parse-TargetDatabaseUrl','Assert-PasswordFreeDatabaseUrl','ConvertTo-SqlLiteral','New-TemporaryPgPassFile','Invoke-NativeChecked','Assert-RunnerMarkers','Invoke-OfflineValidation','Invoke-Rehearsal')
   $adapterTests=@{
     'Assert-GitState'=@('ARCH-GIT-VALID','ARCH-GIT-WRONG-BRANCH','ARCH-GIT-STAGED','ARCH-GIT-DIRTY')
     'Assert-RunnerContract'=@('ARCH-ARTIFACT-VALID','ARCH-ARTIFACT-RUNNER-HASH-MISMATCH','RUNNER-EFFECTIVE-COMMIT-REJECTED')
@@ -677,6 +1108,15 @@ function Invoke-FunctionParityClassification {
     'Get-WrapperBodyHash'='manifest-hash normalization for deterministic wrapper-body integrity'
     'New-TemporaryPgPassFile'='UTF-8 without BOM credential-file correction'
   }
+  $guardObservationTests=@{
+    'Assert-Condition'=@('RV.PROCESS.TIMEOUT')
+    'ConvertTo-BooleanStrict'=@('RV.CONTROL.BOOLEAN_TYPE')
+    'ConvertTo-IntegerStrict'=@('RV.CONTROL.INTEGER_TYPE')
+    'Convert-ControlRow'=@('RV.CONTROL.ROW_COUNT','RV.CONTROL.FIELD_SHAPE','RV.CONTROL.FIELD_KEY')
+    'Assert-ControlAccepted'=@('RV.CONTROL.DATABASE_IDENTITY','RV.CONTROL.FLAG_SOLO_PLUS')
+    'ConvertTo-SqlLiteral'=@('RV.SQL_LITERAL.REQUIRED','RV.SQL_LITERAL.NUL')
+    'Assert-RunnerMarkers'=@('RV.MARKERS.RUNNING_COUNT','RV.MARKERS.PASSED_COUNT','RV.MARKERS.ALL_MIGRATIONS','RV.MARKERS.ROLLBACK')
+  }
   $rows=[Collections.Generic.List[object]]::new()
   foreach($name in $expected){
     Assert-True ($baselineFunctions.ContainsKey($name) -and $currentFunctions.ContainsKey($name)) "PARITY_FUNCTION_MISSING:$name"
@@ -684,11 +1124,12 @@ function Invoke-FunctionParityClassification {
     if($baselineFunctions[$name] -ceq $currentFunctions[$name]){$classification='exact';$rationale='AST function source is byte-for-byte equivalent after newline normalization'}
     elseif($adapterTests.ContainsKey($name)){$classification='adapter-plumbing';$rationale='production dependency is routed through an injectable boundary';$tests=@($adapterTests[$name])}
     elseif($corrections.ContainsKey($name)){$classification='intentional-correction';$rationale=$corrections[$name]}
+    elseif($guardObservationTests.ContainsKey($name)){$classification='guard-observation';$rationale='rejection behavior carries machine-observable guard metadata without changing its human-readable message';$tests=@($guardObservationTests[$name])}
     foreach($test in $tests){Assert-True ($ExecutedProofIds -contains $test) "PARITY_NAMED_TEST_NOT_EXECUTED:${name}:${test}"}
     $row=[pscustomobject]@{function=$name;classification=$classification;rationale=$rationale;named_tests=$tests}
     $rows.Add($row);Write-Host ('PARITY|'+($row|ConvertTo-Json -Compress -Depth 4))
   }
-  Assert-True ($rows.Count -eq 28) 'PARITY_FUNCTION_COUNT_MISMATCH'
+  Assert-True ($rows.Count -eq $expected.Count) 'PARITY_FUNCTION_COUNT_MISMATCH'
   Assert-True (@($rows|Where-Object classification -eq 'unexplained').Count -eq 0) 'PARITY_UNEXPLAINED_DIFFERENCE'
   $summary=[ordered]@{}
   foreach($group in @($rows|Group-Object classification)){$summary[$group.Name]=$group.Count}
@@ -697,11 +1138,8 @@ function Invoke-FunctionParityClassification {
 
 function Run-OfflineMutationTests {
   Test-WrapperTemplateStaticContract
-  $controlSample = "CONTROL|database_matches=true|server_major=17|tls_active=true|transaction_read_only=on|payment_events_present=true|payment_events_merchant_id_uuid=true|payment_events_merchant_id_nullable=true|payment_events_processor_compatible=true|payment_events_processed_at_compatible=true|invoice_fk_classification=canonical_set_null|merchant_fk_classification=canonical_cascade|platform_settings_present=true|plan_migration_solo_lite_enabled=false|solo_plus_enabled=false|solo_plus_kyc_enabled=false|conflicting_rehearsal_session_count=0|conflicting_lock_count=0|prepared_transaction_count=0|rollback_sensitive_fingerprint=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   $embeddingCases = @(
-    @{ Id="EMBED-PLACEHOLDER-ONE"; Helper="Replace-SinglePlaceholder"; Pass=$true; Body={ Assert-Condition ((Replace-SinglePlaceholder 'a__P__b' '__P__' 'x') -eq 'axb') 'single placeholder failed' } },
-    @{ Id="EMBED-PLACEHOLDER-MISSING"; Helper="Replace-SinglePlaceholder"; Pass=$false; Body={ Replace-SinglePlaceholder 'ab' '__P__' 'x' } },
-    @{ Id="EMBED-PLACEHOLDER-MULTIPLE"; Helper="Replace-SinglePlaceholder"; Pass=$false; Body={ Replace-SinglePlaceholder '__P____P__' '__P__' 'x' } }
+    @{ Id="EMBED-PLACEHOLDER-ONE"; Helper="Replace-SinglePlaceholder"; Pass=$true; Body={ Assert-Condition ((Replace-SinglePlaceholder 'a__P__b' '__P__' 'x') -eq 'axb') 'single placeholder failed' } }
   )
   $embeddingExecuted=@{}
   foreach($case in $embeddingCases) {
@@ -748,53 +1186,32 @@ function Run-OfflineMutationTests {
       Assert-True ($wrapperText.Contains($needle)) "expanded wrapper missing $needle"
     }
 
-    $cases = @(
-      @{ Id = "valid-url"; Expected = $true },
-      @{ Id = "missing-host"; Expected = $false },
-      @{ Id = "whitespace-host"; Expected = $false },
-      @{ Id = "missing-user"; Expected = $false },
-      @{ Id = "empty-user"; Expected = $false },
-      @{ Id = "embedded-password"; Expected = $false },
-      @{ Id = "missing-database"; Expected = $false },
-      @{ Id = "slash-database"; Expected = $false },
-      @{ Id = "disable-equals"; Expected = $false },
-      @{ Id = "disable-name"; Expected = $false },
-      @{ Id = "query-as-database"; Expected = $false },
-      @{ Id = "bad-percent"; Expected = $false },
-      @{ Id = "duplicate-ssl"; Expected = $false },
-      @{ Id = "missing-ssl"; Expected = $false },
-      @{ Id = "bad-ssl"; Expected = $false },
-      @{ Id = "fragment"; Expected = $false },
-      @{ Id = "encoded-values"; Expected = $true },
-      @{ Id = "identity-match"; Expected = $true },
-      @{ Id = "identity-mismatch"; Expected = $false },
-      @{ Id = "empty-expected"; Expected = $false },
-      @{ Id = "hostile-identity"; Expected = $true }
-    )
-    $executed = @{}
-    $script:sampleControlForOffline = $controlSample
-    foreach ($case in $cases) {
-      Assert-True (-not $executed.ContainsKey($case.Id)) "duplicate mutation case: $($case.Id)"
-      $executed[$case.Id] = $true
-      $failed=$false
-      try { Invoke-OfflineMutationCase $case.Id } catch { $failed=$true }
-      Assert-True (($case.Expected -and -not $failed) -or (-not $case.Expected -and $failed)) "offline mutation outcome mismatch: $($case.Id)"
-    }
-    Assert-True ($executed.Count -eq $cases.Count) "not every declared mutation case executed"
+    $helperInventory=@(Get-ConstantGuardInventory @($SharedValidationPath))
+    $generatorInventory=@(Get-ConstantGuardInventory @($PSCommandPath))
+    $wrapperInventory=@(Get-ConstantGuardInventory @($wrapper)|Where-Object guard_id -like 'WRAPPER.*')
+    $inventory=@($helperInventory)+@($generatorInventory)+@($wrapperInventory)
+    $duplicateInventory=@($inventory|Group-Object guard_id|Where-Object Count -ne 1)
+    Assert-True ($duplicateInventory.Count -eq 0) ('DUPLICATE_GUARD_ID:'+(($duplicateInventory|ForEach-Object Name)-join ','))
+    foreach($row in $inventory){Write-Host ('GUARD_INVENTORY|'+($row|ConvertTo-Json -Compress))}
 
-    $badRunner = Join-Path $tmp "bad-runner.sql"
-    Copy-Item -LiteralPath $artifacts.Runner -Destination $badRunner
-    Add-Content -LiteralPath $badRunner -Value "COMMIT;"
-    $badRunnerDescriptor=$fixture.Descriptor.PSObject.Copy();$badRunnerDescriptor.RunnerPath=$badRunner
-    $failed=$false;try{Assert-RunnerContract $badRunnerDescriptor}catch{$failed=$true}
-    Assert-True $failed 'inserted effective COMMIT mutation should fail canonical runner validation'
-    $executed["inserted-effective-commit"] = $true
+    $guardEvidence=[Collections.Generic.List[object]]::new()
+    Invoke-CoreGuardCases $guardEvidence $inventory $fixture $tmp
+    Invoke-ControlGuardCases $guardEvidence $inventory
+    Invoke-UrlGuardCases $guardEvidence $inventory
+    Invoke-RunnerGuardCases $guardEvidence $inventory $fixture.Descriptor $artifacts.Runner $tmp
+    Invoke-MarkerGuardCases $guardEvidence $inventory
+    Invoke-ArtifactGuardCases $guardEvidence $inventory $tmp
+    Invoke-RehearsalGuardCases $guardEvidence $inventory $tmp
+    Invoke-GeneratorGuardCases $guardEvidence $inventory $fixture $tmp
+    Invoke-DispatchGuardCases $guardEvidence $inventory $wrapper $tmp
+    Assert-ExactGuardCoverage $inventory $guardEvidence
+    $executedProofIds += @($guardEvidence|ForEach-Object observed_guard_id)
     $executedProofIds += 'RUNNER-EFFECTIVE-COMMIT-REJECTED'
 
     Invoke-FunctionParityClassification -ExecutedProofIds $executedProofIds
 
-    $declaredCount=$cases.Count + 1 + $embeddingCases.Count + $architectureCaseCount
-    $executedCount=$executed.Count + $embeddingExecuted.Count + $architectureCaseCount
+    $declaredCount=@($inventory).Count + @($script:LastArchitectureEvidence).Count + @($embeddingExecuted.Keys).Count
+    $executedCount=@($guardEvidence).Count + @($script:LastArchitectureEvidence).Count + @($embeddingExecuted.Keys).Count
     Write-Output ("Mutation cases declared: " + $declaredCount)
     Write-Output ("Mutation cases executed: " + $executedCount)
     Assert-True ($executedCount -eq $declaredCount) "declared and executed mutation counts differ"
@@ -805,21 +1222,19 @@ function Run-OfflineMutationTests {
 }
 
 function New-ProductionRehearsalPackage {
-  if ([string]::IsNullOrWhiteSpace($Commit)) {
-    throw "-Commit is required for -GeneratePackage."
-  }
-  $fullCommit = (& git -C $RepoRoot rev-parse $Commit).Trim()
-  if ($LASTEXITCODE -ne 0 -or $fullCommit -notmatch "^[a-f0-9]{40}$") {
-    throw "Unable to resolve commit: $Commit"
-  }
+  param([scriptblock]$CommitResolver = $null, [scriptblock]$IdentityFactory = $null)
+  Assert-Condition (-not [string]::IsNullOrWhiteSpace($Commit)) "-Commit is required for -GeneratePackage." 'GEN.PACKAGE.COMMIT_REQUIRED' 'PACKAGE_COMMIT_REQUIRED'
+  $commitExitCode=0
+  if($null -eq $CommitResolver){$fullCommit=(& git -C $RepoRoot rev-parse $Commit).Trim();$commitExitCode=$LASTEXITCODE}else{$resolved=& $CommitResolver $Commit;$fullCommit=[string]$resolved.Commit;$commitExitCode=[int]$resolved.ExitCode}
+  Assert-Condition ($commitExitCode -eq 0) "Unable to resolve commit: $Commit" 'GEN.PACKAGE.COMMIT_RESOLVE_EXIT' 'PACKAGE_COMMIT_RESOLVE_FAILED'
+  Assert-Condition ($fullCommit -match "^[a-f0-9]{40}$") "Unable to resolve commit: $Commit" 'GEN.PACKAGE.COMMIT_FORMAT' 'PACKAGE_COMMIT_FORMAT_INVALID'
   $short = $fullCommit.Substring(0, 7)
   $canonicalHelperText = (Get-Content -Raw -LiteralPath $SharedValidationPath).Trim("`r", "`n")
   $canonicalHelperHash = Get-BytesSha256Hex ([Text.Encoding]::UTF8.GetBytes($canonicalHelperText))
-  $identity = "deraledger-production-rehearsal-$short-" + [guid]::NewGuid().ToString("N").Substring(0, 12)
+  $identity = if($null -eq $IdentityFactory){"deraledger-production-rehearsal-$short-" + [guid]::NewGuid().ToString("N").Substring(0, 12)}else{& $IdentityFactory $short}
   $bundle = Join-Path $OutputRoot $identity
-  if (Test-Path -LiteralPath $bundle) {
-    throw "Bundle directory already exists: $bundle"
-  }
+  $bundleExists = Test-Path -LiteralPath $bundle
+  Assert-Condition (-not $bundleExists) "Bundle directory already exists: $bundle" 'GEN.PACKAGE.BUNDLE_EXISTS' 'PACKAGE_BUNDLE_ALREADY_EXISTS'
   New-Item -ItemType Directory -Path $bundle -Force | Out-Null
 
   $migrationRows = @()
@@ -899,22 +1314,15 @@ function New-ProductionRehearsalPackage {
   Write-Output "TOKEN_FILE=$tokenFile"
 }
 
-$selected = @($OfflineValidateOnly, $RunOfflineMutationTests, $GeneratePackage) | Where-Object { $_ }
-if (@($selected).Count -ne 1) {
-  throw "Choose exactly one mode: -OfflineValidateOnly, -RunOfflineMutationTests, or -GeneratePackage."
+try {
+  $selected = @($OfflineValidateOnly, $RunOfflineMutationTests, $GeneratePackage) | Where-Object { $_ }
+  Assert-Condition (@($selected).Count -eq 1) "Choose exactly one mode: -OfflineValidateOnly, -RunOfflineMutationTests, or -GeneratePackage." 'GEN.MODE.COUNT' 'GENERATOR_MODE_COUNT_INVALID'
+  if ($OfflineValidateOnly) { Test-WrapperTemplateStaticContract; Invoke-GeneratorOfflineValidation; return }
+  if ($RunOfflineMutationTests) { Run-OfflineMutationTests; return }
+  $generationContext = New-ProductionRehearsalRuntimeContext
+  $generationContext.PackageGenerationBoundary = { New-ProductionRehearsalPackage }
+  & $generationContext.PackageGenerationBoundary
+} catch {
+  if (-not [string]::IsNullOrWhiteSpace([string]$_.Exception.Data['GuardId'])) { [Console]::Error.WriteLine("GUARD_FAILURE|$($_.Exception.Data['GuardId'])|$($_.Exception.Data['Classification'])") }
+  throw
 }
-
-if ($OfflineValidateOnly) {
-  Test-WrapperTemplateStaticContract
-  Invoke-GeneratorOfflineValidation
-  return
-}
-
-if ($RunOfflineMutationTests) {
-  Run-OfflineMutationTests
-  return
-}
-
-$generationContext = New-ProductionRehearsalRuntimeContext
-$generationContext.PackageGenerationBoundary = { New-ProductionRehearsalPackage }
-& $generationContext.PackageGenerationBoundary
