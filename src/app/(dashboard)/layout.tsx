@@ -46,6 +46,7 @@ import { SubscriptionExpiryModal } from "@/components/subscription-expiry-modal"
 import { ThemeToggle } from "@/components/theme-toggle";
 import { DeraLedgerLogo } from "@/components/ui/deraledger-logo";
 import { PermissionGuard } from "@/components/PermissionGuard";
+import { requestStarterWorkspaceRecovery } from "@/lib/starter-workspace-recovery";
 
 interface NavItem {
   href: string;
@@ -116,12 +117,36 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       const merchantContext = await resolveMerchantContextForUser(sb, user, {
         preferredMerchantId,
       });
-      const initialDecision = getDashboardMerchantNavigationDecision(merchantContext, false);
+      let resolvedMerchantContext = merchantContext;
+
+      if (resolvedMerchantContext.status === "not_found") {
+        try {
+          const recovery = await requestStarterWorkspaceRecovery(fetch, user);
+          if (recovery.attempted) {
+            if (!recovery.repaired) {
+              setMerchantContextError("starter_workspace_repair_failed");
+              return;
+            }
+            resolvedMerchantContext = await resolveMerchantContextForUser(sb, user, {
+              preferredMerchantId: null,
+            });
+            if (resolvedMerchantContext.status === "not_found") {
+              setMerchantContextError("starter_workspace_repair_not_visible");
+              return;
+            }
+          }
+        } catch {
+          setMerchantContextError("starter_workspace_repair_failed");
+          return;
+        }
+      }
+
+      const initialDecision = getDashboardMerchantNavigationDecision(resolvedMerchantContext, false);
 
       if (initialDecision.action === "login") {
         traceTeamDashboardRedirect({
           source: "DashboardLayout.loadMerchant",
-          context: merchantContext,
+          context: resolvedMerchantContext,
           hasMerchantDto: false,
           hasWorkspaceCookie: Boolean(preferredMerchantId),
           workspaceAuthorized: false,
@@ -137,7 +162,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         }
         traceTeamDashboardRedirect({
           source: "DashboardLayout.loadMerchant",
-          context: merchantContext,
+          context: resolvedMerchantContext,
           hasMerchantDto: false,
           hasWorkspaceCookie: Boolean(preferredMerchantId),
           workspaceAuthorized: false,
@@ -150,7 +175,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       if (initialDecision.action === "error") {
         traceTeamDashboardRedirect({
           source: "DashboardLayout.loadMerchant",
-          context: merchantContext,
+          context: resolvedMerchantContext,
           hasMerchantDto: false,
           hasWorkspaceCookie: Boolean(preferredMerchantId),
           workspaceAuthorized: null,
@@ -160,27 +185,27 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         return;
       }
 
-      if (!isResolvedMerchantContext(merchantContext)) {
+      if (!isResolvedMerchantContext(resolvedMerchantContext)) {
         return;
       }
 
-      const m = await getMerchant(merchantContext.merchantId);
-      const dtoDecision = getDashboardMerchantNavigationDecision(merchantContext, Boolean(m));
+      const m = await getMerchant(resolvedMerchantContext.merchantId);
+      const dtoDecision = getDashboardMerchantNavigationDecision(resolvedMerchantContext, Boolean(m));
 
       if (m === null) {
         traceTeamDashboardRedirect({
           source: "DashboardLayout.loadMerchant",
-          context: merchantContext,
+          context: resolvedMerchantContext,
           hasMerchantDto: false,
           hasWorkspaceCookie: Boolean(preferredMerchantId),
-          workspaceAuthorized: preferredMerchantId === merchantContext.merchantId,
+          workspaceAuthorized: preferredMerchantId === resolvedMerchantContext.merchantId,
           redirectReason: dtoDecision.reason,
         });
         setMerchant({
-          id: merchantContext.merchantId,
+          id: resolvedMerchantContext.merchantId,
           business_name: "Workspace",
-          currentUserRole: merchantContext.roleName,
-          permissions: merchantContext.permissions,
+          currentUserRole: resolvedMerchantContext.roleName,
+          permissions: resolvedMerchantContext.permissions,
         } as unknown as Merchant);
         return;
       }
