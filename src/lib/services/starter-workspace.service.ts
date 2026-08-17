@@ -1,9 +1,41 @@
 import type { SupabaseClient, User } from "@supabase/supabase-js";
 
-import { ensureWorkspaceForMerchant } from "@/lib/services/onboarding-flow.service";
+type QueryError = {
+  code?: string;
+  message?: string;
+  details?: string;
+  hint?: string;
+} | null;
 
-type QueryError = { code?: string; message?: string } | null;
-type AuthAdminError = { code?: string; message?: string; status?: number } | null;
+type AuthAdminError = Exclude<QueryError, null> & { status?: number } | null;
+
+export type StarterProvisioningStage =
+  | "auth_create"
+  | "auth_resolve"
+  | "metadata_validation"
+  | "merchant_lookup"
+  | "merchant_insert"
+  | "merchant_identity_validation"
+  | "membership_role_lookup"
+  | "membership_upsert"
+  | "workspace_lookup"
+  | "workspace_insert"
+  | "workspace_update"
+  | "merchant_workspace_link";
+
+export type SafeSupabaseError = {
+  code: string | null;
+  message: string | null;
+  details: string | null;
+  hint: string | null;
+};
+
+export type StarterProvisioningWarning = {
+  code: string;
+  stage: StarterProvisioningStage;
+  message: string;
+  supabase: SafeSupabaseError | null;
+};
 
 export type StarterMerchantRecord = {
   id: string;
@@ -14,13 +46,13 @@ export type StarterWorkspaceInput = {
   userId: string;
   email: string;
   businessName: string;
-  tradingName?: string | null;
-  ownerName?: string | null;
 };
 
 export type StarterWorkspaceResult = {
   merchantId: string;
+  workspaceId: string;
   merchantCreated: boolean;
+  warnings: StarterProvisioningWarning[];
 };
 
 export type StarterActivationProperties = {
@@ -51,29 +83,52 @@ export interface StarterWorkspaceRepository {
     merchant: StarterMerchantRecord | null;
     error: QueryError;
   }>;
-  updateMerchant(merchantId: string, values: Record<string, unknown>): Promise<void>;
-  findOwnerRoleId(): Promise<string | null>;
-  upsertOwnerMembership(values: {
+  findCreatorRoleId(): Promise<string | null>;
+  upsertCreatorMembership(values: {
     merchant_id: string;
     user_id: string;
     role_id: string;
     is_active: true;
   }): Promise<void>;
-  ensureWorkspace(merchantId: string): Promise<string | null>;
+  ensureWorkspace(input: StarterWorkspaceInput & { merchantId: string }): Promise<string>;
 }
 
 export class StarterProvisioningError extends Error {
+  public readonly supabase: SafeSupabaseError | null;
+
   constructor(
     public readonly code:
       | "AUTH_USER_RESOLUTION_FAILED"
       | "NOT_STARTER_USER"
       | "STARTER_METADATA_MISSING"
-      | "MERCHANT_PROVISION_FAILED",
+      | "MERCHANT_PROVISION_FAILED"
+      | "WORKSPACE_PROVISION_FAILED",
+    public readonly stage: StarterProvisioningStage,
     message: string,
+    error?: QueryError,
   ) {
     super(message);
     this.name = "StarterProvisioningError";
+    this.supabase = toSafeSupabaseError(error);
   }
+}
+
+export function getStarterProvisioningLogPayload(error: unknown) {
+  if (error instanceof StarterProvisioningError) {
+    return {
+      code: error.code,
+      stage: error.stage,
+      message: error.message,
+      supabase: error.supabase,
+    };
+  }
+
+  return {
+    code: "UNEXPECTED_STARTER_PROVISIONING_ERROR",
+    stage: "unknown",
+    message: "Unexpected Starter provisioning error.",
+    supabase: null,
+  };
 }
 
 export function getStarterProfile(user: StarterAuthUser | null | undefined) {
@@ -84,12 +139,14 @@ export function getStarterProfile(user: StarterAuthUser | null | undefined) {
   if (plan !== "starter") {
     throw new StarterProvisioningError(
       "NOT_STARTER_USER",
+      "metadata_validation",
       "This account is not eligible for Starter workspace repair.",
     );
   }
   if (!user?.id || !businessName || !email) {
     throw new StarterProvisioningError(
       "STARTER_METADATA_MISSING",
+      "metadata_validation",
       "Starter account metadata is incomplete.",
     );
   }
@@ -108,6 +165,7 @@ export async function provisionStarterSignup(
   if (!email || !registeredName || !tradingName) {
     throw new StarterProvisioningError(
       "STARTER_METADATA_MISSING",
+      "metadata_validation",
       "Missing required Starter account fields.",
     );
   }
@@ -126,7 +184,9 @@ export async function provisionStarterSignup(
     if (!isAlreadyRegisteredError(createError)) {
       throw new StarterProvisioningError(
         "AUTH_USER_RESOLUTION_FAILED",
+        "auth_create",
         "Failed to provision Starter auth user.",
+        createError,
       );
     }
 
@@ -134,7 +194,9 @@ export async function provisionStarterSignup(
     if (resolved.error || !resolved.data?.user) {
       throw new StarterProvisioningError(
         "AUTH_USER_RESOLUTION_FAILED",
+        "auth_resolve",
         "Failed to resolve existing Starter auth user.",
+        resolved.error,
       );
     }
     user = resolved.data.user;
@@ -145,24 +207,16 @@ export async function provisionStarterSignup(
   if (profile.email !== email) {
     throw new StarterProvisioningError(
       "AUTH_USER_RESOLUTION_FAILED",
+      "auth_resolve",
       "Resolved Starter auth user does not match the requested email.",
     );
   }
 
-  const workspace = await ensureStarterWorkspace(dependencies.repository, {
-    ...profile,
-    businessName: profile.businessName,
-    tradingName,
-    ownerName: normalizeText(input.ownerName),
-  });
+  const workspace = await ensureStarterWorkspace(dependencies.repository, profile);
 
   if (!activationProperties) {
     const generated = await dependencies.authAdmin.generateLink({ type: "magiclink", email });
-    if (generated.error) {
-      activationProperties = null;
-    } else {
-      activationProperties = generated.data?.properties || null;
-    }
+    activationProperties = generated.error ? null : generated.data?.properties || null;
   }
 
   return {
@@ -189,61 +243,79 @@ export async function ensureStarterWorkspace(
 
   if (!merchant) {
     const inserted = await repository.insertMerchant({
-      // Using the Auth UUID as the fallback merchant UUID makes concurrent repairs
-      // converge on one primary key even without a unique merchants.user_id index.
+      // The Auth UUID makes concurrent repairs converge on one merchant primary key
+      // even though production does not enforce uniqueness on merchants.user_id.
       id: input.userId,
       user_id: input.userId,
       business_name: input.businessName,
-      trading_name: input.tradingName || input.businessName,
-      owner_name: input.ownerName || null,
       email: input.email,
-      subscription_plan: "starter",
       merchant_tier: "starter",
+      subscription_plan: "starter",
       verification_status: "unverified",
-      fee_absorption_default: "business",
       monthly_collection_limit: 0,
-      platform_version: 1,
+      holds_pending_review: false,
       onboarding_status: "active",
       setup_mode: false,
+      workspace_type: "business",
       live_features_enabled: false,
+      business_affiliation_status: "not_started",
     });
 
     merchant = inserted.merchant;
     merchantCreated = Boolean(merchant);
 
-    if (!merchant && inserted.error) {
+    if (!merchant) {
       // A concurrent request may have inserted the deterministic merchant first.
       merchant = await repository.findMerchantByUserId(input.userId)
         || await repository.findMerchantById(input.userId);
     }
+
+    if (!merchant) {
+      throw new StarterProvisioningError(
+        "MERCHANT_PROVISION_FAILED",
+        "merchant_insert",
+        "Failed to create Starter merchant.",
+        inserted.error,
+      );
+    }
   }
 
-  if (!merchant || merchant.user_id !== input.userId) {
+  if (merchant.user_id !== input.userId) {
     throw new StarterProvisioningError(
       "MERCHANT_PROVISION_FAILED",
-      "Failed to ensure Starter workspace.",
+      "merchant_identity_validation",
+      "Starter merchant identity did not match the authenticated user.",
     );
   }
 
-  await repository.updateMerchant(merchant.id, compactRecord({
-    trading_name: input.tradingName,
-    owner_name: input.ownerName,
-    platform_version: 1,
-  }));
-
-  const ownerRoleId = await repository.findOwnerRoleId();
-  if (ownerRoleId) {
-    await repository.upsertOwnerMembership({
-      merchant_id: merchant.id,
-      user_id: input.userId,
-      role_id: ownerRoleId,
-      is_active: true,
-    });
+  const warnings: StarterProvisioningWarning[] = [];
+  try {
+    const creatorRoleId = await repository.findCreatorRoleId();
+    if (creatorRoleId) {
+      await repository.upsertCreatorMembership({
+        merchant_id: merchant.id,
+        user_id: input.userId,
+        role_id: creatorRoleId,
+        is_active: true,
+      });
+    } else {
+      warnings.push({
+        code: "MEMBERSHIP_ROLE_UNAVAILABLE",
+        stage: "membership_role_lookup",
+        message: "Starter merchant was created without a team membership because no creator role was available.",
+        supabase: null,
+      });
+    }
+  } catch (error) {
+    warnings.push(toProvisioningWarning(error));
   }
 
-  await repository.ensureWorkspace(merchant.id);
+  const workspaceId = await repository.ensureWorkspace({
+    ...input,
+    merchantId: merchant.id,
+  });
 
-  return { merchantId: merchant.id, merchantCreated };
+  return { merchantId: merchant.id, workspaceId, merchantCreated, warnings };
 }
 
 export function createSupabaseStarterWorkspaceRepository(
@@ -258,7 +330,14 @@ export function createSupabaseStarterWorkspaceRepository(
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
-      if (error) throw new Error("Failed to read Starter merchant.");
+      if (error) {
+        throw new StarterProvisioningError(
+          "MERCHANT_PROVISION_FAILED",
+          "merchant_lookup",
+          "Failed to read Starter merchant.",
+          error,
+        );
+      }
       return data as StarterMerchantRecord | null;
     },
     async findMerchantById(merchantId) {
@@ -267,7 +346,14 @@ export function createSupabaseStarterWorkspaceRepository(
         .select("id,user_id")
         .eq("id", merchantId)
         .maybeSingle();
-      if (error) throw new Error("Failed to resolve concurrent Starter merchant.");
+      if (error) {
+        throw new StarterProvisioningError(
+          "MERCHANT_PROVISION_FAILED",
+          "merchant_lookup",
+          "Failed to resolve concurrent Starter merchant.",
+          error,
+        );
+      }
       return data as StarterMerchantRecord | null;
     },
     async insertMerchant(values) {
@@ -278,31 +364,157 @@ export function createSupabaseStarterWorkspaceRepository(
         .single();
       return {
         merchant: data as StarterMerchantRecord | null,
-        error: error ? { code: error.code, message: error.message } : null,
+        error: error ? pickSupabaseError(error) : null,
       };
     },
-    async updateMerchant(merchantId, values) {
-      if (Object.keys(values).length === 0) return;
-      const { error } = await adminClient.from("merchants").update(values).eq("id", merchantId);
-      if (error) throw new Error("Failed to update Starter merchant profile.");
-    },
-    async findOwnerRoleId() {
+    async findCreatorRoleId() {
       const { data, error } = await adminClient
         .from("roles")
         .select("id")
-        .eq("name", "owner")
+        .eq("name", "admin")
         .maybeSingle();
-      if (error) throw new Error("Failed to resolve Starter owner role.");
+      if (error) {
+        throw new StarterProvisioningError(
+          "MERCHANT_PROVISION_FAILED",
+          "membership_role_lookup",
+          "Failed to resolve the Starter creator role.",
+          error,
+        );
+      }
       return typeof data?.id === "string" ? data.id : null;
     },
-    async upsertOwnerMembership(values) {
+    async upsertCreatorMembership(values) {
       const { error } = await adminClient
         .from("merchant_team")
         .upsert(values, { onConflict: "merchant_id,user_id" });
-      if (error) throw new Error("Failed to ensure Starter owner membership.");
+      if (error) {
+        throw new StarterProvisioningError(
+          "MERCHANT_PROVISION_FAILED",
+          "membership_upsert",
+          "Failed to ensure Starter creator membership.",
+          error,
+        );
+      }
     },
-    async ensureWorkspace(merchantId) {
-      return ensureWorkspaceForMerchant(adminClient, merchantId);
+    async ensureWorkspace(input) {
+      const existingResult = await adminClient
+        .from("workspaces")
+        .select("id,merchant_id")
+        .eq("merchant_id", input.merchantId)
+        .maybeSingle();
+      if (existingResult.error) {
+        throw new StarterProvisioningError(
+          "WORKSPACE_PROVISION_FAILED",
+          "workspace_lookup",
+          "Failed to read Starter workspace.",
+          existingResult.error,
+        );
+      }
+
+      let workspace = existingResult.data as { id: string; merchant_id: string | null } | null;
+      let workspaceInsertError: QueryError = null;
+
+      if (!workspace) {
+        const inserted = await adminClient
+          .from("workspaces")
+          .insert({
+            // Deterministic fallback prevents duplicate workspaces during concurrent repair.
+            id: input.merchantId,
+            owner_user_id: input.userId,
+            merchant_id: input.merchantId,
+            workspace_type: "business",
+            display_name: input.businessName,
+            plan_type: "starter",
+            onboarding_status: "active",
+            setup_mode: false,
+            live_features_enabled: false,
+          })
+          .select("id,merchant_id")
+          .single();
+        workspace = inserted.data as { id: string; merchant_id: string | null } | null;
+        workspaceInsertError = inserted.error ? pickSupabaseError(inserted.error) : null;
+
+        if (!workspace) {
+          const concurrentByMerchant = await adminClient
+            .from("workspaces")
+            .select("id,merchant_id")
+            .eq("merchant_id", input.merchantId)
+            .maybeSingle();
+          if (concurrentByMerchant.error) {
+            throw new StarterProvisioningError(
+              "WORKSPACE_PROVISION_FAILED",
+              "workspace_lookup",
+              "Failed to resolve concurrent Starter workspace.",
+              concurrentByMerchant.error,
+            );
+          }
+          workspace = concurrentByMerchant.data as { id: string; merchant_id: string | null } | null;
+        }
+
+        if (!workspace) {
+          const concurrentById = await adminClient
+            .from("workspaces")
+            .select("id,merchant_id")
+            .eq("id", input.merchantId)
+            .maybeSingle();
+          if (concurrentById.error) {
+            throw new StarterProvisioningError(
+              "WORKSPACE_PROVISION_FAILED",
+              "workspace_lookup",
+              "Failed to resolve deterministic Starter workspace.",
+              concurrentById.error,
+            );
+          }
+          const candidate = concurrentById.data as { id: string; merchant_id: string | null } | null;
+          workspace = candidate?.merchant_id === input.merchantId ? candidate : null;
+        }
+
+        if (!workspace) {
+          throw new StarterProvisioningError(
+            "WORKSPACE_PROVISION_FAILED",
+            "workspace_insert",
+            "Failed to create Starter workspace.",
+            workspaceInsertError,
+          );
+        }
+      }
+
+      const workspaceUpdate = await adminClient
+        .from("workspaces")
+        .update({
+          owner_user_id: input.userId,
+          merchant_id: input.merchantId,
+          workspace_type: "business",
+          display_name: input.businessName,
+          plan_type: "starter",
+          onboarding_status: "active",
+          setup_mode: false,
+          live_features_enabled: false,
+        })
+        .eq("id", workspace.id);
+      if (workspaceUpdate.error) {
+        throw new StarterProvisioningError(
+          "WORKSPACE_PROVISION_FAILED",
+          "workspace_update",
+          "Failed to update Starter workspace.",
+          workspaceUpdate.error,
+        );
+      }
+
+      const merchantLink = await adminClient
+        .from("merchants")
+        .update({ workspace_id: workspace.id })
+        .eq("id", input.merchantId);
+      if (merchantLink.error) {
+        throw new StarterProvisioningError(
+          "WORKSPACE_PROVISION_FAILED",
+          "merchant_workspace_link",
+          "Failed to link Starter merchant to its workspace.",
+          merchantLink.error,
+        );
+      }
+
+      return workspace.id;
     },
   };
 }
@@ -312,8 +524,40 @@ function isAlreadyRegisteredError(error: AuthAdminError | undefined) {
   return error?.status === 422 || message.includes("already") || message.includes("registered");
 }
 
-function compactRecord(values: Record<string, unknown>) {
-  return Object.fromEntries(Object.entries(values).filter(([, value]) => value !== undefined));
+function toProvisioningWarning(error: unknown): StarterProvisioningWarning {
+  if (error instanceof StarterProvisioningError) {
+    return {
+      code: "MEMBERSHIP_PROVISION_WARNING",
+      stage: error.stage,
+      message: error.message,
+      supabase: error.supabase,
+    };
+  }
+  return {
+    code: "MEMBERSHIP_PROVISION_WARNING",
+    stage: "membership_upsert",
+    message: "Starter merchant was created but its team membership could not be ensured.",
+    supabase: null,
+  };
+}
+
+function toSafeSupabaseError(error: QueryError | undefined): SafeSupabaseError | null {
+  if (!error) return null;
+  return {
+    code: normalizeText(error.code),
+    message: normalizeText(error.message),
+    details: normalizeText(error.details),
+    hint: normalizeText(error.hint),
+  };
+}
+
+function pickSupabaseError(error: Exclude<QueryError, null>) {
+  return {
+    code: error.code,
+    message: error.message,
+    details: error.details,
+    hint: error.hint,
+  };
 }
 
 function normalizeEmail(value: unknown) {
