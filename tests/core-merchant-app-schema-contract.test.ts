@@ -4,6 +4,17 @@ import { existsSync, readFileSync } from "node:fs";
 type Contract = {
   tables: Record<string, [string, string][]>;
   additive_repairs: Record<string, string[]>;
+  security: {
+    workspaces: {
+      rls_enabled: boolean;
+      policy_name: string;
+      command: string;
+      roles: string[];
+      using: string;
+      with_check: null;
+      grant_changes: boolean;
+    };
+  };
   excluded_provider_columns: string[];
 };
 
@@ -91,6 +102,39 @@ async function run() {
   assert.doesNotMatch(migration, /\b(?:DROP TABLE|TRUNCATE|DELETE FROM|UPDATE\s+public\.|INSERT INTO)\b/i);
   assert.doesNotMatch(migration, /ALTER TABLE public\.(?:subscriptions|payment_records|payment_events|payment_providers|merchant_settlement)/i);
   assert.match(migration, /No role rows, subscriptions, provider configuration, or business rows are changed/);
+
+  const workspaceSecurity = manifest.security.workspaces;
+  assert.deepEqual(workspaceSecurity, {
+    rls_enabled: true,
+    policy_name: "authenticated_read_merchant_workspaces",
+    command: "SELECT",
+    roles: ["authenticated"],
+    using: "public.can_read_merchant_row_v1(merchant_id)",
+    with_check: null,
+    grant_changes: false,
+  });
+  assert.match(
+    migration,
+    /CREATE POLICY authenticated_read_merchant_workspaces\s+ON public\.workspaces\s+FOR SELECT\s+TO authenticated\s+USING \(public\.can_read_merchant_row_v1\(merchant_id\)\)/,
+  );
+  assert.match(migration, /public\.workspaces has unexpected or incompatible policies/);
+  assert.doesNotMatch(migration, /\bDROP\s+POLICY\b/i);
+  assert.doesNotMatch(
+    executableSql(migration),
+    /\b(?:GRANT|REVOKE)\b/i,
+    "Migration 019 must not alter existing grants.",
+  );
+
+  assert.match(
+    preflight,
+    /workspaces' AND count\(policy\.policyname\) = 0 THEN 'WARN'/,
+    "Zero workspace policies must be a repairable preflight warning.",
+  );
+  assert.match(preflight, /Unexpected or incompatible workspace policies are not replaced and remain blocking/);
+  assert.match(preflight, /policy_prerequisite\.public\.workspaces/);
+  assert.match(postflight, /count\(policy\.policyname\) = 1/);
+  assert.match(postflight, /canonical_workspace_policies/);
+  assert.match(postflight, /policy_prerequisite\.public\.workspaces/);
 
   assert.deepEqual(manifest.excluded_provider_columns.sort(), [
     "invoices.crypto_asset",

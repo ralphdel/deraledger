@@ -115,16 +115,80 @@ security_checks AS (
   SELECT
     'rls.public.' || contract.table_name AS check_name,
     'rls/policy'::text AS object_type,
-    'RLS enabled with at least one policy'::text AS expected,
-    format('rls=%s policies=%s', COALESCE(relation.relrowsecurity, false), count(policy.policyname)) AS actual,
-    CASE WHEN relation.relrowsecurity AND count(policy.policyname) > 0 THEN 'PASS' ELSE 'FAIL' END AS status,
-    'Migration 019 does not replace existing authorization policies.'::text AS details
+    CASE
+      WHEN contract.table_name = 'workspaces'
+      THEN 'RLS enabled; exactly authenticated_read_merchant_workspaces SELECT policy'
+      ELSE 'RLS enabled with at least one policy'
+    END::text AS expected,
+    format(
+      'rls=%s policies=%s canonical_workspace_policies=%s',
+      COALESCE(relation.relrowsecurity, false),
+      count(policy.policyname),
+      count(*) FILTER (
+        WHERE policy.policyname = 'authenticated_read_merchant_workspaces'
+          AND policy.permissive = 'PERMISSIVE'
+          AND policy.cmd = 'SELECT'
+          AND policy.roles::text[] = ARRAY['authenticated']::text[]
+          AND replace(policy.qual, 'public.can_read_merchant_row_v1', 'can_read_merchant_row_v1')
+            IN (
+              'can_read_merchant_row_v1(merchant_id)',
+              '(can_read_merchant_row_v1(merchant_id))'
+            )
+          AND policy.with_check IS NULL
+      )
+    ) AS actual,
+    CASE
+      WHEN NOT COALESCE(relation.relrowsecurity, false) THEN 'FAIL'
+      WHEN contract.table_name = 'workspaces' AND count(policy.policyname) = 0 THEN 'WARN'
+      WHEN contract.table_name = 'workspaces'
+       AND count(policy.policyname) = 1
+       AND count(*) FILTER (
+         WHERE policy.policyname = 'authenticated_read_merchant_workspaces'
+           AND policy.permissive = 'PERMISSIVE'
+           AND policy.cmd = 'SELECT'
+           AND policy.roles::text[] = ARRAY['authenticated']::text[]
+           AND replace(policy.qual, 'public.can_read_merchant_row_v1', 'can_read_merchant_row_v1')
+             IN (
+               'can_read_merchant_row_v1(merchant_id)',
+               '(can_read_merchant_row_v1(merchant_id))'
+             )
+           AND policy.with_check IS NULL
+       ) = 1
+      THEN 'PASS'
+      WHEN contract.table_name = 'workspaces' THEN 'FAIL'
+      WHEN count(policy.policyname) > 0 THEN 'PASS'
+      ELSE 'FAIL'
+    END AS status,
+    CASE
+      WHEN contract.table_name = 'workspaces' AND count(policy.policyname) = 0
+      THEN 'Repairable: migration 019 creates the missing owner/team-scoped authenticated SELECT policy.'
+      WHEN contract.table_name = 'workspaces'
+      THEN 'Unexpected or incompatible workspace policies are not replaced and remain blocking.'
+      ELSE 'Migration 019 preserves the existing authorization policy set.'
+    END::text AS details
   FROM table_contract contract
   LEFT JOIN pg_class relation ON relation.oid = to_regclass(format('public.%I', contract.table_name))
   LEFT JOIN pg_policies policy
     ON policy.schemaname = 'public'
    AND policy.tablename = contract.table_name
   GROUP BY contract.table_name, relation.relrowsecurity
+),
+workspace_policy_prerequisite_check AS (
+  SELECT
+    'policy_prerequisite.public.workspaces' AS check_name,
+    'function/role' AS object_type,
+    'can_read_merchant_row_v1(uuid) and authenticated role exist' AS expected,
+    format(
+      'helper=%s authenticated_role=%s',
+      to_regprocedure('public.can_read_merchant_row_v1(uuid)') IS NOT NULL,
+      EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated')
+    ) AS actual,
+    CASE
+      WHEN to_regprocedure('public.can_read_merchant_row_v1(uuid)') IS NOT NULL
+       AND EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated')
+      THEN 'PASS' ELSE 'FAIL'
+    END AS status,
+    'The workspace policy is repairable only with the existing hardened helper and Supabase authenticated role.' AS details
 ),
 grant_checks AS (
   SELECT
@@ -156,6 +220,8 @@ UNION ALL
 SELECT check_name, object_type, expected, actual, status, details FROM index_checks
 UNION ALL
 SELECT check_name, object_type, expected, actual, status, details FROM security_checks
+UNION ALL
+SELECT check_name, object_type, expected, actual, status, details FROM workspace_policy_prerequisite_check
 UNION ALL
 SELECT check_name, object_type, expected, actual, status, details FROM grant_checks
 UNION ALL

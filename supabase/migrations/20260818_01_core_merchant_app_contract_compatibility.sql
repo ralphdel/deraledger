@@ -13,6 +13,8 @@ DECLARE
   v_table text;
   v_relation regclass;
   v_relkind "char";
+  v_workspace_policy_count bigint;
+  v_canonical_workspace_policy_count bigint;
 BEGIN
   FOREACH v_table IN ARRAY ARRAY[
     'merchants', 'workspaces', 'merchant_team', 'roles', 'clients',
@@ -31,9 +33,57 @@ BEGIN
       RAISE EXCEPTION
         'Migration 019 compatibility failure: public.% is relkind %, expected ordinary table',
         v_table,
-        v_relkind;
+      v_relkind;
     END IF;
   END LOOP;
+
+  IF to_regprocedure('public.can_read_merchant_row_v1(uuid)') IS NULL THEN
+    RAISE EXCEPTION
+      'Migration 019 prerequisite missing: public.can_read_merchant_row_v1(uuid) from authorization hardening';
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    RAISE EXCEPTION 'Migration 019 prerequisite missing: authenticated database role';
+  END IF;
+
+  IF NOT (
+    SELECT relation.relrowsecurity
+    FROM pg_class relation
+    WHERE relation.oid = 'public.workspaces'::regclass
+  ) THEN
+    RAISE EXCEPTION
+      'Migration 019 compatibility failure: public.workspaces RLS must already be enabled';
+  END IF;
+
+  SELECT
+    count(*),
+    count(*) FILTER (
+      WHERE policy.policyname = 'authenticated_read_merchant_workspaces'
+        AND policy.permissive = 'PERMISSIVE'
+        AND policy.cmd = 'SELECT'
+        AND policy.roles::text[] = ARRAY['authenticated']::text[]
+        AND replace(policy.qual, 'public.can_read_merchant_row_v1', 'can_read_merchant_row_v1')
+          IN (
+            'can_read_merchant_row_v1(merchant_id)',
+            '(can_read_merchant_row_v1(merchant_id))'
+          )
+        AND policy.with_check IS NULL
+    )
+  INTO v_workspace_policy_count, v_canonical_workspace_policy_count
+  FROM pg_policies policy
+  WHERE policy.schemaname = 'public'
+    AND policy.tablename = 'workspaces';
+
+  IF v_workspace_policy_count > 0
+     AND NOT (
+       v_workspace_policy_count = 1
+       AND v_canonical_workspace_policy_count = 1
+     ) THEN
+    RAISE EXCEPTION
+      'Migration 019 compatibility failure: public.workspaces has unexpected or incompatible policies (total=%, canonical=%)',
+      v_workspace_policy_count,
+      v_canonical_workspace_policy_count;
+  END IF;
 END;
 $$;
 
@@ -163,8 +213,26 @@ CREATE INDEX IF NOT EXISTS idx_invoices_invoice_hash
 CREATE INDEX IF NOT EXISTS idx_roles_merchant
   ON public.roles (merchant_id);
 
--- No RLS or grant changes are required: no table is created here and migration
--- 018 already establishes the browser-read/service-write policy for merchant data.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_policies policy
+    WHERE policy.schemaname = 'public'
+      AND policy.tablename = 'workspaces'
+      AND policy.policyname = 'authenticated_read_merchant_workspaces'
+  ) THEN
+    CREATE POLICY authenticated_read_merchant_workspaces
+      ON public.workspaces
+      FOR SELECT
+      TO authenticated
+      USING (public.can_read_merchant_row_v1(merchant_id));
+  END IF;
+END;
+$$;
+
+-- The policy relies on the existing authenticated/service_role table grants.
+-- Migration 019 intentionally issues no GRANT or REVOKE statements.
 -- No role rows, subscriptions, provider configuration, or business rows are changed.
 
 COMMIT;

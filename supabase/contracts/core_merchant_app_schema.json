@@ -88,6 +88,17 @@
     "merchant_team": ["must_change_password"],
     "roles": ["merchant_id"]
   },
+  "security": {
+    "workspaces": {
+      "rls_enabled": true,
+      "policy_name": "authenticated_read_merchant_workspaces",
+      "command": "SELECT",
+      "roles": ["authenticated"],
+      "using": "public.can_read_merchant_row_v1(merchant_id)",
+      "with_check": null,
+      "grant_changes": false
+    }
+  },
   "excluded_provider_columns": [
     "invoices.crypto_deposit_address",
     "invoices.crypto_asset",
