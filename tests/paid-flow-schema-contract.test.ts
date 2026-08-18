@@ -12,6 +12,7 @@ async function run() {
   for (const column of [
     "expected_amount", "account_setup_status", "onboarding_session_id",
     "payment_reference", "paystack_ref", "expiry_date", "migration_key",
+    "subscription_payments', 'id", "subscription_payments', 'created_at",
   ]) {
     assert.match(sql, new RegExp(column));
   }
@@ -21,6 +22,14 @@ async function run() {
   assert.match(sql, /'FAIL'/);
   assert.doesNotMatch(sql, /\\(?:set|pset|i)\b/i);
   assert.doesNotMatch(sql, /\b(?:insert\s+into|update\s+public|delete\s+from|alter\s+table|create\s+table|drop\s+table|truncate)\b/i);
+  assert.match(sql, /subscription_payments_pkey/);
+  assert.match(sql, /subscription_payments_paystack_ref_key/);
+  assert.match(sql, /subscription_payments_merchant_id_fkey/);
+  assert.match(sql, /sub_payments_merchant/);
+  assert.match(sql, /authenticated SELECT only; anon\/PUBLIC none/);
+  assert.match(sql, /Migration 017 intentionally made this audit table service-only/);
+  assert.match(sql, /RLS disabled, zero policies, zero browser grants/);
+  assert.match(sql, /payment testing remains prohibited unless every returned row is PASS/i);
 
   console.log("paid-flow-schema-contract tests passed");
 }
