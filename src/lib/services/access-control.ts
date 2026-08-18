@@ -76,9 +76,9 @@ export interface AccessResult {
 }
 
 type InvoiceCreationMerchant = Pick<Merchant,
-  "subscription_plan" | "merchant_tier" | "verification_status" | "bvn_status" | "cac_status" | "live_features_enabled" | "setup_mode"
+  "subscription_plan" | "merchant_tier"
 > & Pick<Partial<Merchant>,
-  "selfie_status" | "utility_status" | "business_affiliation_status" | "email" | "is_super_admin"
+  "verification_status" | "bvn_status" | "cac_status" | "selfie_status" | "utility_status" | "business_affiliation_status" | "live_features_enabled" | "setup_mode" | "email" | "is_super_admin"
 >;
 
 export type InvoiceCreationAccessResult =
@@ -94,7 +94,7 @@ export type InvoiceCreationAccessResult =
     };
 
 function liveCollectionEnabled(
-  merchant: Pick<Merchant, "subscription_plan" | "merchant_tier" | "verification_status" | "bvn_status" | "cac_status" | "live_features_enabled" | "setup_mode"> & Pick<Partial<Merchant>, "selfie_status" | "utility_status" | "business_affiliation_status" | "email" | "is_super_admin">
+  merchant: InvoiceCreationMerchant
 ): boolean {
   return isLiveFeatureEnabled(merchant);
 }
@@ -127,7 +127,7 @@ export function canCreateInvoice(
 
 // ── Gate: Create collection invoice ──────────────────────────────────────────
 export function canCreateCollectionInvoice(
-  merchant: (Pick<Merchant, "subscription_plan" | "merchant_tier" | "verification_status" | "bvn_status" | "cac_status" | "live_features_enabled" | "setup_mode"> & Pick<Partial<Merchant>, "selfie_status" | "utility_status" | "business_affiliation_status" | "email" | "is_super_admin">) | null | undefined
+  merchant: InvoiceCreationMerchant | null | undefined
 ): AccessResult {
   if (!merchant) {
     return { allowed: false, reason: "Workspace could not be resolved. Please refresh and try again." };

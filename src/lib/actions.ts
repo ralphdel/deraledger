@@ -4,7 +4,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { revalidatePath } from "next/cache";
-import { requirePermission } from "./rbac";
+import { requirePermission, resolveMerchantAccess } from "./rbac";
 import { sendTeamInviteEmail, sendInvoiceEmail, sendOnboardingWelcomeEmail } from "./brevo";
 import { getAppUrl } from "@/lib/server-utils";
 import { PaymentService } from "@/lib/payment";
@@ -1283,7 +1283,7 @@ export async function updateClientAction(clientId: string, clientData: {
 }
 
 export async function createInvoiceAction(data: {
-  merchant_id: string;
+  merchant_id?: string | null;
   client_id: string;
   reference_id?: string | null;
   handled_by?: string | null;
@@ -1303,52 +1303,79 @@ export async function createInvoiceAction(data: {
   invoice_stage?: 'deposit' | 'milestone' | 'balance' | 'standard' | null;
   line_items: { item_name: string; quantity: number; unit_rate: number }[];
 }) {
-  const permCheck = await requirePermission(data.merchant_id, "create_invoice");
-  if (!permCheck.permitted) return { success: false, error: permCheck.error };
+  const merchantAccess = await resolveMerchantAccess(data.merchant_id, "create_invoice");
+  if (!merchantAccess.permitted) return { success: false, error: merchantAccess.error };
+  const merchantId = merchantAccess.merchantId;
 
   const adminClient = getServiceClient();
 
-  // Check Starter tier invoice limit (max 5 total invoices)
+  const requestedType = data.invoice_type || "collection";
+
+  // Record invoices need only these stable merchant capability fields.
   const { data: merchantInfo, error: merchantError } = await adminClient
     .from("merchants")
-    .select("email, is_super_admin, subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, utility_status, business_affiliation_status, live_features_enabled, setup_mode")
-    .eq("id", data.merchant_id)
+    .select("email, is_super_admin, subscription_plan, merchant_tier")
+    .eq("id", merchantId)
     .maybeSingle();
 
-  if (merchantError || !merchantInfo) {
+  if (merchantError) {
+    return {
+      success: false,
+      error: "Invoice workspace settings could not be loaded. Please try again.",
+    };
+  }
+
+  if (!merchantInfo) {
     return {
       success: false,
       error: "Workspace could not be resolved. Please refresh and try again.",
     };
   }
 
-  const requestedType = data.invoice_type || "collection";
+  let merchantForAccess = merchantInfo;
+  if (requestedType === "collection") {
+    // Preserve the existing paid-plan collection gate without requiring its
+    // verification-only columns for offline Starter record invoices.
+    const { data: collectionMerchant, error: collectionMerchantError } = await adminClient
+      .from("merchants")
+      .select("email, is_super_admin, subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, utility_status, business_affiliation_status, live_features_enabled, setup_mode")
+      .eq("id", merchantId)
+      .maybeSingle();
+
+    if (collectionMerchantError || !collectionMerchant) {
+      return {
+        success: false,
+        error: "Collection invoice eligibility could not be loaded. Please try again.",
+      };
+    }
+    merchantForAccess = collectionMerchant;
+  }
 
   const { count: lifetimeCount } = await adminClient
     .from("invoices")
     .select("*", { count: "exact", head: true })
-    .eq("merchant_id", data.merchant_id);
+    .eq("merchant_id", merchantId);
 
   const invoiceAccess = getInvoiceCreationAccess(
-    merchantInfo,
+    merchantForAccess,
     requestedType,
     lifetimeCount ?? 0,
   );
   if (!invoiceAccess.allowed) return { success: false, error: invoiceAccess.reason };
 
   if (invoiceAccess.shouldSyncMerchantSetup) {
-    await syncMerchantSetupStatus(adminClient, data.merchant_id);
+    await syncMerchantSetupStatus(adminClient, merchantId);
   }
 
   if (requestedType === "collection") {
     const { count: activeCollCount } = await adminClient
       .from("invoices")
       .select("*", { count: "exact", head: true })
-      .eq("merchant_id", data.merchant_id)
+      .eq("merchant_id", merchantId)
       .eq("invoice_type", "collection")
       .in("status", ["open", "partially_paid"]);
 
-    const activeCheck = canAddActiveCollectionInvoice(merchantInfo, activeCollCount ?? 0);
+    const activeCheck = canAddActiveCollectionInvoice(merchantForAccess, activeCollCount ?? 0);
     if (!activeCheck.allowed) return { success: false, error: activeCheck.reason };
   }
 
@@ -1371,7 +1398,7 @@ export async function createInvoiceAction(data: {
   const { data: invoice, error } = await adminClient
     .from("invoices")
     .insert([{
-      merchant_id: data.merchant_id,
+      merchant_id: merchantId,
       client_id: data.client_id,
       reference_id: data.reference_id || null,
       handled_by: data.handled_by || null,
@@ -1442,7 +1469,7 @@ export async function createInvoiceAction(data: {
     // We can just call recordManualPaymentAction directly after inserting the line items.
     const paymentRes = await recordManualPaymentAction({
       invoice_id: invoice.id,
-      merchant_id: data.merchant_id,
+      merchant_id: merchantId,
       amount: data.initial_amount_paid,
       payment_method: data.payment_method || "cash",
       date_received: new Date().toISOString().split("T")[0],
