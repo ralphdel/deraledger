@@ -196,5 +196,5 @@ SELECT check_name, object_type, expected, actual, status, details FROM rls_check
 UNION ALL
 SELECT check_name, object_type, expected, actual, status, details FROM service_role_checks
 ORDER BY
-  CASE status WHEN 'FAIL' THEN 1 WHEN 'WARN' THEN 2 ELSE 3 END,
+  status,
   check_name;
