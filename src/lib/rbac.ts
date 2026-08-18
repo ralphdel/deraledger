@@ -1,12 +1,72 @@
 import { createClient } from "./supabase/server";
+import {
+  isResolvedMerchantContext,
+  resolveMerchantContextForUser,
+  type MerchantContextResult,
+} from "./merchant-context";
+
+export type MerchantAccessResolution =
+  | { permitted: true; merchantId: string }
+  | { permitted: false; error: string };
+
+export function hasMerchantContextPermission(
+  context: MerchantContextResult,
+  requiredPermission: string,
+) {
+  if (!isResolvedMerchantContext(context)) return false;
+  if (context.relationship === "owner" || context.relationship === "super_admin") return true;
+  return context.permissions[requiredPermission] === true;
+}
+
+export function getMerchantContextResolutionError(context: MerchantContextResult) {
+  if (context.status === "membership_query_failed" || context.status === "merchant_read_failed") {
+    return "Workspace access could not be verified. Please refresh and try again.";
+  }
+  return "Workspace could not be resolved. Please refresh and try again.";
+}
+
+/**
+ * Resolves the acting workspace from a verified Auth user before an action uses
+ * any merchant id supplied by the browser. A missing preferred id safely falls
+ * back to the caller's single owner/team workspace.
+ */
+export async function resolveMerchantAccess(
+  preferredMerchantId: string | null | undefined,
+  requiredPermission: string,
+): Promise<MerchantAccessResolution> {
+  const sb = await createClient();
+  const { data: { user }, error: userError } = await sb.auth.getUser();
+
+  if (userError || !user) {
+    return { permitted: false, error: "Unauthorized: not authenticated." };
+  }
+
+  const context = await resolveMerchantContextForUser(sb, user, {
+    preferredMerchantId: preferredMerchantId || null,
+  });
+
+  if (!isResolvedMerchantContext(context)) {
+    return { permitted: false, error: getMerchantContextResolutionError(context) };
+  }
+
+  if (!hasMerchantContextPermission(context, requiredPermission)) {
+    return { permitted: false, error: `Forbidden: You do not have the '${requiredPermission}' permission` };
+  }
+
+  const permission = await requirePermission(context.merchantId, requiredPermission);
+  if (!permission.permitted) {
+    return { permitted: false, error: permission.error || "Forbidden: workspace permission is required." };
+  }
+
+  return { permitted: true, merchantId: context.merchantId };
+}
 
 export async function requirePermission(merchantId: string, requiredPermission: string): Promise<{ permitted: boolean, error?: string }> {
   try {
     const sb = await createClient();
-    const { data: { session } } = await sb.auth.getSession();
-    const user = session?.user;
+    const { data: { user }, error: userError } = await sb.auth.getUser();
 
-    if (!user) {
+    if (userError || !user) {
       return { permitted: false, error: "Unauthorized: No active session" };
     }
 

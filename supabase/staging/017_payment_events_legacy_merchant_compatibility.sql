@@ -1,0 +1,1 @@
+\ir ../migrations/20260803_00_payment_events_legacy_merchant_compatibility.sql

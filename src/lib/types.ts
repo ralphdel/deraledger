@@ -419,7 +419,7 @@ export interface PaymentEvent {
   processor_ref: string | null;
   amount_kobo: number | null;
   raw_payload: Record<string, unknown> | null;
-  processed_at: string;
+  processed_at: string | null;
   idempotency_key: string | null;
 }
 

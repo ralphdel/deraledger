@@ -1,0 +1,107 @@
+{
+  "contract": "core_merchant_app_schema",
+  "version": "2026-08-18.1",
+  "scope": "Plan-neutral core merchant and offline invoice operations. Payment-provider activation, subscriptions, verification-provider storage, and live collections are excluded.",
+  "tables": {
+    "merchants": [
+      ["id", "uuid"], ["user_id", "uuid"], ["workspace_id", "uuid"],
+      ["business_name", "text"], ["email", "text"], ["phone", "text"],
+      ["logo_url", "text"], ["fee_absorption_default", "text"],
+      ["verification_status", "text"], ["merchant_tier", "text"],
+      ["subscription_plan", "text"], ["monthly_collection_limit", "numeric(12,2)"],
+      ["onboarding_status", "text"], ["setup_mode", "boolean"],
+      ["live_features_enabled", "boolean"], ["is_super_admin", "boolean"],
+      ["created_at", "timestamp with time zone"], ["updated_at", "timestamp with time zone"]
+    ],
+    "workspaces": [
+      ["id", "uuid"], ["owner_user_id", "uuid"], ["merchant_id", "uuid"],
+      ["workspace_type", "text"], ["display_name", "text"], ["plan_type", "text"],
+      ["onboarding_status", "text"], ["setup_mode", "boolean"],
+      ["live_features_enabled", "boolean"], ["created_at", "timestamp with time zone"],
+      ["updated_at", "timestamp with time zone"]
+    ],
+    "merchant_team": [
+      ["id", "uuid"], ["merchant_id", "uuid"], ["user_id", "uuid"],
+      ["role_id", "uuid"], ["is_active", "boolean"], ["must_change_password", "boolean"],
+      ["invited_by", "uuid"], ["added_at", "timestamp with time zone"],
+      ["last_active_at", "timestamp with time zone"]
+    ],
+    "roles": [
+      ["id", "uuid"], ["merchant_id", "uuid"], ["name", "text"],
+      ["permissions", "jsonb"], ["is_system_role", "boolean"],
+      ["created_at", "timestamp with time zone"]
+    ],
+    "clients": [
+      ["id", "uuid"], ["merchant_id", "uuid"], ["full_name", "text"],
+      ["email", "text"], ["phone", "text"], ["company_name", "text"],
+      ["address", "text"], ["whatsapp_number", "text"],
+      ["reminder_enabled", "boolean"], ["reminder_channels", "text[]"],
+      ["is_deleted", "boolean"], ["deleted_at", "timestamp with time zone"],
+      ["created_at", "timestamp with time zone"]
+    ],
+    "invoices": [
+      ["id", "uuid"], ["merchant_id", "uuid"], ["client_id", "uuid"],
+      ["reference_id", "uuid"], ["handled_by", "uuid"], ["invoice_number", "text"],
+      ["invoice_type", "text"], ["invoice_stage", "text"], ["status", "text"],
+      ["subtotal", "numeric(12,2)"], ["discount_pct", "numeric(5,2)"],
+      ["discount_value", "numeric(12,2)"], ["tax_pct", "numeric(5,2)"],
+      ["tax_value", "numeric(12,2)"], ["grand_total", "numeric(12,2)"],
+      ["amount_paid", "numeric(12,2)"], ["outstanding_balance", "numeric(12,2)"],
+      ["fee_absorption", "text"], ["pay_by_date", "date"], ["short_link", "text"],
+      ["qr_code_url", "text"], ["notes", "text"], ["payment_notes", "text"],
+      ["manual_close_reason", "text"], ["send_reminders", "boolean"],
+      ["allow_partial_payment", "boolean"], ["partial_payment_pct", "numeric"],
+      ["is_archived", "boolean"], ["archived_at", "timestamp with time zone"],
+      ["payment_provider", "text"], ["invoice_hash", "text"], ["payment_url", "text"],
+      ["created_at", "timestamp with time zone"], ["updated_at", "timestamp with time zone"]
+    ],
+    "line_items": [
+      ["id", "uuid"], ["invoice_id", "uuid"], ["item_name", "text"],
+      ["quantity", "numeric(10,3)"], ["unit_rate", "numeric(12,2)"],
+      ["line_total", "numeric(12,2)"], ["sort_order", "integer"]
+    ],
+    "references": [
+      ["id", "uuid"], ["merchant_id", "uuid"], ["name", "text"],
+      ["description", "text"], ["handled_by", "uuid"],
+      ["project_total_value", "numeric"], ["created_at", "timestamp with time zone"],
+      ["updated_at", "timestamp with time zone"]
+    ],
+    "item_catalog": [
+      ["id", "uuid"], ["merchant_id", "uuid"], ["item_name", "text"],
+      ["default_rate", "numeric(12,2)"], ["description", "text"],
+      ["is_active", "boolean"], ["usage_count", "integer"],
+      ["created_at", "timestamp with time zone"], ["updated_at", "timestamp with time zone"]
+    ],
+    "discount_templates": [
+      ["id", "uuid"], ["merchant_id", "uuid"], ["name", "text"],
+      ["percentage", "numeric(5,2)"], ["is_active", "boolean"],
+      ["created_at", "timestamp with time zone"]
+    ]
+  },
+  "additive_repairs": {
+    "clients": ["deleted_at"],
+    "invoices": [
+      "invoice_type", "payment_notes", "send_reminders", "allow_partial_payment",
+      "partial_payment_pct", "is_archived", "archived_at", "payment_provider",
+      "invoice_hash", "payment_url"
+    ],
+    "merchant_team": ["must_change_password"],
+    "roles": ["merchant_id"]
+  },
+  "security": {
+    "workspaces": {
+      "rls_enabled": true,
+      "policy_name": "authenticated_read_merchant_workspaces",
+      "command": "SELECT",
+      "roles": ["authenticated"],
+      "using": "public.can_read_merchant_row_v1(merchant_id)",
+      "with_check": null,
+      "grant_changes": false
+    }
+  },
+  "excluded_provider_columns": [
+    "invoices.crypto_deposit_address",
+    "invoices.crypto_asset",
+    "invoices.payment_status"
+  ]
+}

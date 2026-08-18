@@ -3,8 +3,15 @@ import { createClient } from "@supabase/supabase-js";
 import { PaymentService } from "@/lib/payment";
 import { getPaymentEnvironmentForMerchantEmail, resolvePaymentRoute, type PaymentMethod } from "@/lib/services/payment-routing.service";
 import { isLiveFeatureEnabled } from "@/lib/services/onboarding-flow.service";
-import { getProviderSettlementMapping, isProviderSettlementReady } from "@/lib/services/settlement-ledger.service";
+import {
+  getProviderSettlementMapping,
+  isProviderSettlementReady,
+} from "@/lib/services/settlement-ledger.service";
 import { getAppUrl } from "@/lib/server-utils";
+import {
+  getInvoicePaymentInitializationError,
+  getVerifiedProviderSubaccountCode,
+} from "@/lib/services/invoice-payment-safety.service";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -35,6 +42,11 @@ export async function POST(request: Request) {
 
     if (invoiceError || !invoice) {
       return NextResponse.json({ error: "Invoice not found: " + invoiceError?.message }, { status: 404 });
+    }
+
+    const invoicePaymentError = getInvoicePaymentInitializationError(invoice);
+    if (invoicePaymentError) {
+      return NextResponse.json(invoicePaymentError, { status: 403 });
     }
 
     if (["closed", "manually_closed", "void"].includes(invoice.status)) {
@@ -84,18 +96,25 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: message }, { status: 403 });
     }
 
-    const monnifySettlement =
-      route.provider === "monnify"
+    const providerSettlement =
+      route.provider === "monnify" || route.provider === "paystack"
         ? await getProviderSettlementMapping(supabase, {
             merchantId: merchant.id,
-            provider: "monnify",
+            provider: route.provider,
+            environment: paymentEnvironment,
+          })
+        : null;
+    const verifiedProviderSubaccountCode =
+      route.provider === "monnify" || route.provider === "paystack"
+        ? getVerifiedProviderSubaccountCode(providerSettlement, {
+            provider: route.provider,
             environment: paymentEnvironment,
           })
         : null;
 
     if (
-      route.provider === "monnify" &&
-      (!monnifySettlement?.ready || !monnifySettlement.mapping?.provider_subaccount_code)
+      (route.provider === "monnify" || route.provider === "paystack") &&
+      !verifiedProviderSubaccountCode
     ) {
       return NextResponse.json(
         {
@@ -162,12 +181,12 @@ export async function POST(request: Request) {
       email: invoice.clients?.email || "customer@deraledger.app",
       amountKobo: chargeAmountKobo,
       reference,
-      subaccountCode: route.provider === "paystack" ? merchant.payment_subaccount_code : undefined,
+      subaccountCode: route.provider === "paystack" ? (verifiedProviderSubaccountCode || undefined) : undefined,
       incomeSplitConfig:
-        route.provider === "monnify" && monnifySettlement?.mapping?.provider_subaccount_code
+        route.provider === "monnify" && verifiedProviderSubaccountCode
           ? [
               {
-                subAccountCode: monnifySettlement.mapping.provider_subaccount_code,
+                subAccountCode: verifiedProviderSubaccountCode,
                 splitPercentage: 100,
                 feePercentage: 100,
               },

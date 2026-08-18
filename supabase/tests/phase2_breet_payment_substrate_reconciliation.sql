@@ -245,17 +245,207 @@ DO $$
 DECLARE
   v_function_def TEXT;
   v_payment_records_policy TEXT;
+  v_processor_default TEXT;
+  v_processed_at_default TEXT;
+  v_invoice_fk_count INTEGER;
+  v_invoice_fk_delete_action TEXT;
   v_table TEXT;
 BEGIN
-  IF EXISTS (
+  IF NOT EXISTS (
     SELECT 1
     FROM information_schema.columns
     WHERE table_schema = 'public'
       AND table_name = 'payment_events'
       AND column_name = 'merchant_id'
-      AND is_nullable <> 'NO'
+      AND udt_name = 'uuid'
+      AND is_nullable = 'YES'
   ) THEN
-    RAISE EXCEPTION 'payment_events.merchant_id unexpectedly became nullable';
+    RAISE EXCEPTION 'payment_events.merchant_id must remain intentionally nullable for historical ownerless audit rows';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'payment_events'
+      AND column_name = 'invoice_id'
+      AND udt_name = 'uuid'
+      AND is_nullable = 'YES'
+  ) THEN
+    RAISE EXCEPTION 'payment_events.invoice_id must be nullable uuid';
+  END IF;
+
+  SELECT
+    count(*)::integer,
+    max(CASE con.confdeltype::text
+      WHEN 'a' THEN 'NO ACTION'
+      WHEN 'r' THEN 'RESTRICT'
+      WHEN 'c' THEN 'CASCADE'
+      WHEN 'n' THEN 'SET NULL'
+      WHEN 'd' THEN 'SET DEFAULT'
+      ELSE 'UNKNOWN:' || con.confdeltype::text
+    END)
+  INTO
+    v_invoice_fk_count,
+    v_invoice_fk_delete_action
+  FROM pg_constraint con
+  JOIN pg_class ref_cls ON ref_cls.oid = con.confrelid
+  JOIN pg_namespace ref_ns ON ref_ns.oid = ref_cls.relnamespace
+  CROSS JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS src_ord(attnum, ordinality)
+  JOIN pg_attribute src
+    ON src.attrelid = con.conrelid
+   AND src.attnum = src_ord.attnum
+  CROSS JOIN LATERAL unnest(con.confkey) WITH ORDINALITY AS ref_ord(attnum, ordinality)
+  JOIN pg_attribute ref
+    ON ref.attrelid = con.confrelid
+   AND ref.attnum = ref_ord.attnum
+   AND ref_ord.ordinality = src_ord.ordinality
+  WHERE con.conrelid = 'public.payment_events'::regclass
+    AND con.conname = 'payment_events_invoice_id_fkey'
+    AND con.contype::text = 'f'
+    AND con.convalidated
+    AND ref_ns.nspname::text = 'public'
+    AND ref_cls.relname::text = 'invoices'
+  GROUP BY con.conname, con.confdeltype
+  HAVING array_agg(src.attname::text ORDER BY src_ord.ordinality) = ARRAY['invoice_id']::text[]
+     AND array_agg(ref.attname::text ORDER BY ref_ord.ordinality) = ARRAY['id']::text[];
+
+  IF COALESCE(v_invoice_fk_count, 0) <> 1 THEN
+    RAISE EXCEPTION 'payment_events_invoice_id_fkey must be the single validated FK from payment_events(invoice_id) to public.invoices(id)';
+  END IF;
+
+  IF v_invoice_fk_delete_action <> 'SET NULL' THEN
+    RAISE EXCEPTION 'payment_events_invoice_id_fkey must be canonical ON DELETE SET NULL after reconciliation, got %',
+      v_invoice_fk_delete_action;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'payment_events'
+      AND column_name = 'processor'
+      AND udt_name = 'text'
+      AND is_nullable = 'NO'
+  ) THEN
+    RAISE EXCEPTION 'payment_events.processor must remain text not null';
+  END IF;
+
+  SELECT pg_get_expr(d.adbin, d.adrelid)
+  INTO v_processor_default
+  FROM pg_attribute a
+  JOIN pg_class c ON c.oid = a.attrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  LEFT JOIN pg_attrdef d
+    ON d.adrelid = a.attrelid
+   AND d.adnum = a.attnum
+  WHERE n.nspname = 'public'
+    AND c.relname = 'payment_events'
+    AND a.attname = 'processor'
+    AND a.attnum > 0
+    AND NOT a.attisdropped;
+
+  IF v_processor_default IS NOT NULL
+     AND trim(regexp_replace(lower(v_processor_default), '\s+', ' ', 'g')) <> '''paystack''::text' THEN
+    RAISE EXCEPTION 'payment_events.processor must have no default or the accepted legacy paystack default, got %',
+      v_processor_default;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'payment_events'
+      AND column_name = 'processed_at'
+      AND udt_name = 'timestamptz'
+      AND is_nullable = 'YES'
+  ) THEN
+    RAISE EXCEPTION 'payment_events.processed_at must remain nullable timestamptz';
+  END IF;
+
+  SELECT pg_get_expr(d.adbin, d.adrelid)
+  INTO v_processed_at_default
+  FROM pg_attribute a
+  JOIN pg_class c ON c.oid = a.attrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  LEFT JOIN pg_attrdef d
+    ON d.adrelid = a.attrelid
+   AND d.adnum = a.attnum
+  WHERE n.nspname = 'public'
+    AND c.relname = 'payment_events'
+    AND a.attname = 'processed_at'
+    AND a.attnum > 0
+    AND NOT a.attisdropped;
+
+  IF v_processed_at_default IS NOT NULL THEN
+    RAISE EXCEPTION 'payment_events.processed_at must not have a default after reconciliation, got %',
+      v_processed_at_default;
+  END IF;
+
+  INSERT INTO public.payment_events (
+    id,
+    merchant_id,
+    event_type,
+    processor,
+    processed_at,
+    raw_payload,
+    idempotency_key,
+    payment_purpose
+  )
+  VALUES (
+    'aaaaaaaa-0000-4000-8000-000000000009',
+    NULL,
+    'historical.ownerless',
+    'paystack',
+    now(),
+    '{"fixture":"historical_ownerless"}'::jsonb,
+    'phase2-breet-payment-substrate:historical-ownerless',
+    NULL
+  )
+  ON CONFLICT (id) DO NOTHING;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM public.payment_events
+    WHERE id = 'aaaaaaaa-0000-4000-8000-000000000009'
+      AND merchant_id IS NULL
+      AND processed_at IS NOT NULL
+      AND raw_payload = '{"fixture":"historical_ownerless"}'::jsonb
+  ) THEN
+    RAISE EXCEPTION 'historical ownerless payment_events rows must be accepted and preserved';
+  END IF;
+
+  INSERT INTO public.payment_events (
+    id,
+    merchant_id,
+    event_type,
+    processor,
+    processed_at,
+    raw_payload,
+    idempotency_key,
+    payment_purpose
+  )
+  VALUES (
+    'aaaaaaaa-0000-4000-8000-000000000019',
+    NULL,
+    'historical.ownerless.null_processed_at',
+    'paystack',
+    NULL,
+    '{"fixture":"historical_ownerless_null_processed_at"}'::jsonb,
+    'phase2-breet-payment-substrate:historical-ownerless-null-processed-at',
+    NULL
+  )
+  ON CONFLICT (id) DO NOTHING;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM public.payment_events
+    WHERE id = 'aaaaaaaa-0000-4000-8000-000000000019'
+      AND merchant_id IS NULL
+      AND processed_at IS NULL
+      AND raw_payload = '{"fixture":"historical_ownerless_null_processed_at"}'::jsonb
+  ) THEN
+    RAISE EXCEPTION 'historical ownerless payment_events rows with NULL processed_at must be accepted and preserved';
   END IF;
 
   IF NOT EXISTS (

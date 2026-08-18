@@ -369,21 +369,25 @@ async function main() {
     /Solo Plus renewal remains deferred/i,
   );
 
-  await assert.rejects(
-    () =>
-      upsertWebhookAuditEvent((new FakeSupabaseClient()) as never, {
-        provider: "paystack",
-        eventType: "paystack.received",
-        paymentMethod: "card",
-        paymentPurpose: "plan_subscription",
-        paymentReference: "SPL-SUB-TEST",
-        providerReference: "paystack-ref-1",
-        rawPayload: {},
-        processingStatus: "received",
-        idempotencyKey: "paystack:test:received",
-      }),
-    /requires merchantId/i,
-  );
+  for (const provider of ["paystack", "monnify", "breet"] as const) {
+    const client = new FakeSupabaseClient();
+    await assert.rejects(
+      () =>
+        upsertWebhookAuditEvent(client as never, {
+          provider,
+          eventType: `${provider}.received`,
+          paymentMethod: provider === "breet" ? "crypto" : "card",
+          paymentPurpose: "plan_subscription",
+          paymentReference: "SPL-SUB-TEST",
+          providerReference: `${provider}-ref-1`,
+          rawPayload: {},
+          processingStatus: "received",
+          idempotencyKey: `${provider}:test:received`,
+        }),
+      /requires merchantId/i,
+    );
+    assert.equal(client.upsertCalls.length, 0);
+  }
 
   {
     const client = new FakeSupabaseClient();
@@ -403,19 +407,80 @@ async function main() {
 
     assert.equal(client.upsertCalls.length, 1);
     assert.equal(client.upsertCalls[0]?.value.merchant_id, "merchant-1");
+    assert.equal(client.upsertCalls[0]?.value.processor, "paystack");
     assert.equal(client.upsertCalls[0]?.value.amount_kobo, 1300000);
   }
 
   const cryptoSubscriptionSource = readFileSync("src/app/api/checkout/crypto-subscription/route.ts", "utf8");
   const cryptoUpgradeSource = readFileSync("src/app/api/checkout/crypto-upgrade/route.ts", "utf8");
   const breetWebhookSource = readFileSync("src/app/api/webhooks/breet/route.ts", "utf8");
+  const paystackWebhookSource = readFileSync("src/app/api/webhooks/paystack/route.ts", "utf8");
+  const monnifyWebhookSource = readFileSync("src/app/api/webhooks/monnify/route.ts", "utf8");
   const verifyAndProvisionSource = readFileSync("src/app/api/onboarding/verify-and-provision/route.ts", "utf8");
+  const fiatConfirmationSource = readFileSync("src/lib/services/fiat-payment-confirmation.service.ts", "utf8");
+  const planPaymentRecoverySource = readFileSync("src/lib/services/plan-payment-recovery.service.ts", "utf8");
+  const migrationASource = readFileSync(
+    "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql",
+    "utf8",
+  );
+  const legacyCompatibilityMigrationSource = readFileSync(
+    "supabase/migrations/20260803_00_payment_events_legacy_merchant_compatibility.sql",
+    "utf8",
+  );
+  const requireSourceMatch = (source: string, pattern: RegExp, description: string) => {
+    const match = source.match(pattern);
+    assert.ok(match, `${description} was not found`);
+    return match[0];
+  };
+  const breetPaymentEventInsert = requireSourceMatch(
+    breetWebhookSource,
+    /supabase\.from\("payment_events"\)\.insert\(\{[\s\S]*?\n\s*\}\);/,
+    "Breet payment_events insert",
+  );
+  const sharedPaymentEventUpsert = requireSourceMatch(
+    planPaymentRecoverySource,
+    /supabase\.from\("payment_events"\)\.upsert\(\s*\{[\s\S]*?\n\s*\},\s*\{ onConflict: "idempotency_key" \}\s*\);/,
+    "shared payment_events upsert",
+  );
+  const invoicePaymentEventUpsert = requireSourceMatch(
+    fiatConfirmationSource,
+    /supabase\.from\("payment_events"\)\.upsert\(\{[\s\S]*?\n\s*\}\);/,
+    "invoice confirmation payment_events upsert",
+  );
 
   assert.match(cryptoSubscriptionSource, /payment_record_id:\s*pendingPaymentRecord\.id/);
   assert.match(cryptoUpgradeSource, /payment_record_id:\s*pendingPaymentRecord\.id/);
   assert.match(breetWebhookSource, /const soloPlusConfirmation = await confirmSoloPlusPayment\(/);
   assert.match(breetWebhookSource, /Skipping payment_events audit without merchant_id/);
+  assert.match(paystackWebhookSource, /if \(normalized\.merchantId\) \{[\s\S]*?await upsertWebhookAuditEvent/);
+  assert.match(paystackWebhookSource, /Skipping payment_events audit without merchant_id for Paystack processed webhook/);
+  assert.match(monnifyWebhookSource, /if \(normalized\.merchantId\) \{[\s\S]*?await upsertWebhookAuditEvent/);
+  assert.match(monnifyWebhookSource, /Skipping payment_events audit without merchant_id for Monnify processed webhook/);
   assert.match(verifyAndProvisionSource, /Skipping payment_events audit without merchant_id during payment verification attempt/);
+  assert.match(fiatConfirmationSource, /from\("payment_events"\)\.upsert\(\{[\s\S]*?merchant_id: invoice\.merchant_id/);
+  assert.match(fiatConfirmationSource, /from\("payment_events"\)\.upsert\(\{[\s\S]*?processor:\s*provider/);
+  assert.match(planPaymentRecoverySource, /from\("payment_events"\)\.upsert\([\s\S]*?processor:\s*input\.provider/);
+  assert.match(breetWebhookSource, /from\("payment_events"\)\.insert\(\{[\s\S]*?processor:\s*"breet"/);
+  assert.doesNotMatch(breetPaymentEventInsert, /processed_at:/);
+  assert.doesNotMatch(sharedPaymentEventUpsert, /processed_at:/);
+  assert.doesNotMatch(invoicePaymentEventUpsert, /processed_at:/);
+  assert.doesNotMatch(fiatConfirmationSource, /from\("payment_events"\)\.upsert\(\{[\s\S]*?merchant_id:\s*null/);
+  assert.match(migrationASource, /assert_payment_events_processor_legacy_compatible/);
+  assert.match(migrationASource, /assert_payment_events_processed_at_legacy_compatible/);
+  assert.match(migrationASource, /ALTER TABLE public\.payment_events[\s\S]*?ALTER COLUMN processed_at DROP DEFAULT/);
+  assert.match(migrationASource, /ALTER TABLE public\.payment_events[\s\S]*?ALTER COLUMN processed_at DROP NOT NULL/);
+  assert.match(migrationASource, /CREATE TABLE IF NOT EXISTS public\.payment_events \([\s\S]*?processed_at TIMESTAMPTZ NULL,/);
+  assert.doesNotMatch(
+    migrationASource,
+    /CREATE TABLE IF NOT EXISTS public\.payment_events \([\s\S]*?processed_at TIMESTAMPTZ NOT NULL/
+  );
+  assert.doesNotMatch(migrationASource, /ALTER\s+TABLE\s+public\.payment_events\s+ALTER\s+COLUMN\s+processor\s+DROP\s+DEFAULT/i);
+  assert.doesNotMatch(migrationASource, /\b(UPDATE|DELETE FROM)\s+public\.payment_events\b/i);
+  assert.doesNotMatch(legacyCompatibilityMigrationSource, /\b(UPDATE|DELETE FROM)\s+public\.payment_events\b/i);
+  assert.doesNotMatch(
+    legacyCompatibilityMigrationSource,
+    /\b(UPDATE|INSERT INTO|DELETE FROM)\s+public\.(solo_plus_cases|subscriptions|subscription_payments|refunds|payment_records)\b/i,
+  );
 }
 
 main().catch((error) => {

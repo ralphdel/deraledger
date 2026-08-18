@@ -4,6 +4,10 @@
 
 This document defines the mandatory workflow for designing, testing, auditing and applying database migrations in the DeraLedger repository.
 
+Before generating or executing a migration, rollback rehearsal, recovery inspection, PostgreSQL catalog query, or database PowerShell script, review:
+
+* `docs/sql-migration-rehearsal-lessons-learned.md`
+
 It applies to:
 
 * PostgreSQL and Supabase migrations;

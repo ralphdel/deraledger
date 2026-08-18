@@ -23,6 +23,10 @@ import {
   updatePlanPaymentRecord,
 } from "@/lib/services/plan-payment-recovery.service";
 import { confirmSoloPlusPayment } from "@/lib/solo-plus/server/payment-lifecycle";
+import {
+  loadAndValidatePaidOnboardingSession,
+} from "@/lib/services/paid-onboarding-payment.service";
+import { ensurePaidCreatorMembership } from "@/lib/services/paid-provisioning.service";
 
 type FiatProvider = "paystack" | "monnify" | "breet";
 
@@ -54,7 +58,29 @@ export async function processSuccessfulFiatPayment(
   }
 
   if (paymentType === "subscription") {
-    return confirmInitialSubscription(supabase, payment);
+    try {
+      return await confirmInitialSubscription(supabase, payment);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Paid workspace provisioning failed.";
+      await updatePlanPaymentRecord(supabase, payment.reference, {
+        provider_reference: payment.providerReference || payment.reference,
+        amount_paid: payment.amountKobo / 100,
+        payment_status: "successful",
+        processing_status: "manual_review",
+        account_setup_status: "manual_review",
+        password_setup_required: true,
+        failure_reason: message,
+        raw_provider_payload: payment.rawProviderPayload || payment.metadata,
+        paid_at: new Date().toISOString(),
+      }, payment.provider);
+      return {
+        received: true,
+        needs_review: true,
+        status: "provisioning_failed",
+        error: "Payment was received, but workspace setup needs manual review before activation.",
+        already_processed: false,
+      };
+    }
   }
 
   if (paymentType === "subscription_upgrade") {
@@ -503,12 +529,10 @@ async function confirmInitialSubscription(
 ) {
   const { metadata, amountKobo, reference, provider } = payment;
   const sessionId = metadata?.session_id as string | undefined;
-  const plan = metadata?.plan as "individual" | "corporate" | "solo_plus" | undefined;
-  const email = metadata?.email as string | undefined;
-  const businessName = metadata?.business_name as string | undefined;
-  const businessType = metadata?.business_type as string | undefined;
+  const submittedPlan = metadata?.plan as string | undefined;
+  const submittedEmail = metadata?.email as string | undefined;
+  const submittedExpectedAmountKobo = metadata?.amount_expected_kobo;
   const ownerName = metadata?.owner_name as string | undefined;
-  const relationshipClaim = metadata?.relationship_claim as RelationshipClaim | undefined;
   const disclosureAccepted =
     metadata?.verification_disclosure_accepted === true ||
     metadata?.verification_disclosure_accepted === "true";
@@ -516,12 +540,26 @@ async function confirmInitialSubscription(
     (metadata?.verification_disclosure_version as string | undefined) ||
     VERIFICATION_DISCLOSURE_VERSION;
 
-  if (!sessionId || !plan || !email || !businessName) {
+  if (!sessionId || !submittedPlan || !submittedEmail) {
     console.error("Initial subscription confirmation missing metadata:", metadata);
     return { received: true, skipped: true };
   }
 
-  const mismatch = classifyAmountMismatch(Number(metadata.amount_expected_kobo || 0), amountKobo);
+  const binding = await loadAndValidatePaidOnboardingSession(supabase, {
+    sessionId,
+    email: submittedEmail,
+    plan: submittedPlan,
+    amountKobo: submittedExpectedAmountKobo,
+    mode: "confirm",
+  });
+  const session = binding.session;
+  const plan = binding.storagePlan as PlanType;
+  const email = session.email;
+  const businessName = session.business_name;
+  const businessType = session.business_type || undefined;
+  const relationshipClaim = (session.relationship_claim || metadata?.relationship_claim) as RelationshipClaim | undefined;
+
+  const mismatch = classifyAmountMismatch(binding.amountKobo, amountKobo);
   if (mismatch) {
     await updatePlanPaymentRecord(supabase, reference, {
       provider_reference: payment.providerReference || reference,
@@ -534,31 +572,6 @@ async function confirmInitialSubscription(
       raw_provider_payload: payment.rawProviderPayload || metadata,
     }, provider);
     return { received: true, needs_review: true, status: mismatch.processingStatus };
-  }
-
-  const { data: session, error: sessionLoadError } = await supabase
-    .from("onboarding_sessions")
-    .select("id, status, merchant_id")
-    .eq("id", sessionId)
-    .maybeSingle();
-
-  if (sessionLoadError) {
-    throw new Error(`Failed to load onboarding session: ${sessionLoadError.message}`);
-  }
-
-  if (!session) {
-    await updatePlanPaymentRecord(supabase, reference, {
-      provider_reference: payment.providerReference || reference,
-      amount_paid: amountKobo / 100,
-      payment_status: "successful",
-      processing_status: "paid_pending_setup",
-      account_setup_status: "paid_pending_setup",
-      password_setup_required: true,
-      failure_reason: "Payment verified, but onboarding session could not be found.",
-      raw_provider_payload: payment.rawProviderPayload || metadata,
-      paid_at: new Date().toISOString(),
-    }, provider);
-    return { received: true, needs_review: true, status: "paid_pending_setup" };
   }
 
   if (session.status === "payment_confirmed" && session.merchant_id) {
@@ -594,7 +607,8 @@ async function confirmInitialSubscription(
     email_confirm: true,
     user_metadata: {
       business_name: businessName,
-      plan: activePlan,
+      // Keep auth metadata fail-closed until workspace provisioning succeeds.
+      plan: "starter",
     },
   });
 
@@ -615,6 +629,9 @@ async function confirmInitialSubscription(
     supabase.from("merchants").select("id, business_name, user_id").eq("user_id", userId),
     supabase.from("merchants").select("id, business_name, user_id").eq("email", email),
   ]);
+  if (byUserId.error || byEmail.error) {
+    throw new Error(`Failed to resolve subscription merchant: ${byUserId.error?.message || byEmail.error?.message}`);
+  }
 
   const allMerchants = [...(byUserId.data || []), ...(byEmail.data || [])];
   const seen = new Set<string>();
@@ -632,54 +649,14 @@ async function confirmInitialSubscription(
       return 0;
     });
     const keep = sorted[0];
-    const toDelete = sorted.slice(1);
-
-    for (const duplicate of toDelete) {
-      await supabase.from("audit_logs").delete().eq("target_id", duplicate.id);
-      await supabase.from("audit_logs").delete().eq("actor_id", duplicate.id);
-      await supabase.from("onboarding_sessions").delete().eq("merchant_id", duplicate.id);
-      await supabase.from("merchant_team").delete().eq("merchant_id", duplicate.id);
-      await supabase.from("merchants").delete().eq("id", duplicate.id);
-    }
-
-    merchantId = keep.id;
-    const { error: updateError } = await supabase
-      .from("merchants")
-      .update({
-        user_id: userId,
-        business_name: businessName,
-        email,
-        subscription_plan: activePlan,
-        merchant_tier: activePlan,
-        business_type: businessType || "sole_proprietorship",
-        owner_name: ownerName || null,
-        relationship_claim: relationshipClaim || null,
-        monthly_collection_limit:
-          normalizeCapabilityPlanCode(activePlan) === "individual" ? 5000000 : 0,
-        subscription_notifications_sent: {},
-      })
-      .eq("id", merchantId);
-
-    if (updateError) {
-      throw new Error(`Failed to update subscription merchant: ${updateError.message}`);
-    }
-
-    await supabase.from("merchant_team").delete().eq("merchant_id", merchantId).neq("user_id", userId);
-    const { data: existingTeam } = await supabase
-      .from("merchant_team")
-      .select("id")
-      .eq("merchant_id", merchantId)
-      .eq("user_id", userId)
-      .single();
-
-    if (!existingTeam) {
-      await supabase.from("merchant_team").insert({
-        merchant_id: merchantId,
-        user_id: userId,
-        role: "owner",
-        must_change_password: true,
+    if (sorted.length > 1) {
+      console.warn("Multiple merchants matched paid onboarding; preserving all rows and using the preferred existing workspace.", {
+        sessionId,
+        selectedMerchantId: keep.id,
+        matchCount: sorted.length,
       });
     }
+    merchantId = keep.id;
   } else {
     const { data: newMerchant, error: merchantError } = await supabase
       .from("merchants")
@@ -690,12 +667,13 @@ async function confirmInitialSubscription(
         business_type: businessType || "sole_proprietorship",
         owner_name: ownerName || null,
         relationship_claim: relationshipClaim || null,
-        subscription_plan: activePlan,
-        merchant_tier: activePlan,
+        // Keep a newly-created workspace fail-closed until its canonical role
+        // membership has been written successfully.
+        subscription_plan: "starter",
+        merchant_tier: "starter",
         verification_status: "unverified",
         fee_absorption_default: "business",
-        monthly_collection_limit:
-          normalizeCapabilityPlanCode(activePlan) === "individual" ? 5000000 : 0,
+        monthly_collection_limit: 0,
         subscription_notifications_sent: {},
       })
       .select("id")
@@ -706,21 +684,26 @@ async function confirmInitialSubscription(
     }
 
     merchantId = newMerchant.id;
-    await supabase.from("merchant_team").insert({
-      merchant_id: merchantId,
-      user_id: userId,
-      role: "owner",
-      must_change_password: true,
-    });
   }
 
-  await logPlanMigration(supabase, {
-    merchantId,
-    sourceTable: "merchants",
-    sourceRecordId: merchantId,
-    oldPlanCode: activePlan,
-    context: "fiat_payment_confirmation:subscription",
-  });
+  await ensurePaidCreatorMembership(supabase, { merchantId, userId });
+
+  const { error: merchantIdentityError } = await supabase
+    .from("merchants")
+    .update({
+      user_id: userId,
+      business_name: businessName,
+      email,
+      business_type: businessType || "sole_proprietorship",
+      owner_name: ownerName || null,
+      relationship_claim: relationshipClaim || null,
+      subscription_notifications_sent: {},
+    })
+    .eq("id", merchantId);
+
+  if (merchantIdentityError) {
+    throw new Error(`Failed to update subscription merchant identity: ${merchantIdentityError.message}`);
+  }
 
   await enterPaidSetupMode(supabase, {
     merchantId,
@@ -742,17 +725,6 @@ async function confirmInitialSubscription(
   }
 
   const amountPaidNgn = amountKobo / 100;
-  await supabase
-    .from("onboarding_sessions")
-    .update({
-      status: "payment_confirmed",
-      paystack_ref: reference,
-      amount_paid: amountPaidNgn,
-      merchant_id: merchantId,
-      idempotency_key: reference,
-    })
-    .eq("id", sessionId);
-
   const recoveryToken = buildSetupRecoveryToken();
   const existingPaymentRecord = await findPaymentRecordByReference(supabase, reference, provider);
   const appUrl = getAppUrl();
@@ -773,7 +745,7 @@ async function confirmInitialSubscription(
   }
 
   const expiryDate = calculateSubscriptionExpiry(amountPaidNgn, activePlan as PlanType);
-  await supabase.from("subscriptions").insert({
+  const { error: subscriptionError } = await supabase.from("subscriptions").insert({
     merchant_id: merchantId,
     plan_type: activePlan,
     amount_paid: amountPaidNgn,
@@ -781,8 +753,11 @@ async function confirmInitialSubscription(
     expiry_date: expiryDate.toISOString(),
     status: "active",
   });
+  if (subscriptionError) {
+    throw new Error(`Failed to activate paid subscription: ${subscriptionError.message}`);
+  }
 
-  await supabase.from("subscription_payments").insert({
+  const { error: subscriptionPaymentError } = await supabase.from("subscription_payments").insert({
     merchant_id: merchantId,
     plan: activePlan,
     amount_ngn: amountPaidNgn,
@@ -792,6 +767,54 @@ async function confirmInitialSubscription(
     payment_type: "new",
     status: "paid",
   });
+  if (subscriptionPaymentError) {
+    throw new Error(`Failed to record paid subscription payment: ${subscriptionPaymentError.message}`);
+  }
+
+  const { error: planActivationError } = await supabase
+    .from("merchants")
+    .update({
+      subscription_plan: activePlan,
+      merchant_tier: activePlan,
+      monthly_collection_limit:
+        normalizeCapabilityPlanCode(activePlan) === "individual" ? 5000000 : 0,
+    })
+    .eq("id", merchantId);
+  if (planActivationError) {
+    throw new Error(`Failed to activate paid merchant plan: ${planActivationError.message}`);
+  }
+
+  await logPlanMigration(supabase, {
+    merchantId,
+    sourceTable: "merchants",
+    sourceRecordId: merchantId,
+    oldPlanCode: activePlan,
+    context: "fiat_payment_confirmation:subscription",
+  });
+
+  const { error: sessionConfirmError } = await supabase
+    .from("onboarding_sessions")
+    .update({
+      status: "payment_confirmed",
+      paystack_ref: reference,
+      amount_paid: amountPaidNgn,
+      merchant_id: merchantId,
+      idempotency_key: reference,
+    })
+    .eq("id", sessionId);
+  if (sessionConfirmError) {
+    throw new Error(`Failed to confirm onboarding session: ${sessionConfirmError.message}`);
+  }
+
+  const { error: authMetadataError } = await supabase.auth.admin.updateUserById(userId, {
+    user_metadata: {
+      business_name: businessName,
+      plan: activePlan,
+    },
+  });
+  if (authMetadataError) {
+    throw new Error(`Failed to finalize paid auth metadata: ${authMetadataError.message}`);
+  }
 
   if (!welcomeEmailSentAt) {
     try {

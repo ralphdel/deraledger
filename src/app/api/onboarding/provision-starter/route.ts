@@ -1,74 +1,129 @@
 import { NextResponse } from "next/server";
-import { createClient as createSupabaseClient } from "@supabase/supabase-js";
+import { createClient as createSupabaseClient, type SupabaseClient, type User } from "@supabase/supabase-js";
+
 import { sendOnboardingWelcomeEmail } from "@/lib/brevo";
+import {
+  createSupabaseStarterWorkspaceRepository,
+  getStarterProvisioningLogPayload,
+  provisionStarterSignup,
+  repairAuthenticatedStarterWorkspace,
+  StarterProvisioningError,
+  type StarterAuthUser,
+} from "@/lib/services/starter-workspace.service";
 import { getAppUrl } from "@/lib/server-utils";
+import { createClient as createServerClient } from "@/lib/supabase/server";
 
-const supabase = createSupabaseClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+type ProvisionStarterRouteDependencies = {
+  getAuthenticatedUser: () => Promise<StarterAuthUser | null>;
+  getAdminClient: () => SupabaseClient;
+  sendWelcomeEmail: typeof sendOnboardingWelcomeEmail;
+  appUrl: () => string;
+};
 
-export async function POST(request: Request) {
-  try {
-    const { email, tradingName, registeredName, ownerName } = await request.json();
+export function createProvisionStarterRouteHandler(
+  dependencies: ProvisionStarterRouteDependencies,
+) {
+  return {
+    async POST(request: Request) {
+      try {
+        const authenticatedUser = await dependencies.getAuthenticatedUser();
+        const adminClient = dependencies.getAdminClient();
+        const repository = createSupabaseStarterWorkspaceRepository(adminClient);
 
-    if (!email || !tradingName || !registeredName) {
-      return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
-    }
+        // Logged-in recovery never trusts request fields. Eligibility and business
+        // identity come only from the validated Supabase Auth session metadata.
+        if (authenticatedUser) {
+          const result = await repairAuthenticatedStarterWorkspace(repository, authenticatedUser);
+          logProvisioningWarnings(result.warnings);
+          return NextResponse.json({ success: true, repaired: result.merchantCreated });
+        }
 
-    // Create user (triggers merchant creation)
-    const { data: authUser, error: authError } = await supabase.auth.admin.createUser({
-      email,
-      email_confirm: true,
-      user_metadata: {
-        business_name: registeredName,
-        plan: "starter",
-      },
-    });
+        const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+        const email = normalizeText(body?.email);
+        const tradingName = normalizeText(body?.tradingName);
+        const registeredName = normalizeText(body?.registeredName);
+        const ownerName = normalizeText(body?.ownerName);
 
-    if (authError && authError.status !== 422) { // 422 is already exists
-      console.error("Failed to create auth user:", authError);
-      return NextResponse.json({ error: "Failed to provision user" }, { status: 500 });
-    }
+        if (!email || !tradingName || !registeredName) {
+          return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+        }
 
-    // Generate magic link
-    const appUrl = getAppUrl();
+        const result = await provisionStarterSignup(
+          {
+            authAdmin: adminClient.auth.admin,
+            repository,
+          },
+          { email, tradingName, registeredName, ownerName },
+        );
+        logProvisioningWarnings(result.warnings);
 
-    const { data: magicLinkData, error: magicError } = await supabase.auth.admin.generateLink({
-      type: "magiclink",
-      email: email,
-    });
+        const appUrl = dependencies.appUrl();
+        const otp = result.activationProperties?.email_otp;
+        const setPasswordLink = otp
+          ? `${appUrl}/auth/verify?token=${otp}&email=${encodeURIComponent(email.toLowerCase())}&type=magiclink&next=${encodeURIComponent("/onboarding/set-password")}`
+          : `${appUrl}/onboarding/resend`;
 
-    let setPasswordLink = `${appUrl}/onboarding/resend`;
+        try {
+          await dependencies.sendWelcomeEmail(email, tradingName, "starter", setPasswordLink);
+        } catch {
+          console.warn("Starter provisioning warning", {
+            code: "WELCOME_EMAIL_FAILED",
+            stage: "welcome_email",
+            message: "Starter workspace was created, but the welcome email could not be sent.",
+          });
+        }
 
-    if (magicError) {
-      console.error("Failed to generate magic link:", magicError.message);
-    } else if (magicLinkData?.properties?.email_otp) {
-      const otp = magicLinkData.properties.email_otp;
-      setPasswordLink = `${appUrl}/auth/verify?token=${otp}&email=${encodeURIComponent(email)}&type=magiclink&next=${encodeURIComponent('/onboarding/set-password')}`;
-    }
+        return NextResponse.json({ success: true });
+      } catch (error: unknown) {
+        if (error instanceof StarterProvisioningError) {
+          const status = error.code === "NOT_STARTER_USER" || error.code === "STARTER_METADATA_MISSING"
+            ? 409
+            : 500;
+          console.error("Starter provisioning failed", getStarterProvisioningLogPayload(error));
+          return NextResponse.json(
+            { error: status === 409 ? error.message : "Failed to provision Starter workspace" },
+            { status },
+          );
+        }
 
-    // Update the merchant created by the DB trigger with the new fields
-    if (authUser.user) {
-      await supabase.from("merchants").update({
-        trading_name: tradingName,
-        owner_name: ownerName || null,
-        platform_version: 1, // Marks profile as complete/new schema
-      }).eq("user_id", authUser.user.id);
-    }
+        console.error("Starter provisioning failed", getStarterProvisioningLogPayload(error));
+        return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+      }
+    },
+  };
+}
 
-    // No session to update for Starter plan
+async function getAuthenticatedUser(): Promise<StarterAuthUser | null> {
+  const serverClient = await createServerClient();
+  const { data: { user }, error } = await serverClient.auth.getUser();
+  if (error || !user) return null;
+  return user as Pick<User, "id" | "email" | "user_metadata">;
+}
 
-    // Send welcome email
-    try {
-      await sendOnboardingWelcomeEmail(email, tradingName, "starter", setPasswordLink);
-    } catch (e) {
-      console.error("Failed to send welcome email:", e);
-    }
+function getAdminClient() {
+  return createSupabaseClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+  );
+}
 
-    return NextResponse.json({ success: true });
-  } catch (error: any) {
-    console.error("Starter provisioning failed:", error);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+const route = createProvisionStarterRouteHandler({
+  getAuthenticatedUser,
+  getAdminClient,
+  sendWelcomeEmail: sendOnboardingWelcomeEmail,
+  appUrl: getAppUrl,
+});
+
+export const POST = route.POST;
+
+function normalizeText(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function logProvisioningWarnings(
+  warnings: Array<{ code: string; stage: string; message: string; supabase: unknown }>,
+) {
+  for (const warning of warnings) {
+    console.warn("Starter provisioning warning", warning);
   }
 }

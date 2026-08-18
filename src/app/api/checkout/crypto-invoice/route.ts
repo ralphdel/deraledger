@@ -24,6 +24,7 @@ import {
   resolveBreetCheckoutQuote,
 } from "@/lib/treasury";
 import { calculateProportionalPayment } from "@/lib/calculations";
+import { getInvoicePaymentInitializationError } from "@/lib/services/invoice-payment-safety.service";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -136,6 +137,11 @@ export async function POST(request: Request) {
 
     if (invoiceError || !invoice) {
       return NextResponse.json({ error: "Invoice not found" }, { status: 404 });
+    }
+
+    const invoicePaymentError = getInvoicePaymentInitializationError(invoice);
+    if (invoicePaymentError) {
+      return NextResponse.json(invoicePaymentError, { status: 403 });
     }
 
     if (["closed", "manually_closed", "void", "expired"].includes(invoice.status)) {

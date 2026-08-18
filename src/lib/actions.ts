@@ -4,19 +4,18 @@
 import { createClient } from "@/lib/supabase/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { revalidatePath } from "next/cache";
-import { requirePermission } from "./rbac";
+import { requirePermission, resolveMerchantAccess } from "./rbac";
 import { sendTeamInviteEmail, sendInvoiceEmail, sendOnboardingWelcomeEmail } from "./brevo";
 import { getAppUrl } from "@/lib/server-utils";
 import { PaymentService } from "@/lib/payment";
 import { verifyMerchantIdentity, verifyMerchantBusiness } from "@/lib/services/verification.service";
 import { getIncompleteComplianceRequirements } from "@/lib/verification-requirements";
 import {
-  canCreateInvoice,
-  canCreateCollectionInvoice,
   canAddActiveCollectionInvoice,
   canInviteTeamMember,
   canCreateCustomRole,
   canAccessFeature,
+  getInvoiceCreationAccess,
 } from "@/lib/services/access-control";
 import { ensureWorkspaceForMerchant, getLiveFeatureLockReasons, setupStatusForMerchant, syncMerchantSetupStatus } from "@/lib/services/onboarding-flow.service";
 import { ensureMerchantSettlementAccountDetailed } from "@/lib/services/settlement-ledger.service";
@@ -1284,7 +1283,7 @@ export async function updateClientAction(clientId: string, clientData: {
 }
 
 export async function createInvoiceAction(data: {
-  merchant_id: string;
+  merchant_id?: string | null;
   client_id: string;
   reference_id?: string | null;
   handled_by?: string | null;
@@ -1304,45 +1303,83 @@ export async function createInvoiceAction(data: {
   invoice_stage?: 'deposit' | 'milestone' | 'balance' | 'standard' | null;
   line_items: { item_name: string; quantity: number; unit_rate: number }[];
 }) {
+  const merchantAccess = await resolveMerchantAccess(data.merchant_id, "create_invoice");
+  if (!merchantAccess.permitted) return { success: false, error: merchantAccess.error };
+  const merchantId = merchantAccess.merchantId;
+
   const adminClient = getServiceClient();
-
-  await syncMerchantSetupStatus(adminClient, data.merchant_id);
-
-  // Check Starter tier invoice limit (max 5 total invoices)
-  const { data: merchantInfo } = await adminClient
-    .from("merchants")
-    .select("email, subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, utility_status, business_affiliation_status, live_features_enabled, setup_mode")
-    .eq("id", data.merchant_id)
-    .single();
 
   const requestedType = data.invoice_type || "collection";
 
-  // Centralized access control checks
+  // Record invoices need only these stable merchant capability fields.
+  const { data: merchantInfo, error: merchantError } = await adminClient
+    .from("merchants")
+    .select("email, is_super_admin, subscription_plan, merchant_tier")
+    .eq("id", merchantId)
+    .maybeSingle();
+
+  if (merchantError) {
+    return {
+      success: false,
+      error: "Invoice workspace settings could not be loaded. Please try again.",
+    };
+  }
+
+  if (!merchantInfo) {
+    return {
+      success: false,
+      error: "Workspace could not be resolved. Please refresh and try again.",
+    };
+  }
+
+  let merchantForAccess = merchantInfo;
+  if (requestedType === "collection") {
+    // Preserve the existing paid-plan collection gate without requiring its
+    // verification-only columns for offline Starter record invoices.
+    const { data: collectionMerchant, error: collectionMerchantError } = await adminClient
+      .from("merchants")
+      .select("email, is_super_admin, subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, utility_status, business_affiliation_status, live_features_enabled, setup_mode")
+      .eq("id", merchantId)
+      .maybeSingle();
+
+    if (collectionMerchantError || !collectionMerchant) {
+      return {
+        success: false,
+        error: "Collection invoice eligibility could not be loaded. Please try again.",
+      };
+    }
+    merchantForAccess = collectionMerchant;
+  }
+
   const { count: lifetimeCount } = await adminClient
     .from("invoices")
     .select("*", { count: "exact", head: true })
-    .eq("merchant_id", data.merchant_id);
+    .eq("merchant_id", merchantId);
 
-  const createCheck = canCreateInvoice(merchantInfo!, lifetimeCount ?? 0);
-  if (!createCheck.allowed) return { success: false, error: createCheck.reason };
+  const invoiceAccess = getInvoiceCreationAccess(
+    merchantForAccess,
+    requestedType,
+    lifetimeCount ?? 0,
+  );
+  if (!invoiceAccess.allowed) return { success: false, error: invoiceAccess.reason };
+
+  if (invoiceAccess.shouldSyncMerchantSetup) {
+    await syncMerchantSetupStatus(adminClient, merchantId);
+  }
 
   if (requestedType === "collection") {
-    const collectionCheck = canCreateCollectionInvoice(merchantInfo!);
-    if (!collectionCheck.allowed) return { success: false, error: collectionCheck.reason };
-
     const { count: activeCollCount } = await adminClient
       .from("invoices")
       .select("*", { count: "exact", head: true })
-      .eq("merchant_id", data.merchant_id)
+      .eq("merchant_id", merchantId)
       .eq("invoice_type", "collection")
       .in("status", ["open", "partially_paid"]);
 
-    const activeCheck = canAddActiveCollectionInvoice(merchantInfo!, activeCollCount ?? 0);
+    const activeCheck = canAddActiveCollectionInvoice(merchantForAccess, activeCollCount ?? 0);
     if (!activeCheck.allowed) return { success: false, error: activeCheck.reason };
   }
 
-  const plan = merchantInfo?.subscription_plan || merchantInfo?.merchant_tier || "starter";
-  const effectiveType: "record" | "collection" = plan === "starter" ? "record" : requestedType;
+  const effectiveType = invoiceAccess.invoiceType;
 
 
   // Calculate totals server-side
@@ -1361,7 +1398,7 @@ export async function createInvoiceAction(data: {
   const { data: invoice, error } = await adminClient
     .from("invoices")
     .insert([{
-      merchant_id: data.merchant_id,
+      merchant_id: merchantId,
       client_id: data.client_id,
       reference_id: data.reference_id || null,
       handled_by: data.handled_by || null,
@@ -1432,7 +1469,7 @@ export async function createInvoiceAction(data: {
     // We can just call recordManualPaymentAction directly after inserting the line items.
     const paymentRes = await recordManualPaymentAction({
       invoice_id: invoice.id,
-      merchant_id: data.merchant_id,
+      merchant_id: merchantId,
       amount: data.initial_amount_paid,
       payment_method: data.payment_method || "cash",
       date_received: new Date().toISOString().split("T")[0],
@@ -2189,28 +2226,43 @@ export async function createReferenceAction(data: {
 }) {
   const adminClient = getServiceClient();
 
+  const merchantAccess = await resolveMerchantAccess(data.merchant_id, "manage_references");
+  if (!merchantAccess.permitted) {
+    return {
+      success: false,
+      error: merchantAccess.error,
+      code: merchantAccess.error.startsWith("Unauthorized") ? "AUTH_REQUIRED" : "REFERENCE_PERMISSION_DENIED",
+    };
+  }
+  if (data.merchant_id !== merchantAccess.merchantId) {
+    return { success: false, error: "Forbidden: workspace does not match the authenticated user.", code: "MERCHANT_SPOOF_DENIED" };
+  }
+  const trustedMerchantId = merchantAccess.merchantId;
+
   // ── Plan gate: References require Solo Lite plan or above ─────────────────
-  const { data: merchantRow } = await adminClient
+  const { data: merchantRow, error: merchantError } = await adminClient
     .from("merchants")
     .select("subscription_plan, merchant_tier")
-    .eq("id", data.merchant_id)
-    .single();
+    .eq("id", trustedMerchantId)
+    .maybeSingle();
 
-  if (merchantRow) {
-    const access = canAccessFeature(merchantRow as any, "view_references");
-    if (!access.allowed) {
-      return {
-        success: false,
-        error: "References are not available on the Starter plan. Upgrade to Solo Lite or Business to group invoices under project references.",
-        upgradeRequired: "individual" as const,
-      };
-    }
+  if (merchantError || !merchantRow) {
+    return { success: false, error: "Workspace could not be resolved. Please refresh and try again.", code: "WORKSPACE_NOT_FOUND" };
+  }
+  const access = canAccessFeature(merchantRow as any, "view_references");
+  if (!access.allowed) {
+    return {
+      success: false,
+      error: "References are not available on the Starter plan. Upgrade to Solo Lite or Business to group invoices under project references.",
+      code: "REFERENCE_PLAN_REQUIRED",
+      upgradeRequired: "individual" as const,
+    };
   }
 
   const { data: ref, error } = await adminClient
     .from("references")
     .insert({
-      merchant_id: data.merchant_id,
+      merchant_id: trustedMerchantId,
       name: data.name.trim(),
       description: data.description?.trim() || null,
       handled_by: data.handled_by?.trim() || null,
@@ -2233,6 +2285,37 @@ export async function updateReferenceAction(data: {
   project_total_value?: number;
 }) {
   const adminClient = getServiceClient();
+  const merchantAccess = await resolveMerchantAccess(data.merchant_id, "manage_references");
+  if (!merchantAccess.permitted) {
+    return {
+      success: false,
+      error: merchantAccess.error,
+      code: merchantAccess.error.startsWith("Unauthorized") ? "AUTH_REQUIRED" : "REFERENCE_PERMISSION_DENIED",
+    };
+  }
+  if (data.merchant_id !== merchantAccess.merchantId) {
+    return { success: false, error: "Forbidden: workspace does not match the authenticated user.", code: "MERCHANT_SPOOF_DENIED" };
+  }
+  const trustedMerchantId = merchantAccess.merchantId;
+
+  const { data: merchantRow, error: merchantError } = await adminClient
+    .from("merchants")
+    .select("subscription_plan, merchant_tier")
+    .eq("id", trustedMerchantId)
+    .maybeSingle();
+  if (merchantError || !merchantRow) {
+    return { success: false, error: "Workspace could not be resolved. Please refresh and try again.", code: "WORKSPACE_NOT_FOUND" };
+  }
+  const access = canAccessFeature(merchantRow as any, "view_references");
+  if (!access.allowed) {
+    return {
+      success: false,
+      error: "References are not available on the Starter plan. Upgrade to Solo Lite or Business to manage project references.",
+      code: "REFERENCE_PLAN_REQUIRED",
+      upgradeRequired: "individual" as const,
+    };
+  }
+
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (data.name !== undefined) updates.name = data.name.trim();
   if (data.description !== undefined) updates.description = data.description?.trim() || null;
@@ -2243,7 +2326,7 @@ export async function updateReferenceAction(data: {
     .from("references")
     .update(updates)
     .eq("id", data.id)
-    .eq("merchant_id", data.merchant_id);
+    .eq("merchant_id", trustedMerchantId);
 
   if (error) return { success: false, error: error.message };
   revalidatePath("/references");

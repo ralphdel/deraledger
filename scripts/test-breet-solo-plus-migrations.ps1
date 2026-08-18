@@ -521,6 +521,275 @@ function Assert-HarnessSelfTest {
   }
 }
 
+function Get-ContainingPowerShellFunctionName {
+  param($Node, [object[]]$Functions)
+  $matches=@($Functions | Where-Object {
+    $_.Extent.StartOffset -le $Node.Extent.StartOffset -and $_.Extent.EndOffset -ge $Node.Extent.EndOffset
+  } | Sort-Object { $_.Extent.EndOffset - $_.Extent.StartOffset })
+  if($matches.Count -eq 0){return ''}
+  return $matches[0].Name
+}
+
+function Assert-ProductionRehearsalArchitectureAst {
+  param([string]$HelperPath,[string]$GeneratorPath)
+  $helperTokens=$null;$helperErrors=$null;$generatorTokens=$null;$generatorErrors=$null
+  $helperAst=[Management.Automation.Language.Parser]::ParseFile($HelperPath,[ref]$helperTokens,[ref]$helperErrors)
+  $generatorAst=[Management.Automation.Language.Parser]::ParseFile($GeneratorPath,[ref]$generatorTokens,[ref]$generatorErrors)
+  Assert-HarnessSelfTest (@($helperErrors).Count -eq 0 -and @($generatorErrors).Count -eq 0) 'production rehearsal helper or generator has AST errors.'
+  $helperFunctions=@($helperAst.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst]},$true))
+  $generatorFunctions=@($generatorAst.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst]},$true))
+  foreach($group in @($helperFunctions|Group-Object Name)){Assert-HarnessSelfTest ($group.Count -eq 1) "canonical helper function cardinality invalid: $($group.Name)"}
+  $sharedNames=@($helperFunctions.Name|Where-Object {$_ -in $generatorFunctions.Name})
+  Assert-HarnessSelfTest ($sharedNames.Count -eq 0) "generator shadows canonical helper functions: $($sharedNames -join ',')"
+  foreach($obsolete in @('Assert-DRCondition','ConvertTo-DRTarget','ConvertTo-DRSqlLiteral','ConvertFrom-DRControlRow','Assert-DRRunnerText','Assert-DRMarkers','Assert-DRGitState')){
+    Assert-HarnessSelfTest (@(($helperFunctions+$generatorFunctions)|Where-Object Name -eq $obsolete).Count -eq 0) "obsolete DR shadow remains: $obsolete"
+  }
+
+  $readHostCommands=@($helperAst.FindAll({param($node)$node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Read-Host'},$true))
+  Assert-HarnessSelfTest ($readHostCommands.Count -eq 1 -and (Get-ContainingPowerShellFunctionName $readHostCommands[0] $helperFunctions) -eq 'New-ProductionRehearsalRuntimeContext') 'Read-Host exists outside the approved credential provider.'
+  $resolverCommands=@($helperAst.FindAll({param($node)
+    if($node -isnot [Management.Automation.Language.CommandAst]){return $false}
+    $name=$node.GetCommandName();if($name -notin @('Test-Path','Get-Command')){return $false}
+    return $node.Extent.Text -match '(?i)(PsqlPath|PgDumpPath|\.exe)'
+  },$true))
+  foreach($command in $resolverCommands){Assert-HarnessSelfTest ((Get-ContainingPowerShellFunctionName $command $helperFunctions) -eq 'New-ProductionRehearsalRuntimeContext') 'executable resolution exists outside the approved resolver.'}
+
+  $helperStarts=@($helperAst.FindAll({param($node)$node -is [Management.Automation.Language.InvokeMemberExpressionAst] -and $node.Extent.Text -match '\[System\.Diagnostics\.Process\]::Start'},$true))
+  $generatorStarts=@($generatorAst.FindAll({param($node)$node -is [Management.Automation.Language.InvokeMemberExpressionAst] -and $node.Extent.Text -match '\[System\.Diagnostics\.Process\]::Start'},$true))
+  Assert-HarnessSelfTest ($helperStarts.Count -eq 1 -and (Get-ContainingPowerShellFunctionName $helperStarts[0] $helperFunctions) -eq 'Invoke-ProcessStart' -and $generatorStarts.Count -eq 0) 'direct Process.Start exists outside the approved process-start adapter.'
+
+  $pidOnlyStops=@($helperAst.FindAll({param($node)
+    if($node -isnot [Management.Automation.Language.CommandAst]){return $false}
+    $name=$node.GetCommandName()
+    return ($name -eq 'Stop-Process' -and $node.Extent.Text -match '(?i)(?:^|\s)-Id(?:\s|$)') -or
+      ($name -match '^taskkill(?:\.exe)?$' -and $node.Extent.Text -match '(?i)(?:^|\s)/PID(?:\s|$)')
+  },$true))
+  Assert-HarnessSelfTest ($pidOnlyStops.Count -eq 0) 'identity-sensitive production timeout cleanup contains PID-only termination.'
+  $helperSource=[IO.File]::ReadAllText($HelperPath)
+  $generatorSource=[IO.File]::ReadAllText($GeneratorPath)
+  foreach($nativePrimitive in @('DuplicateOriginalHandle','OpenIdentityHandle','GetCreationTime','TerminateProcess','WaitForSingleObject','SafeHandleZeroOrMinusOneIsInvalid')){
+    Assert-HarnessSelfTest $helperSource.Contains($nativePrimitive) "retained-handle process primitive is missing: $nativePrimitive"
+  }
+
+  $packageCalls=@($generatorAst.FindAll({param($node)$node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'New-ProductionRehearsalPackage'},$true))
+  $productionPackageCalls=@($packageCalls|Where-Object {(Get-ContainingPowerShellFunctionName $_ $generatorFunctions) -eq ''})
+  Assert-HarnessSelfTest ($productionPackageCalls.Count -eq 1) 'production package generation call cardinality is invalid.'
+  $packageAssignments=@($generatorAst.FindAll({param($node)$node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Extent.Text -match 'PackageGenerationBoundary'},$true))
+  Assert-HarnessSelfTest (@($packageAssignments|Where-Object {$_.Extent.StartOffset -le $productionPackageCalls[0].Extent.StartOffset -and $_.Extent.EndOffset -ge $productionPackageCalls[0].Extent.EndOffset}).Count -eq 1) 'package generation call exists outside its approved boundary.'
+  $packageFunction=@($generatorFunctions|Where-Object Name -eq 'New-ProductionRehearsalPackage')
+  $finalizedValidationCalls=@($packageFunction[0].FindAll({param($node)$node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Invoke-FinalizedArtifactValidation'},$true))
+  $expansionCalls=@($packageFunction[0].FindAll({param($node)$node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Expand-WrapperTemplate'},$true))
+  $successWrites=@($packageFunction[0].FindAll({param($node)$node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Write-Output'},$true))
+  Assert-HarnessSelfTest ($finalizedValidationCalls.Count -eq 1 -and $expansionCalls.Count -eq 1 -and $successWrites.Count -gt 0 -and $expansionCalls[0].Extent.StartOffset -lt $finalizedValidationCalls[0].Extent.StartOffset -and $finalizedValidationCalls[0].Extent.StartOffset -lt $successWrites[0].Extent.StartOffset) 'generator does not validate finalized wrapper bytes before reporting package success.'
+
+  foreach($astRecord in @(@{Ast=$helperAst;Functions=$helperFunctions;Name='helper'},@{Ast=$generatorAst;Functions=$generatorFunctions;Name='generator'})){
+    $directSql=@($astRecord.Ast.FindAll({param($node)$node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -match '^(psql|pg_dump)(\.exe)?$'},$true))
+    Assert-HarnessSelfTest ($directSql.Count -eq 0) "direct SQL executable invocation found in $($astRecord.Name)."
+  }
+  $invokeRehearsal=@($helperFunctions|Where-Object Name -eq 'Invoke-Rehearsal')
+  Assert-HarnessSelfTest ($invokeRehearsal.Count -eq 1 -and $invokeRehearsal[0].Extent.Text -notmatch 'Invoke-NativeChecked' -and $invokeRehearsal[0].Extent.Text -match 'Invoke-RehearsalProcess') 'SQL execution bypasses the approved rehearsal process boundary.'
+  $artifactOnly=@($helperFunctions|Where-Object Name -eq 'Invoke-ArtifactValidationOnly')
+  Assert-HarnessSelfTest ($artifactOnly.Count -eq 1 -and $artifactOnly[0].Extent.Text -match 'Assert-ArtifactIntegrity' -and $artifactOnly[0].Extent.Text -notmatch 'CredentialProvider|ExecutableResolver|ProcessAdapter|SqlExecutionBoundary') 'artifact-only mode does not terminate at the pre-credential shared validator.'
+  Assert-HarnessSelfTest ($invokeRehearsal[0].Extent.Text -match 'Invoke-ArtifactValidationOnly[\s\S]+CredentialProvider') 'production rehearsal does not traverse the shared artifact-only validator before credentials.'
+  $artifactFunction=@($helperFunctions|Where-Object Name -eq 'Assert-ArtifactIntegrity')
+  $artifactReturns=@($artifactFunction[0].FindAll({param($node)$node -is [Management.Automation.Language.ReturnStatementAst]},$true))
+  $bypassVariables=@($helperAst.FindAll({param($node)$node -is [Management.Automation.Language.VariableExpressionAst] -and $node.VariablePath.UserPath -eq 'SkipEmbeddedContract'},$true)) + @($generatorAst.FindAll({param($node)$node -is [Management.Automation.Language.VariableExpressionAst] -and $node.VariablePath.UserPath -eq 'SkipEmbeddedContract'},$true))
+  $bypassMembers=@($helperAst.FindAll({param($node)$node -is [Management.Automation.Language.MemberExpressionAst] -and $node.Member.Value -eq 'SkipEmbeddedContract'},$true)) + @($generatorAst.FindAll({param($node)$node -is [Management.Automation.Language.MemberExpressionAst] -and $node.Member.Value -eq 'SkipEmbeddedContract'},$true))
+  Assert-HarnessSelfTest ($artifactFunction.Count -eq 1 -and $artifactReturns.Count -eq 0 -and $bypassVariables.Count -eq 0 -and $bypassMembers.Count -eq 0) 'artifact integrity contains a bypass or early return.'
+  $trustedSpecificationFunction=@($helperFunctions|Where-Object Name -eq 'Get-TrustedMigrationSpecification')
+  Assert-HarnessSelfTest ($trustedSpecificationFunction.Count -eq 1) 'trusted migration specification function cardinality is invalid.'
+  Assert-HarnessSelfTest ($generatorSource -match '(?m)^\$MigrationPlan\s*=\s*@\(Get-TrustedMigrationSpecification\)\s*$') 'generator does not consume the canonical trusted migration specification.'
+  Assert-HarnessSelfTest ($artifactFunction[0].Extent.Text -match 'MigrationSpecification' -and $artifactFunction[0].Extent.Text -match 'RV\.ARTIFACT\.CANONICAL_FILENAME') 'artifact integrity does not bind generated filenames to the trusted migration specification.'
+
+  $productionGeneratorFunctions=@(
+    'Replace-SinglePlaceholder','Get-GitBlobBytes','Remove-TopLevelTransactionEnvelopeBytes',
+    'Test-WrapperTemplateStaticContract','New-WrapperExpansion','Expand-WrapperTemplate',
+    'Invoke-FinalizedArtifactValidation','New-ProductionRehearsalPackage'
+  )
+  $guardRows=[Collections.Generic.List[object]]::new()
+  foreach($astRecord in @(
+    @{Ast=$helperAst;Functions=$helperFunctions;Path=$HelperPath;ProductionFunctions=@($helperFunctions.Name);IncludeTopLevel=$false},
+    @{Ast=$generatorAst;Functions=$generatorFunctions;Path=$GeneratorPath;ProductionFunctions=$productionGeneratorFunctions;IncludeTopLevel=$true}
+  )){
+    $guardCommands=@($astRecord.Ast.FindAll({param($node)$node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Assert-Condition'},$true))
+    foreach($command in $guardCommands){
+      $owner=Get-ContainingPowerShellFunctionName $command $astRecord.Functions
+      $isProduction=($astRecord.ProductionFunctions -contains $owner) -or ($astRecord.IncludeTopLevel -and [string]::IsNullOrWhiteSpace($owner))
+      if(-not $isProduction){continue}
+      Assert-HarnessSelfTest ($command.CommandElements.Count -ge 5) "production guard metadata is missing: $($astRecord.Path):$($command.Extent.StartLineNumber)"
+      $guardId=$null;$classification=$null
+      try{$guardId=$command.CommandElements[3].SafeGetValue();$classification=$command.CommandElements[4].SafeGetValue()}catch{Assert-HarnessSelfTest $false "production guard ID or classification is dynamic: $($astRecord.Path):$($command.Extent.StartLineNumber)"}
+      Assert-HarnessSelfTest ($guardId -match '^(RV|GEN)\.[A-Z0-9_.]+$') "production guard ID is invalid: $guardId"
+      Assert-HarnessSelfTest ($classification -match '^[A-Z0-9_]+$') "production guard classification is invalid: $guardId"
+      $compound=@($command.CommandElements[1].FindAll({param($node)$node -is [Management.Automation.Language.BinaryExpressionAst] -and $node.Operator -in @([Management.Automation.Language.TokenKind]::And,[Management.Automation.Language.TokenKind]::Or)},$true))
+      Assert-HarnessSelfTest ($compound.Count -eq 0) "compound production guard was not decomposed: $guardId"
+      $guardRows.Add([pscustomobject]@{guard_id=$guardId;classification=$classification;source=[IO.Path]::GetFileName($astRecord.Path)})
+    }
+
+    $throws=@($astRecord.Ast.FindAll({param($node)$node -is [Management.Automation.Language.ThrowStatementAst]},$true))
+    foreach($throw in $throws){
+      $owner=Get-ContainingPowerShellFunctionName $throw $astRecord.Functions
+      $isProduction=($astRecord.ProductionFunctions -contains $owner) -or ($astRecord.IncludeTopLevel -and [string]::IsNullOrWhiteSpace($owner))
+      if(-not $isProduction){continue}
+      $allowedPrimitive=$owner -eq 'Assert-Condition'
+      $allowedOperationalRethrow=$owner -eq 'Invoke-RehearsalLifecycle' -and $throw.Extent.Text -eq 'throw $bodyFailure'
+      $allowedTopLevelRethrow=[string]::IsNullOrWhiteSpace($owner) -and $throw.Extent.Text -eq 'throw'
+      Assert-HarnessSelfTest ($allowedPrimitive -or $allowedOperationalRethrow -or $allowedTopLevelRethrow) "direct production validation throw remains: $($astRecord.Path):$($throw.Extent.StartLineNumber)"
+    }
+  }
+  Assert-HarnessSelfTest (@($guardRows|Group-Object guard_id|Where-Object Count -ne 1).Count -eq 0) 'production guard IDs are duplicated.'
+  $script:HarnessStaticGuardRows=@($guardRows)
+}
+
+function Assert-RehearsalGuardAstMutationRejected {
+  param([string]$HelperPath,[string]$GeneratorPath,[string]$TemporaryRoot,[string]$MutationId,[scriptblock]$Mutator)
+  $caseRoot=Join-Path $TemporaryRoot ("guard-ast-"+$MutationId.ToLowerInvariant())
+  New-Item -ItemType Directory -Path $caseRoot -Force|Out-Null
+  $helperCopy=Join-Path $caseRoot 'production-rehearsal-validation.ps1'
+  $generatorCopy=Join-Path $caseRoot 'new-production-rehearsal-package.ps1'
+  Copy-Item -LiteralPath $HelperPath -Destination $helperCopy
+  Copy-Item -LiteralPath $GeneratorPath -Destination $generatorCopy
+  try{
+    & $Mutator $helperCopy $generatorCopy
+    $rejected=$false
+    try{Assert-ProductionRehearsalArchitectureAst -HelperPath $helperCopy -GeneratorPath $generatorCopy}catch{$rejected=$true}
+    Assert-HarnessSelfTest $rejected "guard AST mutation was accepted: $MutationId"
+  }finally{
+    Remove-Item -LiteralPath $caseRoot -Recurse -Force -ErrorAction SilentlyContinue
+  }
+}
+
+function New-InvoiceFkControlState {
+  param(
+    [string]$InvoiceIdType = "uuid",
+    [bool]$InvoiceIdNullable = $true,
+    [int]$CandidateCount = 1,
+    [int]$NamedCount = 1,
+    [int]$ExactReferenceCount = 1,
+    [int]$ConflictingCount = 0,
+    [bool]$AllCandidatesValidated = $true,
+    [string]$DeleteAction = "SET NULL"
+  )
+
+  @{
+    InvoiceIdType = $InvoiceIdType
+    InvoiceIdNullable = $InvoiceIdNullable
+    CandidateCount = $CandidateCount
+    NamedCount = $NamedCount
+    ExactReferenceCount = $ExactReferenceCount
+    ConflictingCount = $ConflictingCount
+    AllCandidatesValidated = $AllCandidatesValidated
+    DeleteAction = $DeleteAction
+  }
+}
+
+function Get-InvoiceFkControlClassification {
+  param([hashtable]$State)
+
+  $exactShape = (
+    $State.InvoiceIdType -eq "uuid" -and
+    $State.InvoiceIdNullable -eq $true -and
+    $State.CandidateCount -eq 1 -and
+    $State.NamedCount -eq 1 -and
+    $State.ExactReferenceCount -eq 1 -and
+    $State.ConflictingCount -eq 0 -and
+    $State.AllCandidatesValidated -eq $true
+  )
+  $canonicalAlready = $exactShape -and $State.DeleteAction -eq "SET NULL"
+  $normalizationRequired = $exactShape -and $State.DeleteAction -eq "NO ACTION"
+  $legacyCompatible = $canonicalAlready -or $normalizationRequired
+
+  [pscustomobject]@{
+    LegacyCompatible = $legacyCompatible
+    CanonicalAlready = $canonicalAlready
+    NormalizationRequired = $normalizationRequired
+    Accepted = $legacyCompatible
+  }
+}
+
+function Assert-InvoiceFkControlClassification {
+  param(
+    [string]$Name,
+    [hashtable]$State,
+    [bool]$ExpectedLegacyCompatible,
+    [bool]$ExpectedCanonicalAlready,
+    [bool]$ExpectedNormalizationRequired,
+    [bool]$ExpectedAccepted
+  )
+
+  $classification = Get-InvoiceFkControlClassification -State $State
+  Assert-HarnessSelfTest -Condition ($classification.LegacyCompatible -eq $ExpectedLegacyCompatible) -Message "$Name legacy-compatible mismatch."
+  Assert-HarnessSelfTest -Condition ($classification.CanonicalAlready -eq $ExpectedCanonicalAlready) -Message "$Name canonical-already mismatch."
+  Assert-HarnessSelfTest -Condition ($classification.NormalizationRequired -eq $ExpectedNormalizationRequired) -Message "$Name normalization-required mismatch."
+  Assert-HarnessSelfTest -Condition ($classification.Accepted -eq $ExpectedAccepted) -Message "$Name accepted mismatch."
+  Assert-HarnessSelfTest -Condition (-not ($classification.CanonicalAlready -and $classification.NormalizationRequired)) -Message "$Name cannot be both canonical and normalization-required."
+}
+
+function Assert-InvoiceFkOfflineClassificationMatrix {
+  $cases = @(
+    @{ Name = "canonical-set-null"; State = New-InvoiceFkControlState -DeleteAction "SET NULL"; Legacy = $true; Canonical = $true; Normalize = $false; Accepted = $true },
+    @{ Name = "legacy-no-action"; State = New-InvoiceFkControlState -DeleteAction "NO ACTION"; Legacy = $true; Canonical = $false; Normalize = $true; Accepted = $true },
+    @{ Name = "wrong-name"; State = New-InvoiceFkControlState -NamedCount 0 -ConflictingCount 1; Legacy = $false; Canonical = $false; Normalize = $false; Accepted = $false },
+    @{ Name = "wrong-reference"; State = New-InvoiceFkControlState -ExactReferenceCount 0 -ConflictingCount 1; Legacy = $false; Canonical = $false; Normalize = $false; Accepted = $false },
+    @{ Name = "multiple-candidates"; State = New-InvoiceFkControlState -CandidateCount 2 -ConflictingCount 1; Legacy = $false; Canonical = $false; Normalize = $false; Accepted = $false },
+    @{ Name = "unvalidated"; State = New-InvoiceFkControlState -AllCandidatesValidated $false -ConflictingCount 1; Legacy = $false; Canonical = $false; Normalize = $false; Accepted = $false },
+    @{ Name = "cascade"; State = New-InvoiceFkControlState -DeleteAction "CASCADE"; Legacy = $false; Canonical = $false; Normalize = $false; Accepted = $false },
+    @{ Name = "set-default"; State = New-InvoiceFkControlState -DeleteAction "SET DEFAULT"; Legacy = $false; Canonical = $false; Normalize = $false; Accepted = $false },
+    @{ Name = "not-null"; State = New-InvoiceFkControlState -InvoiceIdNullable $false; Legacy = $false; Canonical = $false; Normalize = $false; Accepted = $false },
+    @{ Name = "wrong-type"; State = New-InvoiceFkControlState -InvoiceIdType "text"; Legacy = $false; Canonical = $false; Normalize = $false; Accepted = $false }
+  )
+
+  foreach ($case in @($cases)) {
+    Assert-InvoiceFkControlClassification `
+      -Name $case.Name `
+      -State $case.State `
+      -ExpectedLegacyCompatible $case.Legacy `
+      -ExpectedCanonicalAlready $case.Canonical `
+      -ExpectedNormalizationRequired $case.Normalize `
+      -ExpectedAccepted $case.Accepted
+  }
+
+  $noActionCanonical = New-InvoiceFkControlState -DeleteAction "NO ACTION"
+  Assert-HarnessSelfTest -Condition (-not (Get-InvoiceFkControlClassification -State $noActionCanonical).CanonicalAlready) -Message "NO ACTION was marked canonical."
+  $setNullNormalize = New-InvoiceFkControlState -DeleteAction "SET NULL"
+  Assert-HarnessSelfTest -Condition (-not (Get-InvoiceFkControlClassification -State $setNullNormalize).NormalizationRequired) -Message "SET NULL was marked normalization-required."
+  $wrongReference = New-InvoiceFkControlState -ExactReferenceCount 0 -ConflictingCount 1 -DeleteAction "NO ACTION"
+  Assert-HarnessSelfTest -Condition (-not (Get-InvoiceFkControlClassification -State $wrongReference).LegacyCompatible) -Message "Wrong reference was marked legacy-compatible."
+  $multipleCompatible = New-InvoiceFkControlState -CandidateCount 2 -ConflictingCount 1 -DeleteAction "NO ACTION"
+  Assert-HarnessSelfTest -Condition (-not (Get-InvoiceFkControlClassification -State $multipleCompatible).LegacyCompatible) -Message "Multiple candidates were marked compatible."
+  $notNullCanonical = New-InvoiceFkControlState -InvoiceIdNullable $false -DeleteAction "SET NULL"
+  Assert-HarnessSelfTest -Condition (-not (Get-InvoiceFkControlClassification -State $notNullCanonical).CanonicalAlready) -Message "NOT NULL invoice_id was marked canonical."
+  $unsupported = New-InvoiceFkControlState -DeleteAction "RESTRICT"
+  Assert-HarnessSelfTest -Condition (-not (Get-InvoiceFkControlClassification -State $unsupported).LegacyCompatible) -Message "Unsupported delete action was accepted."
+}
+
+function Assert-InvoiceFkReferencePredicatesOutsideHaving {
+  param(
+    [Parameter(Mandatory = $true)][string]$SourceName,
+    [Parameter(Mandatory = $true)][string]$SourceText,
+    [Parameter(Mandatory = $true)][string]$CountVariableName
+  )
+
+  $countVariablePattern = [regex]::Escape($CountVariableName)
+  $blockPattern = "(?is)SELECT\s+count\(\*\)::integer,[\s\S]*?INTO\s+[\s\S]*?\b$countVariablePattern\b[\s\S]*?FROM\s+pg_constraint\s+con[\s\S]*?WHERE[\s\S]*?con\.conname\s*=\s*'payment_events_invoice_id_fkey'[\s\S]*?GROUP\s+BY\s+con\.conname,\s+con\.confdeltype\s+HAVING[\s\S]*?;"
+  $blockMatch = [regex]::Match($SourceText, $blockPattern)
+  Assert-HarnessSelfTest -Condition $blockMatch.Success -Message "$SourceName payment_events.invoice_id FK assertion block was not found."
+
+  $block = $blockMatch.Value
+  $whereMatch = [regex]::Match($block, "(?is)\bWHERE\b(?<where>.*?)\bGROUP\s+BY\b")
+  $havingMatch = [regex]::Match($block, "(?is)\bHAVING\b(?<having>.*?);")
+  Assert-HarnessSelfTest -Condition $whereMatch.Success -Message "$SourceName invoice FK assertion WHERE clause was not found."
+  Assert-HarnessSelfTest -Condition $havingMatch.Success -Message "$SourceName invoice FK assertion HAVING clause was not found."
+
+  $where = $whereMatch.Groups["where"].Value
+  $having = $havingMatch.Groups["having"].Value
+  Assert-HarnessSelfTest -Condition ($where -match "ref_ns\.nspname::text\s*=\s*'public'") -Message "$SourceName invoice FK referenced schema predicate must be in WHERE."
+  Assert-HarnessSelfTest -Condition ($where -match "ref_cls\.relname::text\s*=\s*'invoices'") -Message "$SourceName invoice FK referenced table predicate must be in WHERE."
+  Assert-HarnessSelfTest -Condition ($having -notmatch "ref_ns\.nspname|ref_cls\.relname") -Message "$SourceName invoice FK assertion must not reference ref_ns/ref_cls row columns in HAVING."
+  Assert-HarnessSelfTest -Condition ($having -match "array_agg\(src\.attname::text ORDER BY src_ord\.ordinality\)\s*=\s*ARRAY\['invoice_id'\]::text\[\]") -Message "$SourceName invoice FK local-column aggregate check must remain in HAVING."
+  Assert-HarnessSelfTest -Condition ($having -match "array_agg\(ref\.attname::text ORDER BY ref_ord\.ordinality\)\s*=\s*ARRAY\['id'\]::text\[\]") -Message "$SourceName invoice FK referenced-column aggregate check must remain in HAVING."
+}
+
 function New-FakeBatchCommand {
   param(
     [Parameter(Mandatory = $true)][string]$Directory,
@@ -546,6 +815,154 @@ function Assert-LibpqEnvironmentRestored {
   }
 }
 
+function Get-RollbackRunnerMigrationPaths {
+  return @(
+    @{ Number = "006"; Path = "supabase/staging/006_solo_plus_prerequisites.sql" },
+    @{ Number = "007"; Path = "supabase/staging/007_solo_plus_case_foundation.sql" },
+    @{ Number = "008"; Path = "supabase/staging/008_solo_plus_transactional_repository_rpcs.sql" },
+    @{ Number = "009"; Path = "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" },
+    @{ Number = "010"; Path = "supabase/migrations/20260707_02_solo_plus_payment_lifecycle.sql" },
+    @{ Number = "011"; Path = "supabase/migrations/20260710_01_solo_plus_review_decision_rpc.sql" },
+    @{ Number = "012"; Path = "supabase/migrations/20260711_01_solo_plus_activation_rpc.sql" },
+    @{ Number = "013"; Path = "supabase/migrations/20260718_01_solo_plus_payment_recovery.sql" },
+    @{ Number = "014"; Path = "supabase/migrations/20260728_00_authorization_hardening.sql" },
+    @{ Number = "015"; Path = "supabase/migrations/20260728_01_verification_disclosure_acknowledgement_rpc.sql" },
+    @{ Number = "016"; Path = "supabase/migrations/20260731_00_verification_disclosure_identity_hardening.sql" },
+    @{ Number = "017"; Path = "supabase/migrations/20260803_00_payment_events_legacy_merchant_compatibility.sql" }
+  )
+}
+
+function Get-PgTempFunctionDefinitions {
+  param(
+    [Parameter(Mandatory = $true)][string]$MigrationNumber,
+    [Parameter(Mandatory = $true)][string]$RelativePath
+  )
+
+  $absolutePath = Join-Path $repoRoot $RelativePath
+  $lines = Get-Content -LiteralPath $absolutePath
+  $definitions = @()
+  $insideBlockComment = $false
+  $insideDollarQuote = $false
+
+  for ($index = 0; $index -lt $lines.Count; $index++) {
+    $line = $lines[$index]
+    $scanLine = $line
+
+    if ($insideBlockComment) {
+      if ($scanLine -match '\*/') {
+        $insideBlockComment = $false
+        $scanLine = $scanLine.Substring($scanLine.IndexOf('*/') + 2)
+      } else {
+        continue
+      }
+    }
+
+    while ($scanLine -match '/\*') {
+      $beforeComment = $scanLine.Substring(0, $scanLine.IndexOf('/*'))
+      $afterStart = $scanLine.Substring($scanLine.IndexOf('/*') + 2)
+      if ($afterStart -match '\*/') {
+        $scanLine = $beforeComment + $afterStart.Substring($afterStart.IndexOf('*/') + 2)
+      } else {
+        $scanLine = $beforeComment
+        $insideBlockComment = $true
+        break
+      }
+    }
+
+    $lineWithoutInlineComment = ($scanLine -replace '--.*$', '')
+    if ($lineWithoutInlineComment -match '\$\$') {
+      $insideDollarQuote = -not $insideDollarQuote
+      continue
+    }
+
+    if ($insideDollarQuote) {
+      continue
+    }
+
+    if ($lineWithoutInlineComment -notmatch '^\s*CREATE( OR REPLACE)? FUNCTION pg_temp\.([A-Za-z0-9_]+)\s*\(') {
+      continue
+    }
+
+    $createMode = if ($matches[1]) { "CREATE OR REPLACE" } else { "CREATE" }
+    $functionName = $matches[2]
+    $headerLines = @($lines[$index].Trim())
+    $cursor = $index + 1
+    while ($cursor -lt $lines.Count -and $lines[$cursor] -notmatch '^\s*LANGUAGE\s+') {
+      $headerLines += $lines[$cursor].Trim()
+      if ($lines[$cursor] -match '^\s*RETURNS\s+') {
+        break
+      }
+      $cursor += 1
+    }
+
+    $header = ($headerLines -join ' ')
+    $argsText = [regex]::Match($header, 'FUNCTION\s+pg_temp\.[A-Za-z0-9_]+\s*\((.*)\)\s+RETURNS', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase).Groups[1].Value
+    $returnType = [regex]::Match($header, '\)\s+RETURNS\s+(.+)$', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase).Groups[1].Value.Trim()
+    $argNames = @()
+    $argTypes = @()
+    $defaults = @()
+
+    if (-not [string]::IsNullOrWhiteSpace($argsText)) {
+      foreach ($rawArg in ($argsText -split ',')) {
+        $arg = $rawArg.Trim()
+        if ([string]::IsNullOrWhiteSpace($arg)) {
+          continue
+        }
+
+        $parts = [regex]::Split($arg, '\s+DEFAULT\s+', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        $nameAndType = $parts[0].Trim()
+        $firstSpace = $nameAndType.IndexOf(' ')
+        Assert-HarnessSelfTest -Condition ($firstSpace -gt 0) -Message "Unable to parse pg_temp argument in $RelativePath line $($index + 1): $arg"
+
+        $argNames += $nameAndType.Substring(0, $firstSpace).Trim()
+        $argTypes += $nameAndType.Substring($firstSpace + 1).Trim().ToLowerInvariant()
+        if ($parts.Count -gt 1) {
+          $defaults += (($parts[1..($parts.Count - 1)] -join " DEFAULT ").Trim())
+        }
+      }
+    }
+
+    $definitions += [pscustomobject]@{
+      Migration = $MigrationNumber
+      Path = $RelativePath
+      Line = $index + 1
+      Name = $functionName
+      Identity = ("{0}({1})" -f $functionName, ($argTypes -join ","))
+      ArgumentNames = ($argNames -join ",")
+      Defaults = ($defaults -join ",")
+      ReturnType = $returnType.ToLowerInvariant()
+      CreateMode = $createMode
+    }
+  }
+
+  return $definitions
+}
+
+function Assert-RollbackRunnerPgTempHelpersAreIsolated {
+  $definitions = @()
+  foreach ($migration in Get-RollbackRunnerMigrationPaths) {
+    $definitions += Get-PgTempFunctionDefinitions -MigrationNumber $migration.Number -RelativePath $migration.Path
+  }
+
+  $grouped = @($definitions | Group-Object -Property Identity | Where-Object { $_.Count -gt 1 })
+  Assert-HarnessSelfTest -Condition ($grouped.Count -eq 0) -Message "ordered rollback migrations redefine pg_temp helper identities in one session: $(($grouped | ForEach-Object { $_.Name }) -join '; ')"
+
+  $migrationSpecificDefinitions = $definitions | Where-Object { $_.Migration -in @("010", "011", "012") }
+  foreach ($definition in $migrationSpecificDefinitions) {
+    Assert-HarnessSelfTest -Condition ($definition.Name.EndsWith("_m$($definition.Migration)")) -Message "Migration $($definition.Migration) pg_temp helper $($definition.Name) is not migration-specific."
+  }
+
+  $m009FunctionHelper = @($definitions | Where-Object {
+    $_.Migration -eq "009" -and $_.Name -eq "assert_public_function_exists"
+  })
+  $m010FunctionHelper = @($definitions | Where-Object {
+    $_.Migration -eq "010" -and $_.Name -eq "assert_public_function_exists_m010"
+  })
+  Assert-HarnessSelfTest -Condition ($m009FunctionHelper.Count -eq 1) -Message "Migration 009 public-function assertion helper was not found."
+  Assert-HarnessSelfTest -Condition ($m010FunctionHelper.Count -eq 1) -Message "Migration 010 public-function assertion helper was not isolated."
+  Assert-HarnessSelfTest -Condition ($m009FunctionHelper.Identity -ne $m010FunctionHelper.Identity) -Message "Migration 009 and 010 public-function helpers still share one pg_temp identity."
+}
+
 function Run-HarnessSelfTests {
   $tempDir = Join-Path $env:TEMP ("deraledger-harness-selftest-" + [System.Guid]::NewGuid().ToString("N"))
   New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
@@ -556,6 +973,126 @@ function Run-HarnessSelfTests {
   $outerSnapshot = Get-LibpqEnvironmentSnapshot -VariableNames $libpqNames
 
   try {
+    Assert-InvoiceFkOfflineClassificationMatrix
+    $phase2SqlTest = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "supabase/tests/phase2_breet_payment_substrate_reconciliation.sql")
+    Assert-InvoiceFkReferencePredicatesOutsideHaving -SourceName "phase2_breet_payment_substrate_reconciliation.sql" -SourceText $phase2SqlTest -CountVariableName "v_invoice_fk_count"
+
+    $harnessSource = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/test-breet-solo-plus-migrations.ps1")
+    $invoiceFkFunctionMatch = [regex]::Match($harnessSource, "(?m)^function Assert-PaymentEventsInvoiceForeignKey\b")
+    $invoiceFkFunctionStart = if ($invoiceFkFunctionMatch.Success) { $invoiceFkFunctionMatch.Index } else { -1 }
+    $invoiceFkFunctionEndMatch = if ($invoiceFkFunctionStart -ge 0) {
+      [regex]::Match($harnessSource.Substring($invoiceFkFunctionStart), "(?m)^function Set-PaymentEventsInvoiceForeignKeyFixture\b")
+    } else {
+      [regex]::Match("", "a^")
+    }
+    $invoiceFkFunctionEnd = if ($invoiceFkFunctionEndMatch.Success) { $invoiceFkFunctionStart + $invoiceFkFunctionEndMatch.Index } else { -1 }
+    Assert-HarnessSelfTest -Condition ($invoiceFkFunctionStart -ge 0 -and $invoiceFkFunctionEnd -gt $invoiceFkFunctionStart) -Message "Assert-PaymentEventsInvoiceForeignKey source block was not found."
+    $invoiceFkFunctionSource = $harnessSource.Substring($invoiceFkFunctionStart, $invoiceFkFunctionEnd - $invoiceFkFunctionStart)
+    Assert-InvoiceFkReferencePredicatesOutsideHaving -SourceName "Assert-PaymentEventsInvoiceForeignKey" -SourceText $invoiceFkFunctionSource -CountVariableName "v_fk_count"
+
+    $migration009 = Get-Content -Raw -Path (Join-Path $repoRoot "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql")
+    foreach ($needle in @(
+      "get_payment_events_invoice_fk_compatible_delete_action",
+      "assert_payment_events_invoice_fk_legacy_compatible",
+      "normalize_payment_events_invoice_fk",
+      "DROP CONSTRAINT payment_events_invoice_id_fkey",
+      "ADD CONSTRAINT payment_events_invoice_id_fkey",
+      "FOREIGN KEY (invoice_id) REFERENCES public.invoices(id) ON DELETE SET NULL",
+      "v_delete_action_actual = 'NO ACTION'",
+      "v_delete_action_actual NOT IN ('SET NULL', 'NO ACTION')",
+      "con.contype::text = 'f'",
+      "array_agg(src.attname::text ORDER BY src_ord.ordinality)",
+      "array_agg(ref.attname::text ORDER BY ref_ord.ordinality)"
+    )) {
+      Assert-HarnessSelfTest -Condition ($migration009.Contains($needle)) -Message "Migration 009 invoice FK compatibility guard missing: $needle"
+    }
+    Assert-HarnessSelfTest -Condition ($migration009 -notmatch "payment_events_invoice_id_fkey[\s\S]{0,200}ON DELETE RESTRICT") -Message "Migration 009 should not whitelist RESTRICT for payment_events.invoice_id."
+    $paymentEventsSecurityHelper = [regex]::Match(
+      $migration009,
+      "(?ms)^CREATE OR REPLACE FUNCTION pg_temp\.assert_payment_events_server_side_security_compatible\(\).*?^\$\$;"
+    )
+    Assert-HarnessSelfTest -Condition $paymentEventsSecurityHelper.Success -Message "Migration 009 payment_events server-side security compatibility helper is missing."
+    Assert-HarnessSelfTest -Condition ((@([regex]::Matches($migration009, "PERFORM pg_temp\.assert_payment_events_server_side_security_compatible\(\);"))).Count -eq 2) -Message "Migration 009 must apply the payment_events server-side security compatibility helper at both compatibility checkpoints."
+    Assert-HarnessSelfTest -Condition ($migration009 -notmatch "assert_public_rls_state\('payment_events', false\)") -Message "Migration 009 must tolerate safe legacy payment_events RLS enabled state."
+    Assert-HarnessSelfTest -Condition ($paymentEventsSecurityHelper.Value -match "pg_policies" -and $paymentEventsSecurityHelper.Value -match "information_schema\.role_table_grants" -and $paymentEventsSecurityHelper.Value -match "grantee IN \('PUBLIC', 'anon', 'authenticated'\)") -Message "Migration 009 payment_events RLS compatibility must retain browser policy and grant rejection."
+    Assert-HarnessSelfTest -Condition ($harnessSource -match "Create production-like safe RLS-enabled payment_events fixture" -and $harnessSource -match "Create RLS-enabled payment_events browser policy fixture" -and $harnessSource -match "Create RLS-disabled payment_events browser grant fixture" -and $harnessSource -match "Migration 017 disables payment_events RLS after full 009-017 chain") -Message "payment_events RLS compatibility regression fixtures are incomplete."
+    Assert-RollbackRunnerPgTempHelpersAreIsolated
+
+    $rehearsalGenerator = Join-Path $repoRoot "scripts/new-production-rehearsal-package.ps1"
+    $rehearsalHelper = Join-Path $repoRoot "scripts/production-rehearsal-validation.ps1"
+    Assert-HarnessSelfTest -Condition (Test-Path -LiteralPath $rehearsalGenerator) -Message "production rehearsal package generator is missing."
+    Assert-HarnessSelfTest -Condition (Test-Path -LiteralPath $rehearsalHelper) -Message "production rehearsal canonical helper is missing."
+    Assert-ProductionRehearsalArchitectureAst -HelperPath $rehearsalHelper -GeneratorPath $rehearsalGenerator
+    foreach($mutation in @(
+      @{Id='DUPLICATE-ID';Mutator={param($helper,$generator)$text=Get-Content -Raw $helper;$text=$text.Replace("'RV.PROCESS.NONZERO_EXIT'","'RV.PROCESS.TIMEOUT'");[IO.File]::WriteAllText($helper,$text,[Text.UTF8Encoding]::new($false))}},
+      @{Id='DYNAMIC-ID';Mutator={param($helper,$generator)$text=Get-Content -Raw $helper;$text=$text.Replace("'RV.PROCESS.NONZERO_EXIT'",'$script:DynamicGuardId');[IO.File]::WriteAllText($helper,$text,[Text.UTF8Encoding]::new($false))}},
+      @{Id='COMPOUND-CONDITION';Mutator={param($helper,$generator)$text=Get-Content -Raw $helper;$text=$text.Replace('($Result.ExitCode -eq 0) "PROCESS_NONZERO_EXIT:', '(($Result.ExitCode -eq 0) -and $true) "PROCESS_NONZERO_EXIT:');[IO.File]::WriteAllText($helper,$text,[Text.UTF8Encoding]::new($false))}},
+      @{Id='DIRECT-THROW';Mutator={param($helper,$generator)$text=Get-Content -Raw $helper;$old='Assert-Condition ($Result.ExitCode -eq 0) "PROCESS_NONZERO_EXIT:${Operation}:$($Result.ExitCode)" ''RV.PROCESS.NONZERO_EXIT'' ''PROCESS_NONZERO_EXIT''';$text=$text.Replace($old,'if ($Result.ExitCode -ne 0) { throw "PROCESS_NONZERO_EXIT" }');[IO.File]::WriteAllText($helper,$text,[Text.UTF8Encoding]::new($false))}},
+      @{Id='PID-ONLY-STOP-PROCESS';Mutator={param($helper,$generator)$text=Get-Content -Raw $helper;$needle='function Invoke-RetainedIdentityCleanup($Platform, [object[]]$Identities) {';$text=$text.Replace($needle,$needle+"`r`n  Stop-Process -Id 1 -Force");[IO.File]::WriteAllText($helper,$text,[Text.UTF8Encoding]::new($false))}},
+      @{Id='PID-ONLY-TASKKILL';Mutator={param($helper,$generator)$text=Get-Content -Raw $helper;$needle='function Invoke-RetainedIdentityCleanup($Platform, [object[]]$Identities) {';$text=$text.Replace($needle,$needle+"`r`n  taskkill.exe /PID 1 /T /F");[IO.File]::WriteAllText($helper,$text,[Text.UTF8Encoding]::new($false))}}
+    )){
+      Assert-RehearsalGuardAstMutationRejected -HelperPath $rehearsalHelper -GeneratorPath $rehearsalGenerator -TemporaryRoot $tempDir -MutationId $mutation.Id -Mutator $mutation.Mutator
+    }
+    Assert-ProductionRehearsalArchitectureAst -HelperPath $rehearsalHelper -GeneratorPath $rehearsalGenerator
+    $helperTokens = $null
+    $helperErrors = $null
+    $helperAst = [System.Management.Automation.Language.Parser]::ParseFile($rehearsalHelper, [ref]$helperTokens, [ref]$helperErrors)
+    $expectedRuntimeFunctions = @("Assert-Condition","Sha256","Join-NativeArguments","Get-WrapperBodyHash","Get-DescriptorWrapperBodyHash","Invoke-ProcessStart","Invoke-GitText","Get-EnvironmentSnapshot","Restore-Environment","Clear-PostgresRoutingEnvironment","ConvertTo-BooleanStrict","ConvertTo-IntegerStrict","Get-ControlRequiredKeys","Convert-ControlRow","Assert-ControlAccepted","New-ControlSql","Parse-Manifest","Get-ExecutableRunnerLines","Assert-RunnerContract","Assert-ArtifactIntegrity","Assert-GitState","Parse-TargetDatabaseUrl","Assert-PasswordFreeDatabaseUrl","ConvertTo-SqlLiteral","New-TemporaryPgPassFile","Initialize-DeraLedgerProcessNative","New-WindowsProcessPlatform","Get-NativeIdentityKey","Add-RetainedDescendants","Wait-RetainedIdentities","Invoke-RetainedIdentityCleanup","Invoke-NativeChecked","Assert-RunnerMarkers","Invoke-OfflineValidation","Invoke-Rehearsal","New-RehearsalRuntimeContext","New-ProductionRehearsalRuntimeContext","Get-TrustedMigrationSpecification","Get-ProductionArtifactDescriptor","Invoke-RehearsalProcess","Assert-RehearsalProcessResult","Invoke-RehearsalLifecycle","Assert-ControlProofEqual")
+    $helperFunctions = @($helperAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) | ForEach-Object { $_.Name })
+    foreach ($functionName in $expectedRuntimeFunctions) { Assert-HarnessSelfTest -Condition (@($helperFunctions | Where-Object { $_ -eq $functionName }).Count -eq 1) -Message "canonical runtime function cardinality invalid: $functionName" }
+    $generatorSource = Get-Content -Raw -LiteralPath $rehearsalGenerator
+    $helperSource = Get-Content -Raw -LiteralPath $rehearsalHelper
+    foreach ($boundary in @("ArtifactProvider","GitStateProvider","CredentialProvider","ExecutableResolver","ProcessAdapter","FileSystemAdapter","PackageGenerationBoundary","SqlExecutionBoundary")) {
+      Assert-HarnessSelfTest -Condition ($helperSource.Contains($boundary) -and $generatorSource.Contains($boundary)) -Message "injectable rehearsal boundary is missing from production or offline architecture: $boundary"
+    }
+    Assert-HarnessSelfTest -Condition ($helperSource -match "function Assert-GitState[\s\S]+GitStateProvider" -and $helperSource -match "function Invoke-OfflineValidation[\s\S]+Assert-ArtifactIntegrity \`$Context" -and $helperSource -match "function Invoke-Rehearsal[\s\S]+Assert-ControlProofEqual") -Message "production and offline paths do not share canonical acceptance functions."
+    Assert-HarnessSelfTest -Condition ($generatorSource -match "Replace-SinglePlaceholder[\s\S]+__SHARED_VALIDATION_HELPERS__") -Message "generator lacks fail-closed helper placeholder replacement."
+    Assert-HarnessSelfTest -Condition ($generatorSource -match "CANONICAL_HELPER_SHA256" -and $generatorSource -match "EMBEDDED_HELPER_SHA256" -and $generatorSource -match "ARTIFACT_HELPER_BODY_HASH_MISMATCH") -Message "generator lacks canonical helper integrity contract."
+    $generatorOffline = Invoke-CapturedProcess -FilePath "powershell.exe" -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $rehearsalGenerator, "-OfflineValidateOnly") -WorkingDirectory $repoRoot -TimeoutSeconds 60
+    $offlineBoundaryLine=@(($generatorOffline.Stdout -split "`r`n|`n")|Where-Object {$_ -like 'OFFLINE_BOUNDARIES|*'})
+    Assert-HarnessSelfTest -Condition ($offlineBoundaryLine.Count -eq 1) -Message "offline boundary evidence cardinality invalid."
+    $offlineBoundaryProof=if($offlineBoundaryLine.Count -eq 1){$offlineBoundaryLine[0].Substring(19)|ConvertFrom-Json}else{$null}
+    Assert-HarnessSelfTest -Condition ($generatorOffline.ExitCode -eq 0 -and $generatorOffline.Stdout -match "Generator OfflineValidateOnly: PASS" -and $null -ne $offlineBoundaryProof -and $offlineBoundaryProof.CredentialProvider -eq 0 -and $offlineBoundaryProof.PsqlResolver -eq 0 -and $offlineBoundaryProof.PgDumpResolver -eq 0 -and $offlineBoundaryProof.ProcessAdapter -eq 0 -and $offlineBoundaryProof.PackageGenerationBoundary -eq 0 -and $offlineBoundaryProof.SqlExecutionBoundary -eq 0) -Message "production rehearsal generator offline validation failed or crossed a forbidden boundary: $($generatorOffline.Stderr) $($generatorOffline.Stdout)"
+    $generatorMutations = Invoke-CapturedProcess -FilePath "powershell.exe" -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $rehearsalGenerator, "-RunOfflineMutationTests") -WorkingDirectory $repoRoot -TimeoutSeconds 120
+    $declaredMatch = [regex]::Match($generatorMutations.Stdout, "Mutation cases declared: (\d+)")
+    $executedMatch = [regex]::Match($generatorMutations.Stdout, "Mutation cases executed: (\d+)")
+    Assert-HarnessSelfTest -Condition ($generatorMutations.ExitCode -eq 0 -and $declaredMatch.Success -and $executedMatch.Success -and $declaredMatch.Groups[1].Value -eq $executedMatch.Groups[1].Value -and [int]$declaredMatch.Groups[1].Value -gt 0 -and $generatorMutations.Stdout -match "Production rehearsal generator offline mutation tests passed") -Message "production rehearsal generator mutation tests failed: $($generatorMutations.Stderr) $($generatorMutations.Stdout)"
+    $caseRows = @(($generatorMutations.Stdout -split "`r`n|`n") | Where-Object { $_ -like "CASE|*" } | ForEach-Object { $_.Substring(5) | ConvertFrom-Json })
+    $architectureSummaryRows=@(($generatorMutations.Stdout -split "`r`n|`n")|Where-Object {$_ -like 'ARCHITECTURE_SUMMARY|*'}|ForEach-Object {$_.Substring(21)|ConvertFrom-Json})
+    Assert-HarnessSelfTest -Condition ($architectureSummaryRows.Count -eq 1 -and $caseRows.Count -eq $architectureSummaryRows[0].declared -and $architectureSummaryRows[0].declared -eq $architectureSummaryRows[0].executed -and $caseRows.Count -gt 0) -Message "structured architecture evidence count mismatch."
+    Assert-HarnessSelfTest -Condition (@($caseRows|Group-Object case_id|Where-Object Count -ne 1).Count -eq 0) -Message "structured architecture case cardinality invalid."
+    foreach ($case in $caseRows) {
+      Assert-HarnessSelfTest -Condition ($case.setup_executed -and -not [string]::IsNullOrWhiteSpace($case.production_function_invoked) -and $case.expected_outcome -eq $case.observed_outcome -and $case.expected_error_classification -eq $case.observed_error_classification -and $null -ne $case.boundary_invocation_counts -and -not [string]::IsNullOrWhiteSpace($case.cleanup_result)) -Message "structured architecture evidence is incomplete: $($case.case_id)"
+    }
+    foreach ($case in @($caseRows | Where-Object { $_.category -eq "offline-boundary" })) {
+      Assert-HarnessSelfTest -Condition ($case.boundary_invocation_counts.CredentialProvider -eq 0 -and $case.boundary_invocation_counts.ExecutableResolver -eq 0 -and $case.boundary_invocation_counts.ProcessAdapter -eq 0 -and $case.boundary_invocation_counts.PackageGenerationBoundary -eq 0 -and $case.boundary_invocation_counts.SqlExecutionBoundary -eq 0) -Message "offline boundary invocation count is non-zero: $($case.case_id)"
+    }
+    foreach ($case in @($caseRows | Where-Object { $_.category -eq "process" })) {
+      Assert-HarnessSelfTest -Condition ($case.boundary_invocation_counts.ProcessAdapter -eq 1 -and $case.boundary_invocation_counts.SqlExecutionBoundary -eq 1) -Message "process architecture case did not execute injected adapters: $($case.case_id)"
+    }
+    $parityRows=@(($generatorMutations.Stdout -split "`r`n|`n")|Where-Object {$_ -like 'PARITY|*'}|ForEach-Object {$_.Substring(7)|ConvertFrom-Json})
+    Assert-HarnessSelfTest -Condition ($parityRows.Count -gt 0 -and @($parityRows|Group-Object function|Where-Object Count -ne 1).Count -eq 0 -and @($parityRows|Where-Object classification -eq 'unexplained').Count -eq 0) -Message "machine parity classification is incomplete, duplicated, or unexplained."
+    foreach($parity in @($parityRows|Where-Object classification -in @('adapter-plumbing','guard-observation'))){Assert-HarnessSelfTest -Condition (@($parity.named_tests).Count -gt 0) -Message "behavioral parity row lacks named tests: $($parity.function)"}
+    $pgpassRows=@(($generatorMutations.Stdout -split "`r`n|`n")|Where-Object {$_ -like 'PGPASS|*'}|ForEach-Object {$_.Substring(7)|ConvertFrom-Json})
+    Assert-HarnessSelfTest -Condition ($pgpassRows.Count -gt 0 -and @($pgpassRows | Where-Object { -not $_.utf8_no_bom -or -not $_.exact_bytes -or -not $_.hostname_prefix -or $_.credential_in_evidence -or $_.cleanup -ne 'verified' }).Count -eq 0) -Message "pgpass byte or cleanup proof failed."
+    $inventoryRows=@(($generatorMutations.Stdout -split "`r`n|`n")|Where-Object {$_ -like 'GUARD_INVENTORY|*'}|ForEach-Object {$_.Substring(16)|ConvertFrom-Json})
+    $guardRows=@(($generatorMutations.Stdout -split "`r`n|`n")|Where-Object {$_ -like 'GUARD_CASE|*'}|ForEach-Object {$_.Substring(11)|ConvertFrom-Json})
+    $guardSummaryRows=@(($generatorMutations.Stdout -split "`r`n|`n")|Where-Object {$_ -like 'GUARD_SUMMARY|*'}|ForEach-Object {$_.Substring(14)|ConvertFrom-Json})
+    Assert-HarnessSelfTest -Condition ($inventoryRows.Count -gt 0 -and $guardRows.Count -eq $inventoryRows.Count -and $guardSummaryRows.Count -eq 1 -and $guardSummaryRows[0].unique_guards -eq $inventoryRows.Count -and $guardSummaryRows[0].observed_guards -eq $inventoryRows.Count -and $guardSummaryRows[0].missing -eq 0 -and $guardSummaryRows[0].unexpected -eq 0) -Message "exact guard-observation coverage is incomplete."
+    Assert-HarnessSelfTest -Condition (@($inventoryRows|Group-Object guard_id|Where-Object Count -ne 1).Count -eq 0 -and @($guardRows|Group-Object observed_guard_id|Where-Object Count -ne 1).Count -eq 0) -Message "guard inventory or observation cardinality is invalid."
+    $declaredGuardIds=@($inventoryRows|ForEach-Object guard_id|Sort-Object)
+    $observedGuardIds=@($guardRows|ForEach-Object observed_guard_id|Sort-Object)
+    Assert-HarnessSelfTest -Condition (@(Compare-Object $declaredGuardIds $observedGuardIds).Count -eq 0) -Message "declared and observed guard IDs differ."
+    foreach($guard in $guardRows){
+      $inventoryMatch=@($inventoryRows|Where-Object guard_id -eq $guard.observed_guard_id)
+      Assert-HarnessSelfTest -Condition ($inventoryMatch.Count -eq 1 -and $guard.guard_id -eq $guard.observed_guard_id -and $guard.expected_classification -eq $guard.observed_classification -and $guard.observed_classification -eq $inventoryMatch[0].classification -and $guard.execution_count -eq 1 -and -not [string]::IsNullOrWhiteSpace($guard.production_function_invoked) -and $guard.cleanup -eq 'verified') -Message "guard execution evidence is incomplete: $($guard.guard_id)"
+    }
+    $wrapperInventory=@($inventoryRows|Where-Object source -notin @('production-rehearsal-validation.ps1','new-production-rehearsal-package.ps1'))
+    Assert-HarnessSelfTest -Condition ($wrapperInventory.Count -eq 1 -and $wrapperInventory[0].guard_id -eq 'WRAPPER.MODE.COUNT') -Message "expanded wrapper guard inventory is missing or invalid."
+    $staticGuardIds=@($script:HarnessStaticGuardRows|ForEach-Object guard_id|Sort-Object)
+    $emittedStaticGuardIds=@($inventoryRows|Where-Object source -in @('production-rehearsal-validation.ps1','new-production-rehearsal-package.ps1')|ForEach-Object guard_id|Sort-Object)
+    Assert-HarnessSelfTest -Condition (@(Compare-Object $staticGuardIds $emittedStaticGuardIds).Count -eq 0) -Message "independent AST guard inventory differs from emitted source inventory."
+
     $script:HarnessStepCounter = 0
     $script:HarnessProgressMessages.Clear()
     $script:TestDatabaseUrl = "postgresql://postgres@127.0.0.1/test_commit12_harness_selftest?sslmode=disable"
@@ -930,7 +1467,7 @@ function Initialize-PaymentEventsPrerequisite {
   $sql = @"
 CREATE TABLE IF NOT EXISTS public.payment_events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  merchant_id UUID NOT NULL,
+  merchant_id UUID,
   invoice_id UUID,
   transaction_id UUID,
   event_type TEXT NOT NULL,
@@ -938,7 +1475,7 @@ CREATE TABLE IF NOT EXISTS public.payment_events (
   processor_ref TEXT,
   amount_kobo BIGINT,
   raw_payload JSONB,
-  processed_at TIMESTAMPTZ NOT NULL,
+  processed_at TIMESTAMPTZ NULL,
   idempotency_key TEXT,
   payment_method TEXT,
   payment_purpose TEXT,
@@ -978,6 +1515,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_events_idempotency
   WHERE idempotency_key IS NOT NULL;
 
 ALTER TABLE public.payment_events DISABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.payment_events FROM PUBLIC;
+REVOKE ALL ON TABLE public.payment_events FROM anon;
+REVOKE ALL ON TABLE public.payment_events FROM authenticated;
 DROP TRIGGER IF EXISTS trg_payment_events_updated_at ON public.payment_events;
 CREATE TRIGGER trg_payment_events_updated_at
 BEFORE UPDATE ON public.payment_events
@@ -995,6 +1535,75 @@ BEGIN
   END IF;
 END
 `$`$;
+
+INSERT INTO public.merchants (id, business_name, email, subscription_plan, merchant_tier)
+VALUES (
+  '10000000-0000-4000-8000-000000000001',
+  'Harness Merchant',
+  'harness-merchant@example.test',
+  'starter',
+  'starter'
+)
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO public.clients (id, merchant_id, full_name, email)
+VALUES (
+  '10000000-0000-4000-8000-000000000011',
+  '10000000-0000-4000-8000-000000000001',
+  'Harness Client',
+  'harness-client@example.test'
+)
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO public.invoices (id, merchant_id, client_id, invoice_number, status, grand_total)
+VALUES (
+  '10000000-0000-4000-8000-000000000021',
+  '10000000-0000-4000-8000-000000000001',
+  '10000000-0000-4000-8000-000000000011',
+  'HARNESS-INV-001',
+  'open',
+  1000
+)
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO public.payment_events (
+  id,
+  merchant_id,
+  invoice_id,
+  event_type,
+  processor,
+  processor_ref,
+  raw_payload,
+  processed_at,
+  idempotency_key,
+  payment_purpose
+)
+VALUES
+  (
+    '20000000-0000-4000-8000-000000000001',
+    NULL,
+    NULL,
+    'historical.ownerless',
+    'paystack',
+    'legacy-ownerless-ref',
+    '{"fixture":"historical_ownerless"}'::jsonb,
+    NULL,
+    'harness:payment-events:historical-ownerless',
+    NULL
+  ),
+  (
+    '20000000-0000-4000-8000-000000000002',
+    '10000000-0000-4000-8000-000000000001',
+    '10000000-0000-4000-8000-000000000021',
+    'merchant.owned',
+    'paystack',
+    'merchant-owned-ref',
+    '{"fixture":"merchant_owned"}'::jsonb,
+    '2026-06-06T00:01:00Z',
+    'harness:payment-events:merchant-owned',
+    'invoice_payment'
+  )
+ON CONFLICT (id) DO NOTHING;
 "@
 
   Invoke-PsqlSql -Sql $sql -Description "Seed canonical payment_events prerequisite"
@@ -1241,6 +1850,494 @@ END
   Invoke-PsqlSql -Sql $sql -Description "Assert function absent: public.$FunctionName($TypeArguments)"
 }
 
+function Assert-PaymentEventsLegacyRowsPreserved {
+  param([Parameter(Mandatory = $true)][string]$Description)
+
+  $sql = @"
+DO `$`$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM public.payment_events
+    WHERE id = '20000000-0000-4000-8000-000000000001'
+      AND merchant_id IS NULL
+      AND invoice_id IS NULL
+      AND processor = 'paystack'
+      AND processor_ref = 'legacy-ownerless-ref'
+      AND processed_at IS NULL
+      AND raw_payload = '{"fixture":"historical_ownerless"}'::jsonb
+      AND payment_purpose IS NULL
+  ) THEN
+    RAISE EXCEPTION 'historical ownerless payment_events row was not preserved unchanged';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM public.payment_events
+    WHERE id = '20000000-0000-4000-8000-000000000002'
+      AND merchant_id = '10000000-0000-4000-8000-000000000001'
+      AND invoice_id = '10000000-0000-4000-8000-000000000021'
+      AND processor = 'paystack'
+      AND processor_ref = 'merchant-owned-ref'
+      AND processed_at = '2026-06-06T00:01:00Z'::timestamptz
+      AND raw_payload = '{"fixture":"merchant_owned"}'::jsonb
+      AND payment_purpose = 'invoice_payment'
+  ) THEN
+    RAISE EXCEPTION 'merchant-owned payment_events row was not preserved unchanged';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM public.payment_events
+    WHERE id = '20000000-0000-4000-8000-000000000001'
+      AND merchant_id IS NOT NULL
+  ) THEN
+    RAISE EXCEPTION 'historical ownerless payment_events row received synthetic ownership';
+  END IF;
+END
+`$`$;
+"@
+
+  Invoke-PsqlSql -Sql $sql -Description $Description
+}
+
+function Assert-PaymentEventsInvoiceForeignKey {
+  param(
+    [Parameter(Mandatory = $true)][string]$Description,
+    [Parameter(Mandatory = $true)]
+    [ValidateSet("SET NULL", "NO ACTION", "CASCADE", "SET DEFAULT")]
+    [string]$ExpectedDeleteAction
+  )
+
+  $sql = @"
+DO `$`$
+DECLARE
+  v_fk_count INTEGER;
+  v_delete_action TEXT;
+BEGIN
+  SELECT
+    count(*)::integer,
+    max(CASE con.confdeltype::text
+      WHEN 'a' THEN 'NO ACTION'
+      WHEN 'r' THEN 'RESTRICT'
+      WHEN 'c' THEN 'CASCADE'
+      WHEN 'n' THEN 'SET NULL'
+      WHEN 'd' THEN 'SET DEFAULT'
+      ELSE 'UNKNOWN:' || con.confdeltype::text
+    END)
+  INTO
+    v_fk_count,
+    v_delete_action
+  FROM pg_constraint con
+  JOIN pg_class ref_cls ON ref_cls.oid = con.confrelid
+  JOIN pg_namespace ref_ns ON ref_ns.oid = ref_cls.relnamespace
+  CROSS JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS src_ord(attnum, ordinality)
+  JOIN pg_attribute src
+    ON src.attrelid = con.conrelid
+   AND src.attnum = src_ord.attnum
+  CROSS JOIN LATERAL unnest(con.confkey) WITH ORDINALITY AS ref_ord(attnum, ordinality)
+  JOIN pg_attribute ref
+    ON ref.attrelid = con.confrelid
+   AND ref.attnum = ref_ord.attnum
+   AND ref_ord.ordinality = src_ord.ordinality
+  WHERE con.conrelid = 'public.payment_events'::regclass
+    AND con.conname = 'payment_events_invoice_id_fkey'
+    AND con.contype::text = 'f'
+    AND con.convalidated
+    AND ref_ns.nspname::text = 'public'
+    AND ref_cls.relname::text = 'invoices'
+  GROUP BY con.conname, con.confdeltype
+  HAVING array_agg(src.attname::text ORDER BY src_ord.ordinality) = ARRAY['invoice_id']::text[]
+     AND array_agg(ref.attname::text ORDER BY ref_ord.ordinality) = ARRAY['id']::text[];
+
+  IF COALESCE(v_fk_count, 0) <> 1 THEN
+    RAISE EXCEPTION 'expected exactly one validated payment_events_invoice_id_fkey to public.invoices(id), got %',
+      COALESCE(v_fk_count, 0);
+  END IF;
+
+  IF v_delete_action <> '$ExpectedDeleteAction' THEN
+    RAISE EXCEPTION 'payment_events_invoice_id_fkey expected %, got %',
+      '$ExpectedDeleteAction',
+      v_delete_action;
+  END IF;
+END
+`$`$;
+"@
+
+  Invoke-PsqlSql -Sql $sql -Description $Description
+}
+
+function Set-PaymentEventsInvoiceForeignKeyFixture {
+  param(
+    [Parameter(Mandatory = $true)]
+    [ValidateSet(
+      "legacy-no-action",
+      "wrong-name",
+      "wrong-referenced-table",
+      "wrong-referenced-column",
+      "multiple-candidates",
+      "additional-conflicting",
+      "unvalidated",
+      "cascade",
+      "set-default",
+      "not-null",
+      "wrong-type",
+      "missing-target"
+    )]
+    [string]$Scenario
+  )
+
+  $dropExpected = "ALTER TABLE public.payment_events DROP CONSTRAINT IF EXISTS payment_events_invoice_id_fkey;"
+  $sql = switch ($Scenario) {
+    "legacy-no-action" {
+      @"
+$dropExpected
+ALTER TABLE public.payment_events
+  ADD CONSTRAINT payment_events_invoice_id_fkey
+  FOREIGN KEY (invoice_id) REFERENCES public.invoices(id) ON DELETE NO ACTION;
+"@
+    }
+    "wrong-name" {
+      @"
+$dropExpected
+ALTER TABLE public.payment_events
+  ADD CONSTRAINT payment_events_invoice_id_wrong_name_fkey
+  FOREIGN KEY (invoice_id) REFERENCES public.invoices(id) ON DELETE NO ACTION;
+"@
+    }
+    "wrong-referenced-table" {
+      @"
+$dropExpected
+CREATE TABLE IF NOT EXISTS public.fixture_wrong_invoices (id uuid PRIMARY KEY);
+INSERT INTO public.fixture_wrong_invoices (id)
+VALUES ('10000000-0000-4000-8000-000000000021')
+ON CONFLICT (id) DO NOTHING;
+ALTER TABLE public.payment_events
+  ADD CONSTRAINT payment_events_invoice_id_fkey
+  FOREIGN KEY (invoice_id) REFERENCES public.fixture_wrong_invoices(id) ON DELETE NO ACTION;
+"@
+    }
+    "wrong-referenced-column" {
+      @"
+$dropExpected
+ALTER TABLE public.invoices ADD COLUMN IF NOT EXISTS alternate_id uuid UNIQUE;
+UPDATE public.invoices
+SET alternate_id = id
+WHERE id = '10000000-0000-4000-8000-000000000021';
+ALTER TABLE public.payment_events
+  ADD CONSTRAINT payment_events_invoice_id_fkey
+  FOREIGN KEY (invoice_id) REFERENCES public.invoices(alternate_id) ON DELETE NO ACTION;
+"@
+    }
+    "multiple-candidates" {
+      @"
+ALTER TABLE public.payment_events
+  ADD CONSTRAINT payment_events_invoice_id_additional_fkey
+  FOREIGN KEY (invoice_id) REFERENCES public.invoices(id) ON DELETE NO ACTION;
+"@
+    }
+    "additional-conflicting" {
+      @"
+CREATE TABLE IF NOT EXISTS public.fixture_wrong_invoices (id uuid PRIMARY KEY);
+INSERT INTO public.fixture_wrong_invoices (id)
+VALUES ('10000000-0000-4000-8000-000000000021')
+ON CONFLICT (id) DO NOTHING;
+ALTER TABLE public.payment_events
+  ADD CONSTRAINT payment_events_invoice_id_conflicting_fkey
+  FOREIGN KEY (invoice_id) REFERENCES public.fixture_wrong_invoices(id) ON DELETE NO ACTION;
+"@
+    }
+    "unvalidated" {
+      @"
+$dropExpected
+ALTER TABLE public.payment_events
+  ADD CONSTRAINT payment_events_invoice_id_fkey
+  FOREIGN KEY (invoice_id) REFERENCES public.invoices(id) ON DELETE NO ACTION NOT VALID;
+"@
+    }
+    "cascade" {
+      @"
+$dropExpected
+ALTER TABLE public.payment_events
+  ADD CONSTRAINT payment_events_invoice_id_fkey
+  FOREIGN KEY (invoice_id) REFERENCES public.invoices(id) ON DELETE CASCADE;
+"@
+    }
+    "set-default" {
+      @"
+$dropExpected
+ALTER TABLE public.payment_events
+  ADD CONSTRAINT payment_events_invoice_id_fkey
+  FOREIGN KEY (invoice_id) REFERENCES public.invoices(id) ON DELETE SET DEFAULT;
+"@
+    }
+    "not-null" {
+      @"
+UPDATE public.payment_events
+SET invoice_id = '10000000-0000-4000-8000-000000000021'
+WHERE invoice_id IS NULL;
+ALTER TABLE public.payment_events ALTER COLUMN invoice_id SET NOT NULL;
+"@
+    }
+    "wrong-type" {
+      @"
+$dropExpected
+ALTER TABLE public.payment_events
+  ALTER COLUMN invoice_id TYPE text USING invoice_id::text;
+"@
+    }
+    "missing-target" {
+      @"
+DELETE FROM public.payment_events;
+$dropExpected
+DROP TABLE public.invoices CASCADE;
+"@
+    }
+  }
+
+  Invoke-PsqlSql -Sql $sql -Description "Create payment_events invoice FK fixture: $Scenario"
+}
+
+function Assert-PaymentEventsProcessorDefault {
+  param(
+    [Parameter(Mandatory = $true)][string]$Description,
+    [Parameter(Mandatory = $true)]
+    [ValidateSet("none", "paystack", "monnify")]
+    [string]$ExpectedDefaultState
+  )
+
+  $sql = @"
+DO `$`$
+DECLARE
+  v_default_expr TEXT;
+  v_normalized_default TEXT;
+BEGIN
+  SELECT pg_get_expr(d.adbin, d.adrelid)
+  INTO v_default_expr
+  FROM pg_attribute a
+  JOIN pg_class c ON c.oid = a.attrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  LEFT JOIN pg_attrdef d
+    ON d.adrelid = a.attrelid
+   AND d.adnum = a.attnum
+  WHERE n.nspname = 'public'
+    AND c.relname = 'payment_events'
+    AND a.attname = 'processor'
+    AND a.attnum > 0
+    AND NOT a.attisdropped;
+
+  v_normalized_default := trim(regexp_replace(lower(coalesce(v_default_expr, '')), '\s+', ' ', 'g'));
+
+  IF '$ExpectedDefaultState' = 'none' THEN
+    IF v_default_expr IS NOT NULL THEN
+      RAISE EXCEPTION 'payment_events.processor expected no default, got %', v_default_expr;
+    END IF;
+  ELSIF '$ExpectedDefaultState' = 'paystack' THEN
+    IF v_normalized_default <> '''paystack''::text' THEN
+      RAISE EXCEPTION 'payment_events.processor expected legacy paystack default, got %', COALESCE(v_default_expr, 'NULL');
+    END IF;
+  ELSIF '$ExpectedDefaultState' = 'monnify' THEN
+    IF v_normalized_default <> '''monnify''::text' THEN
+      RAISE EXCEPTION 'payment_events.processor expected rejected monnify fixture default, got %', COALESCE(v_default_expr, 'NULL');
+    END IF;
+  END IF;
+END
+`$`$;
+"@
+
+  Invoke-PsqlSql -Sql $sql -Description $Description
+}
+
+function Assert-PaymentEventsProcessedAtCanonical {
+  param([Parameter(Mandatory = $true)][string]$Description)
+
+  $sql = @"
+DO `$`$
+DECLARE
+  v_default_expr TEXT;
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'payment_events'
+      AND column_name = 'processed_at'
+      AND udt_name = 'timestamptz'
+      AND is_nullable = 'YES'
+  ) THEN
+    RAISE EXCEPTION 'payment_events.processed_at should be nullable timestamptz';
+  END IF;
+
+  SELECT pg_get_expr(d.adbin, d.adrelid)
+  INTO v_default_expr
+  FROM pg_attribute a
+  JOIN pg_class c ON c.oid = a.attrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  LEFT JOIN pg_attrdef d
+    ON d.adrelid = a.attrelid
+   AND d.adnum = a.attnum
+  WHERE n.nspname = 'public'
+    AND c.relname = 'payment_events'
+    AND a.attname = 'processed_at'
+    AND a.attnum > 0
+    AND NOT a.attisdropped;
+
+  IF v_default_expr IS NOT NULL THEN
+    RAISE EXCEPTION 'payment_events.processed_at expected no default, got %', v_default_expr;
+  END IF;
+END
+`$`$;
+"@
+
+  Invoke-PsqlSql -Sql $sql -Description $Description
+}
+
+function Assert-PaymentEventsProcessedAtDefault {
+  param(
+    [Parameter(Mandatory = $true)][string]$Description,
+    [Parameter(Mandatory = $true)]
+    [ValidateSet("now", "current_date")]
+    [string]$ExpectedDefaultState
+  )
+
+  $sql = @"
+DO `$`$
+DECLARE
+  v_default_expr TEXT;
+  v_normalized_default TEXT;
+BEGIN
+  SELECT pg_get_expr(d.adbin, d.adrelid)
+  INTO v_default_expr
+  FROM pg_attribute a
+  JOIN pg_class c ON c.oid = a.attrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  LEFT JOIN pg_attrdef d
+    ON d.adrelid = a.attrelid
+   AND d.adnum = a.attnum
+  WHERE n.nspname = 'public'
+    AND c.relname = 'payment_events'
+    AND a.attname = 'processed_at'
+    AND a.attnum > 0
+    AND NOT a.attisdropped;
+
+  v_normalized_default := trim(regexp_replace(lower(coalesce(v_default_expr, '')), '\s+', ' ', 'g'));
+
+  IF '$ExpectedDefaultState' = 'now' THEN
+    IF v_normalized_default <> 'now()' THEN
+      RAISE EXCEPTION 'payment_events.processed_at expected legacy now() default, got %', COALESCE(v_default_expr, 'NULL');
+    END IF;
+  ELSIF '$ExpectedDefaultState' = 'current_date' THEN
+    IF v_normalized_default <> 'CURRENT_DATE' AND v_normalized_default <> 'current_date' THEN
+      RAISE EXCEPTION 'payment_events.processed_at expected rejected current_date fixture default, got %', COALESCE(v_default_expr, 'NULL');
+    END IF;
+  END IF;
+END
+`$`$;
+"@
+
+  Invoke-PsqlSql -Sql $sql -Description $Description
+}
+
+function Assert-PaymentEventsMerchantIdNullable {
+  param([Parameter(Mandatory = $true)][string]$Description)
+
+  $sql = @"
+DO `$`$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'payment_events'
+      AND column_name = 'merchant_id'
+      AND udt_name = 'uuid'
+      AND is_nullable = 'YES'
+  ) THEN
+    RAISE EXCEPTION 'payment_events.merchant_id should be nullable uuid';
+  END IF;
+END
+`$`$;
+"@
+
+  Invoke-PsqlSql -Sql $sql -Description $Description
+}
+
+function Assert-PaymentEventsMerchantIdNotNull {
+  param([Parameter(Mandatory = $true)][string]$Description)
+
+  $sql = @"
+DO `$`$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'payment_events'
+      AND column_name = 'merchant_id'
+      AND udt_name = 'uuid'
+      AND is_nullable = 'NO'
+  ) THEN
+    RAISE EXCEPTION 'payment_events.merchant_id should remain NOT NULL after rollback';
+  END IF;
+END
+`$`$;
+"@
+
+  Invoke-PsqlSql -Sql $sql -Description $Description
+}
+
+function Assert-PaymentEventsRlsState {
+  param(
+    [Parameter(Mandatory = $true)][string]$Description,
+    [Parameter(Mandatory = $true)][bool]$ExpectedEnabled
+  )
+
+  $expectedLiteral = if ($ExpectedEnabled) { 'true' } else { 'false' }
+  $sql = @"
+DO `$$
+DECLARE
+  v_rls_enabled BOOLEAN;
+BEGIN
+  SELECT relrowsecurity
+  INTO v_rls_enabled
+  FROM pg_class
+  WHERE oid = 'public.payment_events'::regclass;
+
+  IF v_rls_enabled IS DISTINCT FROM $expectedLiteral THEN
+    RAISE EXCEPTION 'payment_events RLS state mismatch: expected %, got %', $expectedLiteral, v_rls_enabled;
+  END IF;
+END
+`$$;
+"@
+
+  Invoke-PsqlSql -Sql $sql -Description $Description
+}
+
+function Assert-PaymentEventsForeignKeyRejectsInvalidMerchant {
+  param([Parameter(Mandatory = $true)][string]$Description)
+
+  $sql = @"
+INSERT INTO public.payment_events (
+  id,
+  merchant_id,
+  event_type,
+  processor,
+  processed_at,
+  idempotency_key
+)
+VALUES (
+  '20000000-0000-4000-8000-0000000000ff',
+  'ffffffff-ffff-4fff-8fff-ffffffffffff',
+  'invalid.merchant',
+  'paystack',
+  now(),
+  'harness:payment-events:invalid-merchant'
+);
+"@
+
+  Invoke-PsqlSql -Sql $sql -Description $Description -ExpectFailure
+}
+
 function Invoke-InjectedFailureMigration {
   param(
     [Parameter(Mandatory = $true)][string]$RelativePath,
@@ -1281,13 +2378,132 @@ function Run-Harness {
   Invoke-PsqlFile -RelativePath "supabase/tests/phase2_breet_payment_substrate_reconciliation.sql" -Description "Run Migration A SQL assertions"
   Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Rerun Migration A"
   Invoke-PsqlFile -RelativePath "supabase/tests/phase2_breet_payment_substrate_reconciliation.sql" -Description "Rerun Migration A SQL assertions"
+  Assert-PaymentEventsProcessorDefault -Description "Assert clean Migration A creates canonical payment_events.processor without a default" -ExpectedDefaultState "none"
+  Assert-PaymentEventsProcessedAtCanonical -Description "Assert clean Migration A creates canonical nullable payment_events.processed_at without a default"
   Add-PassResult -Results $results -Message "Migration A clean + rerun"
 
   Reset-DisposableDatabase
   Initialize-CoreFixture -IncludeCanonicalPaymentRecordsSecurityPrerequisite -IncludePaymentEventsPrerequisite
   Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Run Migration A with canonical preexisting payment_events under hostile default grants"
   Invoke-PsqlFile -RelativePath "supabase/tests/phase2_breet_payment_substrate_reconciliation.sql" -Description "Run Migration A SQL assertions with canonical preexisting payment_events under hostile default grants"
-  Add-PassResult -Results $results -Message "Migration A accepts canonical preexisting payment_events and repairs hostile browser grants"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Rerun Migration A with canonical preexisting payment_events"
+  Invoke-PsqlFile -RelativePath "supabase/tests/phase2_breet_payment_substrate_reconciliation.sql" -Description "Rerun Migration A SQL assertions with canonical preexisting payment_events"
+  Assert-PaymentEventsLegacyRowsPreserved -Description "Assert Migration A preserves historical and merchant-owned payment_events rows"
+  Assert-PaymentEventsProcessorDefault -Description "Assert Migration A preserves canonical payment_events.processor without a default" -ExpectedDefaultState "none"
+  Assert-PaymentEventsProcessedAtCanonical -Description "Assert Migration A preserves canonical nullable payment_events.processed_at without a default"
+  Assert-PaymentEventsMerchantIdNullable -Description "Assert Migration A canonical payment_events.merchant_id nullability"
+  Assert-PaymentEventsForeignKeyRejectsInvalidMerchant -Description "Assert Migration A rejects invalid non-null payment_events merchant ownership"
+  Add-PassResult -Results $results -Message "Migration A accepts canonical server-only preexisting payment_events"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture -IncludeCanonicalPaymentRecordsSecurityPrerequisite -IncludePaymentEventsPrerequisite
+  Invoke-PsqlSql -Description "Create production-like safe RLS-enabled payment_events fixture" -Sql @"
+ALTER TABLE public.payment_events ENABLE ROW LEVEL SECURITY;
+"@
+  Assert-PaymentEventsRlsState -Description "Assert production-like fixture starts with payment_events RLS enabled" -ExpectedEnabled $true
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Run Migration A with safe RLS-enabled payment_events"
+  Invoke-PsqlFile -RelativePath "supabase/tests/phase2_breet_payment_substrate_reconciliation.sql" -Description "Run Migration A SQL assertions with safe RLS-enabled payment_events"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Rerun Migration A with safe RLS-enabled payment_events"
+  Assert-PaymentEventsRlsState -Description "Assert Migration A preserves safe legacy payment_events RLS enabled state" -ExpectedEnabled $true
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_02_solo_plus_payment_lifecycle.sql" -Description "Run Migration B after safe RLS-enabled payment_events"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260710_01_solo_plus_review_decision_rpc.sql" -Description "Run Commit 9 migration after safe RLS-enabled payment_events"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260711_01_solo_plus_activation_rpc.sql" -Description "Run Commit 10 migration after safe RLS-enabled payment_events"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260718_01_solo_plus_payment_recovery.sql" -Description "Run Commit 12 migration after safe RLS-enabled payment_events"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260728_00_authorization_hardening.sql" -Description "Run Commit 13 migration after safe RLS-enabled payment_events"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260728_01_verification_disclosure_acknowledgement_rpc.sql" -Description "Run Commit 14 migration after safe RLS-enabled payment_events"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260731_00_verification_disclosure_identity_hardening.sql" -Description "Run Commit 15 migration after safe RLS-enabled payment_events"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260803_00_payment_events_legacy_merchant_compatibility.sql" -Description "Run Migration 017 after safe RLS-enabled payment_events"
+  Assert-PaymentEventsRlsState -Description "Assert Migration 017 disables payment_events RLS after full 009-017 chain" -ExpectedEnabled $false
+  Add-PassResult -Results $results -Message "Full 009-017 chain accepts safe legacy payment_events RLS and Migration 017 disables it"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture -IncludeCanonicalPaymentRecordsSecurityPrerequisite -IncludePaymentEventsPrerequisite
+  Invoke-PsqlSql -Description "Create RLS-enabled payment_events browser policy fixture" -Sql @"
+ALTER TABLE public.payment_events ENABLE ROW LEVEL SECURITY;
+CREATE POLICY payment_events_browser_read
+  ON public.payment_events
+  FOR SELECT
+  USING (true);
+"@
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Expect Migration A to reject RLS-enabled payment_events browser policy" -ExpectFailure
+  Assert-RelationAbsent -QualifiedName "public.payment_sessions"
+  Add-PassResult -Results $results -Message "Migration A rejects RLS-enabled payment_events browser policies before DDL"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture -IncludeCanonicalPaymentRecordsSecurityPrerequisite -IncludePaymentEventsPrerequisite
+  Invoke-PsqlSql -Description "Create RLS-disabled payment_events browser grant fixture" -Sql @"
+GRANT SELECT ON TABLE public.payment_events TO authenticated;
+"@
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Expect Migration A to reject RLS-disabled payment_events browser grant" -ExpectFailure
+  Assert-RelationAbsent -QualifiedName "public.payment_sessions"
+  Add-PassResult -Results $results -Message "Migration A rejects RLS-disabled payment_events browser grants before DDL"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture -IncludeCanonicalPaymentRecordsSecurityPrerequisite -IncludePaymentEventsPrerequisite
+  Invoke-PsqlSql -Description "Create production-like payment_events.processor legacy default fixture" -Sql @"
+ALTER TABLE public.payment_events
+  ALTER COLUMN processor SET DEFAULT 'paystack'::text;
+"@
+  Assert-PaymentEventsProcessorDefault -Description "Assert production-like fixture has legacy payment_events.processor default before Migration A" -ExpectedDefaultState "paystack"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Run Migration A with production-like payment_events.processor legacy default"
+  Invoke-PsqlFile -RelativePath "supabase/tests/phase2_breet_payment_substrate_reconciliation.sql" -Description "Run Migration A SQL assertions with production-like payment_events.processor legacy default"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Rerun Migration A with production-like payment_events.processor legacy default"
+  Invoke-PsqlFile -RelativePath "supabase/tests/phase2_breet_payment_substrate_reconciliation.sql" -Description "Rerun Migration A SQL assertions with production-like payment_events.processor legacy default"
+  Assert-PaymentEventsLegacyRowsPreserved -Description "Assert Migration A preserves rows with production-like payment_events.processor legacy default"
+  Assert-PaymentEventsProcessorDefault -Description "Assert Migration A preserves production-like payment_events.processor legacy default" -ExpectedDefaultState "paystack"
+  Assert-PaymentEventsProcessedAtCanonical -Description "Assert Migration A keeps payment_events.processed_at canonical with processor legacy default"
+  Assert-PaymentEventsMerchantIdNullable -Description "Assert Migration A keeps merchant_id nullable with production-like processor default"
+  Assert-PaymentEventsForeignKeyRejectsInvalidMerchant -Description "Assert Migration A keeps FK enforcement with production-like processor default"
+  Add-PassResult -Results $results -Message "Migration A accepts and preserves production-like payment_events.processor paystack default"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture -IncludeCanonicalPaymentRecordsSecurityPrerequisite -IncludePaymentEventsPrerequisite
+  Invoke-PsqlSql -Description "Create production-like payment_events.processed_at legacy now default fixture" -Sql @"
+ALTER TABLE public.payment_events
+  ALTER COLUMN processed_at SET DEFAULT now();
+"@
+  Assert-PaymentEventsProcessedAtDefault -Description "Assert production-like fixture has legacy payment_events.processed_at now default before Migration A" -ExpectedDefaultState "now"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Run Migration A with production-like payment_events.processed_at legacy now default"
+  Invoke-PsqlFile -RelativePath "supabase/tests/phase2_breet_payment_substrate_reconciliation.sql" -Description "Run Migration A SQL assertions with production-like payment_events.processed_at legacy now default"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Rerun Migration A with repaired payment_events.processed_at default"
+  Invoke-PsqlFile -RelativePath "supabase/tests/phase2_breet_payment_substrate_reconciliation.sql" -Description "Rerun Migration A SQL assertions with repaired payment_events.processed_at default"
+  Assert-PaymentEventsLegacyRowsPreserved -Description "Assert Migration A preserves rows with production-like payment_events.processed_at legacy default"
+  Assert-PaymentEventsProcessedAtCanonical -Description "Assert Migration A drops production-like payment_events.processed_at legacy now default"
+  Assert-PaymentEventsProcessorDefault -Description "Assert Migration A keeps payment_events.processor canonical with processed_at legacy default" -ExpectedDefaultState "none"
+  Assert-PaymentEventsMerchantIdNullable -Description "Assert Migration A keeps merchant_id nullable with processed_at legacy default"
+  Assert-PaymentEventsForeignKeyRejectsInvalidMerchant -Description "Assert Migration A keeps FK enforcement with processed_at legacy default"
+  Add-PassResult -Results $results -Message "Migration A repairs production-like payment_events.processed_at now default and preserves rows"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture -IncludeCanonicalPaymentRecordsSecurityPrerequisite -IncludePaymentEventsPrerequisite
+  Invoke-PsqlSql -Description "Create production-like payment_events FK delete-action drift" -Sql @"
+ALTER TABLE public.payment_events DROP CONSTRAINT payment_events_merchant_id_fkey;
+ALTER TABLE public.payment_events
+  ADD CONSTRAINT payment_events_merchant_id_fkey
+  FOREIGN KEY (merchant_id) REFERENCES public.merchants(id);
+"@
+  Invoke-PsqlFile -RelativePath "supabase/staging/preflight/017_payment_events_legacy_merchant_compatibility_snapshot.sql" -Description "Run payment_events legacy compatibility staging preflight"
+  Invoke-PsqlFile -RelativePath "supabase/staging/017_payment_events_legacy_merchant_compatibility.sql" -Description "Run payment_events legacy compatibility staging wrapper"
+  Invoke-PsqlFile -RelativePath "supabase/staging/postflight/017_payment_events_legacy_merchant_compatibility_verify.sql" -Description "Run payment_events legacy compatibility staging postflight"
+  Invoke-PsqlFile -RelativePath "supabase/staging/017_payment_events_legacy_merchant_compatibility.sql" -Description "Rerun payment_events legacy compatibility staging wrapper"
+  Invoke-PsqlFile -RelativePath "supabase/staging/postflight/017_payment_events_legacy_merchant_compatibility_verify.sql" -Description "Run payment_events legacy compatibility staging postflight after rerun"
+  Assert-PaymentEventsLegacyRowsPreserved -Description "Assert forward migration preserves historical and merchant-owned payment_events rows"
+  Assert-PaymentEventsMerchantIdNullable -Description "Assert forward migration canonical payment_events.merchant_id nullability"
+  Assert-PaymentEventsForeignKeyRejectsInvalidMerchant -Description "Assert forward migration rejects invalid non-null payment_events merchant ownership"
+  Add-PassResult -Results $results -Message "Payment events legacy compatibility staging flow repairs FK drift and preserves rows"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture -IncludeCanonicalPaymentRecordsSecurityPrerequisite -IncludePaymentEventsPrerequisite
+  Invoke-PsqlSql -Description "Create already-applied NOT NULL payment_events fixture" -Sql @"
+DELETE FROM public.payment_events
+WHERE id = '20000000-0000-4000-8000-000000000001';
+ALTER TABLE public.payment_events ALTER COLUMN merchant_id SET NOT NULL;
+"@
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260803_00_payment_events_legacy_merchant_compatibility.sql" -Description "Run forward payment_events compatibility migration on NOT NULL fixture"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260803_00_payment_events_legacy_merchant_compatibility.sql" -Description "Rerun forward payment_events compatibility migration on repaired fixture"
+  Assert-PaymentEventsMerchantIdNullable -Description "Assert forward migration drops payment_events.merchant_id NOT NULL"
+  Assert-PaymentEventsForeignKeyRejectsInvalidMerchant -Description "Assert forward migration keeps real merchant FK enforcement after NOT NULL repair"
+  Add-PassResult -Results $results -Message "Forward payment_events compatibility migration repairs already-applied NOT NULL schemas"
 
   Reset-DisposableDatabase
   Initialize-CoreFixture -IncludeCanonicalPaymentRecordsSecurityPrerequisite
@@ -1636,11 +2852,68 @@ ALTER TABLE public.payment_records DROP CONSTRAINT payment_records_internal_refe
   Reset-DisposableDatabase
   Initialize-CoreFixture -IncludePaymentEventsPrerequisite
   Invoke-PsqlSql -Description "Create incompatible payment_events fixture" -Sql @"
-ALTER TABLE public.payment_events ALTER COLUMN merchant_id DROP NOT NULL;
+ALTER TABLE public.payment_events DROP CONSTRAINT payment_events_merchant_id_fkey;
 "@
   Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Expect Migration A to fail on incompatible payment_events" -ExpectFailure
   Assert-RelationAbsent -QualifiedName "public.payment_sessions"
   Add-PassResult -Results $results -Message "Migration A blocks incompatible payment_events before DDL"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture -IncludePaymentEventsPrerequisite
+  Invoke-PsqlSql -Description "Create incompatible payment_events.processor default fixture" -Sql @"
+ALTER TABLE public.payment_events
+  ALTER COLUMN processor SET DEFAULT 'monnify'::text;
+"@
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Expect Migration A to fail on incompatible payment_events.processor default" -ExpectFailure
+  Assert-RelationAbsent -QualifiedName "public.payment_sessions"
+  Assert-PaymentEventsProcessorDefault -Description "Assert failed Migration A leaves rejected payment_events.processor default unchanged" -ExpectedDefaultState "monnify"
+  Assert-PaymentEventsLegacyRowsPreserved -Description "Assert failed Migration A leaves payment_events rows unchanged after processor default rejection"
+  Add-PassResult -Results $results -Message "Migration A blocks incompatible payment_events.processor defaults before DDL"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture -IncludePaymentEventsPrerequisite
+  Invoke-PsqlSql -Description "Create incompatible payment_events.processed_at default fixture" -Sql @"
+ALTER TABLE public.payment_events
+  ALTER COLUMN processed_at SET DEFAULT CURRENT_DATE;
+"@
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Expect Migration A to fail on incompatible payment_events.processed_at default" -ExpectFailure
+  Assert-RelationAbsent -QualifiedName "public.payment_sessions"
+  Assert-PaymentEventsProcessedAtDefault -Description "Assert failed Migration A leaves rejected payment_events.processed_at default unchanged" -ExpectedDefaultState "current_date"
+  Assert-PaymentEventsLegacyRowsPreserved -Description "Assert failed Migration A leaves payment_events rows unchanged after processed_at default rejection"
+  Add-PassResult -Results $results -Message "Migration A blocks incompatible payment_events.processed_at defaults before DDL"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture -IncludePaymentEventsPrerequisite
+  Set-PaymentEventsInvoiceForeignKeyFixture -Scenario "legacy-no-action"
+  Assert-PaymentEventsInvoiceForeignKey -Description "Assert legacy payment_events invoice FK fixture starts as NO ACTION" -ExpectedDeleteAction "NO ACTION"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Run Migration A to normalize legacy payment_events invoice FK"
+  Assert-PaymentEventsInvoiceForeignKey -Description "Assert Migration A normalizes payment_events invoice FK to SET NULL" -ExpectedDeleteAction "SET NULL"
+  Assert-PaymentEventsLegacyRowsPreserved -Description "Assert Migration A preserves payment_events rows while normalizing invoice FK"
+  Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Rerun Migration A after invoice FK normalization"
+  Assert-PaymentEventsInvoiceForeignKey -Description "Assert rerun keeps payment_events invoice FK canonical" -ExpectedDeleteAction "SET NULL"
+  Assert-PaymentEventsLegacyRowsPreserved -Description "Assert rerun preserves payment_events rows after invoice FK normalization"
+  Add-PassResult -Results $results -Message "Migration A normalizes exact legacy payment_events invoice FK NO ACTION to SET NULL idempotently"
+
+  foreach ($invoiceFkScenario in @(
+    "wrong-name",
+    "wrong-referenced-table",
+    "wrong-referenced-column",
+    "multiple-candidates",
+    "additional-conflicting",
+    "unvalidated",
+    "cascade",
+    "set-default",
+    "not-null",
+    "wrong-type",
+    "missing-target"
+  )) {
+    Reset-DisposableDatabase
+    Initialize-CoreFixture -IncludePaymentEventsPrerequisite
+    Set-PaymentEventsInvoiceForeignKeyFixture -Scenario $invoiceFkScenario
+    Invoke-PsqlFile -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Expect Migration A to fail on payment_events invoice FK fixture $invoiceFkScenario" -ExpectFailure
+    Assert-RelationAbsent -QualifiedName "public.payment_sessions"
+    Add-PassResult -Results $results -Message "Migration A rejects payment_events invoice FK fixture $invoiceFkScenario"
+  }
 
   Reset-DisposableDatabase
   Initialize-CoreFixture -IncludeCanonicalPaymentRecordsSecurityPrerequisite
@@ -1736,6 +3009,17 @@ CREATE UNIQUE INDEX idx_payment_records_solo_plus_provider_reference
   Invoke-InjectedFailureMigration -RelativePath "supabase/migrations/20260707_01_breet_payment_substrate_reconciliation.sql" -Description "Run Migration A with injected late failure"
   Assert-RelationAbsent -QualifiedName "public.payment_sessions"
   Add-PassResult -Results $results -Message "Migration A rolls back on injected late failure"
+
+  Reset-DisposableDatabase
+  Initialize-CoreFixture -IncludeCanonicalPaymentRecordsSecurityPrerequisite -IncludePaymentEventsPrerequisite
+  Invoke-PsqlSql -Description "Create NOT NULL payment_events rollback fixture" -Sql @"
+DELETE FROM public.payment_events
+WHERE id = '20000000-0000-4000-8000-000000000001';
+ALTER TABLE public.payment_events ALTER COLUMN merchant_id SET NOT NULL;
+"@
+  Invoke-InjectedFailureMigration -RelativePath "supabase/migrations/20260803_00_payment_events_legacy_merchant_compatibility.sql" -Description "Run payment_events legacy compatibility migration with injected late failure"
+  Assert-PaymentEventsMerchantIdNotNull -Description "Assert payment_events legacy compatibility rollback preserves NOT NULL fixture"
+  Add-PassResult -Results $results -Message "Payment events legacy compatibility migration rolls back on injected late failure"
 
   Reset-DisposableDatabase
   Initialize-CoreFixture

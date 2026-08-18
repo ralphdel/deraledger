@@ -15,7 +15,12 @@ import { getPaymentEnvironment } from "@/lib/services/payment-routing.service";
 import { createPendingPlanPaymentRecord } from "@/lib/services/plan-payment-recovery.service";
 import { defaultNetworkForRail, rateSettingKeyForRail, resolveBreetCheckoutQuote } from "@/lib/treasury";
 import crypto from "crypto";
-import { assertPlanAvailable, getStoragePlanCode, normalizePlanCode } from "@/lib/plans";
+import { assertPlanAvailable } from "@/lib/plans";
+import {
+  assertCanonicalPaidAmount,
+  loadAndValidatePaidOnboardingSession,
+  PaidOnboardingPaymentError,
+} from "@/lib/services/paid-onboarding-payment.service";
 import {
   prepareSoloPlusOnboardingPayment,
   SoloPlusPaymentLifecycleError,
@@ -37,11 +42,22 @@ export async function POST(request: Request) {
     const { email, plan, sessionId, amountKobo, context } = await request.json();
     const checkoutContext = context === "renewal" ? "renewal" : "onboarding";
 
-    if (!email || !plan || !sessionId || !amountKobo) {
+    if (!email || !plan || !sessionId || amountKobo == null) {
       return NextResponse.json({ error: "Missing required fields." }, { status: 400 });
     }
 
-    const normalizedPlan = normalizePlanCode(plan);
+    const pricing = assertCanonicalPaidAmount(plan, amountKobo);
+    const onboardingBinding = checkoutContext === "onboarding"
+      ? await loadAndValidatePaidOnboardingSession(supabase, {
+          sessionId,
+          email,
+          plan,
+          amountKobo,
+          mode: "initialize",
+        })
+      : null;
+    const normalizedPlan = onboardingBinding?.plan || pricing.plan;
+    const canonicalAmountKobo = onboardingBinding?.amountKobo || pricing.amountKobo;
     if (normalizedPlan === "solo_plus" && checkoutContext === "renewal") {
       return NextResponse.json({ error: "Solo Plus renewal remains deferred until post-approval renewal rules are implemented." }, { status: 409 });
     }
@@ -49,12 +65,12 @@ export async function POST(request: Request) {
     if (!availability.ok) {
       return NextResponse.json({ error: "This plan is not available right now." }, { status: 403 });
     }
-    const storagePlan = getStoragePlanCode(normalizedPlan);
+    const storagePlan = onboardingBinding?.storagePlan || pricing.storagePlan;
 
-    let resolvedEmail = String(email);
+    let resolvedEmail = onboardingBinding?.session.email || String(email);
     let merchantId: string | null = null;
     let userId: string | null = null;
-    let businessName: string | null = null;
+    let businessName: string | null = onboardingBinding?.session.business_name || null;
     let ownerName: string | null = null;
     const paymentPurpose = checkoutContext === "renewal" ? "plan_renewal" : "plan_subscription";
     const paymentType = checkoutContext === "renewal" ? "subscription_renewal" : "subscription";
@@ -100,7 +116,7 @@ export async function POST(request: Request) {
     const settlementMode = eligibility.settlementMode;
     const settlementRecipientType = "platform" as const;
     const platformSettlementAccount = eligibility.config.platformSettlementBankAccount;
-    const fiatAmount = amountKobo / 100;
+    const fiatAmount = canonicalAmountKobo / 100;
     const minimumAutoSettlementNgn = eligibility.config.minimumAutoSettlementNgn;
 
     if (isBelowBreetMinimumAmount(fiatAmount, minimumAutoSettlementNgn)) {
@@ -132,7 +148,7 @@ export async function POST(request: Request) {
       merchant_id: merchantId,
       business_name: businessName,
       owner_name: ownerName,
-      amount_expected_kobo: amountKobo,
+      amount_expected_kobo: canonicalAmountKobo,
       payment_purpose: paymentPurpose,
       checkout_context: checkoutContext,
     };
@@ -140,7 +156,7 @@ export async function POST(request: Request) {
       ? await prepareSoloPlusOnboardingPayment({
           onboardingSessionId: sessionId,
           customerEmail: resolvedEmail,
-          amountKobo: Number(amountKobo),
+          amountKobo: canonicalAmountKobo,
           paymentMethod: "crypto",
           provider: "breet",
           metadata: paymentMetadata,
@@ -305,11 +321,16 @@ export async function POST(request: Request) {
     const message = error instanceof Error ? error.message : "Failed to generate crypto address.";
     console.error("Crypto subscription init error:", message);
     const status =
-      error instanceof SoloPlusPaymentLifecycleError &&
+      error instanceof PaidOnboardingPaymentError
+        ? error.httpStatus
+        : error instanceof SoloPlusPaymentLifecycleError &&
       (error.code === "SOLO_PLUS_PAYMENT_INIT_CONFLICT" ||
         error.code === "SOLO_PLUS_PAYMENT_ALREADY_CONFIRMED")
         ? 409
         : 500;
-    return NextResponse.json({ error: message }, { status });
+    return NextResponse.json({
+      error: message,
+      ...(error instanceof PaidOnboardingPaymentError ? { code: error.code } : {}),
+    }, { status });
   }
 }
