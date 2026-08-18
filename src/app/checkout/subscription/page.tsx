@@ -491,7 +491,7 @@ function SubscriptionCheckoutContent() {
       const handler = pop.setup({
         key: process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY,
         email: checkoutData.email,
-        amount: checkoutData.amountKobo,
+        amount: data.amountKobo ?? checkoutData.amountKobo,
         ref: data.reference,
         access_code: data.accessCode,
         metadata: {

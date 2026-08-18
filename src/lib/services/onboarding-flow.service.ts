@@ -325,7 +325,7 @@ export async function enterPaidSetupMode(
     ? { onboarding_status: "active", setup_mode: false, live_features_enabled: false }
     : { onboarding_status: "setup_mode", setup_mode: true, live_features_enabled: false };
 
-  await adminClient
+  const { error: merchantUpdateError } = await adminClient
     .from("merchants")
     .update({
       ...setupFields,
@@ -333,23 +333,54 @@ export async function enterPaidSetupMode(
       paid_setup_started_at: plan === "starter" ? null : new Date().toISOString(),
     })
     .eq("id", params.merchantId);
+  if (merchantUpdateError) {
+    throw new Error(`Failed to enter paid setup mode: ${merchantUpdateError.message}`);
+  }
 
-  await ensureWorkspaceForMerchant(adminClient, params.merchantId);
+  const workspaceId = await ensureWorkspaceForMerchant(adminClient, params.merchantId);
+  if (!workspaceId) {
+    throw new Error("Failed to ensure the paid workspace.");
+  }
 
-  const { data: workspace } = await adminClient
+  const { error: workspaceUpdateError } = await adminClient
     .from("workspaces")
-    .select("id")
-    .eq("merchant_id", params.merchantId)
-    .maybeSingle();
-
-  if (workspace?.id && plan !== "starter") {
-    await adminClient.from("workspace_subscriptions").insert({
-      workspace_id: workspace.id,
-      merchant_id: params.merchantId,
+    .update({
       plan_type: plan,
-      subscription_status: "paid_setup",
-      payment_reference: params.paymentReference || null,
-    });
+      onboarding_status: setupFields.onboarding_status,
+      setup_mode: setupFields.setup_mode,
+      live_features_enabled: setupFields.live_features_enabled,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", workspaceId);
+  if (workspaceUpdateError) {
+    throw new Error(`Failed to prepare the paid workspace: ${workspaceUpdateError.message}`);
+  }
+
+  if (plan !== "starter") {
+    const paymentReference = params.paymentReference || null;
+    const existingWorkspaceSubscription = paymentReference
+      ? await adminClient
+          .from("workspace_subscriptions")
+          .select("id")
+          .eq("merchant_id", params.merchantId)
+          .eq("payment_reference", paymentReference)
+          .maybeSingle()
+      : { data: null, error: null };
+    if (existingWorkspaceSubscription.error) {
+      throw new Error(`Failed to verify paid workspace subscription: ${existingWorkspaceSubscription.error.message}`);
+    }
+    if (!existingWorkspaceSubscription.data?.id) {
+      const { error: workspaceSubscriptionError } = await adminClient.from("workspace_subscriptions").insert({
+        workspace_id: workspaceId,
+        merchant_id: params.merchantId,
+        plan_type: plan,
+        subscription_status: "paid_setup",
+        payment_reference: paymentReference,
+      });
+      if (workspaceSubscriptionError) {
+        throw new Error(`Failed to initialize paid workspace subscription: ${workspaceSubscriptionError.message}`);
+      }
+    }
   }
 }
 

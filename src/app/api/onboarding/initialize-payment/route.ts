@@ -6,7 +6,11 @@ import { requiresVerificationDisclosure, VERIFICATION_DISCLOSURE_VERSION } from 
 import { getPaymentEnvironmentForMerchantEmail, resolvePaymentRoute, type PaymentMethod } from "@/lib/services/payment-routing.service";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { createPendingPlanPaymentRecord } from "@/lib/services/plan-payment-recovery.service";
-import { assertPlanAvailable, getStoragePlanCode, normalizePlanCode } from "@/lib/plans";
+import { assertPlanAvailable } from "@/lib/plans";
+import {
+  loadAndValidatePaidOnboardingSession,
+  PaidOnboardingPaymentError,
+} from "@/lib/services/paid-onboarding-payment.service";
 import {
   prepareSoloPlusOnboardingPayment,
   SoloPlusPaymentLifecycleError,
@@ -32,46 +36,49 @@ export async function POST(request: Request) {
     paymentMethod,
   } = await request.json();
 
-  if (!email || !tradingName || !registeredName || !plan || !sessionId || !amountKobo) {
+  if (!email || !tradingName || !registeredName || !plan || !sessionId || amountKobo == null) {
     return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
   }
 
-  const normalizedPlan = normalizePlanCode(plan);
-  const availability = await assertPlanAvailable(supabase, normalizedPlan);
-  if (!availability.ok) {
-    return NextResponse.json({ error: "This plan is not available right now." }, { status: 403 });
-  }
-
-  if (requiresVerificationDisclosure(normalizedPlan) && verificationDisclosureAccepted !== true) {
-    return NextResponse.json(
-      { error: "Please acknowledge the verification disclosure before payment." },
-      { status: 400 }
-    );
-  }
-
-  const storagePlan = getStoragePlanCode(normalizedPlan);
-
-  const appUrl = getAppUrl();
-  // Unique reference per transaction
-  const reference = `SUB-${storagePlan.toUpperCase()}-${crypto.randomBytes(6).toString("hex").toUpperCase()}`;
-
   try {
+    const binding = await loadAndValidatePaidOnboardingSession(supabase, {
+      sessionId,
+      email,
+      plan,
+      amountKobo,
+      mode: "initialize",
+    });
+    const { plan: normalizedPlan, storagePlan, amountKobo: canonicalAmountKobo, session } = binding;
+    const availability = await assertPlanAvailable(supabase, normalizedPlan);
+    if (!availability.ok) {
+      return NextResponse.json({ error: "This plan is not available right now." }, { status: 403 });
+    }
+
+    if (requiresVerificationDisclosure(normalizedPlan) && verificationDisclosureAccepted !== true) {
+      return NextResponse.json(
+        { error: "Please acknowledge the verification disclosure before payment." },
+        { status: 400 }
+      );
+    }
+
+    const appUrl = getAppUrl();
+    const reference = `SUB-${storagePlan.toUpperCase()}-${crypto.randomBytes(6).toString("hex").toUpperCase()}`;
     const method = (paymentMethod || "card") as PaymentMethod;
-    const route = await resolvePaymentRoute("plan_subscription", method, getPaymentEnvironmentForMerchantEmail(email));
+    const route = await resolvePaymentRoute("plan_subscription", method, getPaymentEnvironmentForMerchantEmail(session.email));
     const metadata = {
       type: "subscription",
       plan: storagePlan,
       plan_display_code: normalizedPlan,
-      email,
-      business_name: registeredName,
+      email: session.email,
+      business_name: session.business_name,
       trading_name: tradingName,
       owner_name: ownerName || null,
-      business_type: businessType || null,
-      relationship_claim: relationshipClaim || null,
+      business_type: session.business_type || businessType || null,
+      relationship_claim: session.relationship_claim || relationshipClaim || null,
       verification_disclosure_accepted: verificationDisclosureAccepted === true,
-      verification_disclosure_version: VERIFICATION_DISCLOSURE_VERSION,
+      verification_disclosure_version: session.verification_disclosure_version || VERIFICATION_DISCLOSURE_VERSION,
       session_id: sessionId,
-      amount_expected_kobo: amountKobo,
+      amount_expected_kobo: canonicalAmountKobo,
       payment_method_requested: method,
       resolved_provider: route.provider,
       payment_purpose: "plan_subscription",
@@ -80,8 +87,8 @@ export async function POST(request: Request) {
     const resolvedReference = normalizedPlan === "solo_plus"
       ? (await prepareSoloPlusOnboardingPayment({
           onboardingSessionId: sessionId,
-          customerEmail: email,
-          amountKobo: Number(amountKobo),
+          customerEmail: session.email,
+          amountKobo: canonicalAmountKobo,
           paymentMethod: method,
           provider: route.provider,
           metadata,
@@ -95,8 +102,8 @@ export async function POST(request: Request) {
         provider: route.provider,
         paymentMethod: method,
         paymentPurpose: "plan_subscription",
-        customerEmail: email,
-        expectedAmount: Number(amountKobo) / 100,
+        customerEmail: session.email,
+        expectedAmount: canonicalAmountKobo / 100,
         planName: normalizedPlan,
         planId: storagePlan,
         passwordSetupRequired: true,
@@ -106,8 +113,8 @@ export async function POST(request: Request) {
     const callback = new URL(`${appUrl}/onboarding/payment-callback`);
     callback.searchParams.set("provider", route.provider);
     const result = await PaymentService.initializeTransaction({
-      email,
-      amountKobo,
+      email: session.email,
+      amountKobo: canonicalAmountKobo,
       reference: resolvedReference,
       callbackUrl: callback.toString(),
       metadata,
@@ -119,16 +126,21 @@ export async function POST(request: Request) {
       accessCode: result.accessCode,
       reference: resolvedReference,
       provider: route.provider,
+      amountKobo: canonicalAmountKobo,
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Payment initialization failed";
     console.error("Payment init error:", message);
-    const status =
-      err instanceof SoloPlusPaymentLifecycleError &&
+    const status = err instanceof PaidOnboardingPaymentError
+      ? err.httpStatus
+      : err instanceof SoloPlusPaymentLifecycleError &&
       (err.code === "SOLO_PLUS_PAYMENT_INIT_CONFLICT" ||
         err.code === "SOLO_PLUS_PAYMENT_ALREADY_CONFIRMED")
         ? 409
         : 500;
-    return NextResponse.json({ error: message }, { status });
+    return NextResponse.json({
+      error: message,
+      ...(err instanceof PaidOnboardingPaymentError ? { code: err.code } : {}),
+    }, { status });
   }
 }

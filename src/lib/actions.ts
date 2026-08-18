@@ -2226,28 +2226,43 @@ export async function createReferenceAction(data: {
 }) {
   const adminClient = getServiceClient();
 
+  const merchantAccess = await resolveMerchantAccess(data.merchant_id, "manage_references");
+  if (!merchantAccess.permitted) {
+    return {
+      success: false,
+      error: merchantAccess.error,
+      code: merchantAccess.error.startsWith("Unauthorized") ? "AUTH_REQUIRED" : "REFERENCE_PERMISSION_DENIED",
+    };
+  }
+  if (data.merchant_id !== merchantAccess.merchantId) {
+    return { success: false, error: "Forbidden: workspace does not match the authenticated user.", code: "MERCHANT_SPOOF_DENIED" };
+  }
+  const trustedMerchantId = merchantAccess.merchantId;
+
   // ── Plan gate: References require Solo Lite plan or above ─────────────────
-  const { data: merchantRow } = await adminClient
+  const { data: merchantRow, error: merchantError } = await adminClient
     .from("merchants")
     .select("subscription_plan, merchant_tier")
-    .eq("id", data.merchant_id)
-    .single();
+    .eq("id", trustedMerchantId)
+    .maybeSingle();
 
-  if (merchantRow) {
-    const access = canAccessFeature(merchantRow as any, "view_references");
-    if (!access.allowed) {
-      return {
-        success: false,
-        error: "References are not available on the Starter plan. Upgrade to Solo Lite or Business to group invoices under project references.",
-        upgradeRequired: "individual" as const,
-      };
-    }
+  if (merchantError || !merchantRow) {
+    return { success: false, error: "Workspace could not be resolved. Please refresh and try again.", code: "WORKSPACE_NOT_FOUND" };
+  }
+  const access = canAccessFeature(merchantRow as any, "view_references");
+  if (!access.allowed) {
+    return {
+      success: false,
+      error: "References are not available on the Starter plan. Upgrade to Solo Lite or Business to group invoices under project references.",
+      code: "REFERENCE_PLAN_REQUIRED",
+      upgradeRequired: "individual" as const,
+    };
   }
 
   const { data: ref, error } = await adminClient
     .from("references")
     .insert({
-      merchant_id: data.merchant_id,
+      merchant_id: trustedMerchantId,
       name: data.name.trim(),
       description: data.description?.trim() || null,
       handled_by: data.handled_by?.trim() || null,
@@ -2270,6 +2285,37 @@ export async function updateReferenceAction(data: {
   project_total_value?: number;
 }) {
   const adminClient = getServiceClient();
+  const merchantAccess = await resolveMerchantAccess(data.merchant_id, "manage_references");
+  if (!merchantAccess.permitted) {
+    return {
+      success: false,
+      error: merchantAccess.error,
+      code: merchantAccess.error.startsWith("Unauthorized") ? "AUTH_REQUIRED" : "REFERENCE_PERMISSION_DENIED",
+    };
+  }
+  if (data.merchant_id !== merchantAccess.merchantId) {
+    return { success: false, error: "Forbidden: workspace does not match the authenticated user.", code: "MERCHANT_SPOOF_DENIED" };
+  }
+  const trustedMerchantId = merchantAccess.merchantId;
+
+  const { data: merchantRow, error: merchantError } = await adminClient
+    .from("merchants")
+    .select("subscription_plan, merchant_tier")
+    .eq("id", trustedMerchantId)
+    .maybeSingle();
+  if (merchantError || !merchantRow) {
+    return { success: false, error: "Workspace could not be resolved. Please refresh and try again.", code: "WORKSPACE_NOT_FOUND" };
+  }
+  const access = canAccessFeature(merchantRow as any, "view_references");
+  if (!access.allowed) {
+    return {
+      success: false,
+      error: "References are not available on the Starter plan. Upgrade to Solo Lite or Business to manage project references.",
+      code: "REFERENCE_PLAN_REQUIRED",
+      upgradeRequired: "individual" as const,
+    };
+  }
+
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (data.name !== undefined) updates.name = data.name.trim();
   if (data.description !== undefined) updates.description = data.description?.trim() || null;
@@ -2280,7 +2326,7 @@ export async function updateReferenceAction(data: {
     .from("references")
     .update(updates)
     .eq("id", data.id)
-    .eq("merchant_id", data.merchant_id);
+    .eq("merchant_id", trustedMerchantId);
 
   if (error) return { success: false, error: error.message };
   revalidatePath("/references");
