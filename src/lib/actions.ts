@@ -11,12 +11,11 @@ import { PaymentService } from "@/lib/payment";
 import { verifyMerchantIdentity, verifyMerchantBusiness } from "@/lib/services/verification.service";
 import { getIncompleteComplianceRequirements } from "@/lib/verification-requirements";
 import {
-  canCreateInvoice,
-  canCreateCollectionInvoice,
   canAddActiveCollectionInvoice,
   canInviteTeamMember,
   canCreateCustomRole,
   canAccessFeature,
+  getInvoiceCreationAccess,
 } from "@/lib/services/access-control";
 import { ensureWorkspaceForMerchant, getLiveFeatureLockReasons, setupStatusForMerchant, syncMerchantSetupStatus } from "@/lib/services/onboarding-flow.service";
 import { ensureMerchantSettlementAccountDetailed } from "@/lib/services/settlement-ledger.service";
@@ -1304,32 +1303,44 @@ export async function createInvoiceAction(data: {
   invoice_stage?: 'deposit' | 'milestone' | 'balance' | 'standard' | null;
   line_items: { item_name: string; quantity: number; unit_rate: number }[];
 }) {
+  const permCheck = await requirePermission(data.merchant_id, "create_invoice");
+  if (!permCheck.permitted) return { success: false, error: permCheck.error };
+
   const adminClient = getServiceClient();
 
-  await syncMerchantSetupStatus(adminClient, data.merchant_id);
-
   // Check Starter tier invoice limit (max 5 total invoices)
-  const { data: merchantInfo } = await adminClient
+  const { data: merchantInfo, error: merchantError } = await adminClient
     .from("merchants")
-    .select("email, subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, utility_status, business_affiliation_status, live_features_enabled, setup_mode")
+    .select("email, is_super_admin, subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, utility_status, business_affiliation_status, live_features_enabled, setup_mode")
     .eq("id", data.merchant_id)
-    .single();
+    .maybeSingle();
+
+  if (merchantError || !merchantInfo) {
+    return {
+      success: false,
+      error: "Workspace could not be resolved. Please refresh and try again.",
+    };
+  }
 
   const requestedType = data.invoice_type || "collection";
 
-  // Centralized access control checks
   const { count: lifetimeCount } = await adminClient
     .from("invoices")
     .select("*", { count: "exact", head: true })
     .eq("merchant_id", data.merchant_id);
 
-  const createCheck = canCreateInvoice(merchantInfo!, lifetimeCount ?? 0);
-  if (!createCheck.allowed) return { success: false, error: createCheck.reason };
+  const invoiceAccess = getInvoiceCreationAccess(
+    merchantInfo,
+    requestedType,
+    lifetimeCount ?? 0,
+  );
+  if (!invoiceAccess.allowed) return { success: false, error: invoiceAccess.reason };
+
+  if (invoiceAccess.shouldSyncMerchantSetup) {
+    await syncMerchantSetupStatus(adminClient, data.merchant_id);
+  }
 
   if (requestedType === "collection") {
-    const collectionCheck = canCreateCollectionInvoice(merchantInfo!);
-    if (!collectionCheck.allowed) return { success: false, error: collectionCheck.reason };
-
     const { count: activeCollCount } = await adminClient
       .from("invoices")
       .select("*", { count: "exact", head: true })
@@ -1337,12 +1348,11 @@ export async function createInvoiceAction(data: {
       .eq("invoice_type", "collection")
       .in("status", ["open", "partially_paid"]);
 
-    const activeCheck = canAddActiveCollectionInvoice(merchantInfo!, activeCollCount ?? 0);
+    const activeCheck = canAddActiveCollectionInvoice(merchantInfo, activeCollCount ?? 0);
     if (!activeCheck.allowed) return { success: false, error: activeCheck.reason };
   }
 
-  const plan = merchantInfo?.subscription_plan || merchantInfo?.merchant_tier || "starter";
-  const effectiveType: "record" | "collection" = plan === "starter" ? "record" : requestedType;
+  const effectiveType = invoiceAccess.invoiceType;
 
 
   // Calculate totals server-side

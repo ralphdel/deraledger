@@ -25,13 +25,13 @@ export const SUPERADMIN_SANDBOX_EMAIL =
 export const LIVE_FEATURE_LOCK_MESSAGE =
   "Payment collection is disabled until verification is completed. You can continue setting up your workspace.";
 
-export function isSuperadminSandboxMerchant(merchant: {
+export function isSuperadminSandboxMerchant(merchant?: {
   email?: string | null;
   is_super_admin?: boolean | null;
-}) {
+} | null) {
   return (
-    merchant.is_super_admin === true ||
-    merchant.email?.toLowerCase() === SUPERADMIN_SANDBOX_EMAIL
+    merchant?.is_super_admin === true ||
+    merchant?.email?.toLowerCase() === SUPERADMIN_SANDBOX_EMAIL
   );
 }
 

@@ -75,6 +75,24 @@ export interface AccessResult {
   upgradeRequired?: "individual" | "corporate";
 }
 
+type InvoiceCreationMerchant = Pick<Merchant,
+  "subscription_plan" | "merchant_tier" | "verification_status" | "bvn_status" | "cac_status" | "live_features_enabled" | "setup_mode"
+> & Pick<Partial<Merchant>,
+  "selfie_status" | "utility_status" | "business_affiliation_status" | "email" | "is_super_admin"
+>;
+
+export type InvoiceCreationAccessResult =
+  | {
+      allowed: true;
+      invoiceType: "record" | "collection";
+      shouldSyncMerchantSetup: boolean;
+    }
+  | {
+      allowed: false;
+      reason: string;
+      upgradeRequired?: "individual" | "corporate";
+    };
+
 function liveCollectionEnabled(
   merchant: Pick<Merchant, "subscription_plan" | "merchant_tier" | "verification_status" | "bvn_status" | "cac_status" | "live_features_enabled" | "setup_mode"> & Pick<Partial<Merchant>, "selfie_status" | "utility_status" | "business_affiliation_status" | "email" | "is_super_admin">
 ): boolean {
@@ -87,9 +105,12 @@ function liveCollectionEnabled(
  * For Starter: counts ALL invoices ever created (including archived/deleted soft-counts).
  */
 export function canCreateInvoice(
-  merchant: Pick<Merchant, "subscription_plan" | "merchant_tier"> & Pick<Partial<Merchant>, "email" | "is_super_admin">,
+  merchant: (Pick<Merchant, "subscription_plan" | "merchant_tier"> & Pick<Partial<Merchant>, "email" | "is_super_admin">) | null | undefined,
   currentLifetimeInvoiceCount: number
 ): AccessResult {
+  if (!merchant) {
+    return { allowed: false, reason: "Workspace could not be resolved. Please refresh and try again." };
+  }
   if (isSuperadminSandboxMerchant(merchant)) return { allowed: true };
   const plan = getPlan(merchant);
   const limits = PLAN_LIMITS[plan];
@@ -106,8 +127,11 @@ export function canCreateInvoice(
 
 // ── Gate: Create collection invoice ──────────────────────────────────────────
 export function canCreateCollectionInvoice(
-  merchant: Pick<Merchant, "subscription_plan" | "merchant_tier" | "verification_status" | "bvn_status" | "cac_status" | "live_features_enabled" | "setup_mode"> & Pick<Partial<Merchant>, "selfie_status" | "utility_status" | "business_affiliation_status" | "email" | "is_super_admin">
+  merchant: (Pick<Merchant, "subscription_plan" | "merchant_tier" | "verification_status" | "bvn_status" | "cac_status" | "live_features_enabled" | "setup_mode"> & Pick<Partial<Merchant>, "selfie_status" | "utility_status" | "business_affiliation_status" | "email" | "is_super_admin">) | null | undefined
 ): AccessResult {
+  if (!merchant) {
+    return { allowed: false, reason: "Workspace could not be resolved. Please refresh and try again." };
+  }
   if (isSuperadminSandboxMerchant(merchant)) return { allowed: true };
   const plan = getPlan(merchant);
   const limits = PLAN_LIMITS[plan];
@@ -131,6 +155,48 @@ export function canCreateCollectionInvoice(
   }
 
   return { allowed: true };
+}
+
+/**
+ * Keeps invoice creation on the record-invoice path until a collection invoice
+ * explicitly passes its existing plan and live-feature gates.
+ */
+export function getInvoiceCreationAccess(
+  merchant: InvoiceCreationMerchant | null | undefined,
+  requestedInvoiceType: "record" | "collection",
+  currentLifetimeInvoiceCount: number,
+): InvoiceCreationAccessResult {
+  const createCheck = canCreateInvoice(merchant, currentLifetimeInvoiceCount);
+  if (!createCheck.allowed) {
+    return {
+      allowed: false,
+      reason: createCheck.reason || "Invoice creation is unavailable for this workspace.",
+      ...(createCheck.upgradeRequired ? { upgradeRequired: createCheck.upgradeRequired } : {}),
+    };
+  }
+
+  if (!merchant) {
+    return { allowed: false, reason: "Workspace could not be resolved. Please refresh and try again." };
+  }
+
+  if (requestedInvoiceType === "collection") {
+    const collectionCheck = canCreateCollectionInvoice(merchant);
+    if (!collectionCheck.allowed) {
+      return {
+        allowed: false,
+        reason: collectionCheck.reason || "Collection invoices are unavailable for this workspace.",
+        ...(collectionCheck.upgradeRequired ? { upgradeRequired: collectionCheck.upgradeRequired } : {}),
+      };
+    }
+  }
+
+  return {
+    allowed: true,
+    invoiceType: requestedInvoiceType,
+    // Starter record invoices are offline bookkeeping and must never enter
+    // the verification/live-payment setup path.
+    shouldSyncMerchantSetup: getPlan(merchant) !== "starter",
+  };
 }
 
 // ── Gate: Check active collection invoice count ───────────────────────────────
