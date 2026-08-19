@@ -40,6 +40,17 @@ async function run() {
     shouldSyncMerchantSetup: false,
   }, "Starter record invoices must only use the invoice-creation capability path.");
 
+  const paidRecordAccess = getInvoiceCreationAccess({
+    ...starterMerchant,
+    subscription_plan: "individual",
+    merchant_tier: "individual",
+  }, "record", 0);
+  assert.deepEqual(paidRecordAccess, {
+    allowed: true,
+    invoiceType: "record",
+    shouldSyncMerchantSetup: false,
+  }, "Paid-plan record invoices must remain offline and must not request setup synchronization.");
+
   const missingMerchant = getInvoiceCreationAccess(null, "record", 0);
   assert.deepEqual(missingMerchant, {
     allowed: false,
@@ -76,6 +87,7 @@ async function run() {
   );
 
   const actionsSource = readFileSync("src/lib/actions.ts", "utf8");
+  const accessControlSource = readFileSync("src/lib/services/access-control.ts", "utf8");
   const rbacSource = readFileSync("src/lib/rbac.ts", "utf8");
   assert.match(actionsSource, /resolveMerchantAccess\(data\.merchant_id, "create_invoice"\)/);
   assert.match(actionsSource, /merchant_id\?: string \| null/);
@@ -87,8 +99,13 @@ async function run() {
   assert.match(rbacSource, /preferredMerchantId: preferredMerchantId \|\| null/);
   assert.match(
     actionsSource,
-    /if \(invoiceAccess\.shouldSyncMerchantSetup\) \{[\s\S]+syncMerchantSetupStatus/,
-    "Only collection-capable plans may enter the setup/verification synchronization path.",
+    /if \(requestedType === "collection" && invoiceAccess\.shouldSyncMerchantSetup\) \{[\s\S]+syncMerchantSetupStatus/,
+    "Only Collection Invoices may enter the setup/verification synchronization path.",
+  );
+  assert.match(
+    accessControlSource,
+    /shouldSyncMerchantSetup:\s*requestedInvoiceType === "collection" && getPlan\(merchant\) !== "starter"/,
+    "Record Invoice access must never request setup synchronization for a paid plan.",
   );
 
   console.log("invoice-creation-access.test.ts passed");

@@ -193,9 +193,10 @@ export function getInvoiceCreationAccess(
   return {
     allowed: true,
     invoiceType: requestedInvoiceType,
-    // Starter record invoices are offline bookkeeping and must never enter
-    // the verification/live-payment setup path.
-    shouldSyncMerchantSetup: getPlan(merchant) !== "starter",
+    // Record invoices are offline bookkeeping for every plan. They must never
+    // enter the verification/live-payment setup path or change live state.
+    shouldSyncMerchantSetup:
+      requestedInvoiceType === "collection" && getPlan(merchant) !== "starter",
   };
 }
 

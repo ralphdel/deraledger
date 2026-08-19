@@ -1363,7 +1363,9 @@ export async function createInvoiceAction(data: {
   );
   if (!invoiceAccess.allowed) return { success: false, error: invoiceAccess.reason };
 
-  if (invoiceAccess.shouldSyncMerchantSetup) {
+  // Record invoices are strictly offline/manual. Keep setup and live-feature
+  // synchronization on the existing Collection Invoice path only.
+  if (requestedType === "collection" && invoiceAccess.shouldSyncMerchantSetup) {
     await syncMerchantSetupStatus(adminClient, merchantId);
   }
 
