@@ -486,7 +486,8 @@ export async function submitKycAction(merchantId: string, updates: any) {
   }
 
   await logAudit("kyc_submit", merchantId, "merchant", { updates: nextUpdates });
-  await syncMerchantSetupStatus(supabase, merchantId);
+  // Settings/profile writes must not derive or unlock setup/live collection state.
+  // Dedicated compliance and activation paths perform that synchronization.
 
   revalidatePath("/settings");
   revalidatePath("/admin/verification");
