@@ -28,6 +28,8 @@ async function run() {
   const cryptoRoute = readFileSync("src/app/api/checkout/crypto-invoice/route.ts", "utf8");
   assert.ok(demoRoute.indexOf("getInvoicePaymentInitializationError(invoice)") < demoRoute.indexOf("PaymentService.initializeTransaction"));
   assert.ok(cryptoRoute.indexOf("getInvoicePaymentInitializationError(invoice)") < cryptoRoute.indexOf("PaymentService.generateInvoicePaymentAddress"));
+  assert.ok(cryptoRoute.indexOf("isLiveFeatureEnabled(merchant)") < cryptoRoute.indexOf("PaymentService.generateInvoicePaymentAddress"));
+  assert.match(cryptoRoute, /if \(!isLiveFeatureEnabled\(merchant\)\)[\s\S]*status: 403/);
   assert.match(demoRoute, /subaccountCode: route\.provider === "paystack" \? \(verifiedProviderSubaccountCode \|\| undefined\)/);
   assert.doesNotMatch(demoRoute, /subaccountCode:[^\n]*merchant\.payment_subaccount_code/);
 

@@ -25,6 +25,7 @@ import {
 } from "@/lib/treasury";
 import { calculateProportionalPayment } from "@/lib/calculations";
 import { getInvoicePaymentInitializationError } from "@/lib/services/invoice-payment-safety.service";
+import { isLiveFeatureEnabled } from "@/lib/services/onboarding-flow.service";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -150,12 +151,19 @@ export async function POST(request: Request) {
 
     const { data: merchant, error: merchantError } = await supabase
       .from("merchants")
-      .select("id, email, subscription_plan, merchant_tier, verification_status, bvn_status, selfie_status, cac_status, utility_status, business_affiliation_status, payment_provider, live_features_enabled, setup_mode")
+      .select("id, email, subscription_plan, merchant_tier, relationship_claim, verification_status, bvn_status, selfie_status, cac_status, utility_status, business_affiliation_status, settlement_account_number, settlement_bank_name, settlement_account_name, verification_step_state, is_super_admin, payment_provider, live_features_enabled, setup_mode")
       .eq("id", invoice.merchant_id)
       .single();
 
     if (merchantError || !merchant) {
       return NextResponse.json({ error: "Merchant not found" }, { status: 404 });
+    }
+
+    if (!isLiveFeatureEnabled(merchant)) {
+      return NextResponse.json(
+        { error: "Crypto payment collection is disabled until live features and verification are active." },
+        { status: 403 },
+      );
     }
 
     const environment = getPaymentEnvironmentForMerchantEmail(merchant.email);

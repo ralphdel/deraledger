@@ -1,8 +1,13 @@
 import { NextResponse } from "next/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { PaymentService } from "@/lib/payment";
+import { createClient } from "@/lib/supabase/server";
 import { processSuccessfulFiatPayment } from "@/lib/services/fiat-payment-confirmation.service";
 import { findPaymentRecordByReference } from "@/lib/services/plan-payment-recovery.service";
+import {
+  loadPaidUpgradeIntent,
+  PaidUpgradeConfirmationError,
+} from "@/lib/services/paid-upgrade-confirmation.service";
 
 const supabaseAdmin = createSupabaseClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -11,12 +16,30 @@ const supabaseAdmin = createSupabaseClient(
 
 export async function POST(request: Request) {
   try {
-    const { reference, provider } = await request.json();
+    const { reference } = await request.json();
     if (!reference) {
       return NextResponse.json({ error: "Missing reference" }, { status: 400 });
     }
 
-    const verification = await verifyProviderTransaction(reference, provider);
+    const authClient = await createClient();
+    const { data: { user } } = await authClient.auth.getUser();
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const intent = await loadPaidUpgradeIntent(supabaseAdmin, reference, {
+      id: user.id,
+      email: user.email,
+    });
+    if (intent.status === "processed") {
+      return NextResponse.json({
+        success: true,
+        status: "paid_pending_setup",
+        already_updated: true,
+      });
+    }
+
+    const verification = await verifyProviderTransaction(reference, intent.provider);
     if (!verification) {
       return NextResponse.json({ error: "Payment not successful" }, { status: 400 });
     }
@@ -24,11 +47,16 @@ export async function POST(request: Request) {
     const payload = verification.raw;
     const metadata = asRecord(payload.metadata) || asRecord(payload.metaData) || {};
     const amountKobo = normalizeAmountKobo(payload);
+    const confirmedReference =
+      stringValue(payload.reference) || stringValue(payload.paymentReference);
+    if (confirmedReference !== intent.internalReference) {
+      return NextResponse.json({ error: "Payment reference mismatch" }, { status: 400 });
+    }
     const result = await processSuccessfulFiatPayment(supabaseAdmin, {
       provider: verification.provider,
       metadata,
       amountKobo,
-      reference,
+      reference: confirmedReference,
       providerReference:
         stringValue(payload.provider_reference) ||
         stringValue(payload.transactionReference) ||
@@ -42,6 +70,13 @@ export async function POST(request: Request) {
       feesKobo: normalizeOptionalKobo(payload.fees),
       settlementAmountKobo: normalizeOptionalKobo(payload.settlementAmount),
       rawProviderPayload: payload,
+      currency:
+        stringValue(payload.currency) ||
+        stringValue(payload.currencyCode),
+      customerEmail:
+        stringValue(payload.customerEmail) ||
+        stringValue(asRecord(payload.customer)?.email) ||
+        stringValue(metadata.email),
     });
 
     const paymentRecord = await findPaymentRecordByReference(supabaseAdmin, reference, verification.provider);
@@ -64,13 +99,24 @@ export async function POST(request: Request) {
     });
   } catch (error: unknown) {
     console.error("Verify upgrade failed:", error);
+    if (error instanceof PaidUpgradeConfirmationError) {
+      return NextResponse.json(
+        { error: error.message, code: error.code },
+        { status: error.code === "PAYMENT_RECORD_NOT_FOUND" ? 404 : 409 },
+      );
+    }
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
 
-async function verifyProviderTransaction(reference: string, provider?: string) {
-  const providersToTry: Array<"paystack" | "monnify"> =
-    provider === "monnify" ? ["monnify"] : provider === "paystack" ? ["paystack"] : ["paystack", "monnify"];
+async function verifyProviderTransaction(
+  reference: string,
+  provider: "paystack" | "monnify" | "breet",
+) {
+  if (provider === "breet") {
+    return null;
+  }
+  const providersToTry: Array<"paystack" | "monnify"> = [provider];
 
   for (const providerName of providersToTry) {
     try {

@@ -1535,13 +1535,18 @@ async function handlePlanWebhook(input: {
       email: metadata.email || null,
       business_name: metadata.business_name || "DeraLedger",
       payment_purpose: paymentPurpose,
+      resolved_provider: "breet",
+      amount_expected_kobo: Math.round(Number(session.expected_ngn_amount || 0) * 100),
     },
     amountKobo,
     reference: String(session.internal_reference),
+    providerReference: providerReference || txHash || null,
     channel: "crypto",
     feesKobo: Math.round(planAccounting.providerFeeAmount * 100) || null,
     settlementAmountKobo: Math.round(planAccounting.amountSettledNgn * 100),
     rawProviderPayload: accountingPayload,
+    currency: "NGN",
+    customerEmail: stringValue(metadata.email) || null,
   });
 
   const merchantId =

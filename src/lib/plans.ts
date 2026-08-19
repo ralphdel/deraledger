@@ -86,6 +86,14 @@ export function normalizePlanCode(plan: string | null | undefined): CanonicalPla
   return PLAN_ALIASES[normalized] || "starter";
 }
 
+export function parsePaidPlanCode(
+  plan: string | null | undefined,
+): Exclude<CanonicalPlanCode, "starter"> | null {
+  const normalized = String(plan || "").trim().toLowerCase();
+  const canonical = PLAN_ALIASES[normalized];
+  return canonical && canonical !== "starter" ? canonical : null;
+}
+
 export function normalizeCapabilityPlanCode(
   plan: string | null | undefined,
 ): CapabilityPlanCode {

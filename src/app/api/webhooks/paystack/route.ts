@@ -88,6 +88,8 @@ export async function POST(request: Request) {
       channel: normalized.channel,
       feesKobo: normalized.fee !== null ? Math.round(normalized.fee * 100) : null,
       rawProviderPayload: payload as Record<string, unknown>,
+      currency: normalized.currency,
+      customerEmail: normalized.customerEmail,
     });
 
     if (normalized.merchantId) {

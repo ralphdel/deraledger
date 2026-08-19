@@ -71,6 +71,7 @@ export type PaymentRecoverySnapshot = {
 
 export type PendingPlanPaymentRecord = {
   id: string;
+  user_id?: string | null;
   internal_reference: string;
   provider_name: SupportedProvider | null;
   provider_reference: string | null;
@@ -86,6 +87,8 @@ export type PendingPlanPaymentRecord = {
   amount_paid: number | null;
   currency: string | null;
   customer_email: string | null;
+  plan_id?: string | null;
+  plan_name?: string | null;
   metadata: Record<string, unknown> | null;
   raw_provider_payload: Record<string, unknown> | null;
   failure_reason: string | null;
@@ -305,6 +308,14 @@ export async function createPendingPlanPaymentRecord(
   const expectedAmount = Number(input.expectedAmount || 0);
   const planName = input.planName;
 
+  if (!Number.isFinite(expectedAmount) || expectedAmount <= 0) {
+    throw new Error("Paid payment intent requires a positive expected amount.");
+  }
+
+  if (!input.customerEmail.trim()) {
+    throw new Error("Paid payment intent requires a customer email.");
+  }
+
   const { data, error } = await supabase.from("payment_records").upsert(
     {
       user_id: input.userId || null,
@@ -335,7 +346,7 @@ export async function createPendingPlanPaymentRecord(
     },
     { onConflict: "internal_reference" }
   )
-    .select("id, internal_reference, provider_name, provider_reference, payment_purpose, payment_method, payment_status, processing_status, account_setup_status, merchant_id, onboarding_session_id, solo_plus_case_id, expected_amount, amount_paid, currency, customer_email, metadata, raw_provider_payload, failure_reason")
+    .select("id, user_id, internal_reference, provider_name, provider_reference, payment_purpose, payment_method, payment_status, processing_status, account_setup_status, merchant_id, onboarding_session_id, solo_plus_case_id, expected_amount, amount_paid, currency, customer_email, plan_id, plan_name, metadata, raw_provider_payload, failure_reason")
     .single<PendingPlanPaymentRecord>();
 
   if (error || !data) {
@@ -466,7 +477,7 @@ export async function findPendingSoloPlusPaymentByCaseId(
 ) {
   const { data, error } = await supabase
     .from("payment_records")
-    .select("id, internal_reference, provider_name, provider_reference, payment_purpose, payment_method, payment_status, processing_status, account_setup_status, merchant_id, onboarding_session_id, solo_plus_case_id, expected_amount, amount_paid, currency, customer_email, metadata, raw_provider_payload, failure_reason")
+    .select("id, user_id, internal_reference, provider_name, provider_reference, payment_purpose, payment_method, payment_status, processing_status, account_setup_status, merchant_id, onboarding_session_id, solo_plus_case_id, expected_amount, amount_paid, currency, customer_email, plan_id, plan_name, metadata, raw_provider_payload, failure_reason")
     .eq("solo_plus_case_id", soloPlusCaseId)
     .order("created_at", { ascending: false })
     .limit(1)
@@ -486,7 +497,7 @@ export async function findFullPaymentRecordByReference(
 ) {
   let query = supabase
     .from("payment_records")
-    .select("id, internal_reference, provider_name, provider_reference, payment_purpose, payment_method, payment_status, processing_status, account_setup_status, merchant_id, onboarding_session_id, solo_plus_case_id, expected_amount, amount_paid, currency, customer_email, metadata, raw_provider_payload, failure_reason")
+    .select("id, user_id, internal_reference, provider_name, provider_reference, payment_purpose, payment_method, payment_status, processing_status, account_setup_status, merchant_id, onboarding_session_id, solo_plus_case_id, expected_amount, amount_paid, currency, customer_email, plan_id, plan_name, metadata, raw_provider_payload, failure_reason")
     .or(`internal_reference.eq.${reference},provider_reference.eq.${reference}`)
     .order("created_at", { ascending: false })
     .limit(1);

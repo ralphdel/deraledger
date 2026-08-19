@@ -112,6 +112,8 @@ export async function POST(request: Request) {
       feesKobo: normalized.feesKobo,
       settlementAmountKobo: normalized.settlementAmountKobo,
       rawProviderPayload: payload as Record<string, unknown>,
+      currency: normalized.currency,
+      customerEmail: normalized.customerEmail,
     });
     await recordWebhookHealth("success");
     if (normalized.merchantId) {
@@ -261,6 +263,7 @@ function normalizeMonnifyWebhook(payload: MonnifyWebhookPayload) {
 
   return {
     successful,
+    currency,
     eventType,
     paymentStatus,
     reference,

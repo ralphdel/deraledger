@@ -27,6 +27,10 @@ import {
   loadAndValidatePaidOnboardingSession,
 } from "@/lib/services/paid-onboarding-payment.service";
 import { ensurePaidCreatorMembership } from "@/lib/services/paid-provisioning.service";
+import {
+  confirmPaidUpgradeAtomically,
+  PaidUpgradeConfirmationError,
+} from "@/lib/services/paid-upgrade-confirmation.service";
 
 type FiatProvider = "paystack" | "monnify" | "breet";
 
@@ -44,17 +48,37 @@ export type SuccessfulFiatPayment = {
   feesKobo?: number | null;
   settlementAmountKobo?: number | null;
   rawProviderPayload?: Record<string, unknown> | null;
+  currency?: string | null;
+  customerEmail?: string | null;
 };
 
 export async function processSuccessfulFiatPayment(
   supabase: SupabaseClient,
   payment: SuccessfulFiatPayment
 ) {
-  const paymentType = String(payment.metadata?.type || "invoice_payment");
   const soloPlusResult = await confirmLinkedSoloPlusPayment(supabase, payment);
 
   if (soloPlusResult) {
     return soloPlusResult;
+  }
+
+  const linkedPaymentRecord = await findFullPaymentRecordByReference(
+    supabase,
+    payment.reference,
+  );
+  const paymentType = linkedPaymentRecord?.payment_purpose === "plan_subscription"
+    ? "subscription"
+    : linkedPaymentRecord?.payment_purpose === "plan_upgrade"
+      ? "subscription_upgrade"
+      : linkedPaymentRecord?.payment_purpose === "plan_renewal"
+        ? "subscription_renewal"
+        : String(payment.metadata?.type || "invoice_payment");
+
+  if (
+    !linkedPaymentRecord &&
+    ["subscription", "subscription_upgrade", "subscription_renewal"].includes(paymentType)
+  ) {
+    throw new Error("Paid plan confirmation requires a linked payment record.");
   }
 
   if (paymentType === "subscription") {
@@ -332,195 +356,39 @@ async function confirmSubscriptionUpgrade(
   supabase: SupabaseClient,
   payment: SuccessfulFiatPayment
 ) {
-  const { metadata, amountKobo, reference, provider } = payment;
-  const merchantId = metadata?.merchant_id as string | undefined;
-  const newPlan = metadata?.new_plan as "individual" | "corporate" | "solo_plus" | undefined;
-  const relationshipClaim = metadata?.relationship_claim as RelationshipClaim | undefined;
+  try {
+    const result = await confirmPaidUpgradeAtomically(supabase, {
+      provider: payment.provider,
+      reference: payment.reference,
+      providerReference: payment.providerReference || null,
+      amountKobo: payment.amountKobo,
+      currency: payment.currency || null,
+      customerEmail: payment.customerEmail || null,
+      metadata: payment.metadata,
+      rawProviderPayload: payment.rawProviderPayload,
+    });
 
-  if (!merchantId || !newPlan) {
-    console.error("Upgrade confirmation missing metadata:", metadata);
-    return { received: true, skipped: true };
-  }
-
-  const mismatch = classifyAmountMismatch(Number(metadata.amount_expected_kobo || 0), amountKobo);
-  if (mismatch) {
-    await updatePlanPaymentRecord(supabase, reference, {
-      provider_reference: payment.providerReference || reference,
-      amount_paid: amountKobo / 100,
-      payment_status: "pending",
-      processing_status: mismatch.processingStatus,
-      account_setup_status: "manual_review",
-      failure_reason: mismatch.message,
-      raw_provider_payload: payment.rawProviderPayload || metadata,
-    }, provider);
-    return { received: true, needs_review: true, status: mismatch.processingStatus };
-  }
-
-  const { data: existingPayment } = await supabase
-    .from("subscription_payments")
-    .select("id")
-    .eq("paystack_ref", reference)
-    .single();
-  if (existingPayment) {
-    await updatePlanPaymentRecord(supabase, reference, {
-      merchant_id: merchantId,
-      provider_reference: payment.providerReference || reference,
-      amount_paid: amountKobo / 100,
-      payment_status: "successful",
-      processing_status: "processed",
-      account_setup_status: "paid_pending_setup",
-      failure_reason: null,
-      raw_provider_payload: payment.rawProviderPayload || metadata,
-      paid_at: new Date().toISOString(),
-    }, provider);
-    return { received: true, already_processed: true };
-  }
-
-  const { data: merchant } = await supabase
-    .from("merchants")
-    .select("id, owner_name, business_type")
-    .eq("id", merchantId)
-    .single();
-
-  if (!merchant) {
-    console.error("Merchant not found for upgrade:", merchantId);
-    return { received: true, skipped: true };
-  }
-
-  const ownerName = metadata?.owner_name as string | undefined;
-  const businessType = metadata?.business_type as string | undefined;
-  const updates: Record<string, unknown> = {
-    subscription_plan: newPlan,
-    merchant_tier: newPlan,
-    monthly_collection_limit:
-      normalizeCapabilityPlanCode(newPlan) === "individual" ? 5000000 : 0,
-    subscription_notifications_sent: {},
-  };
-
-  if (businessType) {
-    updates.business_type = businessType;
-  } else if (normalizeCapabilityPlanCode(newPlan) === "individual" && !merchant.business_type) {
-    updates.business_type = "sole_proprietorship";
-  }
-
-  if (ownerName) {
-    updates.owner_name = ownerName;
-    if (merchant.owner_name && merchant.owner_name !== ownerName) {
-      updates.bvn = null;
-      updates.bvn_status = "unverified";
-      updates.selfie_url = null;
-      updates.selfie_status = "unverified";
-      updates.verification_status = "unverified";
+    return {
+      received: true,
+      processed: result.applied,
+      already_processed: result.alreadyProcessed,
+      status: "paid_pending_setup",
+    };
+  } catch (error) {
+    if (
+      error instanceof PaidUpgradeConfirmationError &&
+      error.code !== "ATOMIC_ACTIVATION_FAILED"
+    ) {
+      return {
+        received: true,
+        needs_review: true,
+        status: "manual_review",
+        error: error.message,
+        already_processed: false,
+      };
     }
+    throw error;
   }
-
-  if (relationshipClaim) {
-    updates.relationship_claim = relationshipClaim;
-  }
-
-  const { error: updateError } = await supabase
-    .from("merchants")
-    .update(updates)
-    .eq("id", merchantId);
-
-  if (updateError) {
-    throw new Error(`Failed to update upgraded merchant: ${updateError.message}`);
-  }
-
-  await enterPaidSetupMode(supabase, {
-    merchantId,
-    planType: newPlan,
-    relationshipClaim: relationshipClaim || null,
-    paymentReference: reference,
-  });
-
-  const amountPaidNgn = amountKobo / 100;
-  const { data: currentSub } = await supabase
-    .from("subscriptions")
-    .select("plan_type, expiry_date")
-    .eq("merchant_id", merchantId)
-    .in("status", ["active", "expired"])
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .single();
-
-  const expiryDate = calculateSubscriptionExpiry(
-    amountPaidNgn,
-    newPlan as PlanType,
-    currentSub
-      ? { planType: currentSub.plan_type as PlanType, expiryDate: currentSub.expiry_date }
-      : undefined
-  );
-  const periodStart =
-    currentSub && new Date(currentSub.expiry_date) > new Date()
-      ? new Date(currentSub.expiry_date).toISOString()
-      : new Date().toISOString();
-
-  const { error: subUpsertError } = await supabase.from("subscriptions").upsert(
-    {
-      merchant_id: merchantId,
-      plan_type: newPlan,
-      amount_paid: amountPaidNgn,
-      start_date: new Date().toISOString(),
-      expiry_date: expiryDate.toISOString(),
-      status: "active",
-      last_notified_at: null,
-      is_banner_dismissed: false,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "merchant_id" }
-  );
-
-  if (subUpsertError) {
-    throw new Error(`Failed to upsert upgraded subscription: ${subUpsertError.message}`);
-  }
-
-  await supabase.from("subscription_payments").insert({
-    merchant_id: merchantId,
-    plan: newPlan,
-    amount_ngn: amountPaidNgn,
-    period_start: periodStart,
-    period_end: expiryDate.toISOString(),
-    paystack_ref: reference,
-    payment_type: "upgrade",
-    status: "paid",
-  });
-
-  await supabase.from("audit_logs").insert({
-    event_type: "subscription_upgraded",
-    actor_id: null,
-    actor_role: "system",
-    target_id: merchantId,
-    target_type: "merchant",
-    metadata: {
-      actor_name: `System (${provider} Webhook)`,
-      new_plan: newPlan,
-      reference,
-      amount_ngn: amountPaidNgn,
-    },
-  });
-
-  await updatePlanPaymentRecord(supabase, reference, {
-    merchant_id: merchantId,
-    provider_reference: payment.providerReference || reference,
-    amount_paid: amountPaidNgn,
-    payment_status: "successful",
-    processing_status: "processed",
-    account_setup_status: "paid_pending_setup",
-    failure_reason: null,
-    raw_provider_payload: payment.rawProviderPayload || metadata,
-    paid_at: new Date().toISOString(),
-  }, provider);
-
-  await logPlanMigration(supabase, {
-    merchantId,
-    sourceTable: "merchants",
-    sourceRecordId: merchantId,
-    oldPlanCode: newPlan,
-    context: "fiat_payment_confirmation:upgrade",
-  });
-
-  return { received: true, processed: true };
 }
 
 async function confirmInitialSubscription(

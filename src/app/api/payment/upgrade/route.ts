@@ -23,7 +23,7 @@ import {
   assertPlanAvailable,
   getPlanPriceKobo,
   getStoragePlanCode,
-  normalizePlanCode,
+  parsePaidPlanCode,
 } from "@/lib/plans";
 import {
   prepareSoloPlusUpgradePayment,
@@ -126,7 +126,13 @@ export async function POST(request: Request) {
       paymentMethod,
     } = await request.json();
 
-    const normalizedPlan = normalizePlanCode(newPlan);
+    const normalizedPlan = parsePaidPlanCode(newPlan);
+    if (!normalizedPlan) {
+      return NextResponse.json(
+        { error: "Select a valid paid upgrade plan." },
+        { status: 400 },
+      );
+    }
     planCode = normalizedPlan;
     const availability = await assertPlanAvailable(supabase, normalizedPlan);
     if (!availability.ok) {
@@ -162,6 +168,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Merchant not found" }, { status: 404 });
     }
     merchantId = merchant.id;
+    const billingEmail = user.email?.trim() || merchant.email?.trim();
+    if (!billingEmail) {
+      return NextResponse.json(
+        { error: "A verified billing email is required before payment." },
+        { status: 400 },
+      );
+    }
     logStage("merchant_resolved", {
       userId,
       merchantId,
@@ -173,6 +186,12 @@ export async function POST(request: Request) {
 
     // Determine price
     const amountKobo = getPlanPriceKobo(normalizedPlan);
+    if (!Number.isInteger(amountKobo) || amountKobo <= 0) {
+      return NextResponse.json(
+        { error: "This paid plan does not have a valid server price." },
+        { status: 400 },
+      );
+    }
     const reference = `upg_${merchant.id.substring(0, 8)}_${Date.now()}`;
 
     const appUrl = getAppUrl();
@@ -239,6 +258,7 @@ export async function POST(request: Request) {
       verification_disclosure_accepted: verificationDisclosureAccepted === true,
       verification_disclosure_version: disclosureVersionToStore,
       amount_expected_kobo: amountKobo,
+      email: billingEmail.toLowerCase(),
       payment_method_requested: method,
       resolved_provider: route.provider,
       payment_purpose: "plan_upgrade",
@@ -254,7 +274,7 @@ export async function POST(request: Request) {
           });
           const preparation = await prepareSoloPlusUpgradePayment({
             merchantId: merchant.id,
-            customerEmail: user.email || merchant.email || "billing@deraledger.app",
+            customerEmail: billingEmail,
             amountKobo,
             paymentMethod: method,
             provider: route.provider,
@@ -279,7 +299,7 @@ export async function POST(request: Request) {
         provider: route.provider,
         paymentMethod: method,
         paymentPurpose: "plan_upgrade",
-        customerEmail: user.email || merchant.email || "billing@deraledger.app",
+        customerEmail: billingEmail,
         expectedAmount: amountKobo / 100,
         planName: normalizedPlan,
         planId: storagePlan,
@@ -393,7 +413,7 @@ export async function POST(request: Request) {
     let result;
     try {
       result = await PaymentService.initializeTransaction({
-        email: user.email || merchant.email || "billing@deraledger.app",
+        email: billingEmail,
         amountKobo,
         reference: resolvedReference,
         callbackUrl: callback.toString(),
