@@ -405,13 +405,16 @@ export async function getInvoiceHistory(invoiceId: string) {
   return data;
 }
 
-export async function submitKycAction(merchantId: string, updates: any) {
+export async function submitKycAction(
+  merchantId: string,
+  updates: Record<string, unknown>,
+) {
   const supabase = createSupabaseClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 
-  const profileKeys = [
+  const profileKeys = new Set([
     "business_name",
     "trading_name",
     "owner_name",
@@ -420,9 +423,24 @@ export async function submitKycAction(merchantId: string, updates: any) {
     "business_state",
     "business_country",
     "phone",
-  ];
-  const touchesProfile = profileKeys.some((key) => key in updates);
-  let nextUpdates = { ...updates };
+  ]);
+  const allowedSettingsKeys = new Set([
+    ...profileKeys,
+    "business_type",
+    "fee_absorption_default",
+    "logo_url",
+    "platform_version",
+  ]);
+  const nextSettingsEntries = Object.entries(updates).filter(([key]) =>
+    allowedSettingsKeys.has(key),
+  );
+  if (nextSettingsEntries.length === 0) {
+    return { success: false, error: "No supported profile settings were provided." };
+  }
+
+  const safeUpdates = Object.fromEntries(nextSettingsEntries);
+  const touchesProfile = [...profileKeys].some((key) => key in safeUpdates);
+  let nextUpdates = { ...safeUpdates };
 
   if (touchesProfile) {
     const { data: existingMerchant } = await supabase
@@ -434,14 +452,14 @@ export async function submitKycAction(merchantId: string, updates: any) {
       .maybeSingle();
 
     const mergedProfile = {
-      business_name: updates.business_name ?? existingMerchant?.business_name ?? null,
-      trading_name: updates.trading_name ?? existingMerchant?.trading_name ?? null,
-      owner_name: updates.owner_name ?? existingMerchant?.owner_name ?? null,
-      business_street: updates.business_street ?? existingMerchant?.business_street ?? null,
-      business_city: updates.business_city ?? existingMerchant?.business_city ?? null,
-      business_state: updates.business_state ?? existingMerchant?.business_state ?? null,
-      business_country: updates.business_country ?? existingMerchant?.business_country ?? null,
-      phone: updates.phone ?? existingMerchant?.phone ?? null,
+      business_name: safeUpdates.business_name ?? existingMerchant?.business_name ?? null,
+      trading_name: safeUpdates.trading_name ?? existingMerchant?.trading_name ?? null,
+      owner_name: safeUpdates.owner_name ?? existingMerchant?.owner_name ?? null,
+      business_street: safeUpdates.business_street ?? existingMerchant?.business_street ?? null,
+      business_city: safeUpdates.business_city ?? existingMerchant?.business_city ?? null,
+      business_state: safeUpdates.business_state ?? existingMerchant?.business_state ?? null,
+      business_country: safeUpdates.business_country ?? existingMerchant?.business_country ?? null,
+      phone: safeUpdates.phone ?? existingMerchant?.phone ?? null,
     };
 
     const basicProfileComplete = Boolean(
