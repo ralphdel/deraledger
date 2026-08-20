@@ -17,6 +17,7 @@ function approvedInput(
 
   return {
     commercialPlan,
+    commercialEntitlementState: "active_paid",
     complianceStatus:
       normalizedPlan === "solo_lite"
         ? "lite_verified"
@@ -34,6 +35,14 @@ function approvedInput(
       receivableSaleEnabled: true,
       merchantConfirmationBeforeDepositEnabled: true,
       customerRegistrationRequiredForReceivables: true,
+    },
+    merchantEntitlements: {
+      canCollectPayments: true,
+      canUseInstantSale: true,
+      canUseReceivableSale: true,
+      canUseStorefront: true,
+      canActivateSettlement: true,
+      canUseDepositBalance: true,
     },
     settlementReadiness: {
       payoutAccountVerified: true,
@@ -63,6 +72,7 @@ function assertHasReason(
 function run() {
   const starter = resolveMerchantCapabilities({
     commercialPlan: "starter",
+    commercialEntitlementState: "starter_free",
     restrictionState: "active",
   });
   assert.equal(starter.canCreateRecordInvoice, true);
@@ -74,6 +84,27 @@ function run() {
   assert.equal(starter.canUseDepositBalance, false);
   assert.equal(starter.requiresVerification, false);
   assert.ok(starter.requiredBlockingReasons.some((item) => item.code === "starter_plan"));
+
+  for (const [state, code] of [
+    ["expired", "commercial_entitlement_expired"],
+    ["cancelled", "commercial_entitlement_cancelled"],
+    ["conflicting", "commercial_entitlement_conflicting"],
+  ] as const) {
+    const denied = assertHasReason(
+      { ...approvedInput("solo_lite"), commercialEntitlementState: state },
+      code,
+    );
+    assert.equal(denied.canCreateCollectionInvoice, false);
+    assert.equal(denied.canUseCheckout, false);
+    assert.equal(denied.canCreateRecordInvoice, true);
+  }
+
+  const graceReadOnly = assertHasReason(
+    { ...approvedInput("solo_lite"), commercialEntitlementState: "grace_read_only" },
+    "commercial_entitlement_read_only",
+  );
+  assert.equal(graceReadOnly.canCreateCollectionInvoice, false);
+  assert.equal(graceReadOnly.canCreateRecordInvoice, true);
 
   const soloLitePaidSetup = resolveMerchantCapabilities({
     ...approvedInput("solo_lite"),
@@ -155,6 +186,62 @@ function run() {
   );
   assert.equal(missingFeatureFlags.canCreateCollectionInvoice, false);
   assert.equal(missingFeatureFlags.canUseLiveStorefront, false);
+
+  const missingMerchantEntitlements = assertHasReason(
+    { ...approvedInput("solo_lite"), merchantEntitlements: null },
+    "merchant_entitlements_missing",
+  );
+  assert.equal(missingMerchantEntitlements.canCreateCollectionInvoice, false);
+
+  const collectionEntitlementDisabled = assertHasReason(
+    {
+      ...approvedInput("solo_lite"),
+      merchantEntitlements: {
+        ...approvedInput("solo_lite").merchantEntitlements,
+        canCollectPayments: false,
+      },
+    },
+    "collection_entitlement_disabled",
+  );
+  assert.equal(collectionEntitlementDisabled.canCreateCollectionInvoice, false);
+
+  const receivableEntitlementDisabled = assertHasReason(
+    {
+      ...approvedInput("solo_plus"),
+      merchantEntitlements: {
+        ...approvedInput("solo_plus").merchantEntitlements,
+        canUseReceivableSale: false,
+      },
+    },
+    "receivable_sale_entitlement_disabled",
+  );
+  assert.equal(receivableEntitlementDisabled.canUseReceivableSale, false);
+  assert.equal(receivableEntitlementDisabled.canUseDepositBalance, false);
+
+  const depositEntitlementDisabled = assertHasReason(
+    {
+      ...approvedInput("solo_plus"),
+      merchantEntitlements: {
+        ...approvedInput("solo_plus").merchantEntitlements,
+        canUseDepositBalance: false,
+      },
+    },
+    "deposit_balance_entitlement_disabled",
+  );
+  assert.equal(depositEntitlementDisabled.canUseReceivableSale, true);
+  assert.equal(depositEntitlementDisabled.canUseDepositBalance, false);
+
+  const globalFlagsAlone = resolveMerchantCapabilities({
+    ...approvedInput("solo_lite"),
+    merchantEntitlements: null,
+  });
+  assert.equal(globalFlagsAlone.canCreateCollectionInvoice, false);
+
+  const merchantEntitlementsAlone = resolveMerchantCapabilities({
+    ...approvedInput("solo_lite"),
+    featureFlags: null,
+  });
+  assert.equal(merchantEntitlementsAlone.canCreateCollectionInvoice, false);
   assert.equal(missingFeatureFlags.canUseInstantSale, false);
 
   const missingInstantSaleFlag = resolveMerchantCapabilities({

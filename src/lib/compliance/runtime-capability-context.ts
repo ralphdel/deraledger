@@ -6,7 +6,9 @@ import {
 import type {
   CollectionLimitBasis,
   MerchantActivationStatus,
+  MerchantCapabilityEntitlements,
   MerchantCapabilityFeatureFlags,
+  MerchantCommercialEntitlementState,
   MerchantCollectionLimitProfile,
   MerchantComplianceStatus,
   MerchantRestrictionState,
@@ -24,6 +26,8 @@ export interface TrustedRuntimeCapabilitySource {
   merchantId?: string | null;
   workspaceId?: string | null;
   commercialPlan?: string | null;
+  commercialEntitlementState?: MerchantCommercialEntitlementState | string | null;
+  activeEntitlementPlan?: string | null;
   subscriptionStatus?: string | null;
   paymentEntitlementState?: string | null;
   setupMode?: boolean | null;
@@ -39,6 +43,7 @@ export interface TrustedRuntimeCapabilitySource {
   singleTransactionLimitNgn?: number | null;
   collectionLimit?: MerchantCollectionLimitProfile | null;
   featureFlags?: MerchantCapabilityFeatureFlags | null;
+  merchantEntitlements?: MerchantCapabilityEntitlements | null;
   settlementReadiness?: MerchantSettlementReadiness | null;
   soloPlusEnhancedVerificationStatus?: string | null;
   businessKybVerificationStatus?: string | null;
@@ -62,7 +67,9 @@ export interface TrustedRuntimeCapabilityContext {
   workspaceId: string | null;
   hasTrustedMerchantWorkspace: boolean;
   rawCommercialPlan: string | null;
-  commercialPlan: CanonicalPlanCode;
+  rawActiveEntitlementPlan: string | null;
+  commercialEntitlementState: MerchantCommercialEntitlementState;
+  commercialPlan: CanonicalPlanCode | null;
   isKnownCommercialPlan: boolean;
   subscriptionStatus: string | null;
   paymentEntitlementState: string | null;
@@ -74,6 +81,7 @@ export interface TrustedRuntimeCapabilityContext {
   restrictionState: MerchantRestrictionState | string | null;
   limits: RuntimeCollectionLimitContext;
   featureFlags: MerchantCapabilityFeatureFlags | null;
+  merchantEntitlements: MerchantCapabilityEntitlements | null;
   settlementReadiness: MerchantSettlementReadiness | null;
   soloPlusEnhancedVerificationStatus: string | null;
   businessKybVerificationStatus: string | null;
@@ -84,6 +92,17 @@ const LIMIT_BASES = new Set<CollectionLimitBasis>([
   "cumulative",
   "monthly",
   "approved_volume",
+]);
+
+const COMMERCIAL_ENTITLEMENT_STATES = new Set<MerchantCommercialEntitlementState>([
+  "starter_free",
+  "active_paid",
+  "grace_read_only",
+  "inactive",
+  "expired",
+  "cancelled",
+  "missing",
+  "conflicting",
 ]);
 
 function nullableText(value: string | null | undefined): string | null {
@@ -123,6 +142,52 @@ function normalizeFeatureFlags(
   };
 }
 
+function normalizeMerchantEntitlements(
+  entitlements: MerchantCapabilityEntitlements | null | undefined,
+): MerchantCapabilityEntitlements | null {
+  if (!entitlements) return null;
+  return {
+    canCollectPayments: nullableBoolean(entitlements.canCollectPayments),
+    canUseInstantSale: nullableBoolean(entitlements.canUseInstantSale),
+    canUseReceivableSale: nullableBoolean(entitlements.canUseReceivableSale),
+    canUseStorefront: nullableBoolean(entitlements.canUseStorefront),
+    canActivateSettlement: nullableBoolean(entitlements.canActivateSettlement),
+    canUseDepositBalance: nullableBoolean(entitlements.canUseDepositBalance),
+  };
+}
+
+function normalizeCommercialEntitlementState(
+  value: MerchantCommercialEntitlementState | string | null | undefined,
+): MerchantCommercialEntitlementState {
+  const normalized = nullableText(value);
+  return normalized && COMMERCIAL_ENTITLEMENT_STATES.has(normalized as MerchantCommercialEntitlementState)
+    ? (normalized as MerchantCommercialEntitlementState)
+    : "missing";
+}
+
+function normalizeKnownPlan(value: string | null): CanonicalPlanCode | null {
+  return value && Object.prototype.hasOwnProperty.call(PLAN_ALIASES, value)
+    ? normalizePlanCode(value)
+    : null;
+}
+
+function resolveUsableCommercialPlan(
+  entitlementState: MerchantCommercialEntitlementState,
+  merchantProjectionPlan: CanonicalPlanCode | null,
+  activeEntitlementPlan: CanonicalPlanCode | null,
+): CanonicalPlanCode | null {
+  if (entitlementState === "starter_free") {
+    return merchantProjectionPlan === "starter" ? "starter" : null;
+  }
+  if (entitlementState === "active_paid") {
+    return activeEntitlementPlan && activeEntitlementPlan !== "starter"
+      && merchantProjectionPlan === activeEntitlementPlan
+      ? activeEntitlementPlan
+      : null;
+  }
+  return null;
+}
+
 function normalizeSettlementReadiness(
   readiness: MerchantSettlementReadiness | null | undefined,
 ): MerchantSettlementReadiness | null {
@@ -153,8 +218,14 @@ export function buildTrustedRuntimeCapabilityContext(
   source: TrustedRuntimeCapabilitySource,
 ): TrustedRuntimeCapabilityContext {
   const rawCommercialPlan = nullableText(source.commercialPlan);
-  const isKnownCommercialPlan = Boolean(
-    rawCommercialPlan && Object.prototype.hasOwnProperty.call(PLAN_ALIASES, rawCommercialPlan),
+  const rawActiveEntitlementPlan = nullableText(source.activeEntitlementPlan);
+  const commercialEntitlementState = normalizeCommercialEntitlementState(
+    source.commercialEntitlementState,
+  );
+  const commercialPlan = resolveUsableCommercialPlan(
+    commercialEntitlementState,
+    normalizeKnownPlan(rawCommercialPlan),
+    normalizeKnownPlan(rawActiveEntitlementPlan),
   );
   const merchantId = nullableIdentifier(source.merchantId);
   const workspaceId = nullableIdentifier(source.workspaceId);
@@ -164,8 +235,10 @@ export function buildTrustedRuntimeCapabilityContext(
     workspaceId,
     hasTrustedMerchantWorkspace: merchantId !== null && workspaceId !== null,
     rawCommercialPlan,
-    commercialPlan: normalizePlanCode(rawCommercialPlan),
-    isKnownCommercialPlan,
+    rawActiveEntitlementPlan,
+    commercialEntitlementState,
+    commercialPlan,
+    isKnownCommercialPlan: commercialPlan !== null,
     subscriptionStatus: nullableText(source.subscriptionStatus),
     paymentEntitlementState: nullableText(source.paymentEntitlementState),
     setupMode: nullableBoolean(source.setupMode),
@@ -183,6 +256,7 @@ export function buildTrustedRuntimeCapabilityContext(
       collectionLimit: normalizeCollectionLimit(source.collectionLimit),
     },
     featureFlags: normalizeFeatureFlags(source.featureFlags),
+    merchantEntitlements: normalizeMerchantEntitlements(source.merchantEntitlements),
     settlementReadiness: normalizeSettlementReadiness(source.settlementReadiness),
     soloPlusEnhancedVerificationStatus: nullableText(
       source.soloPlusEnhancedVerificationStatus,
@@ -202,8 +276,11 @@ export function toResolveMerchantCapabilitiesInput(
 ): ResolveMerchantCapabilitiesInput {
   return {
     commercialPlan: context.hasTrustedMerchantWorkspace
-      ? (context.isKnownCommercialPlan ? context.commercialPlan : context.rawCommercialPlan)
+      ? context.commercialPlan
       : null,
+    commercialEntitlementState: context.hasTrustedMerchantWorkspace
+      ? context.commercialEntitlementState
+      : "missing",
     complianceStatus: context.complianceStatus,
     activationStatus: context.activationStatus,
     riskRating: context.riskRating,
@@ -211,6 +288,7 @@ export function toResolveMerchantCapabilitiesInput(
     setupMode: context.setupMode,
     liveFeaturesEnabled: context.liveFeaturesEnabled,
     featureFlags: context.featureFlags,
+    merchantEntitlements: context.merchantEntitlements,
     settlementReadiness: context.settlementReadiness,
     collectionLimit: context.limits.collectionLimit,
   };

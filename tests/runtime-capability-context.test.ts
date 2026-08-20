@@ -12,6 +12,8 @@ function baseSource() {
     merchantId: "merchant-1",
     workspaceId: "workspace-1",
     commercialPlan: "solo_lite",
+    commercialEntitlementState: "active_paid",
+    activeEntitlementPlan: "solo_lite",
     subscriptionStatus: "active",
     paymentEntitlementState: "paid_setup",
     setupMode: false,
@@ -38,6 +40,14 @@ function baseSource() {
       merchantConfirmationBeforeDepositEnabled: true,
       customerRegistrationRequiredForReceivables: true,
     },
+    merchantEntitlements: {
+      canCollectPayments: true,
+      canUseInstantSale: true,
+      canUseReceivableSale: true,
+      canUseStorefront: true,
+      canActivateSettlement: true,
+      canUseDepositBalance: true,
+    },
     settlementReadiness: {
       payoutAccountVerified: true,
       providerMappingReady: true,
@@ -52,6 +62,8 @@ function run() {
     merchantId: "merchant-1",
     workspaceId: "workspace-1",
     commercialPlan: "individual",
+    commercialEntitlementState: "active_paid",
+    activeEntitlementPlan: "individual",
   });
   assert.equal(incomplete.commercialPlan, "solo_lite");
   assert.equal(incomplete.complianceStatus, null);
@@ -91,6 +103,7 @@ function run() {
   const corporate = buildTrustedRuntimeCapabilityContext({
     ...baseSource(),
     commercialPlan: "corporate",
+    activeEntitlementPlan: "corporate",
     complianceStatus: "business_verified",
     businessKybVerificationStatus: "approved",
   });
@@ -99,6 +112,7 @@ function run() {
   const soloPlus = buildTrustedRuntimeCapabilityContext({
     ...baseSource(),
     commercialPlan: "solo_plus",
+    activeEntitlementPlan: "solo_plus",
     complianceStatus: "lite_verified",
     soloPlusEnhancedVerificationStatus: "pending",
   });
@@ -149,6 +163,7 @@ function run() {
   const businessWithoutApprovedVolume = buildTrustedRuntimeCapabilityContext({
     ...baseSource(),
     commercialPlan: "business",
+    activeEntitlementPlan: "business",
     complianceStatus: "business_verified",
     approvedMonthlyVolumeNgn: null,
     collectionLimit: null,
@@ -166,6 +181,7 @@ function run() {
   const businessKybOnly = buildTrustedRuntimeCapabilityContext({
     ...baseSource(),
     commercialPlan: "business",
+    activeEntitlementPlan: "business",
     complianceStatus: null,
     businessKybVerificationStatus: "approved",
   });
@@ -174,6 +190,41 @@ function run() {
     resolveMerchantCapabilities(
       toResolveMerchantCapabilitiesInput(businessKybOnly),
     ).canCreateCollectionInvoice,
+    false,
+  );
+
+  for (const state of ["grace_read_only", "inactive", "expired", "cancelled", "missing", "conflicting"] as const) {
+    const inactiveEntitlement = buildTrustedRuntimeCapabilityContext({
+      ...baseSource(),
+      commercialEntitlementState: state,
+    });
+    assert.equal(inactiveEntitlement.commercialPlan, null);
+    assert.equal(
+      resolveMerchantCapabilities(toResolveMerchantCapabilitiesInput(inactiveEntitlement))
+        .canCreateCollectionInvoice,
+      false,
+    );
+  }
+
+  const activeEntitlementMismatch = buildTrustedRuntimeCapabilityContext({
+    ...baseSource(),
+    activeEntitlementPlan: "business",
+  });
+  assert.equal(activeEntitlementMismatch.commercialPlan, null);
+  assert.equal(
+    resolveMerchantCapabilities(toResolveMerchantCapabilitiesInput(activeEntitlementMismatch))
+      .canCreateCollectionInvoice,
+    false,
+  );
+
+  const missingMerchantEntitlements = buildTrustedRuntimeCapabilityContext({
+    ...baseSource(),
+    merchantEntitlements: null,
+  });
+  assert.equal(missingMerchantEntitlements.merchantEntitlements, null);
+  assert.equal(
+    resolveMerchantCapabilities(toResolveMerchantCapabilitiesInput(missingMerchantEntitlements))
+      .canCreateCollectionInvoice,
     false,
   );
 

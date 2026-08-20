@@ -28,12 +28,35 @@ export type MerchantActivationStatus =
 export type MerchantRiskRating = "low" | "medium" | "high" | "restricted";
 export type MerchantRestrictionState = "active" | "restricted" | "suspended";
 
+export type MerchantCommercialEntitlementState =
+  | "starter_free"
+  | "active_paid"
+  | "grace_read_only"
+  | "inactive"
+  | "expired"
+  | "cancelled"
+  | "missing"
+  | "conflicting";
+
 export interface MerchantCapabilityFeatureFlags {
   storefrontEnabled?: boolean | null;
   instantSaleEnabled?: boolean | null;
   receivableSaleEnabled?: boolean | null;
   merchantConfirmationBeforeDepositEnabled?: boolean | null;
   customerRegistrationRequiredForReceivables?: boolean | null;
+}
+
+/**
+ * A reviewed merchant-specific decision. These are deliberately separate from
+ * global rollout flags: neither source can grant a live capability alone.
+ */
+export interface MerchantCapabilityEntitlements {
+  canCollectPayments?: boolean | null;
+  canUseInstantSale?: boolean | null;
+  canUseReceivableSale?: boolean | null;
+  canUseStorefront?: boolean | null;
+  canActivateSettlement?: boolean | null;
+  canUseDepositBalance?: boolean | null;
 }
 
 export interface MerchantSettlementReadiness {
@@ -60,6 +83,7 @@ export interface ResolvedCollectionLimitProfile extends MerchantCollectionLimitP
 
 export interface ResolveMerchantCapabilitiesInput {
   commercialPlan: string | null | undefined;
+  commercialEntitlementState?: MerchantCommercialEntitlementState | string | null;
   complianceStatus?: MerchantComplianceStatus | string | null;
   activationStatus?: MerchantActivationStatus | string | null;
   riskRating?: MerchantRiskRating | string | null;
@@ -67,12 +91,20 @@ export interface ResolveMerchantCapabilitiesInput {
   setupMode?: boolean | null;
   liveFeaturesEnabled?: boolean | null;
   featureFlags?: MerchantCapabilityFeatureFlags | null;
+  merchantEntitlements?: MerchantCapabilityEntitlements | null;
   settlementReadiness?: MerchantSettlementReadiness | null;
   collectionLimit?: MerchantCollectionLimitProfile | null;
 }
 
 export type MerchantCapabilityBlockingReasonCode =
   | "unknown_plan"
+  | "commercial_entitlement_missing"
+  | "commercial_entitlement_read_only"
+  | "commercial_entitlement_inactive"
+  | "commercial_entitlement_expired"
+  | "commercial_entitlement_cancelled"
+  | "commercial_entitlement_conflicting"
+  | "commercial_entitlement_plan_invalid"
   | "starter_plan"
   | "compliance_status_missing"
   | "lite_verification_required"
@@ -90,6 +122,11 @@ export type MerchantCapabilityBlockingReasonCode =
   | "live_features_state_missing"
   | "live_features_disabled"
   | "feature_flags_missing"
+  | "merchant_entitlements_missing"
+  | "collection_entitlement_missing"
+  | "collection_entitlement_disabled"
+  | "settlement_activation_entitlement_missing"
+  | "settlement_activation_entitlement_disabled"
   | "settlement_readiness_missing"
   | "payout_account_not_verified"
   | "settlement_mapping_not_ready"
@@ -99,11 +136,19 @@ export type MerchantCapabilityBlockingReasonCode =
   | "collection_limit_reached"
   | "storefront_flag_missing"
   | "storefront_disabled"
+  | "storefront_entitlement_missing"
+  | "storefront_entitlement_disabled"
   | "instant_sale_flag_missing"
   | "instant_sale_disabled"
+  | "instant_sale_entitlement_missing"
+  | "instant_sale_entitlement_disabled"
   | "receivable_sale_not_in_plan"
   | "receivable_sale_flag_missing"
   | "receivable_sale_disabled"
+  | "receivable_sale_entitlement_missing"
+  | "receivable_sale_entitlement_disabled"
+  | "deposit_balance_entitlement_missing"
+  | "deposit_balance_entitlement_disabled"
   | "merchant_confirmation_flag_missing"
   | "merchant_confirmation_disabled"
   | "customer_registration_flag_missing"
@@ -205,12 +250,92 @@ function getComplianceReason(
   );
 }
 
+function normalizeEntitlementState(
+  value: MerchantCommercialEntitlementState | string | null | undefined,
+): MerchantCommercialEntitlementState {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  switch (normalized) {
+    case "starter_free":
+    case "active_paid":
+    case "grace_read_only":
+    case "inactive":
+    case "expired":
+    case "cancelled":
+    case "conflicting":
+      return normalized;
+    default:
+      return "missing";
+  }
+}
+
+function resolveCommercialEntitlement(
+  commercialPlan: string | null | undefined,
+  entitlementState: MerchantCommercialEntitlementState,
+): { plan: CanonicalPlanCode; isKnownPlan: boolean; reason: MerchantCapabilityBlockingReason | null } {
+  const rawPlan = String(commercialPlan ?? "").trim().toLowerCase();
+  const knownPlan = Object.prototype.hasOwnProperty.call(PLAN_ALIASES, rawPlan)
+    ? normalizePlanCode(rawPlan)
+    : null;
+
+  if (entitlementState === "starter_free") {
+    return knownPlan === "starter"
+      ? { plan: "starter", isKnownPlan: true, reason: null }
+      : {
+          plan: "starter",
+          isKnownPlan: false,
+          reason: reason(
+            "commercial_entitlement_plan_invalid",
+            "A Starter entitlement must resolve to the Starter plan.",
+          ),
+        };
+  }
+
+  if (entitlementState === "active_paid") {
+    return knownPlan && knownPlan !== "starter"
+      ? { plan: knownPlan, isKnownPlan: true, reason: null }
+      : {
+          plan: "starter",
+          isKnownPlan: false,
+          reason: reason(
+            "commercial_entitlement_plan_invalid",
+            "An active paid entitlement requires a recognized paid plan.",
+          ),
+        };
+  }
+
+  const entitlementReasons: Record<
+    Exclude<MerchantCommercialEntitlementState, "starter_free" | "active_paid">,
+    MerchantCapabilityBlockingReason
+  > = {
+    grace_read_only: reason(
+      "commercial_entitlement_read_only",
+      "This commercial entitlement is read-only and cannot use live capabilities.",
+    ),
+    inactive: reason(
+      "commercial_entitlement_inactive",
+      "The commercial entitlement is inactive.",
+    ),
+    expired: reason("commercial_entitlement_expired", "The commercial entitlement has expired."),
+    cancelled: reason("commercial_entitlement_cancelled", "The commercial entitlement was cancelled."),
+    missing: reason("commercial_entitlement_missing", "Commercial entitlement is required."),
+    conflicting: reason(
+      "commercial_entitlement_conflicting",
+      "Commercial entitlement sources conflict and require reconciliation.",
+    ),
+  };
+
+  return { plan: "starter", isKnownPlan: false, reason: entitlementReasons[entitlementState] };
+}
+
 function resolveBaseLiveReasons(
   input: ResolveMerchantCapabilitiesInput,
   plan: CanonicalPlanCode,
   isKnownPlan: boolean,
+  entitlementReason: MerchantCapabilityBlockingReason | null,
 ): MerchantCapabilityBlockingReason[] {
   const reasons: MerchantCapabilityBlockingReason[] = [];
+
+  if (entitlementReason) reasons.push(entitlementReason);
 
   if (!isKnownPlan) {
     reasons.push(reason("unknown_plan", "The commercial plan could not be recognized."));
@@ -278,6 +403,29 @@ function resolveBaseLiveReasons(
   if (!input.featureFlags) {
     reasons.push(
       reason("feature_flags_missing", "Feature-flag state is required for live access."),
+    );
+  }
+
+  if (!input.merchantEntitlements) {
+    reasons.push(
+      reason("merchant_entitlements_missing", "Merchant entitlements are required for live access."),
+    );
+  } else {
+    reasons.push(
+      ...resolveBooleanFlagReason(
+        input.merchantEntitlements.canCollectPayments,
+        "collection_entitlement_missing",
+        "collection_entitlement_disabled",
+        "The merchant collection entitlement is missing.",
+        "This merchant is not entitled to collect payments.",
+      ),
+      ...resolveBooleanFlagReason(
+        input.merchantEntitlements.canActivateSettlement,
+        "settlement_activation_entitlement_missing",
+        "settlement_activation_entitlement_disabled",
+        "The merchant settlement-activation entitlement is missing.",
+        "This merchant is not entitled to activate settlement.",
+      ),
     );
   }
 
@@ -350,11 +498,19 @@ function resolveBooleanFlagReason(
 export function resolveMerchantCapabilities(
   input: ResolveMerchantCapabilitiesInput,
 ): MerchantCapabilities {
-  const rawPlan = String(input.commercialPlan ?? "").trim().toLowerCase();
-  const isKnownPlan = Object.prototype.hasOwnProperty.call(PLAN_ALIASES, rawPlan);
-  const normalizedPlan = normalizePlanCode(input.commercialPlan);
+  const entitlementState = normalizeEntitlementState(input.commercialEntitlementState);
+  const commercialEntitlement = resolveCommercialEntitlement(
+    input.commercialPlan,
+    entitlementState,
+  );
+  const { plan: normalizedPlan, isKnownPlan } = commercialEntitlement;
   const collectionLimit = resolveLimitProfile(input.collectionLimit);
-  const baseLiveReasons = resolveBaseLiveReasons(input, normalizedPlan, isKnownPlan);
+  const baseLiveReasons = resolveBaseLiveReasons(
+    input,
+    normalizedPlan,
+    isKnownPlan,
+    commercialEntitlement.reason,
+  );
 
   const storefrontReasons = uniqueReasons([
     ...baseLiveReasons,
@@ -364,6 +520,13 @@ export function resolveMerchantCapabilities(
       "storefront_disabled",
       "The storefront feature flag is missing.",
       "The storefront feature is disabled.",
+    ),
+    ...resolveBooleanFlagReason(
+      input.merchantEntitlements?.canUseStorefront,
+      "storefront_entitlement_missing",
+      "storefront_entitlement_disabled",
+      "The merchant storefront entitlement is missing.",
+      "This merchant is not entitled to use the live storefront.",
     ),
   ]);
 
@@ -375,6 +538,13 @@ export function resolveMerchantCapabilities(
       "instant_sale_disabled",
       "The Instant Sale feature flag is missing.",
       "Instant Sale is disabled.",
+    ),
+    ...resolveBooleanFlagReason(
+      input.merchantEntitlements?.canUseInstantSale,
+      "instant_sale_entitlement_missing",
+      "instant_sale_entitlement_disabled",
+      "The merchant Instant Sale entitlement is missing.",
+      "This merchant is not entitled to use Instant Sale.",
     ),
   ]);
 
@@ -397,6 +567,13 @@ export function resolveMerchantCapabilities(
       "Receivable Sale is disabled.",
     ),
     ...resolveBooleanFlagReason(
+      input.merchantEntitlements?.canUseReceivableSale,
+      "receivable_sale_entitlement_missing",
+      "receivable_sale_entitlement_disabled",
+      "The merchant Receivable Sale entitlement is missing.",
+      "This merchant is not entitled to use Receivable Sale.",
+    ),
+    ...resolveBooleanFlagReason(
       input.featureFlags?.merchantConfirmationBeforeDepositEnabled,
       "merchant_confirmation_flag_missing",
       "merchant_confirmation_disabled",
@@ -412,13 +589,24 @@ export function resolveMerchantCapabilities(
     ),
   ]);
 
+  const depositBalanceReasons = uniqueReasons([
+    ...receivableSaleReasons,
+    ...resolveBooleanFlagReason(
+      input.merchantEntitlements?.canUseDepositBalance,
+      "deposit_balance_entitlement_missing",
+      "deposit_balance_entitlement_disabled",
+      "The merchant Deposit & Balance entitlement is missing.",
+      "This merchant is not entitled to use Deposit & Balance.",
+    ),
+  ]);
+
   const blockingReasons: MerchantCapabilityBlockingReasons = {
     collectionInvoice: baseLiveReasons,
     checkout: baseLiveReasons,
     liveStorefront: storefrontReasons,
     instantSale: instantSaleReasons,
     receivableSale: receivableSaleReasons,
-    depositBalance: receivableSaleReasons,
+    depositBalance: depositBalanceReasons,
   };
 
   const requiredBlockingReasons = uniqueReasons([
@@ -426,8 +614,10 @@ export function resolveMerchantCapabilities(
     ...storefrontReasons,
     ...instantSaleReasons,
     ...receivableSaleReasons,
+    ...depositBalanceReasons,
   ]);
   const complianceApproved =
+    isKnownPlan &&
     normalizedPlan !== "starter" &&
     input.complianceStatus === REQUIRED_COMPLIANCE_STATUS[normalizedPlan];
   const requiresVerification =
@@ -448,7 +638,7 @@ export function resolveMerchantCapabilities(
     canUseLiveStorefront: storefrontReasons.length === 0,
     canUseInstantSale: instantSaleReasons.length === 0,
     canUseReceivableSale: receivableSaleReasons.length === 0,
-    canUseDepositBalance: receivableSaleReasons.length === 0,
+    canUseDepositBalance: depositBalanceReasons.length === 0,
     requiresVerification,
     collectionLimit,
     requiredBlockingReasons,
