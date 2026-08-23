@@ -28,7 +28,7 @@ export interface SupabaseReadQueryLike {
 }
 
 export interface SupabaseReadClientLike {
-  from(table: string): SupabaseReadQueryLike;
+  from(table: string): Pick<SupabaseReadQueryLike, "select">;
 }
 
 export interface TrustedRuntimeCapabilityRepositoryOptions {

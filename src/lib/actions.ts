@@ -21,6 +21,7 @@ import { ensureWorkspaceForMerchant, getLiveFeatureLockReasons, setupStatusForMe
 import { ensureMerchantSettlementAccountDetailed } from "@/lib/services/settlement-ledger.service";
 import { getPaymentEnvironmentForMerchantEmail } from "@/lib/services/payment-routing.service";
 import { refreshAllPayoutMethodSetup } from "@/lib/services/payout-setup-refresh.service";
+import { observeCollectionInvoiceAccess } from "@/lib/compliance/collection-invoice-shadow-observation";
 
 // Service role client for admin-level operations
 function getServiceClient() {
@@ -1380,11 +1381,21 @@ export async function createInvoiceAction(data: {
     requestedType,
     lifetimeCount ?? 0,
   );
-  if (!invoiceAccess.allowed) return { success: false, error: invoiceAccess.reason };
+  // This default-off observer runs only after the existing collection decision
+  // is complete and returns that exact decision unchanged. Record Invoice is
+  // intentionally excluded from all shadow capability reads.
+  const observedInvoiceAccess = requestedType === "collection"
+    ? await observeCollectionInvoiceAccess({
+        invoiceAccess,
+        trustedMerchantId: merchantId,
+        readClient: adminClient,
+      })
+    : invoiceAccess;
+  if (!observedInvoiceAccess.allowed) return { success: false, error: observedInvoiceAccess.reason };
 
   // Record invoices are strictly offline/manual. Keep setup and live-feature
   // synchronization on the existing Collection Invoice path only.
-  if (requestedType === "collection" && invoiceAccess.shouldSyncMerchantSetup) {
+  if (requestedType === "collection" && observedInvoiceAccess.shouldSyncMerchantSetup) {
     await syncMerchantSetupStatus(adminClient, merchantId);
   }
 
@@ -1400,7 +1411,7 @@ export async function createInvoiceAction(data: {
     if (!activeCheck.allowed) return { success: false, error: activeCheck.reason };
   }
 
-  const effectiveType = invoiceAccess.invoiceType;
+  const effectiveType = observedInvoiceAccess.invoiceType;
 
 
   // Calculate totals server-side

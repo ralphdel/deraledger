@@ -90,6 +90,7 @@ async function run() {
   const accessControlSource = readFileSync("src/lib/services/access-control.ts", "utf8");
   const rbacSource = readFileSync("src/lib/rbac.ts", "utf8");
   assert.match(actionsSource, /resolveMerchantAccess\(data\.merchant_id, "create_invoice"\)/);
+  assert.match(actionsSource, /requestedType === "collection"\s*\?\s*await observeCollectionInvoiceAccess/);
   assert.match(actionsSource, /merchant_id\?: string \| null/);
   assert.match(actionsSource, /\.eq\("id", merchantId\)/);
   assert.match(actionsSource, /Invoice workspace settings could not be loaded/);
@@ -99,7 +100,7 @@ async function run() {
   assert.match(rbacSource, /preferredMerchantId: preferredMerchantId \|\| null/);
   assert.match(
     actionsSource,
-    /if \(requestedType === "collection" && invoiceAccess\.shouldSyncMerchantSetup\) \{[\s\S]+syncMerchantSetupStatus/,
+    /if \(requestedType === "collection" && observedInvoiceAccess\.shouldSyncMerchantSetup\) \{[\s\S]+syncMerchantSetupStatus/,
     "Only Collection Invoices may enter the setup/verification synchronization path.",
   );
   assert.match(
