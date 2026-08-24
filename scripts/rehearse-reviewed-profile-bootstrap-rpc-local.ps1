@@ -69,10 +69,11 @@ try {
   Write-LocalSqlFileNoBom -Path $BaselineSql -Content @'
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN CREATE ROLE service_role NOLOGIN; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN CREATE ROLE service_role NOLOGIN BYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN CREATE ROLE anon NOLOGIN; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated NOLOGIN; END IF;
 END $$;
+ALTER ROLE service_role BYPASSRLS;
 CREATE TABLE IF NOT EXISTS public.merchants (id uuid PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS public.invoices (id uuid PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS public.payment_records (id uuid PRIMARY KEY);
@@ -84,9 +85,12 @@ RESET ROLE;
 DO $rehearsal$
 DECLARE
   lite_merchant uuid := gen_random_uuid(); business_merchant uuid := gen_random_uuid(); plus_merchant uuid := gen_random_uuid();
+  service_merchant uuid := '00000000-0000-4000-8000-000000000004'::uuid;
   case_id uuid := gen_random_uuid(); reviewer uuid := gen_random_uuid(); r record;
 BEGIN
-  INSERT INTO public.merchants(id) VALUES (lite_merchant),(business_merchant),(plus_merchant);
+  -- Admin-only disposable setup. Low-privilege role checks begin only after all
+  -- merchant/case prerequisites exist; service_role exercises the RPC only.
+  INSERT INTO public.merchants(id) VALUES (lite_merchant),(business_merchant),(plus_merchant),(service_merchant);
   INSERT INTO public.solo_plus_cases(id,merchant_id) VALUES (case_id,plus_merchant);
   SELECT * INTO r FROM public.bootstrap_reviewed_profile_v1(lite_merchant,gen_random_uuid(),'solo_lite','lite_pending','test_mode',NULL,'local-lite',gen_random_uuid(),reviewer,now());
   IF r.result_code <> 'bootstrap_created' THEN RAISE EXCEPTION 'lite bootstrap failed'; END IF;
@@ -103,13 +107,10 @@ $rehearsal$;
 SET LOCAL ROLE service_role;
 DO $rehearsal$
 DECLARE
-  service_merchant uuid := gen_random_uuid();
-  service_case uuid := gen_random_uuid();
+  service_merchant uuid := '00000000-0000-4000-8000-000000000004'::uuid;
   reviewer uuid := gen_random_uuid();
   r record;
 BEGIN
-  INSERT INTO public.merchants(id) VALUES (service_merchant);
-  INSERT INTO public.solo_plus_cases(id,merchant_id) VALUES (service_case,service_merchant);
   SELECT * INTO r FROM public.bootstrap_reviewed_profile_v1(service_merchant,gen_random_uuid(),'solo_lite','lite_pending','test_mode',NULL,'local-service',gen_random_uuid(),reviewer,now());
   IF r.result_code <> 'bootstrap_created' THEN RAISE EXCEPTION 'service_role bootstrap failed'; END IF;
 END;

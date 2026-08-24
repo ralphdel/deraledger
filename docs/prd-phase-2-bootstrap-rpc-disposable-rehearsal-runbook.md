@@ -25,9 +25,15 @@ Without `-Execute`, the harness validates only its local target guard and perfor
 - disposable prerequisites plus Migration 024 baseline;
 - Migration 025 preflight, first apply, rerun idempotency, and postflight;
 - service-role-only RPC grants/security shape;
+- owner/admin setup of disposable `merchants` and `solo_plus_cases` prerequisites before any low-privilege check;
+- service-role Solo Lite RPC behavior with no direct `merchants` or `solo_plus_cases` write by `service_role`;
 - Solo Lite, Business, and Solo Plus case-binding behavior;
 - Solo Plus has no compliance review row;
 - replay behavior and fail-closed bootstrap state;
 - all behavior writes occur in an outer transaction that ends in `ROLLBACK`.
 
 The harness must be extended with isolated hostile duplicate and injected late-failure scenarios before it can be treated as a complete migration gate. It never authorizes staging, production, activation, collection, payments, providers, or route adoption.
+
+## Role-order safety
+
+The local role setup deliberately grants `BYPASSRLS` only to the disposable `service_role`, matching the service-only execution model needed to exercise the RPC's granted compliance-table writes. The harness seeds all prerequisite merchant and Solo Plus case rows as the local owner/admin after `RESET ROLE` and before `SET LOCAL ROLE service_role`, `anon`, or `authenticated`. The service-role block invokes only the RPC; it never directly inserts into business prerequisite tables. Hostile `anon` and `authenticated` execute-denial checks then run after seeding.

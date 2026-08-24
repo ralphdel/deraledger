@@ -19,8 +19,12 @@ function run() {
   assert.match(script, /\[System\.IO\.File\]::WriteAllText\(\$Path, \$Content, \$utf8NoBom\)/);
   assert.doesNotMatch(script, /Set-Content -LiteralPath \$BaselineSql -Encoding utf8/);
   assert.doesNotMatch(script, /Set-Content -LiteralPath \$BehaviorSql -Encoding utf8/);
-  assert.match(script, /RESET ROLE;[\s\S]*INSERT INTO public\.merchants/);
-  assert.match(script, /SET LOCAL ROLE service_role;[\s\S]*service_role bootstrap failed/);
+  assert.match(script, /ALTER ROLE service_role BYPASSRLS/);
+  assert.match(script, /RESET ROLE;[\s\S]*INSERT INTO public\.merchants[\s\S]*SET LOCAL ROLE service_role;/);
+  const serviceRoleSection = script.match(/SET LOCAL ROLE service_role;([\s\S]*?)SET LOCAL ROLE anon;/)?.[1] ?? "";
+  assert.match(serviceRoleSection, /bootstrap_reviewed_profile_v1/);
+  assert.match(serviceRoleSection, /service_role bootstrap failed/);
+  assert.doesNotMatch(serviceRoleSection, /INSERT INTO public\.(?:merchants|solo_plus_cases)/);
   assert.match(script, /SET LOCAL ROLE anon;[\s\S]*insufficient_privilege/);
   assert.match(script, /SET LOCAL ROLE authenticated;[\s\S]*insufficient_privilege/);
   assert.match(script, /20260820_00_prd_phase_2_compliance_schema_substrate\.sql/);
@@ -29,6 +33,7 @@ function run() {
   assert.doesNotMatch(script, /paystack|monnify|breet|checkout|src\\app|src\/app|src\\lib\\actions/i);
   assert.match(script, /BEGIN;[\s\S]*ROLLBACK;/);
   assert.match(script, /LOCAL-ONLY TARGET HOST/);
+  assert.match(script, /LOCAL_REHEARSAL_CONNECTION_STRING_REJECTED/);
   assert.match(runbook, /forbidden to run it against staging, production, any Supabase project/i);
   console.log("reviewed-profile-bootstrap-rpc-rehearsal-script.test.ts passed");
 }
