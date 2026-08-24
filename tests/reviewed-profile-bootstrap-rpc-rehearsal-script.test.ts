@@ -19,6 +19,10 @@ function run() {
   assert.match(script, /\[System\.IO\.File\]::WriteAllText\(\$Path, \$Content, \$utf8NoBom\)/);
   assert.doesNotMatch(script, /Set-Content -LiteralPath \$BaselineSql -Encoding utf8/);
   assert.doesNotMatch(script, /Set-Content -LiteralPath \$BehaviorSql -Encoding utf8/);
+  assert.match(script, /RESET ROLE;[\s\S]*INSERT INTO public\.merchants/);
+  assert.match(script, /SET LOCAL ROLE service_role;[\s\S]*service_role bootstrap failed/);
+  assert.match(script, /SET LOCAL ROLE anon;[\s\S]*insufficient_privilege/);
+  assert.match(script, /SET LOCAL ROLE authenticated;[\s\S]*insufficient_privilege/);
   assert.match(script, /20260820_00_prd_phase_2_compliance_schema_substrate\.sql/);
   assert.match(script, /20260824_00_reviewed_profile_bootstrap_rpc\.sql/);
   assert.doesNotMatch(script, /2026081[0-9]|2026082[1-3]/);

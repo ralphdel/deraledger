@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS public.solo_plus_cases (id uuid PRIMARY KEY, merchant
 '@
   Write-LocalSqlFileNoBom -Path $BehaviorSql -Content @'
 BEGIN;
-SET LOCAL ROLE service_role;
+RESET ROLE;
 DO $rehearsal$
 DECLARE
   lite_merchant uuid := gen_random_uuid(); business_merchant uuid := gen_random_uuid(); plus_merchant uuid := gen_random_uuid();
@@ -98,6 +98,46 @@ BEGIN
   IF r.result_code <> 'bootstrap_created' OR r.review_id IS NOT NULL THEN RAISE EXCEPTION 'solo plus case binding failed'; END IF;
   IF EXISTS (SELECT 1 FROM public.merchant_compliance_reviews WHERE merchant_id=plus_merchant) THEN RAISE EXCEPTION 'solo plus created review row'; END IF;
   IF EXISTS (SELECT 1 FROM public.merchant_compliance_profiles WHERE can_collect_payments OR can_use_instant_sale OR can_use_receivable_sale OR can_use_storefront OR can_activate_settlement OR can_use_deposit_balance OR activation_status='approved' OR restriction_state='active') THEN RAISE EXCEPTION 'unsafe bootstrap state'; END IF;
+END;
+$rehearsal$;
+SET LOCAL ROLE service_role;
+DO $rehearsal$
+DECLARE
+  service_merchant uuid := gen_random_uuid();
+  service_case uuid := gen_random_uuid();
+  reviewer uuid := gen_random_uuid();
+  r record;
+BEGIN
+  INSERT INTO public.merchants(id) VALUES (service_merchant);
+  INSERT INTO public.solo_plus_cases(id,merchant_id) VALUES (service_case,service_merchant);
+  SELECT * INTO r FROM public.bootstrap_reviewed_profile_v1(service_merchant,gen_random_uuid(),'solo_lite','lite_pending','test_mode',NULL,'local-service',gen_random_uuid(),reviewer,now());
+  IF r.result_code <> 'bootstrap_created' THEN RAISE EXCEPTION 'service_role bootstrap failed'; END IF;
+END;
+$rehearsal$;
+SET LOCAL ROLE anon;
+DO $rehearsal$
+DECLARE
+  r record;
+BEGIN
+  BEGIN
+    SELECT * INTO r FROM public.bootstrap_reviewed_profile_v1(gen_random_uuid(),gen_random_uuid(),'solo_lite','lite_pending','test_mode',NULL,'local-anon',NULL,gen_random_uuid(),now());
+    RAISE EXCEPTION 'anon privilege check failed';
+  EXCEPTION
+    WHEN insufficient_privilege THEN NULL;
+  END;
+END;
+$rehearsal$;
+SET LOCAL ROLE authenticated;
+DO $rehearsal$
+DECLARE
+  r record;
+BEGIN
+  BEGIN
+    SELECT * INTO r FROM public.bootstrap_reviewed_profile_v1(gen_random_uuid(),gen_random_uuid(),'business','business_pending','test_mode',NULL,'local-authenticated',NULL,gen_random_uuid(),now());
+    RAISE EXCEPTION 'authenticated privilege check failed';
+  EXCEPTION
+    WHEN insufficient_privilege THEN NULL;
+  END;
 END;
 $rehearsal$;
 ROLLBACK;
