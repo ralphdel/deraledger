@@ -14,6 +14,11 @@ function run() {
   assert.match(script, /localhost', '127\.0\.0\.1', 'host\.docker\.internal/);
   assert.match(script, /LOCAL_REHEARSAL_NONLOCAL_HOST_REJECTED/);
   assert.match(script, /LOCAL_REHEARSAL_DISPOSABLE_DATABASE_NAME_REQUIRED/);
+  assert.match(script, /Write-LocalSqlFileNoBom/);
+  assert.match(script, /\[System\.Text\.UTF8Encoding\]::new\(\$false\)/);
+  assert.match(script, /\[System\.IO\.File\]::WriteAllText\(\$Path, \$Content, \$utf8NoBom\)/);
+  assert.doesNotMatch(script, /Set-Content -LiteralPath \$BaselineSql -Encoding utf8/);
+  assert.doesNotMatch(script, /Set-Content -LiteralPath \$BehaviorSql -Encoding utf8/);
   assert.match(script, /20260820_00_prd_phase_2_compliance_schema_substrate\.sql/);
   assert.match(script, /20260824_00_reviewed_profile_bootstrap_rpc\.sql/);
   assert.doesNotMatch(script, /2026081[0-9]|2026082[1-3]/);

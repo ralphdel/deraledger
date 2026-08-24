@@ -39,6 +39,15 @@ function Assert-LocalDisposableConnectionString {
   return $hostName
 }
 
+function Write-LocalSqlFileNoBom {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][string]$Content
+  )
+  $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+  [System.IO.File]::WriteAllText($Path, $Content, $utf8NoBom)
+}
+
 if ($Confirmation -cne $ConfirmationPhrase) { throw 'LOCAL_REHEARSAL_CONFIRMATION_REQUIRED' }
 $TargetHost = Assert-LocalDisposableConnectionString -ConnectionString $LocalConnectionString
 Write-Host "LOCAL-ONLY TARGET HOST: $TargetHost"
@@ -57,7 +66,7 @@ New-Item -ItemType Directory -Path $TempDirectory -Force | Out-Null
 $BaselineSql = Join-Path $TempDirectory '024-local-prerequisites.sql'
 $BehaviorSql = Join-Path $TempDirectory '025-rpc-behavior.sql'
 try {
-  @'
+  Write-LocalSqlFileNoBom -Path $BaselineSql -Content @'
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN CREATE ROLE service_role NOLOGIN; END IF;
@@ -68,8 +77,8 @@ CREATE TABLE IF NOT EXISTS public.merchants (id uuid PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS public.invoices (id uuid PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS public.payment_records (id uuid PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS public.solo_plus_cases (id uuid PRIMARY KEY, merchant_id uuid NOT NULL REFERENCES public.merchants(id));
-'@ | Set-Content -LiteralPath $BaselineSql -Encoding utf8
-  @'
+'@
+  Write-LocalSqlFileNoBom -Path $BehaviorSql -Content @'
 BEGIN;
 SET LOCAL ROLE service_role;
 DO $rehearsal$
@@ -93,7 +102,7 @@ END;
 $rehearsal$;
 ROLLBACK;
 SELECT 'CONTROL|LOCAL_BOOTSTRAP_REHEARSAL=PASS';
-'@ | Set-Content -LiteralPath $BehaviorSql -Encoding utf8
+'@
   function Invoke-LocalPsqlFile([string]$FilePath) { & $Psql -X -w -v ON_ERROR_STOP=1 -d $LocalConnectionString -f $FilePath; if ($LASTEXITCODE -ne 0) { throw "LOCAL_REHEARSAL_PSQL_FAILED: $FilePath" } }
   Write-Host 'Applying disposable Migration 024 baseline only.'; Invoke-LocalPsqlFile $BaselineSql; Invoke-LocalPsqlFile $Migration024
   Write-Host 'Running Migration 025 preflight.'; Invoke-LocalPsqlFile $Preflight025
