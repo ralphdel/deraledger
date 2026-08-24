@@ -1,5 +1,7 @@
 # PRD Phase 2 Migration 025 Partial Local Rehearsal Checkpoint
 
+This checkpoint is retained as the historical record of the earlier partial rehearsal failure and the harness repair that followed. The fresh full local rehearsal pass is recorded in [prd-phase-2-migration-025-full-local-rehearsal-pass.md](./prd-phase-2-migration-025-full-local-rehearsal-pass.md).
+
 ## Current Local Rehearsal State
 
 - Local PostgreSQL 15.18 was confirmed on `127.0.0.1:55432`.
