@@ -18,7 +18,7 @@ function payload(overrides: Partial<ReviewedProfileBootstrapPayload> = {}): Revi
 function writer(overrides: Partial<ReviewedProfileBootstrapAtomicWriter> = {}) {
   const writes: Array<{ table: string; row: Record<string, unknown> }> = [];
   const value: ReviewedProfileBootstrapAtomicWriter = {
-    findProfiles: async () => [], findReviewByIdempotencyKey: async () => [],
+    findProfiles: async () => [], findReviewByIdempotencyKey: async () => [], findEventByIdempotencyKey: async () => [],
     insertProfile: async (row) => { writes.push({ table: "merchant_compliance_profiles", row }); return { id: String(row.id) }; },
     insertReview: async (row) => { writes.push({ table: "merchant_compliance_reviews", row }); return { id: String(row.id) }; },
     insertEvent: async (row) => { writes.push({ table: "merchant_compliance_events", row }); return { id: String(row.id) }; },
@@ -78,6 +78,11 @@ async function run() {
     { id: "b", merchantId: "merchant-1", complianceStatus: "lite_pending", restrictionState: null },
   ] });
   assert.equal((await persistReviewedProfileBootstrap(payload(), atomic(duplicate.value).database)).kind, "rejected");
+  const duplicateEvent = writer({ findEventByIdempotencyKey: async () => [
+    { id: "event-a", merchantId: "merchant-1", idempotencyKey: "key-1:bootstrap" },
+    { id: "event-b", merchantId: "merchant-1", idempotencyKey: "key-1:bootstrap" },
+  ] });
+  assert.equal((await persistReviewedProfileBootstrap(payload(), atomic(duplicateEvent.value).database)).kind, "rejected");
 
   for (const failure of ["insertProfile", "insertReview", "insertEvent"] as const) {
     const mock = writer({ [failure]: async () => { throw new Error("write failed"); } });

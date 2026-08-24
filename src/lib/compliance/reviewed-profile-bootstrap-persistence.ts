@@ -4,6 +4,7 @@ export {
   persistReviewedProfileBootstrap,
   type PersistedBootstrapProfile,
   type PersistedBootstrapReview,
+  type PersistedBootstrapEvent,
   type ReviewedProfileBootstrapAtomicWriter,
   type ReviewedProfileBootstrapPersistenceDatabase,
   type ReviewedProfileBootstrapPersistenceReasonCode,

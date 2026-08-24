@@ -19,12 +19,22 @@ export interface PersistedBootstrapReview {
   idempotencyKey: string;
 }
 
+export interface PersistedBootstrapEvent {
+  id: string;
+  merchantId: string;
+  idempotencyKey: string;
+}
+
 export interface ReviewedProfileBootstrapAtomicWriter {
   findProfiles(merchantId: string): Promise<readonly PersistedBootstrapProfile[]>;
   findReviewByIdempotencyKey(input: {
     merchantId: string;
     idempotencyKey: string;
   }): Promise<readonly PersistedBootstrapReview[]>;
+  findEventByIdempotencyKey(input: {
+    merchantId: string;
+    idempotencyKey: string;
+  }): Promise<readonly PersistedBootstrapEvent[]>;
   insertProfile(row: Record<string, unknown>): Promise<{ id: string } | null>;
   insertReview(row: Record<string, unknown>): Promise<{ id: string } | null>;
   insertEvent(row: Record<string, unknown>): Promise<{ id: string } | null>;
@@ -47,6 +57,7 @@ export type ReviewedProfileBootstrapPersistenceReasonCode =
   | "bootstrap_profile_preserved"
   | "bootstrap_profile_ambiguous"
   | "bootstrap_review_ambiguous"
+  | "bootstrap_event_ambiguous"
   | "bootstrap_atomic_write_failed";
 
 export type ReviewedProfileBootstrapPersistenceResult =
@@ -122,10 +133,20 @@ export async function persistReviewedProfileBootstrap(
 
   try {
     return await database.executeAtomically(async (writer) => {
-      const [profiles, reviews] = await Promise.all([
+      const [profiles, reviews, events] = await Promise.all([
         writer.findProfiles(payload.merchantId),
         writer.findReviewByIdempotencyKey({ merchantId: payload.merchantId, idempotencyKey: payload.bootstrapKey }),
+        writer.findEventByIdempotencyKey({
+          merchantId: payload.merchantId,
+          idempotencyKey: `${payload.bootstrapKey}:bootstrap`,
+        }),
       ]);
+      if (events.length > 1) {
+        return { kind: "rejected", diagnostics: [{ code: "bootstrap_event_ambiguous" }] };
+      }
+      if (events.length === 1) {
+        return { kind: "existing", profileId: null, reviewId: null, diagnostics: [{ code: "bootstrap_existing_result" }] };
+      }
       if (reviews.length > 1) {
         return { kind: "rejected", diagnostics: [{ code: "bootstrap_review_ambiguous" }] };
       }
