@@ -341,9 +341,23 @@ BEGIN
     END IF;
   END LOOP;
   INSERT INTO pg_temp.approval_scenario_results VALUES ('forbidden_writes_absent','forbidden_writes_absent',CASE WHEN v_forbidden_writes_absent THEN 'forbidden_writes_absent' ELSE 'forbidden_write_detected' END,v_forbidden_writes_absent,CASE WHEN v_forbidden_writes_absent THEN NULL ELSE 'forbidden_write_detected' END);
+  -- PUBLIC is a grant pseudo-role, not a role that may be assumed or supplied
+  -- to has_function_privilege. Inspect the exact RPC ACL instead.
   v_grants_safe := NOT has_function_privilege('anon', 'public.review_compliance_profile_decision_v1(uuid,uuid,text,text,uuid,bigint,text,bigint,uuid,text,text,timestamptz,text)', 'EXECUTE')
     AND NOT has_function_privilege('authenticated', 'public.review_compliance_profile_decision_v1(uuid,uuid,text,text,uuid,bigint,text,bigint,uuid,text,text,timestamptz,text)', 'EXECUTE')
-    AND NOT has_function_privilege('PUBLIC', 'public.review_compliance_profile_decision_v1(uuid,uuid,text,text,uuid,bigint,text,bigint,uuid,text,text,timestamptz,text)', 'EXECUTE')
+    AND NOT EXISTS (
+      SELECT 1
+      FROM pg_proc procedure_state
+      CROSS JOIN LATERAL aclexplode(COALESCE(
+        procedure_state.proacl,
+        acldefault('f', procedure_state.proowner)
+      )) privilege_state
+      WHERE procedure_state.oid = to_regprocedure(
+        'public.review_compliance_profile_decision_v1(uuid,uuid,text,text,uuid,bigint,text,bigint,uuid,text,text,timestamptz,text)'
+      )
+        AND privilege_state.grantee = 0
+        AND privilege_state.privilege_type = 'EXECUTE'
+    )
     AND has_function_privilege('service_role', 'public.review_compliance_profile_decision_v1(uuid,uuid,text,text,uuid,bigint,text,bigint,uuid,text,text,timestamptz,text)', 'EXECUTE');
   INSERT INTO pg_temp.approval_scenario_results VALUES ('hostile_role_grant_boundary','grants_safe',CASE WHEN v_grants_safe THEN 'grants_safe' ELSE 'hostile_role_grant_leak' END,v_grants_safe,CASE WHEN v_grants_safe THEN NULL ELSE 'hostile_role_grant_leak' END);
 END;

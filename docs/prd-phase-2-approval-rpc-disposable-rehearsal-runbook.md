@@ -47,7 +47,7 @@ The harness writes generated SQL with `.NET UTF8Encoding` without a BOM, then pe
 4. Applies Migration 026 again to prove installation idempotency.
 5. Runs Migration 026 postflight before any behavior seed rows exist.
 6. Seeds local-only fixtures as the owner/admin, then invokes the approval RPC as `service_role` only.
-7. Runs hostile anon/authenticated denial checks after seeding and service-role behavior.
+7. Runs hostile anon/authenticated denial checks after seeding and service-role behavior. PUBLIC is verified through the exact RPC ACL catalog entry (`aclexplode` grantee `0`), never by attempting `SET ROLE PUBLIC`.
 8. Rolls back the behavior transaction and prints `CONTROL|LOCAL_APPROVAL_REHEARSAL=PASS` only if every check passed.
 
 Behavior coverage includes Solo Lite pending-to-verified, needs-attention, rejected, and restricted decisions; Business pending-to-verified; and Solo Plus approved-to-enhanced-verified, rejected-to-rejected, and manual-review-to-needs-attention decisions. It also checks exact sequential idempotent replay, missing profile/reviewer, stale version, plan/source mismatch, unsupported transition, reused-key conflict, structural duplicate prevention, profile/event rollback failures, hostile grants, and forbidden writes.

@@ -54,6 +54,12 @@ function run() {
   assert.match(script, /SET LOCAL ROLE authenticated;[\s\S]*insufficient_privilege/);
   assert.match(script, /has_function_privilege\('anon'/);
   assert.match(script, /has_function_privilege\('authenticated'/);
+  assert.doesNotMatch(script, /\bSET(?:\s+LOCAL)?\s+ROLE\s+PUBLIC\b/i);
+  assert.doesNotMatch(script, /current_role\s*=\s*'?PUBLIC'?/i);
+  assert.doesNotMatch(script, /has_function_privilege\('PUBLIC'/i);
+  assert.match(script, /aclexplode\(COALESCE\([\s\S]*?procedure_state\.proacl/);
+  assert.match(script, /procedure_state\.oid = to_regprocedure\([\s\S]*?review_compliance_profile_decision_v1/);
+  assert.match(script, /privilege_state\.grantee = 0[\s\S]*?privilege_state\.privilege_type = 'EXECUTE'/);
 
   for (const value of [
     "lite_verified",
