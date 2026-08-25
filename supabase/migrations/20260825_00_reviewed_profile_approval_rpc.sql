@@ -330,6 +330,27 @@ BEGIN
         AND review_status IN ('pending', 'needs_attention')
         AND row_version = p_source_version;
 
+      -- This row is available only to the disposable rehearsal session: it
+      -- requires both an explicitly set local GUC and a session temp table.
+      -- It never changes the normal RPC result or exposes database errors.
+      IF current_setting('deraledger.local_approval_rehearsal_diagnostics', true) = 'on'
+        AND to_regclass('pg_temp.approval_rpc_internal_diagnostics') IS NOT NULL THEN
+        INSERT INTO pg_temp.approval_rpc_internal_diagnostics (
+          diagnostic_name, merchant_id, profile_id, source_type, source_id,
+          source_version, plan_code, target_status, expected_row_version,
+          mapped_review_type, profile_compliance_status, profile_row_version,
+          review_source_match_count
+        ) VALUES (
+          'rpc.review_source_validation', p_merchant_id, p_profile_id, p_source_type, p_source_id,
+          p_source_version, p_plan_code, p_target_compliance_status, p_expected_profile_row_version,
+          CASE p_source_type
+            WHEN 'solo_lite_review' THEN 'solo_lite'
+            WHEN 'business_kyb_review' THEN 'business_kyb'
+          END,
+          v_profile.compliance_status, v_profile.row_version, v_review_source_count
+        );
+      END IF;
+
       IF v_review_source_count = 0 THEN
         RETURN QUERY SELECT 'approval_review_source_lookup_failed', NULL::uuid, NULL::uuid, NULL::bigint;
         RETURN;

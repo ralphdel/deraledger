@@ -58,6 +58,8 @@ The approval RPC returns safe stage-specific failure codes for unexpected intern
 
 Before the first Lite approval call, the harness also prints one compact `DIAGNOSTIC|lite_review_source_before_rpc` row. It contains only fixed disposable-fixture UUIDs, the exact RPC input fields, candidate review fields, and the exact RPC predicate count evaluated as `service_role`. This is diagnostic output only; it contains no connection data, credentials, provider data, or production/business records.
 
+For the next local run, the harness additionally lists every function overload named `review_compliance_profile_decision_v1`, asserts that exactly the expected 13-argument identity is callable, and inspects `pg_get_functiondef` for the installed source-type mapping (while rejecting the old plan-derived review-type expression). A local transaction setting plus session temporary table records the actual Lite/Business RPC parameter values, mapped review type, source count, and profile status/version immediately after the RPC evaluates the source predicate. The channel is inert unless both the local setting and temp table exist; it does not expose raw database errors or affect normal RPC responses.
+
 Concurrent identical or stale replay may fail closed on the expected profile row-version rather than returning the sequential replay result. That is an expected safe outcome and must be recorded as such during review; it is not permission to accept a mismatched replay.
 
 ## Failure handling

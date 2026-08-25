@@ -46,7 +46,9 @@ function run() {
   }
 
   assert.match(script, /RESET ROLE;[\s\S]*INSERT INTO public\.merchants[\s\S]*SET LOCAL ROLE service_role;/);
-  const serviceRoleSection = script.match(/SET LOCAL ROLE service_role;([\s\S]*?)RESET ROLE;\n\n-- Structural duplicates/)?.[1] ?? "";
+  const firstServiceRoleIndex = script.indexOf("SET LOCAL ROLE service_role;");
+  const structuralDuplicatesIndex = script.indexOf("-- Structural duplicates are prevented");
+  const serviceRoleSection = script.slice(firstServiceRoleIndex, structuralDuplicatesIndex);
   assert.match(script, /CREATE OR REPLACE FUNCTION pg_temp\.capture_approval_scenario[\s\S]*review_compliance_profile_decision_v1/);
   assert.match(serviceRoleSection, /capture_approval_scenario/);
   assert.doesNotMatch(serviceRoleSection, /INSERT INTO public\.(?:merchants|merchant_compliance_profiles|merchant_compliance_reviews|solo_plus_cases)/);
@@ -113,6 +115,15 @@ function run() {
   assert.match(script, /review_type = CASE 'solo_lite_review'[\s\S]*?WHEN 'solo_lite_review' THEN 'solo_lite'[\s\S]*?WHEN 'business_kyb_review' THEN 'business_kyb'/);
   assert.match(script, /review_type = CASE 'business_kyb_review'[\s\S]*?WHEN 'solo_lite_review' THEN 'solo_lite'[\s\S]*?WHEN 'business_kyb_review' THEN 'business_kyb'/);
   assert.match(script, /DIAGNOSTIC\|lite_review_source_before_rpc/);
+  assert.match(script, /CREATE TEMP TABLE approval_rpc_internal_diagnostics/);
+  assert.match(script, /SET LOCAL deraledger\.local_approval_rehearsal_diagnostics = 'on'/);
+  assert.match(script, /DIAGNOSTIC\|approval_rpc_function_identity/);
+  assert.match(script, /LOCAL_APPROVAL_RPC_IDENTITY_MISMATCH/);
+  assert.match(script, /LOCAL_APPROVAL_RPC_BODY_MISMATCH/);
+  assert.match(script, /pg_get_functiondef\(v_expected_signature\)/);
+  assert.match(script, /review_type = CASE p_source_type/);
+  assert.doesNotMatch(script, /review_type = CASE WHEN p_plan_code = 'solo_lite' THEN 'solo_lite' ELSE 'business_kyb' END/);
+  assert.match(script, /DIAGNOSTIC\|approval_rpc_internal_values/);
   for (const field of [
     "input_merchant_id", "input_profile_id", "input_source_type", "input_source_id",
     "input_source_version", "input_plan_code", "input_target_status", "input_expected_row_version",
@@ -125,6 +136,8 @@ function run() {
   const exactDiagnosticIndex = script.indexOf("DIAGNOSTIC|lite_review_source_before_rpc");
   const firstLiteInvocationIndex = script.indexOf("lite.pending_to_verified");
   assert.ok(exactDiagnosticIndex >= 0 && exactDiagnosticIndex < firstLiteInvocationIndex, "exact Lite diagnostic must run before the first Lite RPC call");
+  const identityDiagnosticIndex = script.indexOf("DIAGNOSTIC|approval_rpc_function_identity");
+  assert.ok(identityDiagnosticIndex >= 0 && identityDiagnosticIndex < firstLiteInvocationIndex, "function identity/body checks must run before the first Lite RPC call");
   assert.match(script, /review_source\.profile_id = profile_state\.id[\s\S]*?review_source\.review_type = CASE rpc_input\.source_type[\s\S]*?WHEN 'solo_lite_review' THEN 'solo_lite'[\s\S]*?WHEN 'business_kyb_review' THEN 'business_kyb'[\s\S]*?review_source\.row_version = rpc_input\.source_version/);
   assert.match(script, /probe\.case_source_read/);
   assert.match(script, /'00000000-0000-4000-8000-000000000112','local-026-missing-reviewer'/);

@@ -174,6 +174,22 @@ CREATE TEMP TABLE approval_scenario_results (
   safe_failure_code text
 );
 GRANT SELECT, INSERT ON TABLE approval_scenario_results TO service_role, anon, authenticated;
+CREATE TEMP TABLE approval_rpc_internal_diagnostics (
+  diagnostic_name text NOT NULL,
+  merchant_id uuid NOT NULL,
+  profile_id uuid NOT NULL,
+  source_type text NOT NULL,
+  source_id uuid NOT NULL,
+  source_version bigint NOT NULL,
+  plan_code text NOT NULL,
+  target_status text NOT NULL,
+  expected_row_version bigint NOT NULL,
+  mapped_review_type text,
+  profile_compliance_status text,
+  profile_row_version bigint,
+  review_source_match_count bigint NOT NULL
+);
+GRANT SELECT, INSERT ON TABLE approval_rpc_internal_diagnostics TO service_role;
 
 INSERT INTO approval_scenario_results
 SELECT 'probe.fixture_shape', 'fixture_ready',
@@ -221,6 +237,44 @@ GRANT EXECUTE ON FUNCTION pg_temp.capture_approval_scenario(text,text,uuid,uuid,
 -- Local-only probes distinguish fixture, profile-write, event-write, and replay
 -- privilege/RLS readiness without exposing PostgreSQL errors or business data.
 SET LOCAL ROLE service_role;
+SET LOCAL deraledger.local_approval_rehearsal_diagnostics = 'on';
+
+-- Prove that this behavior session will call the single expected RPC identity
+-- and that its installed body contains the current source-type mapping.
+SELECT
+  'DIAGNOSTIC|approval_rpc_function_identity' AS diagnostic_name,
+  procedure_state.oid,
+  procedure_state.pronargs,
+  oidvectortypes(procedure_state.proargtypes) AS argument_types,
+  procedure_state.proargnames AS argument_names
+FROM pg_proc procedure_state
+JOIN pg_namespace namespace_state ON namespace_state.oid = procedure_state.pronamespace
+WHERE namespace_state.nspname = 'public'
+  AND procedure_state.proname = 'review_compliance_profile_decision_v1';
+DO $rehearsal$
+DECLARE
+  v_expected_signature regprocedure := to_regprocedure('public.review_compliance_profile_decision_v1(uuid,uuid,text,text,uuid,bigint,text,bigint,uuid,text,text,timestamptz,text)');
+  v_body text;
+  v_overload_count integer;
+BEGIN
+  SELECT count(*) INTO v_overload_count
+  FROM pg_proc procedure_state
+  JOIN pg_namespace namespace_state ON namespace_state.oid = procedure_state.pronamespace
+  WHERE namespace_state.nspname = 'public'
+    AND procedure_state.proname = 'review_compliance_profile_decision_v1';
+  IF v_expected_signature IS NULL OR v_overload_count <> 1 THEN
+    RAISE EXCEPTION 'LOCAL_APPROVAL_RPC_IDENTITY_MISMATCH';
+  END IF;
+  SELECT pg_get_functiondef(v_expected_signature) INTO v_body;
+  IF position('review_type = CASE p_source_type' IN v_body) = 0
+    OR position('WHEN ''solo_lite_review'' THEN ''solo_lite''' IN v_body) = 0
+    OR position('WHEN ''business_kyb_review'' THEN ''business_kyb''' IN v_body) = 0
+    OR position('review_type = CASE WHEN p_plan_code = ''solo_lite'' THEN ''solo_lite'' ELSE ''business_kyb'' END' IN v_body) <> 0 THEN
+    RAISE EXCEPTION 'LOCAL_APPROVAL_RPC_BODY_MISMATCH';
+  END IF;
+END;
+$rehearsal$;
+
 INSERT INTO pg_temp.approval_scenario_results
 SELECT 'probe.profile_update_privilege_rls', 'probe_ready',
   CASE WHEN has_table_privilege(current_user, 'public.merchant_compliance_profiles', 'UPDATE')
@@ -426,6 +480,15 @@ PERFORM pg_temp.capture_approval_scenario('missing_reviewer','approval_reviewer_
 END;
 $rehearsal$;
 RESET ROLE;
+
+SELECT
+  'DIAGNOSTIC|approval_rpc_internal_values' AS diagnostic_name,
+  diagnostic_name AS rpc_diagnostic_name,
+  merchant_id, profile_id, source_type, source_id, source_version, plan_code,
+  target_status, expected_row_version, mapped_review_type,
+  profile_compliance_status, profile_row_version, review_source_match_count
+FROM pg_temp.approval_rpc_internal_diagnostics
+ORDER BY profile_id, source_id;
 
 -- Structural duplicates are prevented by the Migration 024 primary/unique keys.
 DO $rehearsal$
