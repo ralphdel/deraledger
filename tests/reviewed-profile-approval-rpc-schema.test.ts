@@ -3,6 +3,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 const migration = "supabase/migrations/20260825_00_reviewed_profile_approval_rpc.sql";
+const substrateMigration = "supabase/migrations/20260820_00_prd_phase_2_compliance_schema_substrate.sql";
 const preflight = "supabase/staging/preflight/026_reviewed_profile_approval_rpc_snapshot.sql";
 const postflight = "supabase/staging/postflight/026_reviewed_profile_approval_rpc_verify.sql";
 const signature = "review_compliance_profile_decision_v1(uuid,uuid,text,text,uuid,bigint,text,bigint,uuid,text,text,timestamptz,text)";
@@ -21,6 +22,7 @@ function assertNoBom(file: string) {
 function run() {
   for (const file of [migration, preflight, postflight]) assertNoBom(file);
   const sql = readFileSync(migration, "utf8");
+  const substrateSql = readFileSync(substrateMigration, "utf8");
   const beforeFunction = sql.slice(0, sql.indexOf("CREATE OR REPLACE FUNCTION"));
 
   assert.match(sql, /^BEGIN;[\s\S]*COMMIT;\s*$/);
@@ -35,7 +37,13 @@ function run() {
   assert.match(beforeFunction, /Migration 026 prerequisite missing/);
   assert.match(beforeFunction, /unexpected review_compliance_profile_decision_v1 overload/);
   assert.match(beforeFunction, /bootstrap_reviewed_profile_v1/);
-  assert.match(sql, /FOR UPDATE/);
+  assert.match(sql, /FROM public\.merchant_compliance_profiles[\s\S]*?FOR UPDATE/);
+  assert.match(sql, /FROM public\.merchant_compliance_reviews[\s\S]*?FOR UPDATE/);
+  assert.match(sql, /FROM public\.solo_plus_cases[\s\S]*?FOR UPDATE/);
+  const eventIdempotencyLookup = sql.match(/SELECT \* INTO v_event[\s\S]*?IF FOUND THEN/)?.[0] ?? "";
+  assert.match(eventIdempotencyLookup, /FROM public\.merchant_compliance_events/);
+  assert.doesNotMatch(eventIdempotencyLookup, /FOR UPDATE/);
+  assert.match(substrateSql, /GRANT SELECT, INSERT ON TABLE public\.merchant_compliance_events TO service_role/);
   assert.match(sql, /approval_idempotent_replay/);
   assert.match(sql, /approval_idempotency_conflict/);
   assert.match(sql, /v_event\.actor_id = p_reviewer_id/);

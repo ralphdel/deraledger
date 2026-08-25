@@ -70,6 +70,8 @@ function run() {
   }
   assert.match(script, /REVOKE UPDATE ON TABLE public\.merchant_compliance_profiles FROM service_role/);
   assert.match(script, /REVOKE INSERT ON TABLE public\.merchant_compliance_events FROM service_role/);
+  assert.match(script, /GRANT SELECT ON TABLE auth\.users TO service_role/);
+  assert.match(script, /ALTER ROLE service_role BYPASSRLS/);
   assert.match(script, /rollback left partial profile decision or event/);
   assert.match(script, /NOT setup_mode OR live_features_enabled/);
   assert.match(script, /can_collect_payments OR activation_status = 'active'/);

@@ -19,6 +19,8 @@ The script is dry-run by default. It validates the target but exits before `psql
 
 The generated behavior seed uses explicit column lists for profiles, reviews, and Solo Plus cases. Its static regression test checks that every tuple has the same value count as its INSERT column list; this prevents a local seed-shape error from being mistaken for an approval-RPC failure.
 
+The approval RPC's event idempotency lookup is deliberately a read-only `SELECT`, not `SELECT ... FOR UPDATE`: `merchant_compliance_events` is append-only and grants `service_role` only `SELECT, INSERT`. Profile and trusted review/case rows remain locked for state and version validation. A concurrent replay may fail closed on the profile version; sequential exact replay remains the supported replay result.
+
 ## Exact local command
 
 From the repository root, set `PGPASSWORD` only in the current shell, then run:

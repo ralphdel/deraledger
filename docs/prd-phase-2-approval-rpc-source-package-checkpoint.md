@@ -1,6 +1,6 @@
 # PRD Phase 2 Approval RPC Source Package Checkpoint
 
-Status: source package prepared only. It has not been executed against a local, staging, or production database.
+Status: Migration 026 local install/security rehearsal is PARTIAL PASS: preflight, first apply, second apply/idempotency, and postflight passed on a disposable local database. Behavior/rollback rehearsal remains incomplete; Migration 026 has not been applied to staging or production.
 
 ## Package scope
 
@@ -22,10 +22,12 @@ The independent source review found that Migration 025 creates Lite/Business rev
 
 The review also found missing-table-sensitive preflight casts that could terminate before the required compact summary. Migration 026 preflight now uses `to_regclass(...)` for those checks so absent Migration 024 prerequisites produce `FAIL` rows and `summary FAIL` instead of a relation-resolution crash. Replay comparison now includes reviewer, plan, and complete non-operational target state.
 
+The first local Lite approval invocation exposed an append-only event-lock mismatch: the RPC attempted `SELECT ... FOR UPDATE` on `merchant_compliance_events`, while Migration 024 correctly grants `service_role` only `SELECT, INSERT` on that append-only table. The RPC now reads the idempotency event without an update lock; profile and trusted source locks remain the serialization boundary. The catch-all result remains safe for runtime callers, and the repaired package still requires a full local behavior/rollback PASS before any staging rehearsal.
+
 The database has no canonical internal-compliance-role table. The package revalidates that the reviewer UUID exists in `auth.users`, while internal reviewer/operator authorization remains a required trusted server-side boundary before service-role invocation. It does not infer authorization from browser input.
 
 ## Required validation before any apply
 
-No local database execution occurred in this task. The repaired package requires a second independent source review before a disposable local PostgreSQL rehearsal can be approved. That rehearsal must prove syntax, first/second apply, preflight/postflight, exact grants, hostile-role denial, allowed transitions, idempotent replay, stale/ambiguous failures, late-write rollback, and absence of forbidden writes. Only after a full local PASS may separately approved staging preflight/apply/postflight be prepared.
+The local install/security sequence has passed, but the repaired package requires a fresh disposable local behavior/rollback rehearsal before staging can be considered. That rehearsal must prove allowed transitions, exact grants, hostile-role denial, sequential replay, stale/ambiguous failures, late-write rollback, and absence of forbidden writes. Only after a full local PASS may separately approved staging preflight/apply/postflight be prepared.
 
 Production remains unchanged: Migration 024 and 025 are applied, collection is locked, `setup_mode=true`, `live_features_enabled=false`, and no runtime route/action imports this future approval RPC.

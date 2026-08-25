@@ -230,8 +230,7 @@ BEGIN
     SELECT * INTO v_event
     FROM public.merchant_compliance_events
     WHERE merchant_id = p_merchant_id
-      AND idempotency_key = btrim(p_decision_idempotency_key)
-    FOR UPDATE;
+      AND idempotency_key = btrim(p_decision_idempotency_key);
 
     IF FOUND THEN
       IF v_event.profile_id = p_profile_id
