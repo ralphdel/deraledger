@@ -127,19 +127,25 @@ it issued a key.
 
 ## Workspace linkage
 
-M024 compliance profiles have `merchant_id` but no `workspace_id`. The actual
-canonical relationship is the reverse one: exactly one
-`workspaces.merchant_id` row references a merchant. Migration 028 must require
-that column's exact foreign key to `merchants(id)` and its one-column unique
-constraint, then derive the workspace only from that row. It must not assume,
-create, or backfill `merchants.workspace_id`. Missing, duplicate, stale, or
-conflicting links are safe failures.
+M024--M027 establish a profile-to-merchant relationship, but the approved
+disposable rehearsal baseline does not establish a durable
+`public.workspaces` table, canonical workspace key, or merchant/workspace
+constraint. Historical repository contracts are not a sufficient database
+prerequisite. M028 must therefore neither assume `merchants.workspace_id` nor
+assume `workspaces.id`/`workspaces.merchant_id`.
 
-Migration 028 preflight must inspect the actual deployed merchant/workspace
-columns, foreign key, and uniqueness semantics before any DDL. If that
-inspection cannot prove the one-workspace `workspaces.merchant_id` relationship,
-the package must stop. It must not update merchant/workspace rows or choose the
-newest/default workspace as a workaround.
+M028 preserves the nullable `workspace_id` field only as future request
+metadata; it creates no workspace foreign key and does not derive a workspace.
+Both issue and snapshot RPCs return safe
+`*_workspace_linkage_unavailable` results after their applicable profile/state
+checks. They cannot issue a request or return a ready snapshot while this
+canonical relationship is unavailable.
+
+A future separately reviewed additive workspace-linkage package must establish
+the canonical workspace key and a count-one merchant relationship, with exact
+foreign-key/uniqueness semantics. Only that future package may enable workspace
+derivation. It must not choose a newest/default workspace or backfill a merchant
+pointer as a workaround.
 
 ## Policy provenance
 
@@ -187,10 +193,10 @@ separate from activation and collection unlock.
 
 Before implementation, the migration package must include compact PASS/FAIL
 preflight and postflight scripts. Preflight must verify M024 profile/review/event
-columns and constraints, M025/M026/M027 exact signatures and grants, actual
-merchant/workspace linkage schema, Solo Plus case policy/decision columns, RLS,
-browser grants/policies, absence of conflicting overloads, and no unsafe
-default privileges.
+columns and constraints, M025/M026/M027 exact signatures and grants, the
+explicitly deferred workspace-linkage posture, Solo Plus case policy/decision
+columns, RLS, browser grants/policies, absence of conflicting overloads, and no
+unsafe default privileges.
 
 Postflight must verify exact new RPC signatures, `SECURITY INVOKER`, hardened
 search paths, service-role-only execute, no browser grants/policies, immutable

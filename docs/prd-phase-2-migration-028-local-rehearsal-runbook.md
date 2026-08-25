@@ -18,29 +18,31 @@ must be UTF-8 without BOM; credentials/evidence remain outside tracked files.
   hardened search paths, RLS enabled/not forced, exact service-role table
   grants, immutable no-update/no-delete posture, required constraints/indexes,
   and no PUBLIC/anon/authenticated execute.
-- Verify a consistent `workspaces.merchant_id` FK-backed, unique
-  merchant/workspace/profile/source/published-policy path issues one request
-  and returns one canonical ready snapshot. Do not seed or require
-  `merchants.workspace_id`.
-- Verify missing, duplicate, and conflicting workspace links fail closed.
+- Verify the M024--M027 disposable baseline needs no `public.workspaces` table
+  or `merchants.workspace_id` column for M028 preflight/apply/rerun/postflight.
+  M028 must report its explicitly deferred workspace-linkage posture as PASS.
+- Verify valid issue and snapshot inputs return only safe
+  `canonical_request_workspace_linkage_unavailable` and
+  `canonical_snapshot_workspace_linkage_unavailable` results. They must not
+  issue a request or return a ready snapshot.
 - Verify Lite accepts only `lite_pending`/`needs_attention`, Solo Plus accepts
   only `enhanced_pending`/`needs_attention`, and Business accepts only
   `business_pending`/`needs_attention`; every cross-plan pending state must
   fail closed before issue/snapshot readiness. Verify Lite, Business, and Solo
   Plus source/version/policy mismatches fail closed; Solo Plus
   actor/timestamp/policy must match its case facts.
-- Verify request retry returns the same immutable key only for an exact
-  fingerprint; changed reviewer/source/version/target/policy/reason/profile
-  version fails closed or produces a distinct valid request as designed.
-- Verify exact M026 event/profile linkage yields only a replay candidate;
-  partial or duplicate event evidence fails closed.
+- Verify no canonical request is inserted while workspace linkage is deferred.
+  Request issuance, retry/replay authority, and M026 event/profile replay
+  linkage are out of scope until a separately reviewed workspace-linkage
+  package enables them.
 - Verify hostile anon/authenticated execution is denied and service_role is the
   only callable role.
 - Verify issue/snapshot calls do not alter profile, review, case, event,
   merchant, workspace, payment, provider, limit, subscription, invoice,
   capability, setup/live, activation, or collection state.
-- Inject late request insert failures and confirm transaction rollback. Use
-  collect-all diagnostics before fixing any discovered SQL issue.
+- No request-insert rollback scenario applies while issuance is deliberately
+  blocked. Any future workspace-linkage package that enables issuance must add
+  atomic insert/replay and late-write rollback rehearsal coverage before use.
 
 ## Boundary
 

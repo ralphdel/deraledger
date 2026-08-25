@@ -16,10 +16,10 @@ requests. It proposes only two service-role-only RPCs:
 - `issue_canonical_approval_decision_request_v1(uuid,uuid,text,text,text)`
 - `read_canonical_approval_snapshot_v1(uuid)`
 
-The issue RPC derives profile/source/workspace facts, validates policy and
-transition compatibility, and generates an opaque idempotency key. The snapshot
-RPC re-reads the same facts and returns ready or exact replay-candidate facts
-only when all current relationships are internally consistent.
+The issue and snapshot RPCs validate profile/state compatibility, but remain
+intentionally blocked on workspace derivation. They return only safe
+workspace-linkage-unavailable results until a separately reviewed canonical
+workspace-linkage package exists; they do not issue a request or return ready.
 
 ## Security and safety
 
@@ -43,13 +43,13 @@ Solo Lite accepts only `lite_pending`/`needs_attention`, Solo Plus only
 canonical request or return a ready snapshot.
 
 Preflight now validates M025's exact bootstrap signature, SECURITY INVOKER
-search path, browser denial, and service-role execute grant. The initial M028
-source incorrectly required `merchants.workspace_id`; the local preflight
-proved that column is not present. The repaired package instead requires the
-actual canonical relationship: a unique, FK-backed
-`workspaces.merchant_id -> merchants.id` row. Issue and snapshot derive that
-one workspace directly and fail closed when it is absent or ambiguous; M028
-does not create or backfill a merchant workspace pointer.
+search path, browser denial, and service-role execute grant. Local preflight
+proved that neither `merchants.workspace_id` nor `workspaces.id` is an
+established M024--M027 rehearsal-baseline prerequisite. The repaired package
+does not reference `public.workspaces`, create a workspace foreign key, or
+backfill a merchant pointer. Its nullable request `workspace_id` is future
+metadata only; issue and snapshot fail closed with a safe
+workspace-linkage-unavailable result and cannot become ready.
 
 Postflight now verifies new-table RLS/not-forced state, exact service-role
 table privileges, browser denial, required request constraints/index, and the
@@ -59,7 +59,7 @@ forbidden writes.
 
 ## Next gate
 
-Independent re-review is required before a local disposable rehearsal harness
-is created or run. Staging and production remain out of scope until re-review,
-local preflight/apply/rerun/postflight, behavior, hostile-role, and rollback
-rehearsal all pass.
+Independent re-review is required before local installation/security rehearsal
+is rerun. A future workspace-linkage package must be designed, reviewed, and
+rehearsed before M028 can issue canonical requests or return ready snapshots.
+Staging and production remain out of scope until those gates pass.

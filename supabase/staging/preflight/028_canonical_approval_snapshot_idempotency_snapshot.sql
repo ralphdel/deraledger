@@ -4,7 +4,7 @@ WITH required_columns AS (
     ('merchant_compliance_reviews','id'),('merchant_compliance_reviews','merchant_id'),('merchant_compliance_reviews','profile_id'),('merchant_compliance_reviews','review_type'),('merchant_compliance_reviews','target_plan_code'),('merchant_compliance_reviews','review_status'),('merchant_compliance_reviews','row_version'),
     ('merchant_compliance_events','id'),('merchant_compliance_events','merchant_id'),('merchant_compliance_events','profile_id'),('merchant_compliance_events','idempotency_key'),('merchant_compliance_events','source_type'),('merchant_compliance_events','source_id'),('merchant_compliance_events','policy_version'),('merchant_compliance_events','expected_row_version'),('merchant_compliance_events','resulting_row_version'),
     ('solo_plus_cases','id'),('solo_plus_cases','merchant_id'),('solo_plus_cases','target_plan'),('solo_plus_cases','case_status'),('solo_plus_cases','requirements_policy_version'),('solo_plus_cases','approved_at'),('solo_plus_cases','approved_by_admin_id'),('solo_plus_cases','rejected_at'),('solo_plus_cases','rejected_by_admin_id'),('solo_plus_cases','row_version'),
-    ('merchants','id'),('workspaces','id'),('workspaces','merchant_id')
+    ('merchants','id')
   ) AS expected(table_name,column_name)
 ), bootstrap_fn AS (
   SELECT p.oid,p.prosecdef,p.proconfig,p.proacl,p.proowner
@@ -14,46 +14,13 @@ WITH required_columns AS (
   SELECT p.oid,p.prosecdef,p.proconfig,p.proacl,p.proowner,pg_get_functiondef(p.oid) definition
   FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
   WHERE n.nspname='public' AND p.proname='review_compliance_profile_decision_v1'
-), workspace_key_shape AS (
-  SELECT
-    EXISTS (
-      SELECT 1 FROM pg_constraint c
-      JOIN unnest(c.conkey) WITH ORDINALITY k(attnum, ordinality) ON true
-      JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.attnum
-      WHERE c.conrelid=to_regclass('public.merchants') AND c.contype='p'
-        AND array_length(c.conkey,1)=1 AND a.attname='id'
-    ) AS merchant_id_is_unique,
-    EXISTS (
-      SELECT 1 FROM pg_constraint c
-      JOIN unnest(c.conkey) WITH ORDINALITY k(attnum, ordinality) ON true
-      JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.attnum
-      WHERE c.conrelid=to_regclass('public.workspaces') AND c.contype='p'
-        AND array_length(c.conkey,1)=1 AND a.attname='id'
-    ) AS workspace_id_is_unique,
-    EXISTS (
-      SELECT 1 FROM pg_constraint c
-      JOIN unnest(c.conkey) WITH ORDINALITY k(attnum, ordinality) ON true
-      JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.attnum
-      WHERE c.conrelid=to_regclass('public.workspaces') AND c.contype='u'
-        AND array_length(c.conkey,1)=1 AND a.attname='merchant_id'
-    ) AS workspace_merchant_is_unique,
-    EXISTS (
-      SELECT 1 FROM pg_constraint c
-      JOIN unnest(c.conkey) WITH ORDINALITY source_key(attnum, ordinality) ON true
-      JOIN unnest(c.confkey) WITH ORDINALITY target_key(attnum, ordinality) ON source_key.ordinality=target_key.ordinality
-      JOIN pg_attribute source_attribute ON source_attribute.attrelid=c.conrelid AND source_attribute.attnum=source_key.attnum
-      JOIN pg_attribute target_attribute ON target_attribute.attrelid=c.confrelid AND target_attribute.attnum=target_key.attnum
-      WHERE c.conrelid=to_regclass('public.workspaces') AND c.confrelid=to_regclass('public.merchants')
-        AND c.contype='f' AND array_length(c.conkey,1)=1
-        AND source_attribute.attname='merchant_id' AND target_attribute.attname='id'
-    ) AS workspace_merchant_fk_is_exact
 ), checks AS (
   SELECT 'prerequisite.tables_columns'::text check_name,
     CASE WHEN NOT EXISTS (SELECT 1 FROM required_columns e WHERE to_regclass(format('public.%I',e.table_name)) IS NULL OR NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=to_regclass(format('public.%I',e.table_name)) AND a.attname=e.column_name AND a.attnum>0 AND NOT a.attisdropped)) THEN 'PASS' ELSE 'FAIL' END status,
-    'M024/M025 compliance, source, merchant, and workspace columns exist'::text details
+    'M024/M025 compliance, source, and merchant columns exist'::text details
   UNION ALL
-  SELECT 'prerequisite.workspace_linkage',CASE WHEN merchant_id_is_unique AND workspace_id_is_unique AND workspace_merchant_is_unique AND workspace_merchant_fk_is_exact THEN 'PASS' ELSE 'FAIL' END,
-    'Canonical workspaces.merchant_id is unique and FK-backed; M028 fails closed for absent or ambiguous workspace linkage' FROM workspace_key_shape
+  SELECT 'prerequisite.workspace_linkage_deferred','PASS',
+    'M024-M027 establish no durable workspace contract; M028 issue/snapshot return safe workspace_linkage_unavailable and cannot become ready'
   UNION ALL
   SELECT 'prerequisite.compliance_security',CASE WHEN NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid IN (to_regclass('public.merchant_compliance_profiles'),to_regclass('public.merchant_compliance_reviews'),to_regclass('public.merchant_compliance_events')) AND (NOT c.relrowsecurity OR c.relforcerowsecurity)) AND NOT EXISTS (SELECT 1 FROM information_schema.role_table_grants g WHERE g.table_schema='public' AND g.table_name IN ('merchant_compliance_profiles','merchant_compliance_reviews','merchant_compliance_events') AND g.grantee IN ('PUBLIC','anon','authenticated')) AND NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid IN (to_regclass('public.merchant_compliance_profiles'),to_regclass('public.merchant_compliance_reviews'),to_regclass('public.merchant_compliance_events'))) THEN 'PASS' ELSE 'FAIL' END,'Compliance RLS/grants/policies remain safe'
   UNION ALL

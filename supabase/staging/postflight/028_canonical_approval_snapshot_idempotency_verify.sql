@@ -21,45 +21,12 @@ WITH functions AS (
 ), required_constraints AS (
   SELECT * FROM (VALUES
     ('approval_policy_versions','approval_policy_versions_pkey'),('approval_policy_versions','approval_policy_versions_version_check'),('approval_policy_versions','approval_policy_versions_plan_source_check'),('approval_policy_versions','approval_policy_versions_state_check'),
-    ('approval_decision_requests','approval_decision_requests_pkey'),('approval_decision_requests','approval_decision_requests_key_unique'),('approval_decision_requests','approval_decision_requests_fingerprint_unique'),('approval_decision_requests','approval_decision_requests_reviewer_fkey'),('approval_decision_requests','approval_decision_requests_merchant_fkey'),('approval_decision_requests','approval_decision_requests_workspace_fkey'),('approval_decision_requests','approval_decision_requests_profile_fkey'),('approval_decision_requests','approval_decision_requests_policy_fkey'),('approval_decision_requests','approval_decision_requests_key_check'),('approval_decision_requests','approval_decision_requests_versions_check'),('approval_decision_requests','approval_decision_requests_plan_source_check'),('approval_decision_requests','approval_decision_requests_target_check'),('approval_decision_requests','approval_decision_requests_reason_check')
+    ('approval_decision_requests','approval_decision_requests_pkey'),('approval_decision_requests','approval_decision_requests_key_unique'),('approval_decision_requests','approval_decision_requests_fingerprint_unique'),('approval_decision_requests','approval_decision_requests_reviewer_fkey'),('approval_decision_requests','approval_decision_requests_merchant_fkey'),('approval_decision_requests','approval_decision_requests_profile_fkey'),('approval_decision_requests','approval_decision_requests_policy_fkey'),('approval_decision_requests','approval_decision_requests_key_check'),('approval_decision_requests','approval_decision_requests_versions_check'),('approval_decision_requests','approval_decision_requests_plan_source_check'),('approval_decision_requests','approval_decision_requests_target_check'),('approval_decision_requests','approval_decision_requests_reason_check')
   ) AS e(table_name,constraint_name)
-), workspace_key_shape AS (
-  SELECT
-    EXISTS (
-      SELECT 1 FROM pg_constraint c
-      JOIN unnest(c.conkey) WITH ORDINALITY k(attnum, ordinality) ON true
-      JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.attnum
-      WHERE c.conrelid=to_regclass('public.merchants') AND c.contype='p'
-        AND array_length(c.conkey,1)=1 AND a.attname='id'
-    ) AS merchant_id_is_unique,
-    EXISTS (
-      SELECT 1 FROM pg_constraint c
-      JOIN unnest(c.conkey) WITH ORDINALITY k(attnum, ordinality) ON true
-      JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.attnum
-      WHERE c.conrelid=to_regclass('public.workspaces') AND c.contype='p'
-        AND array_length(c.conkey,1)=1 AND a.attname='id'
-    ) AS workspace_id_is_unique,
-    EXISTS (
-      SELECT 1 FROM pg_constraint c
-      JOIN unnest(c.conkey) WITH ORDINALITY k(attnum, ordinality) ON true
-      JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.attnum
-      WHERE c.conrelid=to_regclass('public.workspaces') AND c.contype='u'
-        AND array_length(c.conkey,1)=1 AND a.attname='merchant_id'
-    ) AS workspace_merchant_is_unique,
-    EXISTS (
-      SELECT 1 FROM pg_constraint c
-      JOIN unnest(c.conkey) WITH ORDINALITY source_key(attnum, ordinality) ON true
-      JOIN unnest(c.confkey) WITH ORDINALITY target_key(attnum, ordinality) ON source_key.ordinality=target_key.ordinality
-      JOIN pg_attribute source_attribute ON source_attribute.attrelid=c.conrelid AND source_attribute.attnum=source_key.attnum
-      JOIN pg_attribute target_attribute ON target_attribute.attrelid=c.confrelid AND target_attribute.attnum=target_key.attnum
-      WHERE c.conrelid=to_regclass('public.workspaces') AND c.confrelid=to_regclass('public.merchants')
-        AND c.contype='f' AND array_length(c.conkey,1)=1
-        AND source_attribute.attname='merchant_id' AND target_attribute.attname='id'
-    ) AS workspace_merchant_fk_is_exact
 ), checks AS (
   SELECT 'objects.tables'::text check_name,CASE WHEN to_regclass('public.approval_policy_versions') IS NOT NULL AND to_regclass('public.approval_decision_requests') IS NOT NULL THEN 'PASS' ELSE 'FAIL' END status,'M028 policy and immutable decision-request tables exist'::text details
   UNION ALL
-  SELECT 'prerequisite.workspace_linkage',CASE WHEN merchant_id_is_unique AND workspace_id_is_unique AND workspace_merchant_is_unique AND workspace_merchant_fk_is_exact THEN 'PASS' ELSE 'FAIL' END,'Canonical workspaces.merchant_id remains unique and FK-backed' FROM workspace_key_shape
+  SELECT 'workspace_linkage.deferred','PASS','M024-M027 establish no durable workspace contract; M028 RPCs return safe workspace_linkage_unavailable and cannot become ready'
   UNION ALL
   SELECT 'tables.rls',CASE WHEN (SELECT count(*) FROM pg_class c WHERE c.oid IN (to_regclass('public.approval_policy_versions'),to_regclass('public.approval_decision_requests')) AND c.relrowsecurity AND NOT c.relforcerowsecurity)=2 THEN 'PASS' ELSE 'FAIL' END,'M028 tables have RLS enabled and not forced'
   UNION ALL
