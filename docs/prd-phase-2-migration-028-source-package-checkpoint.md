@@ -33,9 +33,33 @@ merchants, workspaces, subscriptions, invoices, payments, providers, limits, or
 storefront state. It cannot set setup/live flags, collection entitlement, or
 `activation_status='active'`.
 
+## Source repair before local rehearsal
+
+The first independent review identified three source blockers. The package now
+fails closed unless a pending/needs-attention profile status matches its plan:
+Solo Lite accepts only `lite_pending`/`needs_attention`, Solo Plus only
+`enhanced_pending`/`needs_attention`, and Business only
+`business_pending`/`needs_attention`. Cross-plan pending states cannot issue a
+canonical request or return a ready snapshot.
+
+Preflight now validates M025's exact bootstrap signature, SECURITY INVOKER
+search path, browser denial, and service-role execute grant. It also verifies
+the unique primary identities used by the canonical merchant/workspace
+resolution. The existing schema does not need to be assumed to have a
+merchant-workspace foreign key: the issue and snapshot RPCs use the exact
+count-one `merchants.workspace_id = workspaces.id` plus
+`workspaces.merchant_id = merchants.id` relationship and fail closed when it
+is absent or ambiguous.
+
+Postflight now verifies new-table RLS/not-forced state, exact service-role
+table privileges, browser denial, required request constraints/index, and the
+no-update/no-delete service-role posture. It also verifies that the M028
+function definitions contain neither local diagnostic instrumentation nor
+forbidden writes.
+
 ## Next gate
 
-Independent source review is required before a local disposable rehearsal
-harness is created or run. Staging and production remain out of scope until
-source review, local preflight/apply/rerun/postflight, behavior, hostile-role,
-and rollback rehearsal all pass.
+Independent re-review is required before a local disposable rehearsal harness
+is created or run. Staging and production remain out of scope until re-review,
+local preflight/apply/rerun/postflight, behavior, hostile-role, and rollback
+rehearsal all pass.

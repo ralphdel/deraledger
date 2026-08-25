@@ -15,12 +15,18 @@ must be UTF-8 without BOM; credentials/evidence remain outside tracked files.
 ## Required rehearsal matrix
 
 - Verify policy/request tables, exact RPC signatures, SECURITY INVOKER,
-  hardened search paths, RLS, grants, and no PUBLIC/anon/authenticated execute.
+  hardened search paths, RLS enabled/not forced, exact service-role table
+  grants, immutable no-update/no-delete posture, required constraints/indexes,
+  and no PUBLIC/anon/authenticated execute.
 - Verify a consistent merchant/workspace/profile/source/published-policy path
   issues one request and returns one canonical ready snapshot.
 - Verify missing, duplicate, and conflicting workspace links fail closed.
-- Verify Lite, Business, and Solo Plus source/version/policy mismatches fail
-  closed; Solo Plus actor/timestamp/policy must match its case facts.
+- Verify Lite accepts only `lite_pending`/`needs_attention`, Solo Plus accepts
+  only `enhanced_pending`/`needs_attention`, and Business accepts only
+  `business_pending`/`needs_attention`; every cross-plan pending state must
+  fail closed before issue/snapshot readiness. Verify Lite, Business, and Solo
+  Plus source/version/policy mismatches fail closed; Solo Plus
+  actor/timestamp/policy must match its case facts.
 - Verify request retry returns the same immutable key only for an exact
   fingerprint; changed reviewer/source/version/target/policy/reason/profile
   version fails closed or produces a distinct valid request as designed.

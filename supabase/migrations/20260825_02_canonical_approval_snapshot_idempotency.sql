@@ -21,6 +21,7 @@ DECLARE
     ARRAY['merchants','id'], ARRAY['merchants','workspace_id'], ARRAY['workspaces','id'], ARRAY['workspaces','merchant_id']
   ];
   v_column text[];
+  v_bootstrap_signature text := 'public.bootstrap_reviewed_profile_v1(uuid,uuid,text,text,text,text,text,uuid,uuid,timestamptz)';
   v_approval_signature text := 'public.review_compliance_profile_decision_v1(uuid,uuid,text,text,uuid,bigint,text,bigint,uuid,text,text,timestamptz,text)';
 BEGIN
   IF to_regrole('service_role') IS NULL OR to_regrole('anon') IS NULL OR to_regrole('authenticated') IS NULL THEN
@@ -34,6 +35,18 @@ BEGIN
       RAISE EXCEPTION 'Migration 028 prerequisite failed: required column public.%.% is unavailable', v_column[1], v_column[2];
     END IF;
   END LOOP;
+  IF to_regprocedure(v_bootstrap_signature) IS NULL OR EXISTS (
+    SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.proname = 'bootstrap_reviewed_profile_v1'
+      AND p.oid <> to_regprocedure(v_bootstrap_signature)::oid
+  ) OR EXISTS (
+    SELECT 1 FROM pg_proc p WHERE p.oid = to_regprocedure(v_bootstrap_signature)
+      AND (p.prosecdef OR NOT (p.proconfig @> ARRAY['search_path=pg_catalog, public']))
+  ) OR has_function_privilege('anon', v_bootstrap_signature, 'EXECUTE')
+    OR has_function_privilege('authenticated', v_bootstrap_signature, 'EXECUTE')
+    OR NOT has_function_privilege('service_role', v_bootstrap_signature, 'EXECUTE') THEN
+    RAISE EXCEPTION 'Migration 028 prerequisite failed: M025 bootstrap RPC security/grant posture is incompatible';
+  END IF;
   IF to_regprocedure(v_approval_signature) IS NULL OR EXISTS (
     SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
     WHERE n.nspname = 'public' AND p.proname = 'review_compliance_profile_decision_v1'
@@ -59,6 +72,21 @@ BEGIN
     SELECT 1 FROM pg_policy p WHERE p.polrelid IN (to_regclass('public.merchant_compliance_profiles'),to_regclass('public.merchant_compliance_reviews'),to_regclass('public.merchant_compliance_events'))
   ) THEN
     RAISE EXCEPTION 'Migration 028 prerequisite failed: compliance RLS/grant/policy posture is incompatible';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint c
+    JOIN unnest(c.conkey) WITH ORDINALITY k(attnum, ordinality) ON true
+    JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+    WHERE c.conrelid = to_regclass('public.merchants') AND c.contype = 'p'
+      AND array_length(c.conkey, 1) = 1 AND a.attname = 'id'
+  ) OR NOT EXISTS (
+    SELECT 1 FROM pg_constraint c
+    JOIN unnest(c.conkey) WITH ORDINALITY k(attnum, ordinality) ON true
+    JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+    WHERE c.conrelid = to_regclass('public.workspaces') AND c.contype = 'p'
+      AND array_length(c.conkey, 1) = 1 AND a.attname = 'id'
+  ) THEN
+    RAISE EXCEPTION 'Migration 028 prerequisite failed: merchant/workspace primary-key uniqueness is unavailable';
   END IF;
 END;
 $migration_028_prerequisites$;
@@ -129,6 +157,8 @@ CREATE TABLE IF NOT EXISTS public.approval_decision_requests (
 CREATE INDEX IF NOT EXISTS idx_approval_decision_requests_profile_source ON public.approval_decision_requests (profile_id, source_id, issued_at);
 ALTER TABLE public.approval_policy_versions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.approval_decision_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.approval_policy_versions NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.approval_decision_requests NO FORCE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.approval_policy_versions, public.approval_decision_requests FROM PUBLIC, anon, authenticated, service_role;
 GRANT SELECT ON TABLE public.approval_policy_versions TO service_role;
 GRANT SELECT, INSERT ON TABLE public.approval_decision_requests TO service_role;
@@ -153,7 +183,13 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM auth.users u WHERE u.id = p_reviewer_id) THEN RETURN QUERY SELECT 'canonical_request_reviewer_invalid', NULL::uuid, NULL::text; RETURN; END IF;
   SELECT * INTO v_profile FROM public.merchant_compliance_profiles p WHERE p.id = p_profile_id;
   IF NOT FOUND THEN RETURN QUERY SELECT 'canonical_request_profile_missing', NULL::uuid, NULL::text; RETURN; END IF;
-  IF v_profile.plan_code NOT IN ('solo_lite','solo_plus','business') OR v_profile.row_version <= 0 OR v_profile.compliance_status NOT IN ('lite_pending','enhanced_pending','business_pending','needs_attention')
+  IF v_profile.plan_code NOT IN ('solo_lite','solo_plus','business') OR v_profile.row_version <= 0
+    OR NOT COALESCE(
+      (v_profile.plan_code='solo_lite' AND v_profile.compliance_status IN ('lite_pending','needs_attention'))
+      OR (v_profile.plan_code='solo_plus' AND v_profile.compliance_status IN ('enhanced_pending','needs_attention'))
+      OR (v_profile.plan_code='business' AND v_profile.compliance_status IN ('business_pending','needs_attention')),
+      false
+    )
     OR v_profile.decision_source_type NOT IN ('solo_lite_review','solo_plus_case','business_kyb_review') OR v_profile.decision_source_id IS NULL
     OR (v_profile.plan_code='solo_lite' AND v_profile.decision_source_type <> 'solo_lite_review') OR (v_profile.plan_code='solo_plus' AND v_profile.decision_source_type <> 'solo_plus_case') OR (v_profile.plan_code='business' AND v_profile.decision_source_type <> 'business_kyb_review') THEN
     RETURN QUERY SELECT 'canonical_request_profile_state_invalid', NULL::uuid, NULL::text; RETURN;
@@ -220,7 +256,12 @@ BEGIN
   ELSIF v_replay_count=1 AND v_profile.row_version=v_request.expected_profile_row_version+1 AND v_profile.compliance_status=v_request.target_compliance_status THEN
     RETURN QUERY SELECT 'canonical_snapshot_replay_candidate',v_request.id,v_request.decision_idempotency_key,v_request.merchant_id,v_request.workspace_id,v_request.profile_id,v_request.plan_code,v_profile.compliance_status,v_request.source_type,v_request.source_id,v_request.source_version,v_request.expected_profile_row_version,v_request.policy_version,v_request.reviewer_id,v_request.reviewed_at,v_request.reason_code,v_request.target_compliance_status; RETURN;
   END IF;
-  IF v_profile.row_version<>v_request.expected_profile_row_version OR v_profile.plan_code<>v_request.plan_code OR v_profile.decision_source_type<>v_request.source_type OR v_profile.decision_source_id<>v_request.source_id OR (v_profile.decision_source_version IS NOT NULL AND v_profile.decision_source_version<>v_request.source_version) OR v_profile.compliance_status NOT IN ('lite_pending','enhanced_pending','business_pending','needs_attention') THEN
+  IF v_profile.row_version<>v_request.expected_profile_row_version OR v_profile.plan_code<>v_request.plan_code OR v_profile.decision_source_type<>v_request.source_type OR v_profile.decision_source_id<>v_request.source_id OR (v_profile.decision_source_version IS NOT NULL AND v_profile.decision_source_version<>v_request.source_version) OR NOT COALESCE(
+    (v_profile.plan_code='solo_lite' AND v_profile.compliance_status IN ('lite_pending','needs_attention'))
+    OR (v_profile.plan_code='solo_plus' AND v_profile.compliance_status IN ('enhanced_pending','needs_attention'))
+    OR (v_profile.plan_code='business' AND v_profile.compliance_status IN ('business_pending','needs_attention')),
+    false
+  ) THEN
     RETURN QUERY SELECT 'canonical_snapshot_stale_or_conflicting',v_request.id,NULL::text,NULL::uuid,NULL::uuid,NULL::uuid,NULL::text,NULL::text,NULL::text,NULL::uuid,NULL::bigint,NULL::bigint,NULL::text,NULL::uuid,NULL::timestamptz,NULL::text,NULL::text; RETURN;
   END IF;
   IF v_request.plan_code IN ('solo_lite','business') THEN
