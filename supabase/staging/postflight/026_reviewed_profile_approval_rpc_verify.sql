@@ -1,0 +1,50 @@
+WITH fn AS (
+  SELECT procedure_state.oid, procedure_state.prosecdef, procedure_state.proconfig, procedure_state.proargtypes::regtype[] args
+  FROM pg_proc procedure_state
+  JOIN pg_namespace namespace_state ON namespace_state.oid = procedure_state.pronamespace
+  WHERE namespace_state.nspname='public' AND procedure_state.proname='review_compliance_profile_decision_v1'
+), checks AS (
+  SELECT 'rpc.signature'::text check_name,
+    CASE WHEN count(*)=1 AND bool_and(oid=to_regprocedure('public.review_compliance_profile_decision_v1(uuid,uuid,text,text,uuid,bigint,text,bigint,uuid,text,text,timestamptz,text)'))
+      THEN 'PASS' ELSE 'FAIL' END status,
+    'One exact 13-argument approval RPC'::text details
+  FROM fn
+  UNION ALL
+  SELECT 'rpc.security', CASE WHEN count(*)=1 AND bool_and(prosecdef=false)
+    AND bool_and(proconfig @> ARRAY['search_path=pg_catalog, public']) THEN 'PASS' ELSE 'FAIL' END,
+    'SECURITY INVOKER with hardened search path' FROM fn
+  UNION ALL
+  SELECT 'rpc.browser_grants', CASE WHEN NOT EXISTS (
+    SELECT 1 FROM information_schema.routine_privileges privilege_state
+    WHERE privilege_state.routine_schema='public' AND privilege_state.routine_name='review_compliance_profile_decision_v1'
+      AND privilege_state.grantee IN ('PUBLIC','anon','authenticated')
+  ) THEN 'PASS' ELSE 'FAIL' END, 'No PUBLIC/anon/authenticated EXECUTE'
+  UNION ALL
+  SELECT 'rpc.service_role_grant', CASE WHEN EXISTS (
+    SELECT 1 FROM information_schema.routine_privileges privilege_state
+    WHERE privilege_state.routine_schema='public' AND privilege_state.routine_name='review_compliance_profile_decision_v1'
+      AND privilege_state.grantee='service_role' AND privilege_state.privilege_type='EXECUTE'
+  ) THEN 'PASS' ELSE 'FAIL' END, 'service_role EXECUTE only'
+  UNION ALL
+  SELECT 'compliance.browser_grants', CASE WHEN NOT EXISTS (
+    SELECT 1 FROM information_schema.role_table_grants grant_state
+    WHERE grant_state.table_schema='public'
+      AND grant_state.table_name IN ('merchant_compliance_profiles','merchant_compliance_reviews','merchant_compliance_events')
+      AND grant_state.grantee IN ('PUBLIC','anon','authenticated')
+  ) THEN 'PASS' ELSE 'FAIL' END, 'No browser/public compliance-table grants'
+  UNION ALL
+  SELECT 'compliance.browser_policies', CASE WHEN NOT EXISTS (
+    SELECT 1 FROM pg_policy policy_state
+    WHERE policy_state.polrelid IN ('public.merchant_compliance_profiles'::regclass,'public.merchant_compliance_reviews'::regclass,'public.merchant_compliance_events'::regclass)
+  ) THEN 'PASS' ELSE 'FAIL' END, 'Zero browser policies on compliance tables'
+  UNION ALL
+  SELECT 'data.empty_after_apply', CASE WHEN
+    (SELECT count(*) FROM public.merchant_compliance_profiles)=0
+    AND (SELECT count(*) FROM public.merchant_compliance_reviews)=0
+    AND (SELECT count(*) FROM public.merchant_compliance_events)=0
+    THEN 'PASS' ELSE 'FAIL' END, 'Migration created no compliance business rows'
+)
+SELECT check_name,'rpc/security'::text object_type,status,details FROM checks
+UNION ALL
+SELECT 'summary','summary',CASE WHEN bool_and(status='PASS') THEN 'PASS' ELSE 'FAIL' END,
+  'All postflight checks must pass' FROM checks;
