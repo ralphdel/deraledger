@@ -5,10 +5,12 @@ import "server-only";
 // any live approval path.
 export {
   REVIEW_COMPLIANCE_PROFILE_DECISION_RPC,
+  createComplianceProfileApprovalRpcAdapter,
   executeReviewedProfileApprovalRpc,
   toReviewedProfileApprovalRpcArguments,
   type ComplianceProfileApprovalRpcClientReasonCode,
   type ComplianceProfileApprovalRpcClientResult,
+  type ComplianceProfileApprovalRpcAdapter,
   type ReviewedProfileApprovalRpcArguments,
   type ReviewedProfileApprovalRpcRow,
   type ReviewedProfileApprovalRpcTransport,

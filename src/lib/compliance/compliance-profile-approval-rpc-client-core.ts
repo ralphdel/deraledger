@@ -38,6 +38,15 @@ export interface ReviewedProfileApprovalRpcTransport {
   ): Promise<readonly ReviewedProfileApprovalRpcRow[]>;
 }
 
+/** The executor receives this narrow dependency rather than a DB client. */
+export interface ComplianceProfileApprovalRpcAdapter {
+  execute(
+    command: ComplianceProfileApprovalPayload,
+    profileId: string,
+    context: ComplianceApprovalServiceRoleContext | null,
+  ): Promise<ComplianceProfileApprovalRpcClientResult>;
+}
+
 export type ComplianceProfileApprovalRpcClientReasonCode =
   | "approval_rpc_context_denied"
   | "approval_rpc_transport_missing"
@@ -137,4 +146,18 @@ export async function executeReviewedProfileApprovalRpc(
   } catch {
     return { kind: "rejected", diagnostics: [{ code: "approval_rpc_rejected" }] };
   }
+}
+
+/**
+ * Binds a supplied transport to the adapter interface. This construction is
+ * inert and deliberately does not create a Supabase or database client.
+ */
+export function createComplianceProfileApprovalRpcAdapter(
+  transport: ReviewedProfileApprovalRpcTransport | null,
+): ComplianceProfileApprovalRpcAdapter {
+  return {
+    execute(command, profileId, context) {
+      return executeReviewedProfileApprovalRpc(command, profileId, context, transport);
+    },
+  };
 }

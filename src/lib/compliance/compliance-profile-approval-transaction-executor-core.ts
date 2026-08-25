@@ -1,4 +1,13 @@
-import type { ComplianceProfileApprovalPayload } from "./compliance-profile-approval-command-core";
+import {
+  prepareComplianceProfileApprovalCommand,
+  type ComplianceProfileApprovalReasonCode,
+  type ComplianceProfileApprovalCommandRequest,
+  type ComplianceProfileApprovalPayload,
+} from "./compliance-profile-approval-command-core";
+import type {
+  ComplianceProfileApprovalRpcAdapter,
+  ComplianceProfileApprovalRpcClientReasonCode,
+} from "./compliance-profile-approval-rpc-client-core";
 import {
   prepareComplianceProfileApprovalPersistence,
   type ComplianceApprovalServiceRoleContext,
@@ -22,12 +31,13 @@ export interface ComplianceProfileApprovalTransactionRunner {
 export type ComplianceProfileApprovalTransactionExecutorReasonCode =
   | "approval_transaction_context_denied"
   | "approval_transaction_runner_missing"
-  | "approval_transaction_atomic_write_failed";
+  | "approval_transaction_atomic_write_failed"
+  | "approval_rpc_adapter_missing";
 
 export type ComplianceProfileApprovalTransactionExecutorResult =
   | {
       kind: "rejected";
-      diagnostics: readonly [{ code: ComplianceProfileApprovalPersistenceReasonCode | ComplianceProfileApprovalTransactionExecutorReasonCode }];
+      diagnostics: readonly [{ code: ComplianceProfileApprovalReasonCode | ComplianceProfileApprovalPersistenceReasonCode | ComplianceProfileApprovalTransactionExecutorReasonCode | ComplianceProfileApprovalRpcClientReasonCode }];
     }
   | {
       kind: "created";
@@ -58,6 +68,54 @@ function safeState(command: ComplianceProfileApprovalPayload): Record<string, un
     restriction_state: command.restrictionState,
     merchant_entitlements: command.merchantEntitlements,
   };
+}
+
+function resolvedProfileId(profileId: string | null): string | null {
+  const normalized = profileId?.trim() ?? "";
+  return normalized || null;
+}
+
+/**
+ * Source-only bridge from the existing command validator to an injected RPC
+ * adapter. It is not a runtime call site and never constructs a DB client.
+ */
+export async function executeComplianceProfileApprovalRpcTransaction(
+  request: ComplianceProfileApprovalCommandRequest,
+  profileId: string | null,
+  context: ComplianceApprovalServiceRoleContext | null,
+  adapter: ComplianceProfileApprovalRpcAdapter | null,
+): Promise<ComplianceProfileApprovalTransactionExecutorResult> {
+  const command = prepareComplianceProfileApprovalCommand(request);
+  if (command.kind === "rejected") return command;
+  const resolved = resolvedProfileId(profileId);
+  if (!resolved) {
+    return { kind: "rejected", diagnostics: [{ code: "approval_persistence_command_missing" }] };
+  }
+  if (command.kind === "existing") {
+    return { kind: "preserved", profileId: resolved, diagnostics: [{ code: "approval_profile_preserved" }] };
+  }
+  if (!adapter) {
+    return { kind: "rejected", diagnostics: [{ code: "approval_rpc_adapter_missing" }] };
+  }
+
+  try {
+    const result = await adapter.execute(command.payload, resolved, context);
+    if (result.kind === "created") {
+      return {
+        kind: "created", profileId: result.profileId, reviewId: null,
+        soloPlusCaseId: null, eventId: result.eventId, diagnostics: [],
+      };
+    }
+    if (result.kind === "replay") {
+      return { kind: "replay", profileId: result.profileId, eventId: result.eventId, diagnostics: result.diagnostics };
+    }
+    if (result.kind === "preserved") {
+      return { kind: "preserved", profileId: result.profileId, diagnostics: result.diagnostics };
+    }
+    return result;
+  } catch {
+    return { kind: "rejected", diagnostics: [{ code: "approval_rpc_rejected" }] };
+  }
 }
 
 /**
