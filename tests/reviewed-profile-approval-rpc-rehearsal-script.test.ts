@@ -35,10 +35,12 @@ function run() {
     "20260820_00_prd_phase_2_compliance_schema_substrate.sql",
     "20260824_00_reviewed_profile_bootstrap_rpc.sql",
     "20260825_00_reviewed_profile_approval_rpc.sql",
+    "20260825_01_cleanup_approval_rpc_diagnostics.sql",
   ]) {
     assert.match(script, new RegExp(migration.replaceAll(".", "\\.")));
   }
   assert.match(script, /Running Migration 026 preflight[\s\S]*Applying Migration 026 first time[\s\S]*Applying Migration 026 second time for idempotency[\s\S]*Running Migration 026 postflight/);
+  assert.match(script, /Running Migration 027 preflight[\s\S]*Applying Migration 027 first time[\s\S]*Applying Migration 027 second time for idempotency[\s\S]*Running Migration 027 postflight/);
   assert.match(script, /026_reviewed_profile_approval_rpc_snapshot\.sql/);
   assert.match(script, /026_reviewed_profile_approval_rpc_verify\.sql/);
   for (const table of ["merchant_compliance_profiles", "merchant_compliance_reviews", "solo_plus_cases"]) {
@@ -115,15 +117,15 @@ function run() {
   assert.match(script, /review_type = CASE 'solo_lite_review'[\s\S]*?WHEN 'solo_lite_review' THEN 'solo_lite'[\s\S]*?WHEN 'business_kyb_review' THEN 'business_kyb'/);
   assert.match(script, /review_type = CASE 'business_kyb_review'[\s\S]*?WHEN 'solo_lite_review' THEN 'solo_lite'[\s\S]*?WHEN 'business_kyb_review' THEN 'business_kyb'/);
   assert.match(script, /DIAGNOSTIC\|lite_review_source_before_rpc/);
-  assert.match(script, /CREATE TEMP TABLE approval_rpc_internal_diagnostics/);
-  assert.match(script, /SET LOCAL deraledger\.local_approval_rehearsal_diagnostics = 'on'/);
+  assert.doesNotMatch(script, /CREATE TEMP TABLE approval_rpc_internal_diagnostics/);
+  assert.doesNotMatch(script, /deraledger\.local_approval_rehearsal_diagnostics/);
   assert.match(script, /DIAGNOSTIC\|approval_rpc_function_identity/);
   assert.match(script, /LOCAL_APPROVAL_RPC_IDENTITY_MISMATCH/);
   assert.match(script, /LOCAL_APPROVAL_RPC_BODY_MISMATCH/);
   assert.match(script, /pg_get_functiondef\(v_expected_signature\)/);
   assert.match(script, /review_type = CASE p_source_type/);
   assert.doesNotMatch(script, /review_type = CASE WHEN p_plan_code = 'solo_lite' THEN 'solo_lite' ELSE 'business_kyb' END/);
-  assert.match(script, /DIAGNOSTIC\|approval_rpc_internal_values/);
+  assert.doesNotMatch(script, /DIAGNOSTIC\|approval_rpc_internal_values/);
   for (const field of [
     "input_merchant_id", "input_profile_id", "input_source_type", "input_source_id",
     "input_source_version", "input_plan_code", "input_target_status", "input_expected_row_version",

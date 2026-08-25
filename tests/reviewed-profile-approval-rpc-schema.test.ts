@@ -6,6 +6,9 @@ const migration = "supabase/migrations/20260825_00_reviewed_profile_approval_rpc
 const substrateMigration = "supabase/migrations/20260820_00_prd_phase_2_compliance_schema_substrate.sql";
 const preflight = "supabase/staging/preflight/026_reviewed_profile_approval_rpc_snapshot.sql";
 const postflight = "supabase/staging/postflight/026_reviewed_profile_approval_rpc_verify.sql";
+const cleanupMigration = "supabase/migrations/20260825_01_cleanup_approval_rpc_diagnostics.sql";
+const cleanupPreflight = "supabase/staging/preflight/027_cleanup_approval_rpc_diagnostics_snapshot.sql";
+const cleanupPostflight = "supabase/staging/postflight/027_cleanup_approval_rpc_diagnostics_verify.sql";
 const signature = "review_compliance_profile_decision_v1(uuid,uuid,text,text,uuid,bigint,text,bigint,uuid,text,text,timestamptz,text)";
 
 function sourceFiles(directory: string): string[] {
@@ -140,6 +143,51 @@ function run() {
   assert.match(preflightSql, /to_regclass\('public\.merchant_compliance_reviews'\)/);
   assert.match(preflightSql, /to_regclass\('public\.merchant_compliance_events'\)/);
   assert.doesNotMatch(preflightSql, /'public\.merchant_compliance_(?:profiles|reviews|events)'::regclass/);
+
+  for (const file of [cleanupMigration, cleanupPreflight, cleanupPostflight]) assertNoBom(file);
+  const cleanupSql = readFileSync(cleanupMigration, "utf8");
+  const cleanupPreflightSql = readFileSync(cleanupPreflight, "utf8");
+  const cleanupPostflightSql = readFileSync(cleanupPostflight, "utf8");
+  assert.match(cleanupSql, /^BEGIN;[\s\S]*COMMIT;\s*$/);
+  assert.equal((cleanupSql.match(/CREATE OR REPLACE FUNCTION public\.review_compliance_profile_decision_v1\(/g) ?? []).length, 1);
+  assert.match(cleanupSql, new RegExp(signature.replaceAll("(", "\\(").replaceAll(")", "\\)")));
+  assert.match(cleanupSql, /RETURNS TABLE\(result_code text, profile_id uuid, event_id uuid, resulting_row_version bigint\)/);
+  assert.match(cleanupSql, /SECURITY INVOKER/);
+  assert.doesNotMatch(cleanupSql, /SECURITY DEFINER/);
+  assert.match(cleanupSql, /SET search_path TO pg_catalog, public/);
+  assert.match(cleanupSql, /REVOKE ALL ON FUNCTION public\.review_compliance_profile_decision_v1\([\s\S]*FROM PUBLIC, anon, authenticated, service_role/);
+  assert.match(cleanupSql, /GRANT EXECUTE ON FUNCTION public\.review_compliance_profile_decision_v1\([\s\S]*TO service_role/);
+  assert.match(cleanupSql, /FROM public\.merchant_compliance_reviews AS review_source[\s\S]*?review_source\.profile_id = v_profile\.id[\s\S]*?review_source\.review_type = CASE p_source_type[\s\S]*?review_source\.row_version = p_source_version/);
+  for (const diagnostic of [
+    "LOCAL_APPROVAL_BRANCH", "LOCAL_APPROVAL_EXCEPTION", "deraledger.local_approval_rehearsal_diagnostics",
+    "approval_rpc_internal_diagnostics", "GET STACKED DIAGNOSTICS",
+  ]) {
+    assert.doesNotMatch(cleanupSql, new RegExp(diagnostic.replaceAll(".", "\\.")));
+  }
+  assert.match(cleanupSql, /approval_profile_update_failed/);
+  assert.match(cleanupSql, /approval_event_insert_failed/);
+  assert.match(cleanupSql, /approval_atomic_write_failed_unknown/);
+  assert.match(cleanupSql, /approval_idempotent_replay/);
+  assert.match(cleanupSql, /approval_idempotency_conflict/);
+  assert.match(cleanupSql, /row_version = v_profile\.row_version \+ 1/);
+  assert.match(cleanupSql, /INSERT INTO public\.merchant_compliance_events/);
+  assert.match(cleanupSql, /NOTIFY pgrst, 'reload schema'/);
+  assert.doesNotMatch(cleanupSql, /UPDATE public\.merchant_compliance_reviews|UPDATE public\.solo_plus_cases/);
+  for (const table of [
+    "merchants", "workspaces", "subscriptions", "invoices", "payment_records",
+    "merchant_collection_limit_windows", "merchant_collection_limit_reservations",
+    "merchant_collection_limit_reservation_windows", "merchant_collection_usage_events",
+  ]) {
+    assert.doesNotMatch(cleanupSql, new RegExp(`(?:INSERT INTO|UPDATE|DELETE FROM|TRUNCATE) public\\.${table}`));
+  }
+  assert.doesNotMatch(cleanupSql, /setup_mode\s*=|live_features_enabled\s*=|can_collect_payments\s*=/);
+  assert.doesNotMatch(cleanupSql, /activation_status\s*=\s*'active'/);
+  assert.doesNotMatch(cleanupSql, /checkout|paystack|monnify|breet|provider[_ ]?call/i);
+  assert.match(cleanupPreflightSql, /migration_026\.rpc_signature[\s\S]*rpc\.browser_grants[\s\S]*compliance\.browser_policies[\s\S]*summary/);
+  assert.match(cleanupPostflightSql, /rpc\.signature[\s\S]*rpc\.security[\s\S]*rpc\.diagnostics_removed[\s\S]*rpc\.browser_grants[\s\S]*data\.empty_after_apply[\s\S]*summary/);
+  assert.match(cleanupPostflightSql, /pg_get_functiondef[\s\S]*LOCAL_APPROVAL_BRANCH[\s\S]*GET STACKED DIAGNOSTICS/);
+  assert.doesNotMatch(cleanupPreflightSql, /INSERT|UPDATE|DELETE|TRUNCATE/i);
+  assert.doesNotMatch(cleanupPostflightSql, /INSERT|UPDATE|DELETE|TRUNCATE/i);
 
   for (const file of [...sourceFiles("src/app"), "src/lib/actions.ts"]) {
     assert.doesNotMatch(readFileSync(file, "utf8"), /review_compliance_profile_decision_v1|compliance-profile-approval-transaction-client/);

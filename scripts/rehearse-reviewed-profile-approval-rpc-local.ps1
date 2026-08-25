@@ -14,8 +14,11 @@ $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $Migration024 = Join-Path $ProjectRoot 'supabase/migrations/20260820_00_prd_phase_2_compliance_schema_substrate.sql'
 $Migration025 = Join-Path $ProjectRoot 'supabase/migrations/20260824_00_reviewed_profile_bootstrap_rpc.sql'
 $Migration026 = Join-Path $ProjectRoot 'supabase/migrations/20260825_00_reviewed_profile_approval_rpc.sql'
+$Migration027 = Join-Path $ProjectRoot 'supabase/migrations/20260825_01_cleanup_approval_rpc_diagnostics.sql'
 $Preflight026 = Join-Path $ProjectRoot 'supabase/staging/preflight/026_reviewed_profile_approval_rpc_snapshot.sql'
 $Postflight026 = Join-Path $ProjectRoot 'supabase/staging/postflight/026_reviewed_profile_approval_rpc_verify.sql'
+$Preflight027 = Join-Path $ProjectRoot 'supabase/staging/preflight/027_cleanup_approval_rpc_diagnostics_snapshot.sql'
+$Postflight027 = Join-Path $ProjectRoot 'supabase/staging/postflight/027_cleanup_approval_rpc_diagnostics_verify.sql'
 
 function Get-LocalPgHost {
   param([Parameter(Mandatory = $true)][string]$ConnectionString)
@@ -58,14 +61,14 @@ if (-not $Execute) {
   exit 0
 }
 
-foreach ($path in @($Migration024, $Migration025, $Migration026, $Preflight026, $Postflight026)) {
+foreach ($path in @($Migration024, $Migration025, $Migration026, $Migration027, $Preflight026, $Postflight026, $Preflight027, $Postflight027)) {
   if (-not (Test-Path -LiteralPath $path)) { throw "LOCAL_APPROVAL_REHEARSAL_SOURCE_MISSING: $path" }
 }
 
 $Psql = (Get-Command $PsqlPath -ErrorAction Stop).Source
 $TempDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ("deraledger-approval-rpc-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $TempDirectory -Force | Out-Null
-$BaselineSql = Join-Path $TempDirectory '024-025-026-local-prerequisites.sql'
+$BaselineSql = Join-Path $TempDirectory '024-025-026-027-local-prerequisites.sql'
 $BehaviorSql = Join-Path $TempDirectory '026-rpc-behavior.sql'
 
 try {
@@ -174,23 +177,6 @@ CREATE TEMP TABLE approval_scenario_results (
   safe_failure_code text
 );
 GRANT SELECT, INSERT ON TABLE approval_scenario_results TO service_role, anon, authenticated;
-CREATE TEMP TABLE approval_rpc_internal_diagnostics (
-  diagnostic_name text NOT NULL,
-  merchant_id uuid NOT NULL,
-  profile_id uuid NOT NULL,
-  source_type text NOT NULL,
-  source_id uuid NOT NULL,
-  source_version bigint NOT NULL,
-  plan_code text NOT NULL,
-  target_status text NOT NULL,
-  expected_row_version bigint NOT NULL,
-  mapped_review_type text,
-  profile_compliance_status text,
-  profile_row_version bigint,
-  review_source_match_count bigint NOT NULL
-);
-GRANT SELECT, INSERT ON TABLE approval_rpc_internal_diagnostics TO service_role;
-
 INSERT INTO approval_scenario_results
 SELECT 'probe.fixture_shape', 'fixture_ready',
   CASE WHEN (SELECT count(*) FROM public.merchant_compliance_profiles) = 11
@@ -237,7 +223,6 @@ GRANT EXECUTE ON FUNCTION pg_temp.capture_approval_scenario(text,text,uuid,uuid,
 -- Local-only probes distinguish fixture, profile-write, event-write, and replay
 -- privilege/RLS readiness without exposing PostgreSQL errors or business data.
 SET LOCAL ROLE service_role;
-SET LOCAL deraledger.local_approval_rehearsal_diagnostics = 'on';
 
 -- Prove that this behavior session will call the single expected RPC identity
 -- and that its installed body contains the current source-type mapping.
@@ -269,7 +254,8 @@ BEGIN
   IF position('review_type = CASE p_source_type' IN v_body) = 0
     OR position('WHEN ''solo_lite_review'' THEN ''solo_lite''' IN v_body) = 0
     OR position('WHEN ''business_kyb_review'' THEN ''business_kyb''' IN v_body) = 0
-    OR position('review_type = CASE WHEN p_plan_code = ''solo_lite'' THEN ''solo_lite'' ELSE ''business_kyb'' END' IN v_body) <> 0 THEN
+    OR position('review_type = CASE WHEN p_plan_code = ''solo_lite'' THEN ''solo_lite'' ELSE ''business_kyb'' END' IN v_body) <> 0
+    OR v_body ~ 'LOCAL_APPROVAL_BRANCH|LOCAL_APPROVAL_EXCEPTION|deraledger\\.local_approval_rehearsal_diagnostics|approval_rpc_internal_diagnostics|GET STACKED DIAGNOSTICS' THEN
     RAISE EXCEPTION 'LOCAL_APPROVAL_RPC_BODY_MISMATCH';
   END IF;
 END;
@@ -481,15 +467,6 @@ END;
 $rehearsal$;
 RESET ROLE;
 
-SELECT
-  'DIAGNOSTIC|approval_rpc_internal_values' AS diagnostic_name,
-  diagnostic_name AS rpc_diagnostic_name,
-  merchant_id, profile_id, source_type, source_id, source_version, plan_code,
-  target_status, expected_row_version, mapped_review_type,
-  profile_compliance_status, profile_row_version, review_source_match_count
-FROM pg_temp.approval_rpc_internal_diagnostics
-ORDER BY profile_id, source_id;
-
 -- Structural duplicates are prevented by the Migration 024 primary/unique keys.
 DO $rehearsal$
 BEGIN
@@ -657,6 +634,14 @@ SELECT 'CONTROL|LOCAL_APPROVAL_REHEARSAL=PASS';
   Invoke-LocalPsqlFile $Migration026
   Write-Host 'Running Migration 026 postflight before disposable behavior seeding.'
   Invoke-LocalPsqlFile $Postflight026
+  Write-Host 'Running Migration 027 preflight.'
+  Invoke-LocalPsqlFile $Preflight027
+  Write-Host 'Applying Migration 027 first time.'
+  Invoke-LocalPsqlFile $Migration027
+  Write-Host 'Applying Migration 027 second time for idempotency.'
+  Invoke-LocalPsqlFile $Migration027
+  Write-Host 'Running Migration 027 postflight before disposable behavior seeding.'
+  Invoke-LocalPsqlFile $Postflight027
   Write-Host 'Rehearsing approval, fail-closed, idempotency, rollback, hostile-role, and forbidden-write safety.'
   Invoke-LocalPsqlFile $BehaviorSql
 } finally {
