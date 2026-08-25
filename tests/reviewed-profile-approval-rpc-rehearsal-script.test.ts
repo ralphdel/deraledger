@@ -110,8 +110,8 @@ function run() {
   assert.match(script, /probe\.replay_lookup_privilege/);
   assert.match(script, /probe\.lite_review_source_exact/);
   assert.match(script, /probe\.business_review_source_exact/);
-  assert.match(script, /review_type = CASE WHEN 'solo_lite' = 'solo_lite' THEN 'solo_lite' ELSE 'business_kyb' END/);
-  assert.match(script, /review_type = CASE WHEN 'business' = 'solo_lite' THEN 'solo_lite' ELSE 'business_kyb' END/);
+  assert.match(script, /review_type = CASE 'solo_lite_review'[\s\S]*?WHEN 'solo_lite_review' THEN 'solo_lite'[\s\S]*?WHEN 'business_kyb_review' THEN 'business_kyb'/);
+  assert.match(script, /review_type = CASE 'business_kyb_review'[\s\S]*?WHEN 'solo_lite_review' THEN 'solo_lite'[\s\S]*?WHEN 'business_kyb_review' THEN 'business_kyb'/);
   assert.match(script, /DIAGNOSTIC\|lite_review_source_before_rpc/);
   for (const field of [
     "input_merchant_id", "input_profile_id", "input_source_type", "input_source_id",
@@ -125,7 +125,7 @@ function run() {
   const exactDiagnosticIndex = script.indexOf("DIAGNOSTIC|lite_review_source_before_rpc");
   const firstLiteInvocationIndex = script.indexOf("lite.pending_to_verified");
   assert.ok(exactDiagnosticIndex >= 0 && exactDiagnosticIndex < firstLiteInvocationIndex, "exact Lite diagnostic must run before the first Lite RPC call");
-  assert.match(script, /review_source\.profile_id = profile_state\.id[\s\S]*?review_source\.review_type = CASE WHEN rpc_input\.plan_code = 'solo_lite' THEN 'solo_lite' ELSE 'business_kyb' END[\s\S]*?review_source\.row_version = rpc_input\.source_version/);
+  assert.match(script, /review_source\.profile_id = profile_state\.id[\s\S]*?review_source\.review_type = CASE rpc_input\.source_type[\s\S]*?WHEN 'solo_lite_review' THEN 'solo_lite'[\s\S]*?WHEN 'business_kyb_review' THEN 'business_kyb'[\s\S]*?review_source\.row_version = rpc_input\.source_version/);
   assert.match(script, /probe\.case_source_read/);
   assert.match(script, /'00000000-0000-4000-8000-000000000112','local-026-missing-reviewer'/);
   assert.doesNotMatch(script, /lite verified failed:/);

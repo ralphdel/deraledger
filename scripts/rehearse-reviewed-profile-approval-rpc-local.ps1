@@ -255,7 +255,10 @@ SELECT 'probe.lite_review_source_exact', 'probe_ready',
                WHERE id = '00000000-0000-4000-8000-000000000401'
                  AND merchant_id = '00000000-0000-4000-8000-000000000201'
                  AND profile_id = '00000000-0000-4000-8000-000000000301'
-                 AND review_type = CASE WHEN 'solo_lite' = 'solo_lite' THEN 'solo_lite' ELSE 'business_kyb' END
+                 AND review_type = CASE 'solo_lite_review'
+                   WHEN 'solo_lite_review' THEN 'solo_lite'
+                   WHEN 'business_kyb_review' THEN 'business_kyb'
+                 END
                  AND target_plan_code = 'solo_lite'
                  AND review_status IN ('pending', 'needs_attention')
                  AND row_version = 1) = 1
@@ -265,7 +268,10 @@ SELECT 'probe.lite_review_source_exact', 'probe_ready',
          WHERE id = '00000000-0000-4000-8000-000000000401'
            AND merchant_id = '00000000-0000-4000-8000-000000000201'
            AND profile_id = '00000000-0000-4000-8000-000000000301'
-           AND review_type = CASE WHEN 'solo_lite' = 'solo_lite' THEN 'solo_lite' ELSE 'business_kyb' END
+           AND review_type = CASE 'solo_lite_review'
+             WHEN 'solo_lite_review' THEN 'solo_lite'
+             WHEN 'business_kyb_review' THEN 'business_kyb'
+           END
            AND target_plan_code = 'solo_lite'
            AND review_status IN ('pending', 'needs_attention')
            AND row_version = 1) = 1,
@@ -274,7 +280,10 @@ SELECT 'probe.lite_review_source_exact', 'probe_ready',
                WHERE id = '00000000-0000-4000-8000-000000000401'
                  AND merchant_id = '00000000-0000-4000-8000-000000000201'
                  AND profile_id = '00000000-0000-4000-8000-000000000301'
-                 AND review_type = CASE WHEN 'solo_lite' = 'solo_lite' THEN 'solo_lite' ELSE 'business_kyb' END
+                 AND review_type = CASE 'solo_lite_review'
+                   WHEN 'solo_lite_review' THEN 'solo_lite'
+                   WHEN 'business_kyb_review' THEN 'business_kyb'
+                 END
                  AND target_plan_code = 'solo_lite'
                  AND review_status IN ('pending', 'needs_attention')
                  AND row_version = 1) = 1
@@ -286,7 +295,10 @@ SELECT 'probe.business_review_source_exact', 'probe_ready',
                WHERE id = '00000000-0000-4000-8000-000000000405'
                  AND merchant_id = '00000000-0000-4000-8000-000000000205'
                  AND profile_id = '00000000-0000-4000-8000-000000000305'
-                 AND review_type = CASE WHEN 'business' = 'solo_lite' THEN 'solo_lite' ELSE 'business_kyb' END
+                 AND review_type = CASE 'business_kyb_review'
+                   WHEN 'solo_lite_review' THEN 'solo_lite'
+                   WHEN 'business_kyb_review' THEN 'business_kyb'
+                 END
                  AND target_plan_code = 'business'
                  AND review_status IN ('pending', 'needs_attention')
                  AND row_version = 1) = 1
@@ -296,7 +308,10 @@ SELECT 'probe.business_review_source_exact', 'probe_ready',
          WHERE id = '00000000-0000-4000-8000-000000000405'
            AND merchant_id = '00000000-0000-4000-8000-000000000205'
            AND profile_id = '00000000-0000-4000-8000-000000000305'
-           AND review_type = CASE WHEN 'business' = 'solo_lite' THEN 'solo_lite' ELSE 'business_kyb' END
+           AND review_type = CASE 'business_kyb_review'
+             WHEN 'solo_lite_review' THEN 'solo_lite'
+             WHEN 'business_kyb_review' THEN 'business_kyb'
+           END
            AND target_plan_code = 'business'
            AND review_status IN ('pending', 'needs_attention')
            AND row_version = 1) = 1,
@@ -305,7 +320,10 @@ SELECT 'probe.business_review_source_exact', 'probe_ready',
                WHERE id = '00000000-0000-4000-8000-000000000405'
                  AND merchant_id = '00000000-0000-4000-8000-000000000205'
                  AND profile_id = '00000000-0000-4000-8000-000000000305'
-                 AND review_type = CASE WHEN 'business' = 'solo_lite' THEN 'solo_lite' ELSE 'business_kyb' END
+                 AND review_type = CASE 'business_kyb_review'
+                   WHEN 'solo_lite_review' THEN 'solo_lite'
+                   WHEN 'business_kyb_review' THEN 'business_kyb'
+                 END
                  AND target_plan_code = 'business'
                  AND review_status IN ('pending', 'needs_attention')
                  AND row_version = 1) = 1
@@ -373,7 +391,10 @@ SELECT
     WHERE review_source.id = rpc_input.source_id
       AND review_source.merchant_id = rpc_input.merchant_id
       AND review_source.profile_id = profile_state.id
-      AND review_source.review_type = CASE WHEN rpc_input.plan_code = 'solo_lite' THEN 'solo_lite' ELSE 'business_kyb' END
+      AND review_source.review_type = CASE rpc_input.source_type
+        WHEN 'solo_lite_review' THEN 'solo_lite'
+        WHEN 'business_kyb_review' THEN 'business_kyb'
+      END
       AND review_source.target_plan_code = rpc_input.plan_code
       AND review_source.review_status IN ('pending', 'needs_attention')
       AND review_source.row_version = rpc_input.source_version

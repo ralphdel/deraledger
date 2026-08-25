@@ -48,11 +48,11 @@ function run() {
   assert.ok(sql.indexOf("v_failure_stage := 'reviewer_lookup';") < sql.indexOf("v_failure_stage := 'event_replay_lookup';"));
   assert.ok(sql.indexOf("v_failure_stage := 'reviewer_lookup';") < sql.indexOf("v_failure_stage := 'review_source_lookup';"));
   assert.match(reviewLookup, /SELECT count\(\*\) INTO v_review_source_count[\s\S]*?WHERE id = p_source_id[\s\S]*?merchant_id = p_merchant_id[\s\S]*?profile_id = v_profile\.id/);
-  assert.match(reviewLookup, /review_type = CASE WHEN p_plan_code = 'solo_lite' THEN 'solo_lite' ELSE 'business_kyb' END/);
+  assert.match(reviewLookup, /review_type = CASE p_source_type[\s\S]*?WHEN 'solo_lite_review' THEN 'solo_lite'[\s\S]*?WHEN 'business_kyb_review' THEN 'business_kyb'[\s\S]*?END/);
   assert.match(reviewLookup, /target_plan_code = p_plan_code[\s\S]*?review_status IN \('pending', 'needs_attention'\)[\s\S]*?row_version = p_source_version/);
-  assert.match(reviewLookup, /v_source_valid := v_review_source_count = 1/);
+  assert.match(reviewLookup, /IF v_review_source_count = 0 THEN[\s\S]*?approval_review_source_lookup_failed[\s\S]*?ELSIF v_review_source_count > 1 THEN[\s\S]*?approval_ambiguous_state[\s\S]*?v_source_valid := true/);
   assert.doesNotMatch(reviewLookup, /FOR UPDATE|SELECT \* INTO v_review/);
-  assert.match(reviewLookup, /review_type = CASE WHEN p_plan_code = 'solo_lite' THEN 'solo_lite' ELSE 'business_kyb' END[\s\S]*?target_plan_code = p_plan_code[\s\S]*?review_status IN \('pending', 'needs_attention'\)[\s\S]*?row_version = p_source_version/);
+  assert.match(reviewLookup, /review_type = CASE p_source_type[\s\S]*?solo_lite_review[\s\S]*?business_kyb_review[\s\S]*?target_plan_code = p_plan_code[\s\S]*?review_status IN \('pending', 'needs_attention'\)[\s\S]*?row_version = p_source_version/);
   assert.match(caseLookup, /WHERE id = p_source_id[\s\S]*?merchant_id = p_merchant_id/);
   assert.match(caseLookup, /target_plan = 'solo_plus'[\s\S]*?row_version::bigint = p_source_version[\s\S]*?requirements_policy_version = btrim\(p_policy_version\)/);
   assert.match(caseLookup, /case_status = 'approved'[\s\S]*?case_status = 'rejected'[\s\S]*?case_status IN \('verification_pending', 'manual_review'\)/);

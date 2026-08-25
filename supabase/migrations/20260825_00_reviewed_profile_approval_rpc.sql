@@ -180,7 +180,7 @@ DECLARE
   v_target_restriction_state text;
   v_reason_code text;
   v_source_valid boolean := false;
-  v_review_source_count integer := 0;
+  v_review_source_count bigint := 0;
   v_failure_stage text := 'payload_validation';
 BEGIN
   BEGIN
@@ -322,12 +322,22 @@ BEGIN
       WHERE id = p_source_id
         AND merchant_id = p_merchant_id
         AND profile_id = v_profile.id
-        AND review_type = CASE WHEN p_plan_code = 'solo_lite' THEN 'solo_lite' ELSE 'business_kyb' END
+        AND review_type = CASE p_source_type
+          WHEN 'solo_lite_review' THEN 'solo_lite'
+          WHEN 'business_kyb_review' THEN 'business_kyb'
+        END
         AND target_plan_code = p_plan_code
         AND review_status IN ('pending', 'needs_attention')
         AND row_version = p_source_version;
 
-      v_source_valid := v_review_source_count = 1;
+      IF v_review_source_count = 0 THEN
+        RETURN QUERY SELECT 'approval_review_source_lookup_failed', NULL::uuid, NULL::uuid, NULL::bigint;
+        RETURN;
+      ELSIF v_review_source_count > 1 THEN
+        RETURN QUERY SELECT 'approval_ambiguous_state', NULL::uuid, NULL::uuid, NULL::bigint;
+        RETURN;
+      END IF;
+      v_source_valid := true;
     ELSE
       v_failure_stage := 'case_source_lookup';
       -- Solo Plus cases are likewise read-only evidence sources here. Avoid a
