@@ -35,7 +35,9 @@ The first package should support only these reviewed decisions:
 | Solo Plus | `enhanced_pending` or `needs_attention` | `enhanced_verified` | `needs_attention`, `restricted`, `rejected` |
 | Business | `business_pending` or `needs_attention` | `business_verified` | `needs_attention`, `restricted`, `rejected` |
 
-For Lite and Business, the trusted decision source is the matching existing `merchant_compliance_reviews` row (`solo_lite` or `business_kyb`). For Solo Plus, it is the existing trusted `solo_plus_case`. The RPC validates the relevant source’s identity, plan, decision/evidence version, and reviewed outcome, but the first narrow RPC does not create a compliance review row and does not update the Solo Plus case. Any source-decision mutation belongs to its separately authorized review/case workflow and must precede this RPC.
+For Lite and Business, the trusted decision source is the matching existing `merchant_compliance_reviews` submission/evidence row (`solo_lite` or `business_kyb`) in `pending` or `needs_attention`. The approval command—not that source row—carries the separately authorized reviewer identity, target decision, policy version, reviewed time, and safe reason. The narrow RPC does not require the review row to have a policy version, and does not create or update it.
+
+For Solo Plus, the source is the existing trusted `solo_plus_case`, whose separately authorized case decision remains the evidence boundary: `approved` supports verified/restriction outcomes, `rejected` supports rejection, and `verification_pending`/`manual_review` supports `needs_attention`. The RPC does not create or update the case. Missing, stale, mismatched, or unsupported source states fail closed.
 
 `restricted` requires an explicit safe restriction reason and a non-operational profile state. A suspension is not a compliance-status literal: it is represented by `restriction_state = suspended` and `activation_status = suspended`, while the profile retains a canonical reviewed status, normally `restricted`. Rejection, restriction, suspension, and needs-attention outcomes stay non-operational. Existing verified, rejected, restricted, or suspended profiles are preserved unless a separately approved re-review or re-lock transition authorizes a change.
 
@@ -66,7 +68,7 @@ The profile update may change only canonical compliance-decision fields: `compli
 
 The decision idempotency key is scoped to the merchant’s append-only event stream. The RPC locks and checks it before changing the profile.
 
-- A replay is safe only if one existing event matches the merchant, profile, decision key, source type/ID/version, target state, expected/resulting versions, policy version, and safe reason code. It returns the original opaque result without a second update or event.
+- A replay is safe only if one existing event matches the merchant, profile, decision key, reviewer, plan, source type/ID/version, complete non-operational target state, expected/resulting versions, policy version, and safe reason code. It returns the original opaque result without a second update or event.
 - A reused key that differs in plan, source, target, expected version, policy version, or reason fails closed as `approval_idempotency_conflict`.
 - Zero or more than one matching profile, source, or event where a unique row is required is an ambiguity failure; the function must not select an arbitrary row.
 - A changed profile row version is `approval_row_version_conflict`; it creates no event and performs no update.

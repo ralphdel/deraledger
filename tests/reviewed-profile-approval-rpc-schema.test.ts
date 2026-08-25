@@ -38,6 +38,9 @@ function run() {
   assert.match(sql, /FOR UPDATE/);
   assert.match(sql, /approval_idempotent_replay/);
   assert.match(sql, /approval_idempotency_conflict/);
+  assert.match(sql, /v_event\.actor_id = p_reviewer_id/);
+  assert.match(sql, /v_event\.to_state ->> 'activation_status' = v_target_activation_status/);
+  assert.match(sql, /v_event\.metadata ->> 'plan_code' = p_plan_code/);
   assert.match(sql, /approval_row_version_conflict|approval_profile_state_invalid/);
   assert.match(sql, /row_version = v_profile\.row_version \+ 1/);
   assert.match(sql, /INSERT INTO public\.merchant_compliance_events/);
@@ -48,6 +51,9 @@ function run() {
   assert.match(sql, /enhanced_pending[\s\S]*enhanced_verified/);
   assert.match(sql, /business_pending[\s\S]*business_verified/);
   assert.match(sql, /needs_attention/);
+  assert.match(sql, /v_review\.review_status IN \('pending', 'needs_attention'\)/);
+  assert.doesNotMatch(sql, /v_review\.policy_version/);
+  assert.doesNotMatch(sql, /v_review\.review_status = 'approved'/);
   assert.match(sql, /risk_suspended[\s\S]*suspended/);
   assert.match(sql, /NOTIFY pgrst, 'reload schema'/);
 
@@ -72,6 +78,10 @@ function run() {
   assert.match(postflightSql, /rpc\.signature[\s\S]*rpc\.security[\s\S]*rpc\.browser_grants[\s\S]*rpc\.service_role_grant[\s\S]*data\.empty_after_apply[\s\S]*summary/);
   assert.doesNotMatch(preflightSql, /INSERT|UPDATE|DELETE|TRUNCATE/i);
   assert.doesNotMatch(postflightSql, /INSERT|UPDATE|DELETE|TRUNCATE/i);
+  assert.match(preflightSql, /to_regclass\('public\.merchant_compliance_profiles'\)/);
+  assert.match(preflightSql, /to_regclass\('public\.merchant_compliance_reviews'\)/);
+  assert.match(preflightSql, /to_regclass\('public\.merchant_compliance_events'\)/);
+  assert.doesNotMatch(preflightSql, /'public\.merchant_compliance_(?:profiles|reviews|events)'::regclass/);
 
   for (const file of [...sourceFiles("src/app"), "src/lib/actions.ts"]) {
     assert.doesNotMatch(readFileSync(file, "utf8"), /review_compliance_profile_decision_v1|compliance-profile-approval-transaction-client/);

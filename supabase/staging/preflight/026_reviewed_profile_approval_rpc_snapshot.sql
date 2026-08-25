@@ -8,8 +8,7 @@ WITH required_columns AS (
     ('merchant_compliance_reviews','id'), ('merchant_compliance_reviews','merchant_id'),
     ('merchant_compliance_reviews','profile_id'), ('merchant_compliance_reviews','review_type'),
     ('merchant_compliance_reviews','target_plan_code'), ('merchant_compliance_reviews','review_status'),
-    ('merchant_compliance_reviews','policy_version'), ('merchant_compliance_reviews','reviewed_at'),
-    ('merchant_compliance_reviews','reviewed_by'), ('merchant_compliance_reviews','row_version'),
+    ('merchant_compliance_reviews','row_version'),
     ('merchant_compliance_events','id'), ('merchant_compliance_events','merchant_id'),
     ('merchant_compliance_events','profile_id'), ('merchant_compliance_events','idempotency_key'),
     ('merchant_compliance_events','resulting_row_version'),
@@ -33,7 +32,11 @@ WITH required_columns AS (
   UNION ALL
   SELECT 'prerequisite.rls', CASE WHEN NOT EXISTS (
     SELECT 1 FROM pg_class relation
-    WHERE relation.oid IN ('public.merchant_compliance_profiles'::regclass,'public.merchant_compliance_reviews'::regclass,'public.merchant_compliance_events'::regclass)
+    WHERE relation.oid IN (
+      to_regclass('public.merchant_compliance_profiles'),
+      to_regclass('public.merchant_compliance_reviews'),
+      to_regclass('public.merchant_compliance_events')
+    )
       AND (NOT relation.relrowsecurity OR relation.relforcerowsecurity)
   ) THEN 'PASS' ELSE 'FAIL' END, 'RLS enabled and not forced on compliance tables'
   UNION ALL
@@ -46,7 +49,11 @@ WITH required_columns AS (
   UNION ALL
   SELECT 'prerequisite.browser_policies', CASE WHEN NOT EXISTS (
     SELECT 1 FROM pg_policy policy_state
-    WHERE policy_state.polrelid IN ('public.merchant_compliance_profiles'::regclass,'public.merchant_compliance_reviews'::regclass,'public.merchant_compliance_events'::regclass)
+    WHERE policy_state.polrelid IN (
+      to_regclass('public.merchant_compliance_profiles'),
+      to_regclass('public.merchant_compliance_reviews'),
+      to_regclass('public.merchant_compliance_events')
+    )
   ) THEN 'PASS' ELSE 'FAIL' END, 'Zero browser policies on compliance tables'
   UNION ALL
   SELECT 'migration_025.rpc_security', CASE WHEN EXISTS (

@@ -30,7 +30,6 @@ BEGIN
       ('merchant_compliance_reviews', 'review_type'),
       ('merchant_compliance_reviews', 'target_plan_code'),
       ('merchant_compliance_reviews', 'review_status'),
-      ('merchant_compliance_reviews', 'policy_version'),
       ('merchant_compliance_reviews', 'reviewed_at'),
       ('merchant_compliance_reviews', 'reviewed_by'),
       ('merchant_compliance_reviews', 'row_version'),
@@ -180,7 +179,7 @@ DECLARE
   v_from_compliance_status text;
   v_target_activation_status text;
   v_target_restriction_state text;
-  v_expected_review_status text;
+  v_reason_code text;
   v_source_valid boolean := false;
 BEGIN
   BEGIN
@@ -208,13 +207,25 @@ BEGIN
           WHEN 'business' THEN 'business_verified'
         END)
       OR (p_target_compliance_status IN ('needs_attention', 'restricted', 'rejected')
-        AND (p_reason_code IS NULL OR p_reason_code NOT IN (
+        AND (NULLIF(btrim(COALESCE(p_reason_code, '')), '') IS NULL OR NULLIF(btrim(COALESCE(p_reason_code, '')), '') NOT IN (
           'evidence_incomplete', 'evidence_expired', 'evidence_mismatch', 'review_rejected',
           'reviewer_requested_correction', 'policy_restriction', 'risk_restricted', 'risk_suspended'
         ))) THEN
       RETURN QUERY SELECT 'approval_payload_invalid', NULL::uuid, NULL::uuid, NULL::bigint;
       RETURN;
     END IF;
+
+    v_reason_code := NULLIF(btrim(COALESCE(p_reason_code, '')), '');
+    v_target_activation_status := CASE
+      WHEN p_target_compliance_status = 'restricted' AND v_reason_code = 'risk_suspended' THEN 'suspended'
+      WHEN p_target_compliance_status = 'restricted' THEN 'restricted'
+      ELSE 'test_mode'
+    END;
+    v_target_restriction_state := CASE
+      WHEN p_target_compliance_status = 'restricted' AND v_reason_code = 'risk_suspended' THEN 'suspended'
+      WHEN p_target_compliance_status = 'restricted' THEN 'restricted'
+      ELSE NULL
+    END;
 
     SELECT * INTO v_event
     FROM public.merchant_compliance_events
@@ -227,12 +238,24 @@ BEGIN
         AND v_event.event_type = 'compliance_profile_approval_v1'
         AND v_event.source_type = p_source_type
         AND v_event.source_id = p_source_id
+        AND v_event.actor_id = p_reviewer_id
         AND v_event.policy_version = btrim(p_policy_version)
-        AND v_event.reason_code IS NOT DISTINCT FROM NULLIF(btrim(COALESCE(p_reason_code, '')), '')
+        AND v_event.reason_code IS NOT DISTINCT FROM v_reason_code
         AND v_event.expected_row_version = p_expected_profile_row_version
         AND v_event.resulting_row_version = p_expected_profile_row_version + 1
         AND v_event.from_state ->> 'compliance_status' IN ('lite_pending', 'enhanced_pending', 'business_pending', 'needs_attention')
         AND v_event.to_state ->> 'compliance_status' = p_target_compliance_status
+        AND v_event.to_state ->> 'activation_status' = v_target_activation_status
+        AND v_event.to_state ->> 'restriction_state' IS NOT DISTINCT FROM v_target_restriction_state
+        AND v_event.to_state @> jsonb_build_object('merchant_entitlements', jsonb_build_object(
+          'canCollectPayments', false,
+          'canUseInstantSale', false,
+          'canUseReceivableSale', false,
+          'canUseStorefront', false,
+          'canActivateSettlement', false,
+          'canUseDepositBalance', false
+        ))
+        AND v_event.metadata ->> 'plan_code' = p_plan_code
         AND v_event.metadata ->> 'source_version' = p_source_version::text THEN
         RETURN QUERY SELECT 'approval_idempotent_replay', v_event.profile_id, v_event.id, v_event.resulting_row_version;
       ELSE
@@ -284,12 +307,6 @@ BEGIN
       RETURN;
     END IF;
 
-    v_expected_review_status := CASE
-      WHEN p_target_compliance_status IN ('lite_verified', 'enhanced_verified', 'business_verified', 'restricted') THEN 'approved'
-      WHEN p_target_compliance_status = 'rejected' THEN 'rejected'
-      ELSE 'needs_attention'
-    END;
-
     IF p_plan_code IN ('solo_lite', 'business') THEN
       SELECT * INTO v_review
       FROM public.merchant_compliance_reviews
@@ -301,11 +318,9 @@ BEGIN
       v_source_valid := COALESCE(FOUND
         AND v_review.review_type = CASE WHEN p_plan_code = 'solo_lite' THEN 'solo_lite' ELSE 'business_kyb' END
         AND v_review.target_plan_code = p_plan_code
-        AND v_review.review_status = v_expected_review_status
+        AND v_review.review_status IN ('pending', 'needs_attention')
         AND v_review.row_version = p_source_version
-        AND v_review.reviewed_at = p_reviewed_at
-        AND v_review.reviewed_by = p_reviewer_id
-        AND v_review.policy_version = btrim(p_policy_version), false);
+        , false);
     ELSE
       SELECT * INTO v_case
       FROM public.solo_plus_cases
@@ -318,15 +333,15 @@ BEGIN
         AND v_case.row_version::bigint = p_source_version
         AND v_case.requirements_policy_version = btrim(p_policy_version)
         AND (
-          (v_expected_review_status = 'approved'
+          (p_target_compliance_status IN ('enhanced_verified', 'restricted')
             AND v_case.case_status = 'approved'
             AND v_case.approved_at = p_reviewed_at
             AND v_case.approved_by_admin_id = p_reviewer_id)
-          OR (v_expected_review_status = 'rejected'
+          OR (p_target_compliance_status = 'rejected'
             AND v_case.case_status = 'rejected'
             AND v_case.rejected_at = p_reviewed_at
             AND v_case.rejected_by_admin_id = p_reviewer_id)
-          OR (v_expected_review_status = 'needs_attention'
+          OR (p_target_compliance_status = 'needs_attention'
             AND v_case.case_status IN ('verification_pending', 'manual_review'))
         ), false);
     END IF;
@@ -336,23 +351,13 @@ BEGIN
       RETURN;
     END IF;
 
-    v_target_activation_status := CASE
-      WHEN p_target_compliance_status = 'restricted' AND p_reason_code = 'risk_suspended' THEN 'suspended'
-      WHEN p_target_compliance_status = 'restricted' THEN 'restricted'
-      ELSE 'test_mode'
-    END;
-    v_target_restriction_state := CASE
-      WHEN p_target_compliance_status = 'restricted' AND p_reason_code = 'risk_suspended' THEN 'suspended'
-      WHEN p_target_compliance_status = 'restricted' THEN 'restricted'
-      ELSE NULL
-    END;
     v_from_compliance_status := v_profile.compliance_status;
 
     UPDATE public.merchant_compliance_profiles
     SET compliance_status = p_target_compliance_status,
         activation_status = v_target_activation_status,
         restriction_state = v_target_restriction_state,
-        restriction_reason_code = CASE WHEN p_target_compliance_status = 'restricted' THEN p_reason_code ELSE NULL END,
+        restriction_reason_code = CASE WHEN p_target_compliance_status = 'restricted' THEN v_reason_code ELSE NULL END,
         restriction_effective_at = CASE WHEN p_target_compliance_status = 'restricted' THEN p_reviewed_at ELSE NULL END,
         decision_source_type = p_source_type,
         decision_source_id = p_source_id,
@@ -391,10 +396,14 @@ BEGIN
           'canUseDepositBalance', false
         )
       ),
-      NULLIF(btrim(COALESCE(p_reason_code, '')), ''), 'admin', p_reviewer_id,
+      v_reason_code, 'admin', p_reviewer_id,
       p_source_type, p_source_id, btrim(p_policy_version), btrim(p_decision_idempotency_key),
       p_expected_profile_row_version, v_profile.row_version,
-      jsonb_build_object('transition', 'reviewed_profile_approval', 'source_version', p_source_version)
+      jsonb_build_object(
+        'transition', 'reviewed_profile_approval',
+        'plan_code', p_plan_code,
+        'source_version', p_source_version
+      )
     );
 
     RETURN QUERY SELECT 'approval_applied', v_profile.id, v_event_id, v_profile.row_version;
