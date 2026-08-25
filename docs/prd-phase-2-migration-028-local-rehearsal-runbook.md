@@ -18,8 +18,10 @@ must be UTF-8 without BOM; credentials/evidence remain outside tracked files.
   hardened search paths, RLS enabled/not forced, exact service-role table
   grants, immutable no-update/no-delete posture, required constraints/indexes,
   and no PUBLIC/anon/authenticated execute.
-- Verify a consistent merchant/workspace/profile/source/published-policy path
-  issues one request and returns one canonical ready snapshot.
+- Verify a consistent `workspaces.merchant_id` FK-backed, unique
+  merchant/workspace/profile/source/published-policy path issues one request
+  and returns one canonical ready snapshot. Do not seed or require
+  `merchants.workspace_id`.
 - Verify missing, duplicate, and conflicting workspace links fail closed.
 - Verify Lite accepts only `lite_pending`/`needs_attention`, Solo Plus accepts
   only `enhanced_pending`/`needs_attention`, and Business accepts only

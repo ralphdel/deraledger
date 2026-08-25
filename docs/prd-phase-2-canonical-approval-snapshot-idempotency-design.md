@@ -127,19 +127,19 @@ it issued a key.
 
 ## Workspace linkage
 
-M024 compliance profiles have `merchant_id` but no `workspace_id`. The snapshot
-must therefore derive a workspace only through an exact, current merchant ↔
-workspace relationship. The proposed rule is to require all supported linkage
-facts to agree—for example, `merchants.workspace_id` points to one workspace,
-that workspace has the same `merchant_id`, and no competing active workspace
-relationship exists. Missing, null, duplicate, stale, or conflicting links are
-safe failures.
+M024 compliance profiles have `merchant_id` but no `workspace_id`. The actual
+canonical relationship is the reverse one: exactly one
+`workspaces.merchant_id` row references a merchant. Migration 028 must require
+that column's exact foreign key to `merchants(id)` and its one-column unique
+constraint, then derive the workspace only from that row. It must not assume,
+create, or backfill `merchants.workspace_id`. Missing, duplicate, stale, or
+conflicting links are safe failures.
 
 Migration 028 preflight must inspect the actual deployed merchant/workspace
-columns, foreign keys, uniqueness, and active-state semantics before any DDL.
-If that inspection cannot prove a one-workspace relationship, the package must
-stop. It must not update merchant/workspace rows or choose the newest/default
-workspace as a workaround.
+columns, foreign key, and uniqueness semantics before any DDL. If that
+inspection cannot prove the one-workspace `workspaces.merchant_id` relationship,
+the package must stop. It must not update merchant/workspace rows or choose the
+newest/default workspace as a workaround.
 
 ## Policy provenance
 

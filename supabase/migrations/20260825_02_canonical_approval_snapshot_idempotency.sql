@@ -18,7 +18,7 @@ DECLARE
     ARRAY['solo_plus_cases','id'], ARRAY['solo_plus_cases','merchant_id'], ARRAY['solo_plus_cases','target_plan'], ARRAY['solo_plus_cases','case_status'],
     ARRAY['solo_plus_cases','requirements_policy_version'], ARRAY['solo_plus_cases','approved_at'], ARRAY['solo_plus_cases','approved_by_admin_id'],
     ARRAY['solo_plus_cases','rejected_at'], ARRAY['solo_plus_cases','rejected_by_admin_id'], ARRAY['solo_plus_cases','row_version'],
-    ARRAY['merchants','id'], ARRAY['merchants','workspace_id'], ARRAY['workspaces','id'], ARRAY['workspaces','merchant_id']
+    ARRAY['merchants','id'], ARRAY['workspaces','id'], ARRAY['workspaces','merchant_id']
   ];
   v_column text[];
   v_bootstrap_signature text := 'public.bootstrap_reviewed_profile_v1(uuid,uuid,text,text,text,text,text,uuid,uuid,timestamptz)';
@@ -85,8 +85,23 @@ BEGIN
     JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
     WHERE c.conrelid = to_regclass('public.workspaces') AND c.contype = 'p'
       AND array_length(c.conkey, 1) = 1 AND a.attname = 'id'
+  ) OR NOT EXISTS (
+    SELECT 1 FROM pg_constraint c
+    JOIN unnest(c.conkey) WITH ORDINALITY k(attnum, ordinality) ON true
+    JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+    WHERE c.conrelid = to_regclass('public.workspaces') AND c.contype = 'u'
+      AND array_length(c.conkey, 1) = 1 AND a.attname = 'merchant_id'
+  ) OR NOT EXISTS (
+    SELECT 1 FROM pg_constraint c
+    JOIN unnest(c.conkey) WITH ORDINALITY source_key(attnum, ordinality) ON true
+    JOIN unnest(c.confkey) WITH ORDINALITY target_key(attnum, ordinality) ON source_key.ordinality = target_key.ordinality
+    JOIN pg_attribute source_attribute ON source_attribute.attrelid = c.conrelid AND source_attribute.attnum = source_key.attnum
+    JOIN pg_attribute target_attribute ON target_attribute.attrelid = c.confrelid AND target_attribute.attnum = target_key.attnum
+    WHERE c.conrelid = to_regclass('public.workspaces') AND c.confrelid = to_regclass('public.merchants')
+      AND c.contype = 'f' AND array_length(c.conkey, 1) = 1
+      AND source_attribute.attname = 'merchant_id' AND target_attribute.attname = 'id'
   ) THEN
-    RAISE EXCEPTION 'Migration 028 prerequisite failed: merchant/workspace primary-key uniqueness is unavailable';
+    RAISE EXCEPTION 'Migration 028 prerequisite failed: canonical workspaces.merchant_id linkage is unavailable';
   END IF;
 END;
 $migration_028_prerequisites$;
@@ -194,7 +209,7 @@ BEGIN
     OR (v_profile.plan_code='solo_lite' AND v_profile.decision_source_type <> 'solo_lite_review') OR (v_profile.plan_code='solo_plus' AND v_profile.decision_source_type <> 'solo_plus_case') OR (v_profile.plan_code='business' AND v_profile.decision_source_type <> 'business_kyb_review') THEN
     RETURN QUERY SELECT 'canonical_request_profile_state_invalid', NULL::uuid, NULL::text; RETURN;
   END IF;
-  SELECT count(*), min(w.id::text)::uuid INTO v_workspace_count, v_workspace_id FROM public.merchants m JOIN public.workspaces w ON w.id=m.workspace_id AND w.merchant_id=m.id WHERE m.id=v_profile.merchant_id;
+  SELECT count(*), min(w.id::text)::uuid INTO v_workspace_count, v_workspace_id FROM public.workspaces w WHERE w.merchant_id=v_profile.merchant_id;
   IF v_workspace_count=0 THEN RETURN QUERY SELECT 'canonical_request_workspace_missing', NULL::uuid, NULL::text; RETURN; ELSIF v_workspace_count<>1 THEN RETURN QUERY SELECT 'canonical_request_workspace_ambiguous', NULL::uuid, NULL::text; RETURN; END IF;
   IF v_profile.plan_code IN ('solo_lite','business') THEN
     SELECT count(*), min(r.row_version) INTO v_review_count, v_source_version FROM public.merchant_compliance_reviews r
@@ -247,7 +262,7 @@ BEGIN
   IF NOT FOUND THEN RETURN QUERY SELECT 'canonical_snapshot_request_missing',NULL::uuid,NULL::text,NULL::uuid,NULL::uuid,NULL::uuid,NULL::text,NULL::text,NULL::text,NULL::uuid,NULL::bigint,NULL::bigint,NULL::text,NULL::uuid,NULL::timestamptz,NULL::text,NULL::text; RETURN; END IF;
   SELECT * INTO v_profile FROM public.merchant_compliance_profiles p WHERE p.id=v_request.profile_id AND p.merchant_id=v_request.merchant_id;
   IF NOT FOUND THEN RETURN QUERY SELECT 'canonical_snapshot_profile_missing',v_request.id,NULL::text,NULL::uuid,NULL::uuid,NULL::uuid,NULL::text,NULL::text,NULL::text,NULL::uuid,NULL::bigint,NULL::bigint,NULL::text,NULL::uuid,NULL::timestamptz,NULL::text,NULL::text; RETURN; END IF;
-  SELECT count(*) INTO v_workspace_count FROM public.merchants m JOIN public.workspaces w ON w.id=m.workspace_id AND w.merchant_id=m.id WHERE m.id=v_request.merchant_id AND w.id=v_request.workspace_id;
+  SELECT count(*) INTO v_workspace_count FROM public.workspaces w WHERE w.id=v_request.workspace_id AND w.merchant_id=v_request.merchant_id;
   IF v_workspace_count<>1 THEN RETURN QUERY SELECT 'canonical_snapshot_workspace_invalid',v_request.id,NULL::text,NULL::uuid,NULL::uuid,NULL::uuid,NULL::text,NULL::text,NULL::text,NULL::uuid,NULL::bigint,NULL::bigint,NULL::text,NULL::uuid,NULL::timestamptz,NULL::text,NULL::text; RETURN; END IF;
   SELECT count(*) INTO v_policy_count FROM public.approval_policy_versions p WHERE p.policy_version=v_request.policy_version AND p.plan_code=v_request.plan_code AND p.source_type=v_request.source_type AND p.policy_state='published';
   IF v_policy_count<>1 THEN RETURN QUERY SELECT 'canonical_snapshot_policy_invalid',v_request.id,NULL::text,NULL::uuid,NULL::uuid,NULL::uuid,NULL::text,NULL::text,NULL::text,NULL::uuid,NULL::bigint,NULL::bigint,NULL::text,NULL::uuid,NULL::timestamptz,NULL::text,NULL::text; RETURN; END IF;

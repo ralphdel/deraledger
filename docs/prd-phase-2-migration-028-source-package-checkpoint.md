@@ -43,13 +43,13 @@ Solo Lite accepts only `lite_pending`/`needs_attention`, Solo Plus only
 canonical request or return a ready snapshot.
 
 Preflight now validates M025's exact bootstrap signature, SECURITY INVOKER
-search path, browser denial, and service-role execute grant. It also verifies
-the unique primary identities used by the canonical merchant/workspace
-resolution. The existing schema does not need to be assumed to have a
-merchant-workspace foreign key: the issue and snapshot RPCs use the exact
-count-one `merchants.workspace_id = workspaces.id` plus
-`workspaces.merchant_id = merchants.id` relationship and fail closed when it
-is absent or ambiguous.
+search path, browser denial, and service-role execute grant. The initial M028
+source incorrectly required `merchants.workspace_id`; the local preflight
+proved that column is not present. The repaired package instead requires the
+actual canonical relationship: a unique, FK-backed
+`workspaces.merchant_id -> merchants.id` row. Issue and snapshot derive that
+one workspace directly and fail closed when it is absent or ambiguous; M028
+does not create or backfill a merchant workspace pointer.
 
 Postflight now verifies new-table RLS/not-forced state, exact service-role
 table privileges, browser denial, required request constraints/index, and the
