@@ -249,33 +249,67 @@ SELECT 'probe.replay_lookup_privilege', 'probe_ready',
   CASE WHEN has_table_privilege(current_user, 'public.merchant_compliance_events', 'SELECT')
         THEN NULL ELSE 'replay_lookup_privilege_failed' END;
 INSERT INTO pg_temp.approval_scenario_results
-SELECT 'probe.review_source_read', 'probe_ready',
+SELECT 'probe.lite_review_source_exact', 'probe_ready',
   CASE WHEN has_table_privilege(current_user, 'public.merchant_compliance_reviews', 'SELECT')
-          AND EXISTS (
-            SELECT 1 FROM public.merchant_compliance_reviews
-            WHERE id = '00000000-0000-4000-8000-000000000401'
-              AND merchant_id = '00000000-0000-4000-8000-000000000201'
-              AND profile_id = '00000000-0000-4000-8000-000000000301'
-              AND review_type = 'solo_lite'
-              AND target_plan_code = 'solo_lite'
-              AND review_status = 'pending'
-              AND row_version = 1
-          )
-       THEN 'probe_ready' ELSE 'review_source_read_or_fixture_failed' END,
+          AND (SELECT count(*) FROM public.merchant_compliance_reviews
+               WHERE id = '00000000-0000-4000-8000-000000000401'
+                 AND merchant_id = '00000000-0000-4000-8000-000000000201'
+                 AND profile_id = '00000000-0000-4000-8000-000000000301'
+                 AND review_type = CASE WHEN 'solo_lite' = 'solo_lite' THEN 'solo_lite' ELSE 'business_kyb' END
+                 AND target_plan_code = 'solo_lite'
+                 AND review_status IN ('pending', 'needs_attention')
+                 AND row_version = 1) = 1
+       THEN 'probe_ready' ELSE 'lite_review_source_predicate_failed' END,
   has_table_privilege(current_user, 'public.merchant_compliance_reviews', 'SELECT')
-    AND EXISTS (
-      SELECT 1 FROM public.merchant_compliance_reviews
-      WHERE id = '00000000-0000-4000-8000-000000000401'
-        AND merchant_id = '00000000-0000-4000-8000-000000000201'
-        AND profile_id = '00000000-0000-4000-8000-000000000301'
-        AND review_type = 'solo_lite'
-        AND target_plan_code = 'solo_lite'
-        AND review_status = 'pending'
-        AND row_version = 1
-    ),
+    AND (SELECT count(*) FROM public.merchant_compliance_reviews
+         WHERE id = '00000000-0000-4000-8000-000000000401'
+           AND merchant_id = '00000000-0000-4000-8000-000000000201'
+           AND profile_id = '00000000-0000-4000-8000-000000000301'
+           AND review_type = CASE WHEN 'solo_lite' = 'solo_lite' THEN 'solo_lite' ELSE 'business_kyb' END
+           AND target_plan_code = 'solo_lite'
+           AND review_status IN ('pending', 'needs_attention')
+           AND row_version = 1) = 1,
   CASE WHEN has_table_privilege(current_user, 'public.merchant_compliance_reviews', 'SELECT')
-          AND EXISTS (SELECT 1 FROM public.merchant_compliance_reviews WHERE id = '00000000-0000-4000-8000-000000000401')
-       THEN NULL ELSE 'review_source_read_or_fixture_failed' END;
+          AND (SELECT count(*) FROM public.merchant_compliance_reviews
+               WHERE id = '00000000-0000-4000-8000-000000000401'
+                 AND merchant_id = '00000000-0000-4000-8000-000000000201'
+                 AND profile_id = '00000000-0000-4000-8000-000000000301'
+                 AND review_type = CASE WHEN 'solo_lite' = 'solo_lite' THEN 'solo_lite' ELSE 'business_kyb' END
+                 AND target_plan_code = 'solo_lite'
+                 AND review_status IN ('pending', 'needs_attention')
+                 AND row_version = 1) = 1
+       THEN NULL ELSE 'lite_review_source_predicate_failed' END;
+INSERT INTO pg_temp.approval_scenario_results
+SELECT 'probe.business_review_source_exact', 'probe_ready',
+  CASE WHEN has_table_privilege(current_user, 'public.merchant_compliance_reviews', 'SELECT')
+          AND (SELECT count(*) FROM public.merchant_compliance_reviews
+               WHERE id = '00000000-0000-4000-8000-000000000405'
+                 AND merchant_id = '00000000-0000-4000-8000-000000000205'
+                 AND profile_id = '00000000-0000-4000-8000-000000000305'
+                 AND review_type = CASE WHEN 'business' = 'solo_lite' THEN 'solo_lite' ELSE 'business_kyb' END
+                 AND target_plan_code = 'business'
+                 AND review_status IN ('pending', 'needs_attention')
+                 AND row_version = 1) = 1
+       THEN 'probe_ready' ELSE 'business_review_source_predicate_failed' END,
+  has_table_privilege(current_user, 'public.merchant_compliance_reviews', 'SELECT')
+    AND (SELECT count(*) FROM public.merchant_compliance_reviews
+         WHERE id = '00000000-0000-4000-8000-000000000405'
+           AND merchant_id = '00000000-0000-4000-8000-000000000205'
+           AND profile_id = '00000000-0000-4000-8000-000000000305'
+           AND review_type = CASE WHEN 'business' = 'solo_lite' THEN 'solo_lite' ELSE 'business_kyb' END
+           AND target_plan_code = 'business'
+           AND review_status IN ('pending', 'needs_attention')
+           AND row_version = 1) = 1,
+  CASE WHEN has_table_privilege(current_user, 'public.merchant_compliance_reviews', 'SELECT')
+          AND (SELECT count(*) FROM public.merchant_compliance_reviews
+               WHERE id = '00000000-0000-4000-8000-000000000405'
+                 AND merchant_id = '00000000-0000-4000-8000-000000000205'
+                 AND profile_id = '00000000-0000-4000-8000-000000000305'
+                 AND review_type = CASE WHEN 'business' = 'solo_lite' THEN 'solo_lite' ELSE 'business_kyb' END
+                 AND target_plan_code = 'business'
+                 AND review_status IN ('pending', 'needs_attention')
+                 AND row_version = 1) = 1
+       THEN NULL ELSE 'business_review_source_predicate_failed' END;
 INSERT INTO pg_temp.approval_scenario_results
 SELECT 'probe.case_source_read', 'probe_ready',
   CASE WHEN has_table_privilege(current_user, 'public.solo_plus_cases', 'SELECT')
@@ -340,9 +374,20 @@ BEGIN
 END;
 $rehearsal$;
 
--- Deliberately remove an approved writer privilege late in the RPC and verify
--- that the exception returns a safe failure with no profile/event partial state.
-REVOKE UPDATE ON TABLE public.merchant_compliance_profiles FROM service_role;
+-- Fail the profile update after the profile lock/read succeeds, without
+-- withdrawing the UPDATE privilege that SELECT ... FOR UPDATE requires.
+CREATE OR REPLACE FUNCTION public.local_026_rehearsal_reject_profile_update()
+RETURNS trigger LANGUAGE plpgsql AS $trigger$
+BEGIN
+  IF NEW.id = '00000000-0000-4000-8000-000000000310' THEN
+    RAISE EXCEPTION 'local rehearsal profile update failure';
+  END IF;
+  RETURN NEW;
+END;
+$trigger$;
+CREATE TRIGGER local_026_rehearsal_reject_profile_update
+  BEFORE UPDATE ON public.merchant_compliance_profiles
+  FOR EACH ROW EXECUTE FUNCTION public.local_026_rehearsal_reject_profile_update();
 SET LOCAL ROLE service_role;
 DO $rehearsal$
 DECLARE r record;
@@ -352,7 +397,8 @@ BEGIN
 END;
 $rehearsal$;
 RESET ROLE;
-GRANT UPDATE ON TABLE public.merchant_compliance_profiles TO service_role;
+DROP TRIGGER local_026_rehearsal_reject_profile_update ON public.merchant_compliance_profiles;
+DROP FUNCTION public.local_026_rehearsal_reject_profile_update();
 
 REVOKE INSERT ON TABLE public.merchant_compliance_events FROM service_role;
 SET LOCAL ROLE service_role;

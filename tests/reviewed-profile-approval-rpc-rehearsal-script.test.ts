@@ -75,7 +75,9 @@ function run() {
   ]) {
     assert.match(script, new RegExp(value));
   }
-  assert.match(script, /REVOKE UPDATE ON TABLE public\.merchant_compliance_profiles FROM service_role/);
+  assert.match(script, /CREATE TRIGGER local_026_rehearsal_reject_profile_update[\s\S]*?BEFORE UPDATE ON public\.merchant_compliance_profiles/);
+  assert.match(script, /DROP TRIGGER local_026_rehearsal_reject_profile_update ON public\.merchant_compliance_profiles/);
+  assert.doesNotMatch(script, /REVOKE UPDATE ON TABLE public\.merchant_compliance_profiles FROM service_role/);
   assert.match(script, /REVOKE INSERT ON TABLE public\.merchant_compliance_events FROM service_role/);
   assert.match(script, /GRANT SELECT ON TABLE auth\.users TO service_role/);
   assert.match(script, /GRANT SELECT ON TABLE public\.solo_plus_cases TO service_role/);
@@ -106,7 +108,10 @@ function run() {
   assert.match(script, /probe\.profile_update_privilege_rls/);
   assert.match(script, /probe\.event_insert_privilege_rls/);
   assert.match(script, /probe\.replay_lookup_privilege/);
-  assert.match(script, /probe\.review_source_read/);
+  assert.match(script, /probe\.lite_review_source_exact/);
+  assert.match(script, /probe\.business_review_source_exact/);
+  assert.match(script, /review_type = CASE WHEN 'solo_lite' = 'solo_lite' THEN 'solo_lite' ELSE 'business_kyb' END/);
+  assert.match(script, /review_type = CASE WHEN 'business' = 'solo_lite' THEN 'solo_lite' ELSE 'business_kyb' END/);
   assert.match(script, /probe\.case_source_read/);
   assert.match(script, /'00000000-0000-4000-8000-000000000112','local-026-missing-reviewer'/);
   assert.doesNotMatch(script, /lite verified failed:/);

@@ -172,7 +172,6 @@ SET search_path TO pg_catalog, public
 AS $review_compliance_profile_decision_v1$
 DECLARE
   v_profile public.merchant_compliance_profiles%ROWTYPE;
-  v_review public.merchant_compliance_reviews%ROWTYPE;
   v_case public.solo_plus_cases%ROWTYPE;
   v_event public.merchant_compliance_events%ROWTYPE;
   v_event_id uuid := gen_random_uuid();
@@ -181,6 +180,7 @@ DECLARE
   v_target_restriction_state text;
   v_reason_code text;
   v_source_valid boolean := false;
+  v_review_source_count integer := 0;
   v_failure_stage text := 'payload_validation';
 BEGIN
   BEGIN
@@ -315,20 +315,19 @@ BEGIN
 
     IF p_plan_code IN ('solo_lite', 'business') THEN
       v_failure_stage := 'review_source_lookup';
-      -- Reviews are validation-only evidence sources in this narrow RPC. They
-      -- are not mutated, so require only their canonical SELECT grant.
-      SELECT * INTO v_review
+      -- Reviews are validation-only evidence sources in this narrow RPC. One
+      -- exact submission/evidence row must satisfy every expected field.
+      SELECT count(*) INTO v_review_source_count
       FROM public.merchant_compliance_reviews
       WHERE id = p_source_id
         AND merchant_id = p_merchant_id
-        AND profile_id = v_profile.id;
+        AND profile_id = v_profile.id
+        AND review_type = CASE WHEN p_plan_code = 'solo_lite' THEN 'solo_lite' ELSE 'business_kyb' END
+        AND target_plan_code = p_plan_code
+        AND review_status IN ('pending', 'needs_attention')
+        AND row_version = p_source_version;
 
-      v_source_valid := COALESCE(FOUND
-        AND v_review.review_type = CASE WHEN p_plan_code = 'solo_lite' THEN 'solo_lite' ELSE 'business_kyb' END
-        AND v_review.target_plan_code = p_plan_code
-        AND v_review.review_status IN ('pending', 'needs_attention')
-        AND v_review.row_version = p_source_version
-        , false);
+      v_source_valid := v_review_source_count = 1;
     ELSE
       v_failure_stage := 'case_source_lookup';
       -- Solo Plus cases are likewise read-only evidence sources here. Avoid a

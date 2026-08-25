@@ -47,10 +47,11 @@ function run() {
   assert.match(reviewerValidation, /FROM auth\.users WHERE id = p_reviewer_id/);
   assert.ok(sql.indexOf("v_failure_stage := 'reviewer_lookup';") < sql.indexOf("v_failure_stage := 'event_replay_lookup';"));
   assert.ok(sql.indexOf("v_failure_stage := 'reviewer_lookup';") < sql.indexOf("v_failure_stage := 'review_source_lookup';"));
-  assert.match(reviewLookup, /WHERE id = p_source_id[\s\S]*?merchant_id = p_merchant_id[\s\S]*?profile_id = v_profile\.id/);
+  assert.match(reviewLookup, /SELECT count\(\*\) INTO v_review_source_count[\s\S]*?WHERE id = p_source_id[\s\S]*?merchant_id = p_merchant_id[\s\S]*?profile_id = v_profile\.id/);
   assert.match(reviewLookup, /review_type = CASE WHEN p_plan_code = 'solo_lite' THEN 'solo_lite' ELSE 'business_kyb' END/);
   assert.match(reviewLookup, /target_plan_code = p_plan_code[\s\S]*?review_status IN \('pending', 'needs_attention'\)[\s\S]*?row_version = p_source_version/);
-  assert.doesNotMatch(reviewLookup, /FOR UPDATE/);
+  assert.match(reviewLookup, /v_source_valid := v_review_source_count = 1/);
+  assert.doesNotMatch(reviewLookup, /FOR UPDATE|SELECT \* INTO v_review/);
   assert.match(caseLookup, /WHERE id = p_source_id[\s\S]*?merchant_id = p_merchant_id/);
   assert.match(caseLookup, /target_plan = 'solo_plus'[\s\S]*?row_version::bigint = p_source_version[\s\S]*?requirements_policy_version = btrim\(p_policy_version\)/);
   assert.match(caseLookup, /case_status = 'approved'[\s\S]*?case_status = 'rejected'[\s\S]*?case_status IN \('verification_pending', 'manual_review'\)/);
@@ -79,7 +80,7 @@ function run() {
   assert.match(sql, /enhanced_pending[\s\S]*enhanced_verified/);
   assert.match(sql, /business_pending[\s\S]*business_verified/);
   assert.match(sql, /needs_attention/);
-  assert.match(sql, /v_review\.review_status IN \('pending', 'needs_attention'\)/);
+  assert.match(sql, /review_status IN \('pending', 'needs_attention'\)/);
   assert.doesNotMatch(sql, /v_review\.policy_version/);
   assert.doesNotMatch(sql, /v_review\.review_status = 'approved'/);
   assert.match(sql, /risk_suspended[\s\S]*suspended/);
