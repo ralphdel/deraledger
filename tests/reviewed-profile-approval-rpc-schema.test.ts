@@ -46,6 +46,11 @@ function run() {
   assert.match(substrateSql, /GRANT SELECT, INSERT ON TABLE public\.merchant_compliance_events TO service_role/);
   assert.match(sql, /approval_idempotent_replay/);
   assert.match(sql, /approval_idempotency_conflict/);
+  assert.match(sql, /v_failure_stage text := 'payload_validation'/);
+  assert.match(sql, /approval_profile_update_failed/);
+  assert.match(sql, /approval_event_insert_failed/);
+  assert.match(sql, /approval_atomic_write_failed_unknown/);
+  assert.doesNotMatch(sql, /RETURN QUERY SELECT 'approval_atomic_write_failed',/);
   assert.match(sql, /v_event\.actor_id = p_reviewer_id/);
   assert.match(sql, /v_event\.to_state ->> 'activation_status' = v_target_activation_status/);
   assert.match(sql, /v_event\.metadata ->> 'plan_code' = p_plan_code/);

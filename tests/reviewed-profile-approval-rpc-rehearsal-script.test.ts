@@ -47,7 +47,8 @@ function run() {
 
   assert.match(script, /RESET ROLE;[\s\S]*INSERT INTO public\.merchants[\s\S]*SET LOCAL ROLE service_role;/);
   const serviceRoleSection = script.match(/SET LOCAL ROLE service_role;([\s\S]*?)RESET ROLE;\n\n-- Structural duplicates/)?.[1] ?? "";
-  assert.match(serviceRoleSection, /review_compliance_profile_decision_v1/);
+  assert.match(script, /CREATE OR REPLACE FUNCTION pg_temp\.capture_approval_scenario[\s\S]*review_compliance_profile_decision_v1/);
+  assert.match(serviceRoleSection, /capture_approval_scenario/);
   assert.doesNotMatch(serviceRoleSection, /INSERT INTO public\.(?:merchants|merchant_compliance_profiles|merchant_compliance_reviews|solo_plus_cases)/);
   assert.match(script, /SET LOCAL ROLE anon;[\s\S]*insufficient_privilege/);
   assert.match(script, /SET LOCAL ROLE authenticated;[\s\S]*insufficient_privilege/);
@@ -72,7 +73,7 @@ function run() {
   assert.match(script, /REVOKE INSERT ON TABLE public\.merchant_compliance_events FROM service_role/);
   assert.match(script, /GRANT SELECT ON TABLE auth\.users TO service_role/);
   assert.match(script, /ALTER ROLE service_role BYPASSRLS/);
-  assert.match(script, /rollback left partial profile decision or event/);
+  assert.match(script, /rollback_partial_state_detected/);
   assert.match(script, /NOT setup_mode OR live_features_enabled/);
   assert.match(script, /can_collect_payments OR activation_status = 'active'/);
   for (const table of [
@@ -89,6 +90,18 @@ function run() {
     assert.match(script, new RegExp(`public\\.${table}`));
   }
   assert.match(script, /CONTROL\|LOCAL_APPROVAL_REHEARSAL=PASS/);
+  assert.match(script, /CREATE TEMP TABLE approval_scenario_results/);
+  assert.match(script, /scenario_name, expected_result, actual_result/);
+  assert.match(script, /LOCAL_APPROVAL_SCENARIOS_FAILED/);
+  assert.match(script, /approval_profile_update_failed/);
+  assert.match(script, /approval_event_insert_failed/);
+  assert.match(script, /probe\.profile_update_privilege_rls/);
+  assert.match(script, /probe\.event_insert_privilege_rls/);
+  assert.match(script, /probe\.replay_lookup_privilege/);
+  assert.doesNotMatch(script, /lite verified failed:/);
+  const summaryIndex = script.indexOf("SELECT scenario_name, expected_result, actual_result");
+  const finalFailureIndex = script.indexOf("LOCAL_APPROVAL_SCENARIOS_FAILED");
+  assert.ok(summaryIndex >= 0 && finalFailureIndex > summaryIndex, "scenario results must print before final failure");
   assert.doesNotMatch(script, /src\\app|src\/app|src\\lib\\actions|paystack|monnify|breet/i);
   assert.match(runbook, /forbidden to run it against staging, production, or any Supabase project/i);
   assert.match(runbook, /concurrent identical or stale replay may fail closed/i);

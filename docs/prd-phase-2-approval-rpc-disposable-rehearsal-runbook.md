@@ -52,6 +52,10 @@ The harness writes generated SQL with `.NET UTF8Encoding` without a BOM, then pe
 
 Behavior coverage includes Solo Lite pending-to-verified, needs-attention, rejected, and restricted decisions; Business pending-to-verified; and Solo Plus approved-to-enhanced-verified, rejected-to-rejected, and manual-review-to-needs-attention decisions. It also checks exact sequential idempotent replay, missing profile/reviewer, stale version, plan/source mismatch, unsupported transition, reused-key conflict, structural duplicate prevention, profile/event rollback failures, hostile grants, and forbidden writes.
 
+The behavior file is collect-all for approval scenarios. It records `scenario_name`, `expected_result`, `actual_result`, `PASS`/`FAIL`, and a safe failure code in a transaction-local temporary table, prints every row, then exits nonzero once if any required scenario failed. It does not print raw PostgreSQL errors, fixture contents, or credentials.
+
+The approval RPC returns safe stage-specific failure codes for unexpected internal failures: replay lookup, profile lookup, reviewer/source lookup, profile update, event insert, or an unknown atomic-write stage. These retain the one transaction boundary: an event-insert failure rolls back the preceding profile update. The local probes separately report fixture shape plus profile-update, event-insert, and replay-lookup privilege/RLS readiness before full scenario assertions.
+
 Concurrent identical or stale replay may fail closed on the expected profile row-version rather than returning the sequential replay result. That is an expected safe outcome and must be recorded as such during review; it is not permission to accept a mismatched replay.
 
 ## Failure handling

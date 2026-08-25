@@ -164,42 +164,108 @@ INSERT INTO public.solo_plus_cases(
   ('00000000-0000-4000-8000-000000000407','00000000-0000-4000-8000-000000000207','solo_plus','rejected','local-policy-v1',NULL,NULL,'2026-08-25T00:01:00Z','00000000-0000-4000-8000-000000000101',1),
   ('00000000-0000-4000-8000-000000000408','00000000-0000-4000-8000-000000000208','solo_plus','manual_review','local-policy-v1',NULL,NULL,NULL,NULL,1);
 
--- service_role invokes only the two reviewed-profile RPC contracts. It has no
--- direct table write in the behavior phase.
-SET LOCAL ROLE service_role;
-DO $rehearsal$
-DECLARE r record;
+-- Scenario results are accumulated first. The script prints every safe result
+-- and fails only once after all required local behavior checks have run.
+CREATE TEMP TABLE approval_scenario_results (
+  scenario_name text NOT NULL,
+  expected_result text NOT NULL,
+  actual_result text NOT NULL,
+  passed boolean NOT NULL,
+  safe_failure_code text
+);
+GRANT SELECT, INSERT ON TABLE approval_scenario_results TO service_role, anon, authenticated;
+
+INSERT INTO approval_scenario_results
+SELECT 'probe.fixture_shape', 'fixture_ready',
+  CASE WHEN (SELECT count(*) FROM public.merchant_compliance_profiles) = 11
+          AND (SELECT count(*) FROM public.merchant_compliance_reviews) = 8
+          AND (SELECT count(*) FROM public.solo_plus_cases) = 3
+       THEN 'fixture_ready' ELSE 'fixture_mismatch' END,
+  (SELECT count(*) FROM public.merchant_compliance_profiles) = 11
+    AND (SELECT count(*) FROM public.merchant_compliance_reviews) = 8
+    AND (SELECT count(*) FROM public.solo_plus_cases) = 3,
+  CASE WHEN (SELECT count(*) FROM public.merchant_compliance_profiles) = 11
+          AND (SELECT count(*) FROM public.merchant_compliance_reviews) = 8
+          AND (SELECT count(*) FROM public.solo_plus_cases) = 3
+       THEN NULL ELSE 'fixture_mismatch' END;
+
+CREATE OR REPLACE FUNCTION pg_temp.capture_approval_scenario(
+  p_scenario_name text, p_expected_result text,
+  p_merchant_id uuid, p_profile_id uuid, p_plan_code text, p_source_type text,
+  p_source_id uuid, p_source_version bigint, p_target_status text, p_expected_row_version bigint,
+  p_reviewer_id uuid, p_idempotency_key text, p_policy_version text, p_reviewed_at timestamptz, p_reason_code text
+) RETURNS void LANGUAGE plpgsql SECURITY INVOKER AS $capture$
+DECLARE v_actual_result text := 'approval_rpc_invocation_failed';
 BEGIN
-  SELECT * INTO r FROM public.review_compliance_profile_decision_v1('00000000-0000-4000-8000-000000000201','00000000-0000-4000-8000-000000000301','solo_lite','solo_lite_review','00000000-0000-4000-8000-000000000401',1,'lite_verified',1,'00000000-0000-4000-8000-000000000101','local-026-approve-lite','local-policy-v1','2026-08-25T00:00:00Z',NULL);
-  IF r.result_code <> 'approval_applied' THEN RAISE EXCEPTION 'lite verified failed: %', r.result_code; END IF;
-  SELECT * INTO r FROM public.review_compliance_profile_decision_v1('00000000-0000-4000-8000-000000000201','00000000-0000-4000-8000-000000000301','solo_lite','solo_lite_review','00000000-0000-4000-8000-000000000401',1,'lite_verified',1,'00000000-0000-4000-8000-000000000101','local-026-approve-lite','local-policy-v1','2026-08-25T00:00:00Z',NULL);
-  IF r.result_code <> 'approval_idempotent_replay' THEN RAISE EXCEPTION 'sequential idempotent replay failed: %', r.result_code; END IF;
-  SELECT * INTO r FROM public.review_compliance_profile_decision_v1('00000000-0000-4000-8000-000000000202','00000000-0000-4000-8000-000000000302','solo_lite','solo_lite_review','00000000-0000-4000-8000-000000000402',1,'needs_attention',1,'00000000-0000-4000-8000-000000000101','local-026-needs-attention','local-policy-v1','2026-08-25T00:00:00Z','evidence_incomplete');
-  IF r.result_code <> 'approval_applied' THEN RAISE EXCEPTION 'lite needs attention failed: %', r.result_code; END IF;
-  SELECT * INTO r FROM public.review_compliance_profile_decision_v1('00000000-0000-4000-8000-000000000203','00000000-0000-4000-8000-000000000303','solo_lite','solo_lite_review','00000000-0000-4000-8000-000000000403',1,'rejected',1,'00000000-0000-4000-8000-000000000101','local-026-rejected','local-policy-v1','2026-08-25T00:00:00Z','review_rejected');
-  IF r.result_code <> 'approval_applied' THEN RAISE EXCEPTION 'lite rejected failed: %', r.result_code; END IF;
-  SELECT * INTO r FROM public.review_compliance_profile_decision_v1('00000000-0000-4000-8000-000000000204','00000000-0000-4000-8000-000000000304','solo_lite','solo_lite_review','00000000-0000-4000-8000-000000000404',1,'restricted',1,'00000000-0000-4000-8000-000000000101','local-026-restricted','local-policy-v1','2026-08-25T00:00:00Z','risk_restricted');
-  IF r.result_code <> 'approval_applied' THEN RAISE EXCEPTION 'lite restricted failed: %', r.result_code; END IF;
-  SELECT * INTO r FROM public.review_compliance_profile_decision_v1('00000000-0000-4000-8000-000000000205','00000000-0000-4000-8000-000000000305','business','business_kyb_review','00000000-0000-4000-8000-000000000405',1,'business_verified',1,'00000000-0000-4000-8000-000000000101','local-026-business','local-policy-v1','2026-08-25T00:00:00Z',NULL);
-  IF r.result_code <> 'approval_applied' THEN RAISE EXCEPTION 'business verified failed: %', r.result_code; END IF;
-  SELECT * INTO r FROM public.review_compliance_profile_decision_v1('00000000-0000-4000-8000-000000000206','00000000-0000-4000-8000-000000000306','solo_plus','solo_plus_case','00000000-0000-4000-8000-000000000406',1,'enhanced_verified',1,'00000000-0000-4000-8000-000000000101','local-026-plus-approved','local-policy-v1','2026-08-25T00:00:00Z',NULL);
-  IF r.result_code <> 'approval_applied' THEN RAISE EXCEPTION 'solo plus approved failed: %', r.result_code; END IF;
-  SELECT * INTO r FROM public.review_compliance_profile_decision_v1('00000000-0000-4000-8000-000000000207','00000000-0000-4000-8000-000000000307','solo_plus','solo_plus_case','00000000-0000-4000-8000-000000000407',1,'rejected',1,'00000000-0000-4000-8000-000000000101','local-026-plus-rejected','local-policy-v1','2026-08-25T00:01:00Z','review_rejected');
-  IF r.result_code <> 'approval_applied' THEN RAISE EXCEPTION 'solo plus rejected failed: %', r.result_code; END IF;
-  SELECT * INTO r FROM public.review_compliance_profile_decision_v1('00000000-0000-4000-8000-000000000208','00000000-0000-4000-8000-000000000308','solo_plus','solo_plus_case','00000000-0000-4000-8000-000000000408',1,'needs_attention',1,'00000000-0000-4000-8000-000000000101','local-026-plus-attention','local-policy-v1','2026-08-25T00:00:00Z','evidence_incomplete');
-  IF r.result_code <> 'approval_applied' THEN RAISE EXCEPTION 'solo plus manual review failed: %', r.result_code; END IF;
-  SELECT * INTO r FROM public.review_compliance_profile_decision_v1(gen_random_uuid(),gen_random_uuid(),'solo_lite','solo_lite_review',gen_random_uuid(),1,'lite_verified',1,'00000000-0000-4000-8000-000000000101','local-026-missing','local-policy-v1','2026-08-25T00:00:00Z',NULL);
-  IF r.result_code <> 'approval_profile_missing' THEN RAISE EXCEPTION 'missing profile did not fail closed: %', r.result_code; END IF;
-  SELECT * INTO r FROM public.review_compliance_profile_decision_v1('00000000-0000-4000-8000-000000000209','00000000-0000-4000-8000-000000000309','solo_lite','solo_lite_review','00000000-0000-4000-8000-000000000409',1,'lite_verified',2,'00000000-0000-4000-8000-000000000101','local-026-stale','local-policy-v1','2026-08-25T00:00:00Z',NULL);
-  IF r.result_code <> 'approval_profile_state_invalid' THEN RAISE EXCEPTION 'stale version did not fail closed: %', r.result_code; END IF;
-  SELECT * INTO r FROM public.review_compliance_profile_decision_v1('00000000-0000-4000-8000-000000000209','00000000-0000-4000-8000-000000000309','business','solo_lite_review','00000000-0000-4000-8000-000000000409',1,'business_verified',1,'00000000-0000-4000-8000-000000000101','local-026-plan-mismatch','local-policy-v1','2026-08-25T00:00:00Z',NULL);
-  IF r.result_code <> 'approval_payload_invalid' THEN RAISE EXCEPTION 'plan/source mismatch did not fail closed: %', r.result_code; END IF;
-  SELECT * INTO r FROM public.review_compliance_profile_decision_v1('00000000-0000-4000-8000-000000000209','00000000-0000-4000-8000-000000000309','solo_lite','solo_lite_review','00000000-0000-4000-8000-000000000409',1,'enhanced_verified',1,'00000000-0000-4000-8000-000000000101','local-026-transition','local-policy-v1','2026-08-25T00:00:00Z',NULL);
-  IF r.result_code <> 'approval_payload_invalid' THEN RAISE EXCEPTION 'unsupported transition did not fail closed: %', r.result_code; END IF;
-  SELECT * INTO r FROM public.review_compliance_profile_decision_v1('00000000-0000-4000-8000-000000000201','00000000-0000-4000-8000-000000000301','solo_lite','solo_lite_review','00000000-0000-4000-8000-000000000401',1,'lite_verified',1,'00000000-0000-4000-8000-000000000101','local-026-approve-lite','different-policy','2026-08-25T00:00:00Z',NULL);
-  IF r.result_code <> 'approval_idempotency_conflict' THEN RAISE EXCEPTION 'idempotency mismatch did not fail closed: %', r.result_code; END IF;
-  SELECT * INTO r FROM public.review_compliance_profile_decision_v1('00000000-0000-4000-8000-000000000210','00000000-0000-4000-8000-000000000310','solo_lite','solo_lite_review','00000000-0000-4000-8000-000000000410',1,'lite_verified',1,'00000000-0000-4000-8000-000000000102','local-026-missing-reviewer','local-policy-v1','2026-08-25T00:00:00Z',NULL);
-  IF r.result_code <> 'approval_reviewer_invalid' THEN RAISE EXCEPTION 'missing reviewer did not fail closed: %', r.result_code; END IF;
+  BEGIN
+    SELECT result_code INTO v_actual_result
+    FROM public.review_compliance_profile_decision_v1(
+      p_merchant_id, p_profile_id, p_plan_code, p_source_type, p_source_id, p_source_version,
+      p_target_status, p_expected_row_version, p_reviewer_id, p_idempotency_key,
+      p_policy_version, p_reviewed_at, p_reason_code
+    );
+  EXCEPTION WHEN OTHERS THEN
+    v_actual_result := 'approval_rpc_invocation_failed';
+  END;
+  INSERT INTO pg_temp.approval_scenario_results
+    (scenario_name, expected_result, actual_result, passed, safe_failure_code)
+  VALUES (
+    p_scenario_name, p_expected_result, v_actual_result, v_actual_result = p_expected_result,
+    CASE WHEN v_actual_result = p_expected_result THEN NULL ELSE v_actual_result END
+  );
+END;
+$capture$;
+GRANT EXECUTE ON FUNCTION pg_temp.capture_approval_scenario(text,text,uuid,uuid,text,text,uuid,bigint,text,bigint,uuid,text,text,timestamptz,text)
+  TO service_role;
+
+-- Local-only probes distinguish fixture, profile-write, event-write, and replay
+-- privilege/RLS readiness without exposing PostgreSQL errors or business data.
+SET LOCAL ROLE service_role;
+INSERT INTO pg_temp.approval_scenario_results
+SELECT 'probe.profile_update_privilege_rls', 'probe_ready',
+  CASE WHEN has_table_privilege(current_user, 'public.merchant_compliance_profiles', 'UPDATE')
+          AND EXISTS (SELECT 1 FROM public.merchant_compliance_profiles WHERE id = '00000000-0000-4000-8000-000000000301' AND row_version = 1)
+       THEN 'probe_ready' ELSE 'profile_update_privilege_or_condition_failed' END,
+  has_table_privilege(current_user, 'public.merchant_compliance_profiles', 'UPDATE')
+    AND EXISTS (SELECT 1 FROM public.merchant_compliance_profiles WHERE id = '00000000-0000-4000-8000-000000000301' AND row_version = 1),
+  CASE WHEN has_table_privilege(current_user, 'public.merchant_compliance_profiles', 'UPDATE')
+          AND EXISTS (SELECT 1 FROM public.merchant_compliance_profiles WHERE id = '00000000-0000-4000-8000-000000000301' AND row_version = 1)
+       THEN NULL ELSE 'profile_update_privilege_or_condition_failed' END;
+INSERT INTO pg_temp.approval_scenario_results
+SELECT 'probe.event_insert_privilege_rls', 'probe_ready',
+  CASE WHEN has_table_privilege(current_user, 'public.merchant_compliance_events', 'SELECT')
+          AND has_table_privilege(current_user, 'public.merchant_compliance_events', 'INSERT')
+       THEN 'probe_ready' ELSE 'event_insert_privilege_or_rls_failed' END,
+  has_table_privilege(current_user, 'public.merchant_compliance_events', 'SELECT')
+    AND has_table_privilege(current_user, 'public.merchant_compliance_events', 'INSERT'),
+  CASE WHEN has_table_privilege(current_user, 'public.merchant_compliance_events', 'SELECT')
+          AND has_table_privilege(current_user, 'public.merchant_compliance_events', 'INSERT')
+       THEN NULL ELSE 'event_insert_privilege_or_rls_failed' END;
+INSERT INTO pg_temp.approval_scenario_results
+SELECT 'probe.replay_lookup_privilege', 'probe_ready',
+  CASE WHEN has_table_privilege(current_user, 'public.merchant_compliance_events', 'SELECT')
+       THEN 'probe_ready' ELSE 'replay_lookup_privilege_failed' END,
+  has_table_privilege(current_user, 'public.merchant_compliance_events', 'SELECT'),
+  CASE WHEN has_table_privilege(current_user, 'public.merchant_compliance_events', 'SELECT')
+       THEN NULL ELSE 'replay_lookup_privilege_failed' END;
+
+DO $rehearsal$
+BEGIN
+PERFORM pg_temp.capture_approval_scenario('lite.pending_to_verified','approval_applied','00000000-0000-4000-8000-000000000201','00000000-0000-4000-8000-000000000301','solo_lite','solo_lite_review','00000000-0000-4000-8000-000000000401',1,'lite_verified',1,'00000000-0000-4000-8000-000000000101','local-026-approve-lite','local-policy-v1','2026-08-25T00:00:00Z',NULL);
+PERFORM pg_temp.capture_approval_scenario('lite.exact_replay','approval_idempotent_replay','00000000-0000-4000-8000-000000000201','00000000-0000-4000-8000-000000000301','solo_lite','solo_lite_review','00000000-0000-4000-8000-000000000401',1,'lite_verified',1,'00000000-0000-4000-8000-000000000101','local-026-approve-lite','local-policy-v1','2026-08-25T00:00:00Z',NULL);
+PERFORM pg_temp.capture_approval_scenario('lite.needs_attention','approval_applied','00000000-0000-4000-8000-000000000202','00000000-0000-4000-8000-000000000302','solo_lite','solo_lite_review','00000000-0000-4000-8000-000000000402',1,'needs_attention',1,'00000000-0000-4000-8000-000000000101','local-026-needs-attention','local-policy-v1','2026-08-25T00:00:00Z','evidence_incomplete');
+PERFORM pg_temp.capture_approval_scenario('lite.rejected','approval_applied','00000000-0000-4000-8000-000000000203','00000000-0000-4000-8000-000000000303','solo_lite','solo_lite_review','00000000-0000-4000-8000-000000000403',1,'rejected',1,'00000000-0000-4000-8000-000000000101','local-026-rejected','local-policy-v1','2026-08-25T00:00:00Z','review_rejected');
+PERFORM pg_temp.capture_approval_scenario('lite.restricted','approval_applied','00000000-0000-4000-8000-000000000204','00000000-0000-4000-8000-000000000304','solo_lite','solo_lite_review','00000000-0000-4000-8000-000000000404',1,'restricted',1,'00000000-0000-4000-8000-000000000101','local-026-restricted','local-policy-v1','2026-08-25T00:00:00Z','risk_restricted');
+PERFORM pg_temp.capture_approval_scenario('business.pending_to_verified','approval_applied','00000000-0000-4000-8000-000000000205','00000000-0000-4000-8000-000000000305','business','business_kyb_review','00000000-0000-4000-8000-000000000405',1,'business_verified',1,'00000000-0000-4000-8000-000000000101','local-026-business','local-policy-v1','2026-08-25T00:00:00Z',NULL);
+PERFORM pg_temp.capture_approval_scenario('solo_plus.approved_to_verified','approval_applied','00000000-0000-4000-8000-000000000206','00000000-0000-4000-8000-000000000306','solo_plus','solo_plus_case','00000000-0000-4000-8000-000000000406',1,'enhanced_verified',1,'00000000-0000-4000-8000-000000000101','local-026-plus-approved','local-policy-v1','2026-08-25T00:00:00Z',NULL);
+PERFORM pg_temp.capture_approval_scenario('solo_plus.rejected','approval_applied','00000000-0000-4000-8000-000000000207','00000000-0000-4000-8000-000000000307','solo_plus','solo_plus_case','00000000-0000-4000-8000-000000000407',1,'rejected',1,'00000000-0000-4000-8000-000000000101','local-026-plus-rejected','local-policy-v1','2026-08-25T00:01:00Z','review_rejected');
+PERFORM pg_temp.capture_approval_scenario('solo_plus.manual_review','approval_applied','00000000-0000-4000-8000-000000000208','00000000-0000-4000-8000-000000000308','solo_plus','solo_plus_case','00000000-0000-4000-8000-000000000408',1,'needs_attention',1,'00000000-0000-4000-8000-000000000101','local-026-plus-attention','local-policy-v1','2026-08-25T00:00:00Z','evidence_incomplete');
+PERFORM pg_temp.capture_approval_scenario('missing_profile','approval_profile_missing',gen_random_uuid(),gen_random_uuid(),'solo_lite','solo_lite_review',gen_random_uuid(),1,'lite_verified',1,'00000000-0000-4000-8000-000000000101','local-026-missing','local-policy-v1','2026-08-25T00:00:00Z',NULL);
+PERFORM pg_temp.capture_approval_scenario('stale_row_version','approval_profile_state_invalid','00000000-0000-4000-8000-000000000209','00000000-0000-4000-8000-000000000309','solo_lite','solo_lite_review','00000000-0000-4000-8000-000000000409',1,'lite_verified',2,'00000000-0000-4000-8000-000000000101','local-026-stale','local-policy-v1','2026-08-25T00:00:00Z',NULL);
+PERFORM pg_temp.capture_approval_scenario('mismatched_plan_source','approval_payload_invalid','00000000-0000-4000-8000-000000000209','00000000-0000-4000-8000-000000000309','business','solo_lite_review','00000000-0000-4000-8000-000000000409',1,'business_verified',1,'00000000-0000-4000-8000-000000000101','local-026-plan-mismatch','local-policy-v1','2026-08-25T00:00:00Z',NULL);
+PERFORM pg_temp.capture_approval_scenario('unsupported_transition','approval_payload_invalid','00000000-0000-4000-8000-000000000209','00000000-0000-4000-8000-000000000309','solo_lite','solo_lite_review','00000000-0000-4000-8000-000000000409',1,'enhanced_verified',1,'00000000-0000-4000-8000-000000000101','local-026-transition','local-policy-v1','2026-08-25T00:00:00Z',NULL);
+PERFORM pg_temp.capture_approval_scenario('reused_idempotency_mismatch','approval_idempotency_conflict','00000000-0000-4000-8000-000000000201','00000000-0000-4000-8000-000000000301','solo_lite','solo_lite_review','00000000-0000-4000-8000-000000000401',1,'lite_verified',1,'00000000-0000-4000-8000-000000000101','local-026-approve-lite','different-policy','2026-08-25T00:00:00Z',NULL);
+PERFORM pg_temp.capture_approval_scenario('missing_reviewer','approval_reviewer_invalid','00000000-0000-4000-8000-000000000210','00000000-0000-4000-8000-000000000310','solo_lite','solo_lite_review','00000000-0000-4000-8000-000000000410',1,'lite_verified',1,'00000000-0000-4000-8000-000000000102','local-026-missing-reviewer','local-policy-v1','2026-08-25T00:00:00Z',NULL);
 END;
 $rehearsal$;
 RESET ROLE;
@@ -228,7 +294,7 @@ DO $rehearsal$
 DECLARE r record;
 BEGIN
   SELECT * INTO r FROM public.review_compliance_profile_decision_v1('00000000-0000-4000-8000-000000000210','00000000-0000-4000-8000-000000000310','solo_lite','solo_lite_review','00000000-0000-4000-8000-000000000410',1,'lite_verified',1,'00000000-0000-4000-8000-000000000101','local-026-profile-write-failure','local-policy-v1','2026-08-25T00:00:00Z',NULL);
-  IF r.result_code <> 'approval_atomic_write_failed' THEN RAISE EXCEPTION 'profile rollback was not fail closed: %', r.result_code; END IF;
+  INSERT INTO pg_temp.approval_scenario_results VALUES ('rollback.profile_update_failure','approval_profile_update_failed',r.result_code,r.result_code = 'approval_profile_update_failed',CASE WHEN r.result_code = 'approval_profile_update_failed' THEN NULL ELSE r.result_code END);
 END;
 $rehearsal$;
 RESET ROLE;
@@ -240,7 +306,7 @@ DO $rehearsal$
 DECLARE r record;
 BEGIN
   SELECT * INTO r FROM public.review_compliance_profile_decision_v1('00000000-0000-4000-8000-000000000211','00000000-0000-4000-8000-000000000311','solo_lite','solo_lite_review','00000000-0000-4000-8000-000000000411',1,'lite_verified',1,'00000000-0000-4000-8000-000000000101','local-026-event-write-failure','local-policy-v1','2026-08-25T00:00:00Z',NULL);
-  IF r.result_code <> 'approval_atomic_write_failed' THEN RAISE EXCEPTION 'event rollback was not fail closed: %', r.result_code; END IF;
+  INSERT INTO pg_temp.approval_scenario_results VALUES ('rollback.event_insert_failure','approval_event_insert_failed',r.result_code,r.result_code = 'approval_event_insert_failed',CASE WHEN r.result_code = 'approval_event_insert_failed' THEN NULL ELSE r.result_code END);
 END;
 $rehearsal$;
 RESET ROLE;
@@ -250,18 +316,20 @@ DO $rehearsal$
 DECLARE
   v_relation text;
   v_has_rows boolean;
+  v_rollback_safe boolean;
+  v_forbidden_writes_absent boolean := true;
+  v_grants_safe boolean;
 BEGIN
-  IF EXISTS (SELECT 1 FROM public.merchant_compliance_profiles WHERE id IN ('00000000-0000-4000-8000-000000000310','00000000-0000-4000-8000-000000000311') AND compliance_status <> 'lite_pending')
-    OR EXISTS (SELECT 1 FROM public.merchant_compliance_events WHERE idempotency_key IN ('local-026-profile-write-failure','local-026-event-write-failure')) THEN
-    RAISE EXCEPTION 'rollback left partial profile decision or event';
-  END IF;
+  v_rollback_safe := NOT EXISTS (SELECT 1 FROM public.merchant_compliance_profiles WHERE id IN ('00000000-0000-4000-8000-000000000310','00000000-0000-4000-8000-000000000311') AND compliance_status <> 'lite_pending')
+    AND NOT EXISTS (SELECT 1 FROM public.merchant_compliance_events WHERE idempotency_key IN ('local-026-profile-write-failure','local-026-event-write-failure'));
+  INSERT INTO pg_temp.approval_scenario_results VALUES ('rollback.no_partial_profile_or_event','rollback_safe',CASE WHEN v_rollback_safe THEN 'rollback_safe' ELSE 'rollback_partial_state_detected' END,v_rollback_safe,CASE WHEN v_rollback_safe THEN NULL ELSE 'rollback_partial_state_detected' END);
   IF EXISTS (SELECT 1 FROM public.merchants WHERE NOT setup_mode OR live_features_enabled)
     OR EXISTS (SELECT 1 FROM public.merchant_compliance_profiles WHERE can_collect_payments OR activation_status = 'active')
     OR EXISTS (SELECT 1 FROM public.merchant_collection_limit_windows)
     OR EXISTS (SELECT 1 FROM public.merchant_collection_limit_reservations)
     OR EXISTS (SELECT 1 FROM public.merchant_collection_limit_reservation_windows)
     OR EXISTS (SELECT 1 FROM public.merchant_collection_usage_events) THEN
-    RAISE EXCEPTION 'forbidden write detected';
+    v_forbidden_writes_absent := false;
   END IF;
   FOREACH v_relation IN ARRAY ARRAY[
     'public.invoices', 'public.payment_records', 'public.subscriptions',
@@ -269,15 +337,15 @@ BEGIN
   ] LOOP
     IF to_regclass(v_relation) IS NOT NULL THEN
       EXECUTE format('SELECT EXISTS (SELECT 1 FROM %s)', v_relation) INTO v_has_rows;
-      IF v_has_rows THEN RAISE EXCEPTION 'forbidden table row detected: %', v_relation; END IF;
+      IF v_has_rows THEN v_forbidden_writes_absent := false; END IF;
     END IF;
   END LOOP;
-  IF has_function_privilege('anon', 'public.review_compliance_profile_decision_v1(uuid,uuid,text,text,uuid,bigint,text,bigint,uuid,text,text,timestamptz,text)', 'EXECUTE')
-    OR has_function_privilege('authenticated', 'public.review_compliance_profile_decision_v1(uuid,uuid,text,text,uuid,bigint,text,bigint,uuid,text,text,timestamptz,text)', 'EXECUTE')
-    OR has_function_privilege('PUBLIC', 'public.review_compliance_profile_decision_v1(uuid,uuid,text,text,uuid,bigint,text,bigint,uuid,text,text,timestamptz,text)', 'EXECUTE')
-    OR NOT has_function_privilege('service_role', 'public.review_compliance_profile_decision_v1(uuid,uuid,text,text,uuid,bigint,text,bigint,uuid,text,text,timestamptz,text)', 'EXECUTE') THEN
-    RAISE EXCEPTION 'hostile role grant check failed';
-  END IF;
+  INSERT INTO pg_temp.approval_scenario_results VALUES ('forbidden_writes_absent','forbidden_writes_absent',CASE WHEN v_forbidden_writes_absent THEN 'forbidden_writes_absent' ELSE 'forbidden_write_detected' END,v_forbidden_writes_absent,CASE WHEN v_forbidden_writes_absent THEN NULL ELSE 'forbidden_write_detected' END);
+  v_grants_safe := NOT has_function_privilege('anon', 'public.review_compliance_profile_decision_v1(uuid,uuid,text,text,uuid,bigint,text,bigint,uuid,text,text,timestamptz,text)', 'EXECUTE')
+    AND NOT has_function_privilege('authenticated', 'public.review_compliance_profile_decision_v1(uuid,uuid,text,text,uuid,bigint,text,bigint,uuid,text,text,timestamptz,text)', 'EXECUTE')
+    AND NOT has_function_privilege('PUBLIC', 'public.review_compliance_profile_decision_v1(uuid,uuid,text,text,uuid,bigint,text,bigint,uuid,text,text,timestamptz,text)', 'EXECUTE')
+    AND has_function_privilege('service_role', 'public.review_compliance_profile_decision_v1(uuid,uuid,text,text,uuid,bigint,text,bigint,uuid,text,text,timestamptz,text)', 'EXECUTE');
+  INSERT INTO pg_temp.approval_scenario_results VALUES ('hostile_role_grant_boundary','grants_safe',CASE WHEN v_grants_safe THEN 'grants_safe' ELSE 'hostile_role_grant_leak' END,v_grants_safe,CASE WHEN v_grants_safe THEN NULL ELSE 'hostile_role_grant_leak' END);
 END;
 $rehearsal$;
 
@@ -285,24 +353,41 @@ $rehearsal$;
 -- contract behavior. They must receive insufficient_privilege, never a result.
 SET LOCAL ROLE anon;
 DO $rehearsal$
-DECLARE r record;
+DECLARE
+  r record;
+  v_actual text := 'hostile_execute_other_failure';
 BEGIN
   BEGIN
     SELECT * INTO r FROM public.review_compliance_profile_decision_v1(gen_random_uuid(),gen_random_uuid(),'solo_lite','solo_lite_review',gen_random_uuid(),1,'lite_verified',1,'00000000-0000-4000-8000-000000000101','local-026-anon','local-policy-v1','2026-08-25T00:00:00Z',NULL);
-    RAISE EXCEPTION 'anon executed approval RPC';
-  EXCEPTION WHEN insufficient_privilege THEN NULL;
+    v_actual := 'hostile_execute_unexpected_result';
+  EXCEPTION WHEN insufficient_privilege THEN v_actual := 'execute_denied';
   END;
+  INSERT INTO pg_temp.approval_scenario_results VALUES ('anon_execute_denied','execute_denied',v_actual,v_actual = 'execute_denied',CASE WHEN v_actual = 'execute_denied' THEN NULL ELSE v_actual END);
 END;
 $rehearsal$;
 SET LOCAL ROLE authenticated;
 DO $rehearsal$
-DECLARE r record;
+DECLARE
+  r record;
+  v_actual text := 'hostile_execute_other_failure';
 BEGIN
   BEGIN
     SELECT * INTO r FROM public.review_compliance_profile_decision_v1(gen_random_uuid(),gen_random_uuid(),'solo_lite','solo_lite_review',gen_random_uuid(),1,'lite_verified',1,'00000000-0000-4000-8000-000000000101','local-026-authenticated','local-policy-v1','2026-08-25T00:00:00Z',NULL);
-    RAISE EXCEPTION 'authenticated executed approval RPC';
-  EXCEPTION WHEN insufficient_privilege THEN NULL;
+    v_actual := 'hostile_execute_unexpected_result';
+  EXCEPTION WHEN insufficient_privilege THEN v_actual := 'execute_denied';
   END;
+  INSERT INTO pg_temp.approval_scenario_results VALUES ('authenticated_execute_denied','execute_denied',v_actual,v_actual = 'execute_denied',CASE WHEN v_actual = 'execute_denied' THEN NULL ELSE v_actual END);
+END;
+$rehearsal$;
+RESET ROLE;
+SELECT scenario_name, expected_result, actual_result, CASE WHEN passed THEN 'PASS' ELSE 'FAIL' END AS pass_fail, safe_failure_code
+FROM pg_temp.approval_scenario_results
+ORDER BY scenario_name;
+DO $rehearsal$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_temp.approval_scenario_results WHERE NOT passed) THEN
+    RAISE EXCEPTION 'LOCAL_APPROVAL_SCENARIOS_FAILED';
+  END IF;
 END;
 $rehearsal$;
 ROLLBACK;

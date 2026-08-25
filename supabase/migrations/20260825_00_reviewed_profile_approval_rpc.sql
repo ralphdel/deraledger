@@ -181,6 +181,7 @@ DECLARE
   v_target_restriction_state text;
   v_reason_code text;
   v_source_valid boolean := false;
+  v_failure_stage text := 'payload_validation';
 BEGIN
   BEGIN
     IF p_merchant_id IS NULL OR p_profile_id IS NULL OR p_source_id IS NULL OR p_reviewer_id IS NULL
@@ -227,6 +228,7 @@ BEGIN
       ELSE NULL
     END;
 
+    v_failure_stage := 'event_replay_lookup';
     SELECT * INTO v_event
     FROM public.merchant_compliance_events
     WHERE merchant_id = p_merchant_id
@@ -263,6 +265,7 @@ BEGIN
       RETURN;
     END IF;
 
+    v_failure_stage := 'profile_lookup';
     SELECT * INTO v_profile
     FROM public.merchant_compliance_profiles
     WHERE id = p_profile_id
@@ -301,12 +304,14 @@ BEGIN
       RETURN;
     END IF;
 
+    v_failure_stage := 'reviewer_lookup';
     IF NOT EXISTS (SELECT 1 FROM auth.users WHERE id = p_reviewer_id) THEN
       RETURN QUERY SELECT 'approval_reviewer_invalid', NULL::uuid, NULL::uuid, NULL::bigint;
       RETURN;
     END IF;
 
     IF p_plan_code IN ('solo_lite', 'business') THEN
+      v_failure_stage := 'review_source_lookup';
       SELECT * INTO v_review
       FROM public.merchant_compliance_reviews
       WHERE id = p_source_id
@@ -321,6 +326,7 @@ BEGIN
         AND v_review.row_version = p_source_version
         , false);
     ELSE
+      v_failure_stage := 'case_source_lookup';
       SELECT * INTO v_case
       FROM public.solo_plus_cases
       WHERE id = p_source_id
@@ -352,6 +358,7 @@ BEGIN
 
     v_from_compliance_status := v_profile.compliance_status;
 
+    v_failure_stage := 'profile_update';
     UPDATE public.merchant_compliance_profiles
     SET compliance_status = p_target_compliance_status,
         activation_status = v_target_activation_status,
@@ -376,6 +383,7 @@ BEGIN
       RETURN;
     END IF;
 
+    v_failure_stage := 'event_insert';
     INSERT INTO public.merchant_compliance_events (
       id, merchant_id, profile_id, event_type, from_state, to_state, reason_code, actor_type, actor_id,
       source_type, source_id, policy_version, idempotency_key, expected_row_version, resulting_row_version, metadata
@@ -407,7 +415,16 @@ BEGIN
 
     RETURN QUERY SELECT 'approval_applied', v_profile.id, v_event_id, v_profile.row_version;
   EXCEPTION WHEN OTHERS THEN
-    RETURN QUERY SELECT 'approval_atomic_write_failed', NULL::uuid, NULL::uuid, NULL::bigint;
+    RETURN QUERY SELECT CASE v_failure_stage
+      WHEN 'event_replay_lookup' THEN 'approval_replay_lookup_failed'
+      WHEN 'profile_lookup' THEN 'approval_profile_lookup_failed'
+      WHEN 'reviewer_lookup' THEN 'approval_reviewer_lookup_failed'
+      WHEN 'review_source_lookup' THEN 'approval_review_source_lookup_failed'
+      WHEN 'case_source_lookup' THEN 'approval_case_source_lookup_failed'
+      WHEN 'profile_update' THEN 'approval_profile_update_failed'
+      WHEN 'event_insert' THEN 'approval_event_insert_failed'
+      ELSE 'approval_atomic_write_failed_unknown'
+    END, NULL::uuid, NULL::uuid, NULL::bigint;
   END;
 END;
 $review_compliance_profile_decision_v1$;
