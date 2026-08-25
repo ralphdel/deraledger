@@ -78,6 +78,8 @@ function run() {
   assert.match(script, /REVOKE UPDATE ON TABLE public\.merchant_compliance_profiles FROM service_role/);
   assert.match(script, /REVOKE INSERT ON TABLE public\.merchant_compliance_events FROM service_role/);
   assert.match(script, /GRANT SELECT ON TABLE auth\.users TO service_role/);
+  assert.match(script, /GRANT SELECT ON TABLE public\.solo_plus_cases TO service_role/);
+  assert.doesNotMatch(script, /GRANT UPDATE ON TABLE public\.solo_plus_cases TO service_role/);
   assert.match(script, /ALTER ROLE service_role BYPASSRLS/);
   assert.match(script, /rollback_partial_state_detected/);
   assert.match(script, /NOT setup_mode OR live_features_enabled/);
@@ -104,6 +106,9 @@ function run() {
   assert.match(script, /probe\.profile_update_privilege_rls/);
   assert.match(script, /probe\.event_insert_privilege_rls/);
   assert.match(script, /probe\.replay_lookup_privilege/);
+  assert.match(script, /probe\.review_source_read/);
+  assert.match(script, /probe\.case_source_read/);
+  assert.match(script, /'00000000-0000-4000-8000-000000000112','local-026-missing-reviewer'/);
   assert.doesNotMatch(script, /lite verified failed:/);
   const summaryIndex = script.indexOf("SELECT scenario_name, expected_result, actual_result");
   const finalFailureIndex = script.indexOf("LOCAL_APPROVAL_SCENARIOS_FAILED");

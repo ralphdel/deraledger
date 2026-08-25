@@ -228,6 +228,15 @@ BEGIN
       ELSE NULL
     END;
 
+    -- The trusted reviewer is part of the decision authority. Validate it
+    -- before any idempotency, profile, or evidence-source lookup so an absent
+    -- reviewer never falls through to a misleading source outcome.
+    v_failure_stage := 'reviewer_lookup';
+    IF NOT EXISTS (SELECT 1 FROM auth.users WHERE id = p_reviewer_id) THEN
+      RETURN QUERY SELECT 'approval_reviewer_invalid', NULL::uuid, NULL::uuid, NULL::bigint;
+      RETURN;
+    END IF;
+
     v_failure_stage := 'event_replay_lookup';
     SELECT * INTO v_event
     FROM public.merchant_compliance_events
@@ -304,20 +313,15 @@ BEGIN
       RETURN;
     END IF;
 
-    v_failure_stage := 'reviewer_lookup';
-    IF NOT EXISTS (SELECT 1 FROM auth.users WHERE id = p_reviewer_id) THEN
-      RETURN QUERY SELECT 'approval_reviewer_invalid', NULL::uuid, NULL::uuid, NULL::bigint;
-      RETURN;
-    END IF;
-
     IF p_plan_code IN ('solo_lite', 'business') THEN
       v_failure_stage := 'review_source_lookup';
+      -- Reviews are validation-only evidence sources in this narrow RPC. They
+      -- are not mutated, so require only their canonical SELECT grant.
       SELECT * INTO v_review
       FROM public.merchant_compliance_reviews
       WHERE id = p_source_id
         AND merchant_id = p_merchant_id
-        AND profile_id = v_profile.id
-      FOR UPDATE;
+        AND profile_id = v_profile.id;
 
       v_source_valid := COALESCE(FOUND
         AND v_review.review_type = CASE WHEN p_plan_code = 'solo_lite' THEN 'solo_lite' ELSE 'business_kyb' END
@@ -327,11 +331,12 @@ BEGIN
         , false);
     ELSE
       v_failure_stage := 'case_source_lookup';
+      -- Solo Plus cases are likewise read-only evidence sources here. Avoid a
+      -- write lock because their known service-role contract grants SELECT only.
       SELECT * INTO v_case
       FROM public.solo_plus_cases
       WHERE id = p_source_id
-        AND merchant_id = p_merchant_id
-      FOR UPDATE;
+        AND merchant_id = p_merchant_id;
 
       v_source_valid := COALESCE(FOUND
         AND v_case.target_plan = 'solo_plus'

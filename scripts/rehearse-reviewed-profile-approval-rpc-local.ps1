@@ -247,7 +247,61 @@ SELECT 'probe.replay_lookup_privilege', 'probe_ready',
        THEN 'probe_ready' ELSE 'replay_lookup_privilege_failed' END,
   has_table_privilege(current_user, 'public.merchant_compliance_events', 'SELECT'),
   CASE WHEN has_table_privilege(current_user, 'public.merchant_compliance_events', 'SELECT')
-       THEN NULL ELSE 'replay_lookup_privilege_failed' END;
+        THEN NULL ELSE 'replay_lookup_privilege_failed' END;
+INSERT INTO pg_temp.approval_scenario_results
+SELECT 'probe.review_source_read', 'probe_ready',
+  CASE WHEN has_table_privilege(current_user, 'public.merchant_compliance_reviews', 'SELECT')
+          AND EXISTS (
+            SELECT 1 FROM public.merchant_compliance_reviews
+            WHERE id = '00000000-0000-4000-8000-000000000401'
+              AND merchant_id = '00000000-0000-4000-8000-000000000201'
+              AND profile_id = '00000000-0000-4000-8000-000000000301'
+              AND review_type = 'solo_lite'
+              AND target_plan_code = 'solo_lite'
+              AND review_status = 'pending'
+              AND row_version = 1
+          )
+       THEN 'probe_ready' ELSE 'review_source_read_or_fixture_failed' END,
+  has_table_privilege(current_user, 'public.merchant_compliance_reviews', 'SELECT')
+    AND EXISTS (
+      SELECT 1 FROM public.merchant_compliance_reviews
+      WHERE id = '00000000-0000-4000-8000-000000000401'
+        AND merchant_id = '00000000-0000-4000-8000-000000000201'
+        AND profile_id = '00000000-0000-4000-8000-000000000301'
+        AND review_type = 'solo_lite'
+        AND target_plan_code = 'solo_lite'
+        AND review_status = 'pending'
+        AND row_version = 1
+    ),
+  CASE WHEN has_table_privilege(current_user, 'public.merchant_compliance_reviews', 'SELECT')
+          AND EXISTS (SELECT 1 FROM public.merchant_compliance_reviews WHERE id = '00000000-0000-4000-8000-000000000401')
+       THEN NULL ELSE 'review_source_read_or_fixture_failed' END;
+INSERT INTO pg_temp.approval_scenario_results
+SELECT 'probe.case_source_read', 'probe_ready',
+  CASE WHEN has_table_privilege(current_user, 'public.solo_plus_cases', 'SELECT')
+          AND EXISTS (
+            SELECT 1 FROM public.solo_plus_cases
+            WHERE id = '00000000-0000-4000-8000-000000000406'
+              AND merchant_id = '00000000-0000-4000-8000-000000000206'
+              AND target_plan = 'solo_plus'
+              AND case_status = 'approved'
+              AND requirements_policy_version = 'local-policy-v1'
+              AND row_version = 1
+          )
+       THEN 'probe_ready' ELSE 'case_source_read_or_fixture_failed' END,
+  has_table_privilege(current_user, 'public.solo_plus_cases', 'SELECT')
+    AND EXISTS (
+      SELECT 1 FROM public.solo_plus_cases
+      WHERE id = '00000000-0000-4000-8000-000000000406'
+        AND merchant_id = '00000000-0000-4000-8000-000000000206'
+        AND target_plan = 'solo_plus'
+        AND case_status = 'approved'
+        AND requirements_policy_version = 'local-policy-v1'
+        AND row_version = 1
+    ),
+  CASE WHEN has_table_privilege(current_user, 'public.solo_plus_cases', 'SELECT')
+          AND EXISTS (SELECT 1 FROM public.solo_plus_cases WHERE id = '00000000-0000-4000-8000-000000000406')
+       THEN NULL ELSE 'case_source_read_or_fixture_failed' END;
 
 DO $rehearsal$
 BEGIN
@@ -265,7 +319,7 @@ PERFORM pg_temp.capture_approval_scenario('stale_row_version','approval_profile_
 PERFORM pg_temp.capture_approval_scenario('mismatched_plan_source','approval_payload_invalid','00000000-0000-4000-8000-000000000209','00000000-0000-4000-8000-000000000309','business','solo_lite_review','00000000-0000-4000-8000-000000000409',1,'business_verified',1,'00000000-0000-4000-8000-000000000101','local-026-plan-mismatch','local-policy-v1','2026-08-25T00:00:00Z',NULL);
 PERFORM pg_temp.capture_approval_scenario('unsupported_transition','approval_payload_invalid','00000000-0000-4000-8000-000000000209','00000000-0000-4000-8000-000000000309','solo_lite','solo_lite_review','00000000-0000-4000-8000-000000000409',1,'enhanced_verified',1,'00000000-0000-4000-8000-000000000101','local-026-transition','local-policy-v1','2026-08-25T00:00:00Z',NULL);
 PERFORM pg_temp.capture_approval_scenario('reused_idempotency_mismatch','approval_idempotency_conflict','00000000-0000-4000-8000-000000000201','00000000-0000-4000-8000-000000000301','solo_lite','solo_lite_review','00000000-0000-4000-8000-000000000401',1,'lite_verified',1,'00000000-0000-4000-8000-000000000101','local-026-approve-lite','different-policy','2026-08-25T00:00:00Z',NULL);
-PERFORM pg_temp.capture_approval_scenario('missing_reviewer','approval_reviewer_invalid','00000000-0000-4000-8000-000000000210','00000000-0000-4000-8000-000000000310','solo_lite','solo_lite_review','00000000-0000-4000-8000-000000000410',1,'lite_verified',1,'00000000-0000-4000-8000-000000000102','local-026-missing-reviewer','local-policy-v1','2026-08-25T00:00:00Z',NULL);
+PERFORM pg_temp.capture_approval_scenario('missing_reviewer','approval_reviewer_invalid','00000000-0000-4000-8000-000000000210','00000000-0000-4000-8000-000000000310','solo_lite','solo_lite_review','00000000-0000-4000-8000-000000000410',1,'lite_verified',1,'00000000-0000-4000-8000-000000000112','local-026-missing-reviewer','local-policy-v1','2026-08-25T00:00:00Z',NULL);
 END;
 $rehearsal$;
 RESET ROLE;
