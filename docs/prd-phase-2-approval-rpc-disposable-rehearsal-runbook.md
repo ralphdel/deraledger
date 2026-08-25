@@ -56,6 +56,8 @@ The behavior file is collect-all for approval scenarios. It records `scenario_na
 
 The approval RPC returns safe stage-specific failure codes for unexpected internal failures: replay lookup, profile lookup, reviewer/source lookup, profile update, event insert, or an unknown atomic-write stage. These retain the one transaction boundary: an event-insert failure rolls back the preceding profile update. The local probes separately report fixture shape plus profile-update, event-insert, replay-lookup, exact Lite/Business review-source, and case-source privilege/fixture readiness before full scenario assertions. The profile-update rollback fixture uses a disposable owner-created trigger after the profile lock succeeds, rather than revoking UPDATE before `SELECT ... FOR UPDATE`.
 
+Before the first Lite approval call, the harness also prints one compact `DIAGNOSTIC|lite_review_source_before_rpc` row. It contains only fixed disposable-fixture UUIDs, the exact RPC input fields, candidate review fields, and the exact RPC predicate count evaluated as `service_role`. This is diagnostic output only; it contains no connection data, credentials, provider data, or production/business records.
+
 Concurrent identical or stale replay may fail closed on the expected profile row-version rather than returning the sequential replay result. That is an expected safe outcome and must be recorded as such during review; it is not permission to accept a mismatched replay.
 
 ## Failure handling

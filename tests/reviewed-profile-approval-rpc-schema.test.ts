@@ -52,6 +52,7 @@ function run() {
   assert.match(reviewLookup, /target_plan_code = p_plan_code[\s\S]*?review_status IN \('pending', 'needs_attention'\)[\s\S]*?row_version = p_source_version/);
   assert.match(reviewLookup, /v_source_valid := v_review_source_count = 1/);
   assert.doesNotMatch(reviewLookup, /FOR UPDATE|SELECT \* INTO v_review/);
+  assert.match(reviewLookup, /review_type = CASE WHEN p_plan_code = 'solo_lite' THEN 'solo_lite' ELSE 'business_kyb' END[\s\S]*?target_plan_code = p_plan_code[\s\S]*?review_status IN \('pending', 'needs_attention'\)[\s\S]*?row_version = p_source_version/);
   assert.match(caseLookup, /WHERE id = p_source_id[\s\S]*?merchant_id = p_merchant_id/);
   assert.match(caseLookup, /target_plan = 'solo_plus'[\s\S]*?row_version::bigint = p_source_version[\s\S]*?requirements_policy_version = btrim\(p_policy_version\)/);
   assert.match(caseLookup, /case_status = 'approved'[\s\S]*?case_status = 'rejected'[\s\S]*?case_status IN \('verification_pending', 'manual_review'\)/);

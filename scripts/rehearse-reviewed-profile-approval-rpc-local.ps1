@@ -337,6 +337,54 @@ SELECT 'probe.case_source_read', 'probe_ready',
           AND EXISTS (SELECT 1 FROM public.solo_plus_cases WHERE id = '00000000-0000-4000-8000-000000000406')
        THEN NULL ELSE 'case_source_read_or_fixture_failed' END;
 
+-- Compact, local-fixture-only diagnosis immediately before the first Lite RPC
+-- invocation. The count predicate mirrors the Lite/Business RPC branch.
+WITH rpc_input AS (
+  SELECT
+    '00000000-0000-4000-8000-000000000201'::uuid AS merchant_id,
+    '00000000-0000-4000-8000-000000000301'::uuid AS profile_id,
+    'solo_lite'::text AS plan_code,
+    'solo_lite_review'::text AS source_type,
+    '00000000-0000-4000-8000-000000000401'::uuid AS source_id,
+    1::bigint AS source_version,
+    'lite_verified'::text AS target_status,
+    1::bigint AS expected_row_version
+)
+SELECT
+  'DIAGNOSTIC|lite_review_source_before_rpc' AS diagnostic_name,
+  rpc_input.merchant_id AS input_merchant_id,
+  rpc_input.profile_id AS input_profile_id,
+  rpc_input.source_type AS input_source_type,
+  rpc_input.source_id AS input_source_id,
+  rpc_input.source_version AS input_source_version,
+  rpc_input.plan_code AS input_plan_code,
+  rpc_input.target_status AS input_target_status,
+  rpc_input.expected_row_version AS input_expected_row_version,
+  candidate.id AS candidate_id,
+  candidate.merchant_id AS candidate_merchant_id,
+  candidate.profile_id AS candidate_profile_id,
+  candidate.review_type AS candidate_review_type,
+  candidate.target_plan_code AS candidate_target_plan_code,
+  candidate.review_status AS candidate_review_status,
+  candidate.row_version AS candidate_row_version,
+  (
+    SELECT count(*)
+    FROM public.merchant_compliance_reviews review_source
+    WHERE review_source.id = rpc_input.source_id
+      AND review_source.merchant_id = rpc_input.merchant_id
+      AND review_source.profile_id = profile_state.id
+      AND review_source.review_type = CASE WHEN rpc_input.plan_code = 'solo_lite' THEN 'solo_lite' ELSE 'business_kyb' END
+      AND review_source.target_plan_code = rpc_input.plan_code
+      AND review_source.review_status IN ('pending', 'needs_attention')
+      AND review_source.row_version = rpc_input.source_version
+  ) AS exact_rpc_predicate_count
+FROM rpc_input
+LEFT JOIN public.merchant_compliance_profiles profile_state
+  ON profile_state.id = rpc_input.profile_id
+ AND profile_state.merchant_id = rpc_input.merchant_id
+LEFT JOIN public.merchant_compliance_reviews candidate
+  ON candidate.id = rpc_input.source_id;
+
 DO $rehearsal$
 BEGIN
 PERFORM pg_temp.capture_approval_scenario('lite.pending_to_verified','approval_applied','00000000-0000-4000-8000-000000000201','00000000-0000-4000-8000-000000000301','solo_lite','solo_lite_review','00000000-0000-4000-8000-000000000401',1,'lite_verified',1,'00000000-0000-4000-8000-000000000101','local-026-approve-lite','local-policy-v1','2026-08-25T00:00:00Z',NULL);
