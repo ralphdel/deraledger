@@ -75,6 +75,11 @@ async function run() {
     async callApprovalDecisionRpc() { return [{ result_code: "unexpected_database_detail", profile_id: null, event_id: null, resulting_row_version: null }]; },
   });
   assert.deepEqual(unknown, { kind: "rejected", diagnostics: [{ code: "approval_rpc_result_unknown" }] });
+  const transportFailure = await executeReviewedProfileApprovalRpc(command, "profile-1", context, {
+    async callApprovalDecisionRpc() { throw new Error("transport detail"); },
+  });
+  assert.deepEqual(transportFailure, { kind: "rejected", diagnostics: [{ code: "approval_rpc_rejected" }] });
+  assert.doesNotMatch(JSON.stringify(transportFailure), /transport detail/i);
 
   const facade = readFileSync("src/lib/compliance/compliance-profile-approval-rpc-client.ts", "utf8");
   const core = readFileSync("src/lib/compliance/compliance-profile-approval-rpc-client-core.ts", "utf8");
