@@ -186,6 +186,12 @@ function run() {
   assert.match(cleanupPreflightSql, /migration_026\.rpc_signature[\s\S]*rpc\.browser_grants[\s\S]*compliance\.browser_policies[\s\S]*summary/);
   assert.match(cleanupPostflightSql, /rpc\.signature[\s\S]*rpc\.security[\s\S]*rpc\.diagnostics_removed[\s\S]*rpc\.browser_grants[\s\S]*data\.empty_after_apply[\s\S]*summary/);
   assert.match(cleanupPostflightSql, /pg_get_functiondef[\s\S]*LOCAL_APPROVAL_BRANCH[\s\S]*GET STACKED DIAGNOSTICS/);
+  for (const verificationSql of [cleanupPreflightSql, cleanupPostflightSql]) {
+    assert.match(verificationSql, /has_function_privilege\('service_role',[\s\S]*?review_compliance_profile_decision_v1[\s\S]*?'EXECUTE'\)/);
+    assert.match(verificationSql, /has_function_privilege\('anon',[\s\S]*?'EXECUTE'\)[\s\S]*?has_function_privilege\('authenticated',[\s\S]*?'EXECUTE'\)/);
+    assert.match(verificationSql, /aclexplode\(COALESCE\([\s\S]*?privilege_state\.grantee = 0[\s\S]*?privilege_state\.privilege_type = 'EXECUTE'/);
+    assert.doesNotMatch(verificationSql, /rp\.grantee <> 'service_role'/);
+  }
   assert.doesNotMatch(cleanupPreflightSql, /INSERT|UPDATE|DELETE|TRUNCATE/i);
   assert.doesNotMatch(cleanupPostflightSql, /INSERT|UPDATE|DELETE|TRUNCATE/i);
 
