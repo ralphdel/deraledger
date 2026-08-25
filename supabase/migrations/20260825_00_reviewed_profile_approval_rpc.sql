@@ -182,6 +182,11 @@ DECLARE
   v_source_valid boolean := false;
   v_review_source_count bigint := 0;
   v_failure_stage text := 'payload_validation';
+  v_exception_sqlstate text;
+  v_exception_message text;
+  v_exception_detail text;
+  v_exception_hint text;
+  v_exception_context text;
 BEGIN
   BEGIN
     IF p_merchant_id IS NULL OR p_profile_id IS NULL OR p_source_id IS NULL OR p_reviewer_id IS NULL
@@ -321,17 +326,17 @@ BEGIN
       -- Reviews are validation-only evidence sources in this narrow RPC. One
       -- exact submission/evidence row must satisfy every expected field.
       SELECT count(*) INTO v_review_source_count
-      FROM public.merchant_compliance_reviews
-      WHERE id = p_source_id
-        AND merchant_id = p_merchant_id
-        AND profile_id = v_profile.id
-        AND review_type = CASE p_source_type
+      FROM public.merchant_compliance_reviews AS review_source
+      WHERE review_source.id = p_source_id
+        AND review_source.merchant_id = p_merchant_id
+        AND review_source.profile_id = v_profile.id
+        AND review_source.review_type = CASE p_source_type
           WHEN 'solo_lite_review' THEN 'solo_lite'
           WHEN 'business_kyb_review' THEN 'business_kyb'
         END
-        AND target_plan_code = p_plan_code
-        AND review_status IN ('pending', 'needs_attention')
-        AND row_version = p_source_version;
+        AND review_source.target_plan_code = p_plan_code
+        AND review_source.review_status IN ('pending', 'needs_attention')
+        AND review_source.row_version = p_source_version;
 
       IF current_setting('deraledger.local_approval_rehearsal_diagnostics', true) = 'on' THEN
         RAISE NOTICE 'LOCAL_APPROVAL_BRANCH|review_lookup_failed.source_type_mapping|mapped_review_type=%',
@@ -479,6 +484,20 @@ BEGIN
   EXCEPTION WHEN OTHERS THEN
     IF v_failure_stage = 'review_source_lookup'
       AND current_setting('deraledger.local_approval_rehearsal_diagnostics', true) = 'on' THEN
+      -- This diagnostic channel is inert unless the disposable rehearsal
+      -- harness explicitly enables its transaction-local GUC. It emits only
+      -- psql NOTICE output and never changes the RPC's production-safe result.
+      GET STACKED DIAGNOSTICS
+        v_exception_sqlstate = RETURNED_SQLSTATE,
+        v_exception_message = MESSAGE_TEXT,
+        v_exception_detail = PG_EXCEPTION_DETAIL,
+        v_exception_hint = PG_EXCEPTION_HINT,
+        v_exception_context = PG_EXCEPTION_CONTEXT;
+      RAISE NOTICE 'LOCAL_APPROVAL_BRANCH|review_lookup_failed.exception_sqlstate|%', v_exception_sqlstate;
+      RAISE NOTICE 'LOCAL_APPROVAL_BRANCH|review_lookup_failed.exception_message|%', v_exception_message;
+      RAISE NOTICE 'LOCAL_APPROVAL_BRANCH|review_lookup_failed.exception_detail|%', COALESCE(v_exception_detail, '');
+      RAISE NOTICE 'LOCAL_APPROVAL_BRANCH|review_lookup_failed.exception_hint|%', COALESCE(v_exception_hint, '');
+      RAISE NOTICE 'LOCAL_APPROVAL_BRANCH|review_lookup_failed.exception_context|%', COALESCE(v_exception_context, '');
       RAISE NOTICE 'LOCAL_APPROVAL_BRANCH|review_lookup_failed.unknown_branch';
     END IF;
     RETURN QUERY SELECT CASE v_failure_stage
