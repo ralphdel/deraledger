@@ -4,6 +4,18 @@ import { readFileSync } from "node:fs";
 const script = readFileSync("scripts/rehearse-reviewed-profile-approval-rpc-local.ps1", "utf8");
 const runbook = readFileSync("docs/prd-phase-2-approval-rpc-disposable-rehearsal-runbook.md", "utf8");
 
+function assertExplicitSeedColumnCounts(table: string) {
+  const match = script.match(new RegExp(`INSERT INTO public\\.${table}\\(([\\s\\S]*?)\\) VALUES\\s*([\\s\\S]*?);`));
+  assert.ok(match, `${table} seed INSERT must have an explicit column list`);
+  const expectedColumns = match[1].split(",").map((column) => column.trim()).filter(Boolean).length;
+  const rows = match[2].match(/\([^()]+\)/g) ?? [];
+  assert.ok(rows.length > 0, `${table} seed INSERT must include rows`);
+  for (const row of rows) {
+    const actualValues = row.slice(1, -1).split(",").length;
+    assert.equal(actualValues, expectedColumns, `${table} seed row has ${actualValues} values; expected ${expectedColumns}`);
+  }
+}
+
 function run() {
   assert.match(script, /\[string\]\$LocalConnectionString/);
   assert.match(script, /REHEARSE MIGRATION 026 LOCAL DISPOSABLE DB ONLY/);
@@ -29,6 +41,9 @@ function run() {
   assert.match(script, /Running Migration 026 preflight[\s\S]*Applying Migration 026 first time[\s\S]*Applying Migration 026 second time for idempotency[\s\S]*Running Migration 026 postflight/);
   assert.match(script, /026_reviewed_profile_approval_rpc_snapshot\.sql/);
   assert.match(script, /026_reviewed_profile_approval_rpc_verify\.sql/);
+  for (const table of ["merchant_compliance_profiles", "merchant_compliance_reviews", "solo_plus_cases"]) {
+    assertExplicitSeedColumnCounts(table);
+  }
 
   assert.match(script, /RESET ROLE;[\s\S]*INSERT INTO public\.merchants[\s\S]*SET LOCAL ROLE service_role;/);
   const serviceRoleSection = script.match(/SET LOCAL ROLE service_role;([\s\S]*?)RESET ROLE;\n\n-- Structural duplicates/)?.[1] ?? "";

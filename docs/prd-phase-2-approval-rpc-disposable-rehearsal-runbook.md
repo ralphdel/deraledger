@@ -17,6 +17,8 @@ Migration 026 has passed independent source review but has not yet been run in a
 
 The script is dry-run by default. It validates the target but exits before `psql` unless `-Execute` is supplied with the exact confirmation phrase.
 
+The generated behavior seed uses explicit column lists for profiles, reviews, and Solo Plus cases. Its static regression test checks that every tuple has the same value count as its INSERT column list; this prevents a local seed-shape error from being mistaken for an approval-RPC failure.
+
 ## Exact local command
 
 From the repository root, set `PGPASSWORD` only in the current shell, then run:
