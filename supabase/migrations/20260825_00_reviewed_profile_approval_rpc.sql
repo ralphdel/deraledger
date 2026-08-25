@@ -315,6 +315,9 @@ BEGIN
 
     IF p_plan_code IN ('solo_lite', 'business') THEN
       v_failure_stage := 'review_source_lookup';
+      IF current_setting('deraledger.local_approval_rehearsal_diagnostics', true) = 'on' THEN
+        RAISE NOTICE 'LOCAL_APPROVAL_BRANCH|review_lookup_failed.enter';
+      END IF;
       -- Reviews are validation-only evidence sources in this narrow RPC. One
       -- exact submission/evidence row must satisfy every expected field.
       SELECT count(*) INTO v_review_source_count
@@ -330,11 +333,24 @@ BEGIN
         AND review_status IN ('pending', 'needs_attention')
         AND row_version = p_source_version;
 
+      IF current_setting('deraledger.local_approval_rehearsal_diagnostics', true) = 'on' THEN
+        RAISE NOTICE 'LOCAL_APPROVAL_BRANCH|review_lookup_failed.source_type_mapping|mapped_review_type=%',
+          CASE p_source_type
+            WHEN 'solo_lite_review' THEN 'solo_lite'
+            WHEN 'business_kyb_review' THEN 'business_kyb'
+          END;
+        RAISE NOTICE 'LOCAL_APPROVAL_BRANCH|review_lookup_failed.review_count|source_match_count=%', v_review_source_count;
+        RAISE NOTICE 'LOCAL_APPROVAL_BRANCH|review_lookup_failed.diagnostic_gate_check';
+      END IF;
+
       -- This row is available only to the disposable rehearsal session: it
       -- requires both an explicitly set local GUC and a session temp table.
       -- It never changes the normal RPC result or exposes database errors.
       IF current_setting('deraledger.local_approval_rehearsal_diagnostics', true) = 'on'
         AND to_regclass('pg_temp.approval_rpc_internal_diagnostics') IS NOT NULL THEN
+        IF current_setting('deraledger.local_approval_rehearsal_diagnostics', true) = 'on' THEN
+          RAISE NOTICE 'LOCAL_APPROVAL_BRANCH|review_lookup_failed.diagnostic_insert_start';
+        END IF;
         INSERT INTO pg_temp.approval_rpc_internal_diagnostics (
           diagnostic_name, merchant_id, profile_id, source_type, source_id,
           source_version, plan_code, target_status, expected_row_version,
@@ -349,12 +365,23 @@ BEGIN
           END,
           v_profile.compliance_status, v_profile.row_version, v_review_source_count
         );
+        IF current_setting('deraledger.local_approval_rehearsal_diagnostics', true) = 'on' THEN
+          RAISE NOTICE 'LOCAL_APPROVAL_BRANCH|review_lookup_failed.diagnostic_insert_complete';
+        END IF;
+      ELSIF current_setting('deraledger.local_approval_rehearsal_diagnostics', true) = 'on' THEN
+        RAISE NOTICE 'LOCAL_APPROVAL_BRANCH|review_lookup_failed.diagnostic_gate_inactive';
       END IF;
 
       IF v_review_source_count = 0 THEN
+        IF current_setting('deraledger.local_approval_rehearsal_diagnostics', true) = 'on' THEN
+          RAISE NOTICE 'LOCAL_APPROVAL_BRANCH|review_lookup_failed.review_count_zero';
+        END IF;
         RETURN QUERY SELECT 'approval_review_source_lookup_failed', NULL::uuid, NULL::uuid, NULL::bigint;
         RETURN;
       ELSIF v_review_source_count > 1 THEN
+        IF current_setting('deraledger.local_approval_rehearsal_diagnostics', true) = 'on' THEN
+          RAISE NOTICE 'LOCAL_APPROVAL_BRANCH|review_lookup_failed.review_count_multiple';
+        END IF;
         RETURN QUERY SELECT 'approval_ambiguous_state', NULL::uuid, NULL::uuid, NULL::bigint;
         RETURN;
       END IF;
@@ -450,6 +477,10 @@ BEGIN
 
     RETURN QUERY SELECT 'approval_applied', v_profile.id, v_event_id, v_profile.row_version;
   EXCEPTION WHEN OTHERS THEN
+    IF v_failure_stage = 'review_source_lookup'
+      AND current_setting('deraledger.local_approval_rehearsal_diagnostics', true) = 'on' THEN
+      RAISE NOTICE 'LOCAL_APPROVAL_BRANCH|review_lookup_failed.unknown_branch';
+    END IF;
     RETURN QUERY SELECT CASE v_failure_stage
       WHEN 'event_replay_lookup' THEN 'approval_replay_lookup_failed'
       WHEN 'profile_lookup' THEN 'approval_profile_lookup_failed'

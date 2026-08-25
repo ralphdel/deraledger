@@ -55,6 +55,20 @@ function run() {
   assert.match(reviewLookup, /review_type = CASE p_source_type[\s\S]*?solo_lite_review[\s\S]*?business_kyb_review[\s\S]*?target_plan_code = p_plan_code[\s\S]*?review_status IN \('pending', 'needs_attention'\)[\s\S]*?row_version = p_source_version/);
   assert.match(reviewLookup, /current_setting\('deraledger\.local_approval_rehearsal_diagnostics', true\) = 'on'[\s\S]*?to_regclass\('pg_temp\.approval_rpc_internal_diagnostics'\)[\s\S]*?INSERT INTO pg_temp\.approval_rpc_internal_diagnostics/);
   assert.match(reviewLookup, /mapped_review_type, profile_compliance_status, profile_row_version,[\s\S]*?review_source_match_count/);
+  for (const branch of [
+    "review_lookup_failed.enter",
+    "review_lookup_failed.source_type_mapping",
+    "review_lookup_failed.review_count",
+    "review_lookup_failed.diagnostic_gate_check",
+    "review_lookup_failed.diagnostic_insert_start",
+    "review_lookup_failed.diagnostic_insert_complete",
+    "review_lookup_failed.diagnostic_gate_inactive",
+    "review_lookup_failed.review_count_zero",
+    "review_lookup_failed.review_count_multiple",
+    "review_lookup_failed.unknown_branch",
+  ]) {
+    assert.match(sql, new RegExp(branch));
+  }
   assert.match(caseLookup, /WHERE id = p_source_id[\s\S]*?merchant_id = p_merchant_id/);
   assert.match(caseLookup, /target_plan = 'solo_plus'[\s\S]*?row_version::bigint = p_source_version[\s\S]*?requirements_policy_version = btrim\(p_policy_version\)/);
   assert.match(caseLookup, /case_status = 'approved'[\s\S]*?case_status = 'rejected'[\s\S]*?case_status IN \('verification_pending', 'manual_review'\)/);

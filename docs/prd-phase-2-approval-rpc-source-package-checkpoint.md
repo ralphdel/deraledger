@@ -26,6 +26,8 @@ The first local Lite approval invocation exposed an append-only event-lock misma
 
 Because the standalone exact predicate passed while the prior local RPC result still reported a source-lookup stage failure, the next disposable run must prove the installed function identity/body and capture the actual Lite/Business function parameters and match count through a local-GUC/session-temp diagnostic channel. The channel is inert without the harness-created temp table and local setting. It does not alter normal results, security grants, or runtime adoption.
 
+If that session-temp row is absent, local-GUC-gated safe branch notices identify the exact source-lookup return or exception route without returning raw database errors. This remains a disposable-only diagnostic requirement before any staging consideration.
+
 The database has no canonical internal-compliance-role table. The package revalidates that the reviewer UUID exists in `auth.users`, while internal reviewer/operator authorization remains a required trusted server-side boundary before service-role invocation. It does not infer authorization from browser input.
 
 ## Required validation before any apply
