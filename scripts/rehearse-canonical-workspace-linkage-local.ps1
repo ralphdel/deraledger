@@ -47,9 +47,8 @@ function Get-LocalPgDatabaseName {
 function Assert-LocalDisposableConnectionString {
   param([Parameter(Mandatory = $true)][string]$ConnectionString)
   if ([string]::IsNullOrWhiteSpace($ConnectionString)) { throw 'LOCAL_M029_REHEARSAL_CONNECTION_STRING_REQUIRED' }
-  # The local-only connection string is passed to cmd.exe solely to capture
-  # psql output without PowerShell treating NOTICE stderr as a terminating
-  # NativeCommandError. Reject cmd metacharacters before that boundary.
+  # The local-only connection string is passed as a distinct Start-Process
+  # argument. Reject shell metacharacters as a defence-in-depth local guard.
   if ($ConnectionString -match '(?i)(supabase\.co|supabase\.com|vercel|production|staging|service_role|anon|eyJ|password\s*=|://[^/\s]*:|[&|<>()^"%])') {
     throw 'LOCAL_M029_REHEARSAL_CONNECTION_STRING_REJECTED'
   }
@@ -86,7 +85,7 @@ foreach ($path in @(
   if (-not (Test-Path -LiteralPath $path)) { throw "LOCAL_M029_REHEARSAL_SOURCE_MISSING: $path" }
 }
 
-$Psql = (Get-Command $PsqlPath -ErrorAction Stop).Source
+$Psql = (Resolve-Path -LiteralPath (Get-Command $PsqlPath -ErrorAction Stop).Source).Path
 $TempDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ("deraledger-m029-workspace-linkage-" + [guid]::NewGuid().ToString('N'))
 $EvidenceDirectory = Join-Path $ProjectRoot ("local-evidence/migration-029-local-" + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 New-Item -ItemType Directory -Path $TempDirectory -Force | Out-Null
@@ -344,21 +343,23 @@ SELECT 'CONTROL|LOCAL_CANONICAL_WORKSPACE_LINKAGE_REHEARSAL=PASS';
 
   function Invoke-LocalPsqlFile([string]$Label, [string]$FilePath) {
     $EvidencePath = Join-Path $EvidenceDirectory ("$Label.txt")
-    # cmd.exe owns the combined stdout/stderr redirection. This keeps harmless
-    # idempotency NOTICE lines in the evidence file instead of allowing
-    # PowerShell to surface them as NativeCommandError records.
-    $Command = '""{0}" -X -w -v ON_ERROR_STOP=1 -d "{1}" -f "{2}" > "{3}" 2>&1"' -f `
-      $Psql, $LocalConnectionString.Trim(), $FilePath, $EvidencePath
-    & $env:ComSpec /d /c $Command
-    $PsqlExitCode = $LASTEXITCODE
+    $StdoutPath = Join-Path $EvidenceDirectory ("$Label.stdout.txt")
+    $StderrPath = Join-Path $EvidenceDirectory ("$Label.stderr.txt")
+    # Start-Process passes FilePath and ArgumentList independently, so the
+    # standard Windows psql path with spaces is never parsed by cmd.exe.
+    # stderr remains evidence rather than a PowerShell NativeCommandError.
+    $PsqlProcess = Start-Process -FilePath $Psql -ArgumentList @(
+      '-X', '-w', '-v', 'ON_ERROR_STOP=1', '-d', $LocalConnectionString.Trim(), '-f', $FilePath
+    ) -RedirectStandardOutput $StdoutPath -RedirectStandardError $StderrPath -Wait -PassThru -NoNewWindow
+    $PsqlExitCode = $PsqlProcess.ExitCode
 
-    $Evidence = if (Test-Path -LiteralPath $EvidencePath) {
-      Get-Content -LiteralPath $EvidencePath -Raw
-    } else {
-      ''
-    }
+    $Stdout = if (Test-Path -LiteralPath $StdoutPath) { Get-Content -LiteralPath $StdoutPath -Raw } else { '' }
+    $Stderr = if (Test-Path -LiteralPath $StderrPath) { Get-Content -LiteralPath $StderrPath -Raw } else { '' }
+    $Evidence = "===== STDOUT =====$([Environment]::NewLine)$Stdout$([Environment]::NewLine)===== STDERR =====$([Environment]::NewLine)$Stderr"
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllText($EvidencePath, $Evidence, $utf8NoBom)
     Write-Host "===== LOCAL M029 EVIDENCE: $Label ====="
-    if ($Evidence.Length -gt 0) { Write-Host $Evidence -NoNewline }
+    Write-Host $Evidence -NoNewline
     Write-Host "===== END LOCAL M029 EVIDENCE: $Label ====="
 
     if ($PsqlExitCode -ne 0) { throw "LOCAL_M029_REHEARSAL_PSQL_FAILED: $Label" }

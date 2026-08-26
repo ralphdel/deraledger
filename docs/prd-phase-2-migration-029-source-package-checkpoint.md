@@ -59,12 +59,13 @@ function/table ACLs where grantee OID `0` denotes the pseudo-role. A missing
 browser role is treated as no direct grant; a missing `service_role` remains a
 clear fail-closed prerequisite failure.
 
-The local rehearsal runner captures each `psql` stage through `cmd.exe`
-combined-output redirection and records its labelled evidence before applying
-exit-code and verification-row checks. This local harness detail prevents
-harmless idempotent-install `NOTICE` lines from becoming PowerShell
-`NativeCommandError` failures; it neither changes M029 SQL nor weakens
-`ON_ERROR_STOP`, nonzero-exit, or `FAIL`-row handling.
+The local rehearsal runner captures each `psql` stage with `Start-Process`,
+using a resolved executable path and argument array plus separate stdout/stderr
+files. It combines and records labelled evidence before applying exit-code and
+verification-row checks. This local harness detail supports paths with spaces
+and prevents harmless idempotent-install `NOTICE` lines from becoming
+PowerShell `NativeCommandError` failures; it neither changes M029 SQL nor
+weakens `ON_ERROR_STOP`, nonzero-exit, or `FAIL`-row handling.
 
 ## M028 boundary
 
