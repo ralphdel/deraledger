@@ -1,6 +1,10 @@
 WITH object_facts AS (
   SELECT to_regclass('public.merchant_canonical_workspaces') AS link_table_oid,
     to_regprocedure('public.reconcile_canonical_merchant_workspace_link_v1(uuid,uuid,text)') AS reconcile_oid
+), workspace_facts AS (
+  SELECT to_regclass('public.workspaces') AS workspace_oid,
+    (SELECT attnum FROM pg_attribute WHERE attrelid=to_regclass('public.workspaces') AND attname='id' AND attnum>0 AND NOT attisdropped) AS workspace_id_attnum,
+    (SELECT attnum FROM pg_attribute WHERE attrelid=to_regclass('public.workspaces') AND attname='merchant_id' AND attnum>0 AND NOT attisdropped) AS workspace_merchant_attnum
 ), role_facts AS (
   SELECT to_regrole('service_role') AS service_role_oid,
     to_regrole('anon') AS anon_oid,
@@ -76,9 +80,19 @@ WITH object_facts AS (
       AND EXISTS (SELECT 1 FROM pg_constraint c CROSS JOIN object_facts o WHERE c.conrelid=o.link_table_oid AND c.conname='merchant_canonical_workspaces_workspace_key' AND c.contype='u'::"char")
       AND EXISTS (SELECT 1 FROM pg_constraint c CROSS JOIN object_facts o WHERE c.conrelid=o.link_table_oid AND c.conname='merchant_canonical_workspaces_reconcile_key' AND c.contype='u'::"char")
       AND EXISTS (SELECT 1 FROM pg_constraint c CROSS JOIN object_facts o WHERE c.conrelid=o.link_table_oid AND c.conname='merchant_canonical_workspaces_workspace_owner_fkey' AND c.contype='f'::"char" AND c.convalidated)
-      AND EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid=to_regclass('public.workspaces') AND i.indisunique AND i.indpred IS NULL AND i.indexrelid=to_regclass('public.merchant_canonical_workspace_supporting_owner_key'))
+      AND EXISTS (
+        SELECT 1 FROM pg_index i CROSS JOIN workspace_facts f
+        WHERE i.indexrelid=to_regclass('public.merchant_canonical_workspace_supporting_owner_key')
+          AND i.indrelid=f.workspace_oid AND i.indisunique AND i.indpred IS NULL
+          AND i.indnkeyatts=2 AND i.indnatts=2
+          AND ARRAY(
+            SELECT index_key.attnum
+            FROM unnest(i.indkey::smallint[]) WITH ORDINALITY AS index_key(attnum, ordinal_position)
+            ORDER BY index_key.ordinal_position
+          )=ARRAY[f.workspace_id_attnum,f.workspace_merchant_attnum]::smallint[]
+      )
     THEN 'PASS' ELSE 'FAIL' END,
-    'Canonical keys, composite ownership FK, and supporting unique index exist'
+    'Canonical keys, composite ownership FK, and exact supporting unique index exist'
   UNION ALL
   SELECT 'table.immutable_posture',
     CASE WHEN EXISTS (

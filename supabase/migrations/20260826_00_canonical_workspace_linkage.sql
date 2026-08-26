@@ -113,7 +113,13 @@ BEGIN
   WHERE i.indrelid = v_workspaces_oid
     AND i.indisunique
     AND i.indpred IS NULL
-    AND i.indkey::smallint[] = ARRAY[v_workspace_id_attnum, v_workspace_merchant_attnum]::smallint[];
+    AND i.indnkeyatts = 2
+    AND i.indnatts = 2
+    AND ARRAY(
+      SELECT index_key.attnum
+      FROM unnest(i.indkey::smallint[]) WITH ORDINALITY AS index_key(attnum, ordinal_position)
+      ORDER BY index_key.ordinal_position
+    ) = ARRAY[v_workspace_id_attnum, v_workspace_merchant_attnum]::smallint[];
 
   IF v_named_support_index_oid IS NOT NULL THEN
     SELECT EXISTS (
@@ -123,7 +129,13 @@ BEGIN
         AND i.indrelid = v_workspaces_oid
         AND i.indisunique
         AND i.indpred IS NULL
-        AND i.indkey::smallint[] = ARRAY[v_workspace_id_attnum, v_workspace_merchant_attnum]::smallint[]
+        AND i.indnkeyatts = 2
+        AND i.indnatts = 2
+        AND ARRAY(
+          SELECT index_key.attnum
+          FROM unnest(i.indkey::smallint[]) WITH ORDINALITY AS index_key(attnum, ordinal_position)
+          ORDER BY index_key.ordinal_position
+        ) = ARRAY[v_workspace_id_attnum, v_workspace_merchant_attnum]::smallint[]
     ) INTO v_named_support_index_valid;
   END IF;
 
@@ -131,8 +143,8 @@ BEGIN
     OR v_workspace_merchant_fk_count <> 1
     OR v_workspace_merchant_fk_total <> 1
     OR v_workspace_merchant_unique_count <> 1
-    OR v_composite_support_count > 1
-    OR (v_named_support_index_oid IS NOT NULL AND NOT v_named_support_index_valid) THEN
+    OR (v_named_support_index_oid IS NULL AND v_composite_support_count <> 0)
+    OR (v_named_support_index_oid IS NOT NULL AND (NOT v_named_support_index_valid OR v_composite_support_count <> 1)) THEN
     RAISE EXCEPTION 'Migration 029 prerequisite failed: workspace identity/linkage contract is incompatible';
   END IF;
 

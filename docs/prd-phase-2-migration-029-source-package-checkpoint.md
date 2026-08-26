@@ -76,6 +76,15 @@ syntax defect: the M026--M028 RPC grant-verification `FOR` loop had one stray
 the schema test asserts this exact loop boundary so the migration remains
 parseable before any future disposable rerun.
 
+The M029 rerun guard also normalises supporting-index key order before
+comparison. PostgreSQL exposes `pg_index.indkey` as `int2vector`; direct array
+equality can treat its bounds differently from a standard `smallint[]` target,
+rejecting M029's own correct index on rerun. The accepted state is now strict:
+no matching supporting index before first apply, or exactly one named,
+two-key, non-partial unique M029 supporting index after apply. Any wrong named
+index, unexpected duplicate, key order, predicate, relation, or uniqueness
+drift remains fail-closed.
+
 ## M028 boundary
 
 M029 deliberately leaves M028 issue/snapshot RPCs unchanged. Postflight must

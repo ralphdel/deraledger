@@ -118,6 +118,13 @@ CTE before sorting the summary last. Do not flatten that CTE into a direct
 `UNION ALL ... ORDER BY CASE` query: PostgreSQL rejects expression ordering at
 that union level.
 
+The supporting ownership index is accepted only in two states: absent before a
+first M029 apply, or exactly the named unique `(workspaces.id,
+workspaces.merchant_id)` index after M029. The migration and verification SQL
+normalise `pg_index.indkey` through `unnest ... WITH ORDINALITY` before ordered
+comparison, because direct `int2vector` array equality can reject the exact
+post-install index due to array-bound representation.
+
 Before a local run, validate M029 procedural block structure through the
 schema test. In particular, the M026--M028 RPC grant-verification `FOR` loop
 ends directly with `END LOOP`; it is not wrapped by an additional conditional

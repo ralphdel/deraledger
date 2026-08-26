@@ -42,10 +42,12 @@ assert.match(migration, /workspace identity\/linkage contract is incompatible/);
 assert.match(migration, /v_workspace_merchant_fk_count <> 1[\s\S]*v_workspace_merchant_unique_count <> 1/);
 assert.match(migration, /v_existing_link_contract_ok/);
 assert.match(migration, /existing canonical workspace authority is incompatible/);
+assert.match(migration, /ARRAY\(\s*SELECT index_key\.attnum\s*FROM unnest\(i\.indkey::smallint\[\]\) WITH ORDINALITY AS index_key\(attnum, ordinal_position\)\s*ORDER BY index_key\.ordinal_position\s*\) = ARRAY\[v_workspace_id_attnum, v_workspace_merchant_attnum\]::smallint\[\]/);
+assert.match(migration, /v_named_support_index_oid IS NULL AND v_composite_support_count <> 0[\s\S]*v_named_support_index_oid IS NOT NULL AND \(NOT v_named_support_index_valid OR v_composite_support_count <> 1\)/);
+assert.doesNotMatch(migration, /i\.indkey::smallint\[\]\s*=\s*ARRAY\[v_workspace_id_attnum, v_workspace_merchant_attnum\]::smallint\[\]/);
 assert.match(migration, /FOR v_rpc_oid IN SELECT unnest\(ARRAY\[v_approval_oid, v_issue_oid, v_snapshot_oid\]\)[\s\S]*IF v_public_execute OR v_anon_execute OR v_authenticated_execute OR NOT v_service_execute THEN[\s\S]*END IF;\s*END LOOP;\s*FOR v_table_oid IN SELECT unnest\(ARRAY\[/);
 assert.doesNotMatch(migration, /END LOOP;\s*END IF;\s*FOR v_table_oid IN SELECT unnest\(ARRAY\[/);
 assert.match(migration, /v_named_support_index_oid regclass := to_regclass\('public\.merchant_canonical_workspace_supporting_owner_key'\)/);
-assert.match(migration, /v_named_support_index_oid IS NOT NULL AND NOT v_named_support_index_valid/);
 assert.doesNotMatch(migration, /merchants\.workspace_id/);
 assert.doesNotMatch(migration, /ORDER BY created_at DESC/);
 
@@ -100,6 +102,9 @@ assert.match(preflight, /has_function_privilege\(r\.service_role_oid, f\.issue_o
 assert.match(preflight, /migration_029\.objects_absent/);
 assert.match(preflight, /migration_029\.supporting_index_name/);
 assert.match(preflight, /merchant_canonical_workspace_supporting_owner_key/);
+assert.match(preflight, /Supporting-index state is absent before first apply or exactly M029-created on rerun/);
+assert.match(preflight, /unnest\(i\.indkey::smallint\[\]\) WITH ORDINALITY/);
+assert.doesNotMatch(preflight, /i\.indkey::smallint\[\]\s*=\s*ARRAY\[f\.workspace_id_attnum,f\.workspace_merchant_attnum\]::smallint\[\]/);
 assert.match(preflight, /output_rows AS \([\s\S]*SELECT check_name, status, details FROM rendered[\s\S]*UNION ALL[\s\S]*All preflight checks must pass[\s\S]*\)[\s\S]*FROM output_rows[\s\S]*ORDER BY CASE WHEN check_name='summary'/);
 assert.doesNotMatch(preflight, /UNION ALL\s+SELECT 'summary'[^\r\n]*\r?\nORDER BY CASE/);
 assert.match(preflight, /summary[\s\S]*All preflight checks must pass/);
@@ -123,6 +128,9 @@ assert.match(postflight, /has_function_privilege\(r\.service_role_oid, f\.oid, '
 assert.match(postflight, /CASE WHEN o\.link_table_oid IS NULL OR r\.anon_oid IS NULL THEN false ELSE has_table_privilege\(r\.anon_oid/);
 assert.doesNotMatch(postflight, /FROM public\.merchant_canonical_workspaces/);
 assert.match(postflight, /merchant_canonical_workspaces_workspace_owner_fkey/);
+assert.match(postflight, /workspace_facts AS \([\s\S]*workspace_id_attnum[\s\S]*workspace_merchant_attnum/);
+assert.match(postflight, /unnest\(i\.indkey::smallint\[\]\) WITH ORDINALITY/);
+assert.match(postflight, /exact supporting unique index exist/);
 assert.match(postflight, /canonical_request_workspace_linkage_unavailable/);
 assert.match(postflight, /canonical_snapshot_workspace_linkage_unavailable/);
 assert.match(postflight, /output_rows AS \([\s\S]*SELECT check_name, status, details FROM rendered[\s\S]*UNION ALL[\s\S]*All postflight checks must pass[\s\S]*\)[\s\S]*FROM output_rows[\s\S]*ORDER BY CASE WHEN check_name='summary'/);

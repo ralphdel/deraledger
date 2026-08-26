@@ -114,14 +114,39 @@ WITH required_relations AS (
     'No conflicting M029 table or reconcile RPC exists before apply'
   UNION ALL
   SELECT 'migration_029.supporting_index_name',
-    CASE WHEN (SELECT supporting_index_oid IS NULL FROM supporting_index_facts)
-      OR EXISTS (
+    CASE WHEN (
+        (SELECT supporting_index_oid IS NULL FROM supporting_index_facts)
+        AND NOT EXISTS (
+          SELECT 1 FROM pg_index i CROSS JOIN workspace_facts f
+          WHERE i.indrelid=f.workspace_oid AND i.indisunique AND i.indpred IS NULL
+            AND i.indnkeyatts=2 AND i.indnatts=2
+            AND ARRAY(
+              SELECT index_key.attnum
+              FROM unnest(i.indkey::smallint[]) WITH ORDINALITY AS index_key(attnum, ordinal_position)
+              ORDER BY index_key.ordinal_position
+            )=ARRAY[f.workspace_id_attnum,f.workspace_merchant_attnum]::smallint[]
+        )
+      ) OR EXISTS (
         SELECT 1 FROM pg_index i CROSS JOIN workspace_facts f CROSS JOIN supporting_index_facts s
         WHERE i.indexrelid=s.supporting_index_oid AND i.indrelid=f.workspace_oid
-          AND i.indisunique AND i.indpred IS NULL
-          AND i.indkey::smallint[]=ARRAY[f.workspace_id_attnum,f.workspace_merchant_attnum]::smallint[]
+          AND i.indisunique AND i.indpred IS NULL AND i.indnkeyatts=2 AND i.indnatts=2
+          AND ARRAY(
+            SELECT index_key.attnum
+            FROM unnest(i.indkey::smallint[]) WITH ORDINALITY AS index_key(attnum, ordinal_position)
+            ORDER BY index_key.ordinal_position
+          )=ARRAY[f.workspace_id_attnum,f.workspace_merchant_attnum]::smallint[]
+          AND 1=(
+            SELECT count(*) FROM pg_index exact_index
+            WHERE exact_index.indrelid=f.workspace_oid AND exact_index.indisunique AND exact_index.indpred IS NULL
+              AND exact_index.indnkeyatts=2 AND exact_index.indnatts=2
+              AND ARRAY(
+                SELECT index_key.attnum
+                FROM unnest(exact_index.indkey::smallint[]) WITH ORDINALITY AS index_key(attnum, ordinal_position)
+                ORDER BY index_key.ordinal_position
+              )=ARRAY[f.workspace_id_attnum,f.workspace_merchant_attnum]::smallint[]
+          )
       ) THEN 'PASS' ELSE 'FAIL' END,
-    'Existing supporting-index name is absent or has the exact unique workspace ownership definition'
+    'Supporting-index state is absent before first apply or exactly M029-created on rerun'
 ), rendered AS (
   SELECT check_name, status, details FROM checks
 ), summary AS (
