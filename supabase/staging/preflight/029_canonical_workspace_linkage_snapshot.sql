@@ -104,8 +104,11 @@ WITH required_relations AS (
   SELECT check_name, status, details FROM checks
 ), summary AS (
   SELECT CASE WHEN bool_and(status='PASS') THEN 'PASS' ELSE 'FAIL' END status FROM rendered
+), output_rows AS (
+  SELECT check_name, status, details FROM rendered
+  UNION ALL
+  SELECT 'summary', status, 'All preflight checks must pass' FROM summary
 )
-SELECT check_name, status, details FROM rendered
-UNION ALL
-SELECT 'summary', status, 'All preflight checks must pass' FROM summary
+SELECT check_name, status, details
+FROM output_rows
 ORDER BY CASE WHEN check_name='summary' THEN 1 ELSE 0 END, check_name;

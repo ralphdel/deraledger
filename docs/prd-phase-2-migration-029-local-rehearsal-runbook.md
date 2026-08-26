@@ -91,3 +91,8 @@ forbidden writes, and
 `CONTROL|LOCAL_CANONICAL_WORKSPACE_LINKAGE_REHEARSAL=PASS`. Only then may a
 separately approved staging preflight be considered. Runtime adoption and
 collection unlock remain out of scope.
+
+The preflight and postflight output queries intentionally use an outer result
+CTE before sorting the summary last. Do not flatten that CTE into a direct
+`UNION ALL ... ORDER BY CASE` query: PostgreSQL rejects expression ordering at
+that union level.

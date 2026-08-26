@@ -48,6 +48,10 @@ supporting-index name is rejected if it exists with an incompatible definition;
 and postflight uses `to_regclass`/`to_regprocedure` gates so a missing M029
 object produces FAIL rows and summary FAIL rather than an inspection error.
 Postflight also requires the exact reconcile `(uuid, uuid, text)` signature.
+Both M029 verification outputs wrap the result-plus-summary `UNION ALL` in an
+outer `output_rows` CTE before applying the summary-last sort expression. This
+avoids PostgreSQL's invalid direct `UNION ... ORDER BY CASE` form while
+preserving compact PASS/FAIL output.
 
 ## M028 boundary
 

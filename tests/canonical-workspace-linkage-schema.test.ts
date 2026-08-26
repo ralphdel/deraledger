@@ -93,6 +93,8 @@ assert.doesNotMatch(preflight, /has_function_privilege\('service_role','public\.
 assert.match(preflight, /migration_029\.objects_absent/);
 assert.match(preflight, /migration_029\.supporting_index_name/);
 assert.match(preflight, /merchant_canonical_workspace_supporting_owner_key/);
+assert.match(preflight, /output_rows AS \([\s\S]*SELECT check_name, status, details FROM rendered[\s\S]*UNION ALL[\s\S]*All preflight checks must pass[\s\S]*\)[\s\S]*FROM output_rows[\s\S]*ORDER BY CASE WHEN check_name='summary'/);
+assert.doesNotMatch(preflight, /UNION ALL\s+SELECT 'summary'[^\r\n]*\r?\nORDER BY CASE/);
 assert.match(preflight, /summary[\s\S]*All preflight checks must pass/);
 assert.doesNotMatch(preflight, /^\s*(?:INSERT INTO|UPDATE public\.|DELETE FROM|TRUNCATE)/im);
 
@@ -109,6 +111,8 @@ assert.match(postflight, /NOT has_table_privilege\('authenticated',o\.link_table
 assert.match(postflight, /merchant_canonical_workspaces_workspace_owner_fkey/);
 assert.match(postflight, /canonical_request_workspace_linkage_unavailable/);
 assert.match(postflight, /canonical_snapshot_workspace_linkage_unavailable/);
+assert.match(postflight, /output_rows AS \([\s\S]*SELECT check_name, status, details FROM rendered[\s\S]*UNION ALL[\s\S]*All postflight checks must pass[\s\S]*\)[\s\S]*FROM output_rows[\s\S]*ORDER BY CASE WHEN check_name='summary'/);
+assert.doesNotMatch(postflight, /UNION ALL\s+SELECT 'summary'[^\r\n]*\r?\nORDER BY CASE/);
 assert.doesNotMatch(postflight, /^\s*(?:INSERT INTO|UPDATE public\.|DELETE FROM|TRUNCATE)/im);
 
 assert.match(rehearsalScript, /REHEARSE MIGRATION 029 LOCAL DISPOSABLE DB ONLY/);
