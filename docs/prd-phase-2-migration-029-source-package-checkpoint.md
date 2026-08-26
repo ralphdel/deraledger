@@ -70,6 +70,21 @@ idempotent-install `NOTICE` lines from becoming PowerShell `NativeCommandError`
 failures; it neither changes M029 SQL nor weakens `ON_ERROR_STOP`, nonzero-exit,
 or `FAIL`-row handling.
 
+For disposable behavior diagnosis only, the harness creates a temporary
+scenario-diagnostic table. A caught reconcile invocation records its scenario
+name, SQLSTATE, and SQL message there and prints the trace with the aggregate
+scenario output. This does not alter the installed M029 function, its safe
+result-code contract, or production error exposure. The harness separately
+probes `service_role` read access to `auth.users`, `merchants`, and
+`workspaces` before invoking the reconcile RPC.
+
+The reconcile RPC intentionally checks the merchant with a non-locking read.
+It must not use `FOR KEY SHARE`: the function is `SECURITY INVOKER` and the
+approved prerequisite posture grants `service_role` read access, not merchant
+write-lock privilege. The canonical-link foreign key still enforces referential
+integrity at insert time; a concurrent prerequisite change returns the existing
+safe fail-closed write result without mutating merchants or workspaces.
+
 The local preflight passed before first application exposed a procedural SQL
 syntax defect: the M026--M028 RPC grant-verification `FOR` loop had one stray
 `END IF` after its valid `END LOOP`. The source now closes that loop directly;

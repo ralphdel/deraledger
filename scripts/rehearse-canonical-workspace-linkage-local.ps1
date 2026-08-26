@@ -174,20 +174,37 @@ CREATE TEMP TABLE canonical_workspace_scenario_results (
   passed boolean NOT NULL,
   safe_failure_code text
 );
+-- Local harness-only diagnostics. These rows are never created by M029 and
+-- are emitted only when a caught service-role invocation/probe fails.
+CREATE TEMP TABLE canonical_workspace_scenario_diagnostics (
+  scenario_name text NOT NULL,
+  sqlstate text NOT NULL,
+  sql_message text NOT NULL
+);
 CREATE TEMP TABLE workspace_contract_before AS
   SELECT id, merchant_id FROM public.workspaces;
 GRANT SELECT, INSERT ON canonical_workspace_scenario_results TO service_role, anon, authenticated;
+GRANT SELECT, INSERT ON canonical_workspace_scenario_diagnostics TO service_role;
 
 CREATE OR REPLACE FUNCTION pg_temp.capture_canonical_workspace_scenario(
   p_scenario_name text, p_expected_result text, p_merchant_id uuid, p_reconciled_by uuid, p_key text
 ) RETURNS void LANGUAGE plpgsql SECURITY INVOKER AS $capture$
-DECLARE v_actual_result text := 'canonical_workspace_link_invocation_failed';
+DECLARE
+  v_actual_result text := 'canonical_workspace_link_invocation_failed';
+  v_sqlstate text;
+  v_sql_message text;
 BEGIN
   BEGIN
     SELECT result_code INTO v_actual_result
     FROM public.reconcile_canonical_merchant_workspace_link_v1(p_merchant_id, p_reconciled_by, p_key);
   EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS
+      v_sqlstate = RETURNED_SQLSTATE,
+      v_sql_message = MESSAGE_TEXT;
     v_actual_result := 'canonical_workspace_link_invocation_failed';
+    INSERT INTO pg_temp.canonical_workspace_scenario_diagnostics
+      (scenario_name, sqlstate, sql_message)
+    VALUES (p_scenario_name, v_sqlstate, v_sql_message);
   END;
   INSERT INTO pg_temp.canonical_workspace_scenario_results
     (scenario_name, expected_result, actual_result, passed, safe_failure_code)
@@ -219,6 +236,32 @@ END;
 $duplicate_candidate$;
 
 SET LOCAL ROLE service_role;
+DO $service_role_prerequisite_read_probe$
+DECLARE
+  v_actual text := 'service_role_prerequisite_reads_granted';
+  v_sqlstate text;
+  v_sql_message text;
+BEGIN
+  BEGIN
+    PERFORM 1 FROM auth.users LIMIT 1;
+    PERFORM 1 FROM public.merchants LIMIT 1;
+    PERFORM 1 FROM public.workspaces LIMIT 1;
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS
+      v_sqlstate = RETURNED_SQLSTATE,
+      v_sql_message = MESSAGE_TEXT;
+    v_actual := 'service_role_prerequisite_reads_denied';
+    INSERT INTO pg_temp.canonical_workspace_scenario_diagnostics
+      (scenario_name, sqlstate, sql_message)
+    VALUES ('service_role_prerequisite_reads', v_sqlstate, v_sql_message);
+  END;
+  INSERT INTO pg_temp.canonical_workspace_scenario_results VALUES
+    ('service_role_prerequisite_reads', 'service_role_prerequisite_reads_granted', v_actual,
+     v_actual = 'service_role_prerequisite_reads_granted',
+     CASE WHEN v_actual = 'service_role_prerequisite_reads_granted' THEN NULL ELSE v_actual END);
+END;
+$service_role_prerequisite_read_probe$;
+
 SELECT pg_temp.capture_canonical_workspace_scenario(
   'zero_candidate_fails_closed', 'canonical_workspace_link_unavailable',
   '00000000-0000-4000-8000-000000002911', '00000000-0000-4000-8000-000000002901', 'local-m029-zero'
@@ -340,10 +383,15 @@ END;
 $authenticated$;
 RESET ROLE;
 
-SELECT scenario_name, expected_result, actual_result,
-  CASE WHEN passed THEN 'PASS' ELSE 'FAIL' END AS pass_fail, safe_failure_code
-FROM pg_temp.canonical_workspace_scenario_results
-ORDER BY scenario_name;
+SELECT scenario_result.scenario_name, scenario_result.expected_result, scenario_result.actual_result,
+  CASE WHEN scenario_result.passed THEN 'PASS' ELSE 'FAIL' END AS pass_fail,
+  scenario_result.safe_failure_code,
+  diagnostic.sqlstate AS local_sqlstate,
+  diagnostic.sql_message AS local_sql_message
+FROM pg_temp.canonical_workspace_scenario_results scenario_result
+LEFT JOIN pg_temp.canonical_workspace_scenario_diagnostics diagnostic
+  ON diagnostic.scenario_name = scenario_result.scenario_name
+ORDER BY scenario_result.scenario_name;
 DO $final_assert$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_temp.canonical_workspace_scenario_results WHERE NOT passed) THEN

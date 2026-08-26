@@ -27,6 +27,12 @@ not an app-layer approximation or guessed columns.
 7. Run the behavior/rollback matrix. Aggregate scenario results before a final
    fail so all independent failures are visible in one run.
 
+If a service-role RPC invocation throws, the generated disposable behavior SQL
+records only the scenario name, SQLSTATE, and SQL message in a temporary local
+diagnostic table, then prints it beside that scenario before the final
+aggregate assertion. This table is harness-only; M029's installed RPC
+continues to return safe result codes and emits no raw database details.
+
 Generated SQL and PowerShell output must be UTF-8 without BOM. Use the
 repository's disposable-database, evidence-sanitization, and hostile-role
 requirements; do not print credentials or connection strings.
@@ -98,6 +104,14 @@ must report compact FAIL plus summary FAIL without crashing.
 - A late insert failure leaves no partial canonical-link row.
 - `anon` and `authenticated` cannot execute the reconcile RPC or access the
   table; `service_role` is the only allowed caller.
+- A service-role prerequisite-read probe confirms read access to `auth.users`,
+  `public.merchants`, and `public.workspaces` before reconcile scenarios run.
+  Any failure retains its local SQLSTATE/message in aggregate evidence instead
+  of being collapsed into a generic invocation failure.
+- The `SECURITY INVOKER` reconcile RPC performs only non-locking prerequisite
+  reads. It must not use `FOR KEY SHARE` on `merchants`: that lock requires
+  elevated write-lock privilege and would defeat the intentionally
+  read-only service-role prerequisite contract.
 - M026/M027 remain unchanged and M028 issue/snapshot remain fail-closed with
   workspace-linkage-unavailable; no approval profile/event mutation occurs.
 - No setup/live, activation, collection entitlement, payment, provider,

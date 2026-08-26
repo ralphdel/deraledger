@@ -306,7 +306,12 @@ BEGIN
     RETURN;
   END IF;
 
-  PERFORM 1 FROM public.merchants m WHERE m.id = p_merchant_id FOR KEY SHARE;
+  -- SECURITY INVOKER service_role has the deliberately narrow read-only
+  -- prerequisite contract. A row lock would require write-lock privilege on
+  -- merchants and turns every otherwise-safe outcome into an exception.
+  -- The canonical-link INSERT retains FK enforcement; a concurrent deletion
+  -- fails closed through the existing opaque insert failure path.
+  PERFORM 1 FROM public.merchants m WHERE m.id = p_merchant_id;
   IF NOT FOUND THEN
     RETURN QUERY SELECT 'canonical_workspace_link_merchant_missing', NULL::uuid, NULL::uuid, NULL::bigint;
     RETURN;
