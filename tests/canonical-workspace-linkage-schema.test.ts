@@ -42,6 +42,8 @@ assert.match(migration, /workspace identity\/linkage contract is incompatible/);
 assert.match(migration, /v_workspace_merchant_fk_count <> 1[\s\S]*v_workspace_merchant_unique_count <> 1/);
 assert.match(migration, /v_existing_link_contract_ok/);
 assert.match(migration, /existing canonical workspace authority is incompatible/);
+assert.match(migration, /FOR v_rpc_oid IN SELECT unnest\(ARRAY\[v_approval_oid, v_issue_oid, v_snapshot_oid\]\)[\s\S]*IF v_public_execute OR v_anon_execute OR v_authenticated_execute OR NOT v_service_execute THEN[\s\S]*END IF;\s*END LOOP;\s*FOR v_table_oid IN SELECT unnest\(ARRAY\[/);
+assert.doesNotMatch(migration, /END LOOP;\s*END IF;\s*FOR v_table_oid IN SELECT unnest\(ARRAY\[/);
 assert.match(migration, /v_named_support_index_oid regclass := to_regclass\('public\.merchant_canonical_workspace_supporting_owner_key'\)/);
 assert.match(migration, /v_named_support_index_oid IS NOT NULL AND NOT v_named_support_index_valid/);
 assert.doesNotMatch(migration, /merchants\.workspace_id/);

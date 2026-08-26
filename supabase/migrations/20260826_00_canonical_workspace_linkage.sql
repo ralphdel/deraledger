@@ -178,7 +178,6 @@ BEGIN
       RAISE EXCEPTION 'Migration 029 prerequisite failed: M026-M028 RPC grants are incompatible';
     END IF;
   END LOOP;
-  END IF;
 
   FOR v_table_oid IN SELECT unnest(ARRAY[
     to_regclass('public.merchant_compliance_profiles'),

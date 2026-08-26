@@ -117,3 +117,8 @@ The preflight and postflight output queries intentionally use an outer result
 CTE before sorting the summary last. Do not flatten that CTE into a direct
 `UNION ALL ... ORDER BY CASE` query: PostgreSQL rejects expression ordering at
 that union level.
+
+Before a local run, validate M029 procedural block structure through the
+schema test. In particular, the M026--M028 RPC grant-verification `FOR` loop
+ends directly with `END LOOP`; it is not wrapped by an additional conditional
+block. A stray `END IF` there makes PostgreSQL reject the migration before DDL.

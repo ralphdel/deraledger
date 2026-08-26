@@ -70,6 +70,12 @@ idempotent-install `NOTICE` lines from becoming PowerShell `NativeCommandError`
 failures; it neither changes M029 SQL nor weakens `ON_ERROR_STOP`, nonzero-exit,
 or `FAIL`-row handling.
 
+The local preflight passed before first application exposed a procedural SQL
+syntax defect: the M026--M028 RPC grant-verification `FOR` loop had one stray
+`END IF` after its valid `END LOOP`. The source now closes that loop directly;
+the schema test asserts this exact loop boundary so the migration remains
+parseable before any future disposable rerun.
+
 ## M028 boundary
 
 M029 deliberately leaves M028 issue/snapshot RPCs unchanged. Postflight must
