@@ -29,6 +29,12 @@ Generated SQL and PowerShell output must be UTF-8 without BOM. Use the
 repository's disposable-database, evidence-sanitization, and hostile-role
 requirements; do not print credentials or connection strings.
 
+Before a clean run, include hostile source fixtures for a missing canonical
+table, missing/wrong reconcile overload, unsafe M028 issue/snapshot grant, and
+a conflicting pre-existing
+`merchant_canonical_workspace_supporting_owner_key` index. Preflight/postflight
+must report compact FAIL plus summary FAIL without crashing.
+
 ## Required behavior matrix
 
 - One merchant with exactly one valid workspace creates exactly one canonical

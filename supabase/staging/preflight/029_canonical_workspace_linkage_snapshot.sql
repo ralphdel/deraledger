@@ -12,6 +12,8 @@ WITH required_relations AS (
     (SELECT attnum FROM pg_attribute WHERE attrelid=to_regclass('public.workspaces') AND attname='id' AND attnum>0 AND NOT attisdropped) workspace_id_attnum,
     (SELECT attnum FROM pg_attribute WHERE attrelid=to_regclass('public.workspaces') AND attname='merchant_id' AND attnum>0 AND NOT attisdropped) workspace_merchant_attnum,
     (SELECT attnum FROM pg_attribute WHERE attrelid=to_regclass('public.merchants') AND attname='id' AND attnum>0 AND NOT attisdropped) merchant_id_attnum
+), supporting_index_facts AS (
+  SELECT to_regclass('public.merchant_canonical_workspace_supporting_owner_key') supporting_index_oid
 ), function_facts AS (
   SELECT
     to_regprocedure('public.review_compliance_profile_decision_v1(uuid,uuid,text,text,uuid,bigint,text,bigint,uuid,text,text,timestamptz,text)') approval_oid,
@@ -45,12 +47,24 @@ WITH required_relations AS (
     'Workspace primary key, merchant FK cascade, and count-one merchant uniqueness are exact'
   UNION ALL
   SELECT 'migration_026_028.rpc_security',
-    CASE WHEN (SELECT approval_oid IS NOT NULL AND issue_oid IS NOT NULL AND snapshot_oid IS NOT NULL FROM function_facts)
-      AND NOT EXISTS (SELECT 1 FROM pg_proc p CROSS JOIN function_facts f WHERE p.oid IN (f.approval_oid,f.issue_oid,f.snapshot_oid) AND (p.prosecdef OR NOT (p.proconfig @> ARRAY['search_path=pg_catalog, public'])))
-      AND NOT has_function_privilege('PUBLIC','public.review_compliance_profile_decision_v1(uuid,uuid,text,text,uuid,bigint,text,bigint,uuid,text,text,timestamptz,text)','EXECUTE')
-      AND NOT has_function_privilege('anon','public.review_compliance_profile_decision_v1(uuid,uuid,text,text,uuid,bigint,text,bigint,uuid,text,text,timestamptz,text)','EXECUTE')
-      AND NOT has_function_privilege('authenticated','public.review_compliance_profile_decision_v1(uuid,uuid,text,text,uuid,bigint,text,bigint,uuid,text,text,timestamptz,text)','EXECUTE')
-      AND has_function_privilege('service_role','public.review_compliance_profile_decision_v1(uuid,uuid,text,text,uuid,bigint,text,bigint,uuid,text,text,timestamptz,text)','EXECUTE')
+    CASE WHEN EXISTS (
+      SELECT 1
+      FROM function_facts f
+      WHERE f.approval_oid IS NOT NULL AND f.issue_oid IS NOT NULL AND f.snapshot_oid IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid IN (f.approval_oid,f.issue_oid,f.snapshot_oid) AND (p.prosecdef OR NOT (p.proconfig @> ARRAY['search_path=pg_catalog, public'])))
+        AND NOT has_function_privilege('PUBLIC',f.approval_oid,'EXECUTE')
+        AND NOT has_function_privilege('anon',f.approval_oid,'EXECUTE')
+        AND NOT has_function_privilege('authenticated',f.approval_oid,'EXECUTE')
+        AND has_function_privilege('service_role',f.approval_oid,'EXECUTE')
+        AND NOT has_function_privilege('PUBLIC',f.issue_oid,'EXECUTE')
+        AND NOT has_function_privilege('anon',f.issue_oid,'EXECUTE')
+        AND NOT has_function_privilege('authenticated',f.issue_oid,'EXECUTE')
+        AND has_function_privilege('service_role',f.issue_oid,'EXECUTE')
+        AND NOT has_function_privilege('PUBLIC',f.snapshot_oid,'EXECUTE')
+        AND NOT has_function_privilege('anon',f.snapshot_oid,'EXECUTE')
+        AND NOT has_function_privilege('authenticated',f.snapshot_oid,'EXECUTE')
+        AND has_function_privilege('service_role',f.snapshot_oid,'EXECUTE')
+    )
     THEN 'PASS' ELSE 'FAIL' END,
     'M026-M028 exact RPCs are SECURITY INVOKER, hardened, and service-role-only'
   UNION ALL
@@ -71,6 +85,21 @@ WITH required_relations AS (
       AND NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.proname='reconcile_canonical_merchant_workspace_link_v1')
     THEN 'PASS' ELSE 'FAIL' END,
     'No conflicting M029 table or reconcile RPC exists before apply'
+  UNION ALL
+  SELECT 'migration_029.supporting_index_name',
+    CASE WHEN (SELECT supporting_index_oid IS NULL FROM supporting_index_facts)
+      OR EXISTS (
+        SELECT 1
+        FROM pg_index i
+        CROSS JOIN workspace_facts f
+        CROSS JOIN supporting_index_facts s
+        WHERE i.indexrelid=s.supporting_index_oid
+          AND i.indrelid=f.workspace_oid
+          AND i.indisunique
+          AND i.indpred IS NULL
+          AND i.indkey::smallint[]=ARRAY[f.workspace_id_attnum,f.workspace_merchant_attnum]::smallint[]
+      ) THEN 'PASS' ELSE 'FAIL' END,
+    'Existing supporting-index name is absent or has the exact unique workspace ownership definition'
 ), rendered AS (
   SELECT check_name, status, details FROM checks
 ), summary AS (

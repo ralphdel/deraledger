@@ -42,6 +42,13 @@ deletes merchants, workspaces, compliance profiles/events, M028 requests, or
 operational data. Installation creates no canonical-link rows and performs no
 automatic backfill.
 
+The source verification was repaired before local rehearsal: preflight and the
+migration guard now verify service-role-only execute for both M028 RPCs; the
+supporting-index name is rejected if it exists with an incompatible definition;
+and postflight uses `to_regclass`/`to_regprocedure` gates so a missing M029
+object produces FAIL rows and summary FAIL rather than an inspection error.
+Postflight also requires the exact reconcile `(uuid, uuid, text)` signature.
+
 ## M028 boundary
 
 M029 deliberately leaves M028 issue/snapshot RPCs unchanged. Postflight must

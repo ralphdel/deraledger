@@ -15,6 +15,8 @@ DECLARE
   v_workspace_merchant_unique_count integer;
   v_workspace_primary_key_count integer;
   v_composite_support_count integer;
+  v_named_support_index_oid regclass := to_regclass('public.merchant_canonical_workspace_supporting_owner_key');
+  v_named_support_index_valid boolean := false;
   v_link_table_oid regclass := to_regclass('public.merchant_canonical_workspaces');
   v_link_merchant_attnum smallint;
   v_link_workspace_attnum smallint;
@@ -97,11 +99,24 @@ BEGIN
     AND i.indpred IS NULL
     AND i.indkey::smallint[] = ARRAY[v_workspace_id_attnum, v_workspace_merchant_attnum]::smallint[];
 
+  IF v_named_support_index_oid IS NOT NULL THEN
+    SELECT EXISTS (
+      SELECT 1
+      FROM pg_index i
+      WHERE i.indexrelid = v_named_support_index_oid
+        AND i.indrelid = v_workspaces_oid
+        AND i.indisunique
+        AND i.indpred IS NULL
+        AND i.indkey::smallint[] = ARRAY[v_workspace_id_attnum, v_workspace_merchant_attnum]::smallint[]
+    ) INTO v_named_support_index_valid;
+  END IF;
+
   IF v_workspace_primary_key_count <> 1
     OR v_workspace_merchant_fk_count <> 1
     OR v_workspace_merchant_fk_total <> 1
     OR v_workspace_merchant_unique_count <> 1
-    OR v_composite_support_count > 1 THEN
+    OR v_composite_support_count > 1
+    OR (v_named_support_index_oid IS NOT NULL AND NOT v_named_support_index_valid) THEN
     RAISE EXCEPTION 'Migration 029 prerequisite failed: workspace identity/linkage contract is incompatible';
   END IF;
 
@@ -124,6 +139,17 @@ BEGIN
     OR has_function_privilege('authenticated', v_approval_signature, 'EXECUTE')
     OR NOT has_function_privilege('service_role', v_approval_signature, 'EXECUTE') THEN
     RAISE EXCEPTION 'Migration 029 prerequisite failed: M026-M028 RPC security/signature posture is incompatible';
+  END IF;
+
+  IF has_function_privilege('PUBLIC', v_issue_signature, 'EXECUTE')
+    OR has_function_privilege('anon', v_issue_signature, 'EXECUTE')
+    OR has_function_privilege('authenticated', v_issue_signature, 'EXECUTE')
+    OR NOT has_function_privilege('service_role', v_issue_signature, 'EXECUTE')
+    OR has_function_privilege('PUBLIC', v_snapshot_signature, 'EXECUTE')
+    OR has_function_privilege('anon', v_snapshot_signature, 'EXECUTE')
+    OR has_function_privilege('authenticated', v_snapshot_signature, 'EXECUTE')
+    OR NOT has_function_privilege('service_role', v_snapshot_signature, 'EXECUTE') THEN
+    RAISE EXCEPTION 'Migration 029 prerequisite failed: M028 issue/snapshot RPC grants are incompatible';
   END IF;
 
   IF EXISTS (
@@ -225,7 +251,6 @@ DECLARE
   v_workspace_candidate_count integer;
   v_workspace_candidate_id uuid;
   v_existing public.merchant_canonical_workspaces%ROWTYPE;
-  v_existing_key_merchant_id uuid;
   v_key text;
 BEGIN
   v_key := NULLIF(btrim(COALESCE(p_reconcile_idempotency_key, '')), '');
@@ -279,7 +304,7 @@ BEGIN
     RETURN;
   END IF;
 
-  SELECT canonical_link.merchant_id INTO v_existing_key_merchant_id
+  PERFORM 1
   FROM public.merchant_canonical_workspaces canonical_link
   WHERE canonical_link.reconcile_idempotency_key = v_key;
   IF FOUND THEN
