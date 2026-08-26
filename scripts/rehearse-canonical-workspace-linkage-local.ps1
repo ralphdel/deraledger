@@ -47,7 +47,10 @@ function Get-LocalPgDatabaseName {
 function Assert-LocalDisposableConnectionString {
   param([Parameter(Mandatory = $true)][string]$ConnectionString)
   if ([string]::IsNullOrWhiteSpace($ConnectionString)) { throw 'LOCAL_M029_REHEARSAL_CONNECTION_STRING_REQUIRED' }
-  if ($ConnectionString -match '(?i)(supabase\.co|supabase\.com|vercel|production|staging|service_role|anon|eyJ|password\s*=|://[^/\s]*:)') {
+  # The local-only connection string is passed to cmd.exe solely to capture
+  # psql output without PowerShell treating NOTICE stderr as a terminating
+  # NativeCommandError. Reject cmd metacharacters before that boundary.
+  if ($ConnectionString -match '(?i)(supabase\.co|supabase\.com|vercel|production|staging|service_role|anon|eyJ|password\s*=|://[^/\s]*:|[&|<>()^"%])') {
     throw 'LOCAL_M029_REHEARSAL_CONNECTION_STRING_REJECTED'
   }
   $hostName = Get-LocalPgHost -ConnectionString $ConnectionString
@@ -90,6 +93,8 @@ New-Item -ItemType Directory -Path $TempDirectory -Force | Out-Null
 New-Item -ItemType Directory -Path $EvidenceDirectory -Force | Out-Null
 $BaselineSql = Join-Path $TempDirectory '024-028-workspace-prerequisites.sql'
 $BehaviorSql = Join-Path $TempDirectory '029-workspace-linkage-behavior.sql'
+$OriginalPGOPTIONS = $env:PGOPTIONS
+$env:PGOPTIONS = '-c client_min_messages=warning'
 
 try {
   # Local owner/admin setup only. This establishes the historical workspace
@@ -339,9 +344,27 @@ SELECT 'CONTROL|LOCAL_CANONICAL_WORKSPACE_LINKAGE_REHEARSAL=PASS';
 
   function Invoke-LocalPsqlFile([string]$Label, [string]$FilePath) {
     $EvidencePath = Join-Path $EvidenceDirectory ("$Label.txt")
-    & $Psql -X -w -v ON_ERROR_STOP=1 -d $LocalConnectionString.Trim() -f $FilePath 2>&1 |
-      Tee-Object -FilePath $EvidencePath
-    if ($LASTEXITCODE -ne 0) { throw "LOCAL_M029_REHEARSAL_PSQL_FAILED: $Label" }
+    # cmd.exe owns the combined stdout/stderr redirection. This keeps harmless
+    # idempotency NOTICE lines in the evidence file instead of allowing
+    # PowerShell to surface them as NativeCommandError records.
+    $Command = '""{0}" -X -w -v ON_ERROR_STOP=1 -d "{1}" -f "{2}" > "{3}" 2>&1"' -f `
+      $Psql, $LocalConnectionString.Trim(), $FilePath, $EvidencePath
+    & $env:ComSpec /d /c $Command
+    $PsqlExitCode = $LASTEXITCODE
+
+    $Evidence = if (Test-Path -LiteralPath $EvidencePath) {
+      Get-Content -LiteralPath $EvidencePath -Raw
+    } else {
+      ''
+    }
+    Write-Host "===== LOCAL M029 EVIDENCE: $Label ====="
+    if ($Evidence.Length -gt 0) { Write-Host $Evidence -NoNewline }
+    Write-Host "===== END LOCAL M029 EVIDENCE: $Label ====="
+
+    if ($PsqlExitCode -ne 0) { throw "LOCAL_M029_REHEARSAL_PSQL_FAILED: $Label" }
+    if ($Label -match '(?:preflight|postflight)' -and $Evidence -match '(?m)^\s*[^|\r\n]+\|\s*FAIL\s*\|') {
+      throw "LOCAL_M029_REHEARSAL_VERIFICATION_FAILED: $Label"
+    }
   }
 
   Write-Host 'Applying disposable local prerequisites and M024--M028 baseline.'
@@ -369,5 +392,10 @@ SELECT 'CONTROL|LOCAL_CANONICAL_WORKSPACE_LINKAGE_REHEARSAL=PASS';
   Invoke-LocalPsqlFile '029-behavior' $BehaviorSql
   Write-Host "LOCAL EVIDENCE DIRECTORY: $EvidenceDirectory"
 } finally {
+  if ($null -eq $OriginalPGOPTIONS) {
+    Remove-Item -Path Env:PGOPTIONS -ErrorAction SilentlyContinue
+  } else {
+    $env:PGOPTIONS = $OriginalPGOPTIONS
+  }
   if (Test-Path -LiteralPath $TempDirectory) { Remove-Item -LiteralPath $TempDirectory -Recurse -Force }
 }

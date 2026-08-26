@@ -34,7 +34,13 @@ Each executed stage is captured under an untracked local
 `local-evidence/migration-029-local-<timestamp>` directory. A failed `psql`
 stage stops the harness immediately and identifies the stage label; the final
 control line is emitted only after all baseline, M029, and behavior stages
-pass.
+pass. The harness invokes each SQL file through `cmd.exe` with combined output
+redirected to its labelled evidence file, then prints that file after the
+stage. It sets `PGOPTIONS=-c client_min_messages=warning` only for the harness
+process and restores the prior environment afterwards. Harmless PostgreSQL
+`NOTICE` output from idempotent reruns is therefore retained as evidence and
+does not become a PowerShell `NativeCommandError`; `ON_ERROR_STOP=1`, nonzero
+`psql` exit codes, and preflight/postflight `FAIL` rows still stop the run.
 
 ## Safe local command
 

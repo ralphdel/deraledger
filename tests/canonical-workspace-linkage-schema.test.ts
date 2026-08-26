@@ -134,7 +134,16 @@ assert.match(rehearsalScript, /LOCAL_M029_REHEARSAL_DISPOSABLE_DATABASE_NAME_REQ
 assert.match(rehearsalScript, /\^deraledger_m029_disposable_\[a-z0-9_\]\+\$/);
 assert.match(rehearsalScript, /Write-LocalSqlFileNoBom/);
 assert.match(rehearsalScript, /local-evidence\/migration-029-local-/);
-assert.match(rehearsalScript, /Tee-Object -FilePath \$EvidencePath/);
+assert.match(rehearsalScript, /\$env:PGOPTIONS = '-c client_min_messages=warning'/);
+assert.match(rehearsalScript, /& \$env:ComSpec \/d \/c \$Command/);
+assert.match(rehearsalScript, /-v ON_ERROR_STOP=1/);
+assert.match(rehearsalScript, /\$PsqlExitCode = \$LASTEXITCODE/);
+assert.match(rehearsalScript, /Get-Content -LiteralPath \$EvidencePath -Raw/);
+assert.match(rehearsalScript, /LOCAL_M029_REHEARSAL_VERIFICATION_FAILED/);
+assert.match(rehearsalScript, /Remove-Item -Path Env:PGOPTIONS/);
+assert.doesNotMatch(rehearsalScript, /Tee-Object -FilePath/);
+assert.doesNotMatch(rehearsalScript, /\$Psql[^\r\n]*2>&1\s*\|/);
+assert.doesNotMatch(rehearsalScript, /& \$Psql\b/);
 assert.match(rehearsalScript, /CREATE TABLE IF NOT EXISTS public\.workspaces[\s\S]*id uuid PRIMARY KEY,[\s\S]*merchant_id uuid REFERENCES public\.merchants\(id\) ON DELETE CASCADE,[\s\S]*UNIQUE \(merchant_id\)/);
 assert.match(rehearsalScript, /\$Migration024[\s\S]*\$Migration025[\s\S]*\$Migration026[\s\S]*\$Migration027[\s\S]*\$Migration028[\s\S]*\$Migration029/);
 assert.match(rehearsalScript, /\$Preflight029[\s\S]*Invoke-LocalPsqlFile '029-preflight' \$Preflight029[\s\S]*Invoke-LocalPsqlFile '029-apply-first' \$Migration029[\s\S]*Invoke-LocalPsqlFile '029-apply-rerun' \$Migration029[\s\S]*Invoke-LocalPsqlFile '029-postflight' \$Postflight029/);
