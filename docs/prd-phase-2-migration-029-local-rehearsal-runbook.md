@@ -2,9 +2,10 @@
 
 ## Scope and boundary
 
-This is a future local-disposable rehearsal plan only. Do not run it on
-staging or production. Migration 029 must not be applied until its source and
-the eventual harness have passed independent review.
+This is a local-disposable rehearsal plan only. Do not run it on staging or
+production. The source-only harness is
+`scripts/rehearse-canonical-workspace-linkage-local.ps1`; it remains dry-run
+unless its explicit `-Execute` switch is supplied.
 
 The disposable baseline must include M024--M028 plus the exact historical
 `public.merchants`/`public.workspaces` schema contract that M029 validates.
@@ -14,7 +15,8 @@ not an app-layer approximation or guessed columns.
 
 ## Required sequence
 
-1. Create a fresh explicitly named disposable PostgreSQL database.
+1. Create a fresh explicitly named disposable PostgreSQL database named
+   `deraledger_m029_disposable_<suffix>`.
 2. Apply the local prerequisites and M024--M028 baseline.
 3. Establish the exact workspace PK, `merchant_id` FK/cascade, and
    `UNIQUE (merchant_id)` contract required by M029.
@@ -28,6 +30,27 @@ not an app-layer approximation or guessed columns.
 Generated SQL and PowerShell output must be UTF-8 without BOM. Use the
 repository's disposable-database, evidence-sanitization, and hostile-role
 requirements; do not print credentials or connection strings.
+
+## Safe local command
+
+Set `PGPASSWORD` only in the current PowerShell process if the local server
+requires it; do not place credentials in the repository or connection string.
+The command rejects Supabase, staging, production, non-local hosts, and a
+database name that does not match the disposable M029 pattern.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\rehearse-canonical-workspace-linkage-local.ps1 `
+  -LocalConnectionString 'postgresql://localhost/deraledger_m029_disposable_20260826' `
+  -Confirmation 'REHEARSE MIGRATION 029 LOCAL DISPOSABLE DB ONLY' `
+  -Execute `
+  -PsqlPath 'C:\Program Files\PostgreSQL\15\bin\psql.exe'
+```
+
+The owner/admin-only generated baseline creates the local historical contract:
+`workspaces.id uuid` primary key, nullable `workspaces.merchant_id uuid`
+foreign-keyed to `merchants.id` with cascade deletion, and `UNIQUE
+(merchant_id)`. It does not create, repair, or backfill anything outside the
+named disposable database.
 
 Before a clean run, include hostile source fixtures for a missing canonical
 table, missing/wrong reconcile overload, unsafe M028 issue/snapshot grant, and
@@ -46,6 +69,9 @@ must report compact FAIL plus summary FAIL without crashing.
   workspace candidate, cross-merchant workspace, and conflicting pre-existing
   canonical link all fail closed.
 - The legacy `merchants.workspace_id` pointer is ignored; no path updates it.
+- Duplicate candidate insertion proves the historical unique merchant linkage
+  prevents an ambiguous workspace candidate; the reconcile RPC then remains
+  fail-closed for unavailable/conflicting state.
 - Concurrent/repeated insertion proves the primary/unique constraints prevent
   duplicate merchant or workspace canonical links.
 - A late insert failure leaves no partial canonical-link row.
@@ -60,6 +86,8 @@ must report compact FAIL plus summary FAIL without crashing.
 ## Pass criteria and next gate
 
 The local evidence must show preflight PASS, first apply PASS, rerun PASS,
-postflight PASS, complete behavior/rollback PASS, hostile-grant PASS, and no
-forbidden writes. Only then may a separately approved staging preflight be
-considered. Runtime adoption and collection unlock remain out of scope.
+postflight PASS, complete behavior/rollback PASS, hostile-grant PASS, no
+forbidden writes, and
+`CONTROL|LOCAL_CANONICAL_WORKSPACE_LINKAGE_REHEARSAL=PASS`. Only then may a
+separately approved staging preflight be considered. Runtime adoption and
+collection unlock remain out of scope.

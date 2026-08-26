@@ -5,9 +5,11 @@ import { join } from "node:path";
 const migrationPath = "supabase/migrations/20260826_00_canonical_workspace_linkage.sql";
 const preflightPath = "supabase/staging/preflight/029_canonical_workspace_linkage_snapshot.sql";
 const postflightPath = "supabase/staging/postflight/029_canonical_workspace_linkage_verify.sql";
+const rehearsalScriptPath = "scripts/rehearse-canonical-workspace-linkage-local.ps1";
 const migration = readFileSync(migrationPath, "utf8");
 const preflight = readFileSync(preflightPath, "utf8");
 const postflight = readFileSync(postflightPath, "utf8");
+const rehearsalScript = readFileSync(rehearsalScriptPath, "utf8");
 
 function sourceFiles(root: string): string[] {
   return readdirSync(root).flatMap((entry) => {
@@ -108,6 +110,33 @@ assert.match(postflight, /merchant_canonical_workspaces_workspace_owner_fkey/);
 assert.match(postflight, /canonical_request_workspace_linkage_unavailable/);
 assert.match(postflight, /canonical_snapshot_workspace_linkage_unavailable/);
 assert.doesNotMatch(postflight, /^\s*(?:INSERT INTO|UPDATE public\.|DELETE FROM|TRUNCATE)/im);
+
+assert.match(rehearsalScript, /REHEARSE MIGRATION 029 LOCAL DISPOSABLE DB ONLY/);
+assert.match(rehearsalScript, /LOCAL_M029_REHEARSAL_NONLOCAL_HOST_REJECTED/);
+assert.match(rehearsalScript, /LOCAL_M029_REHEARSAL_CONNECTION_STRING_REJECTED/);
+assert.match(rehearsalScript, /LOCAL_M029_REHEARSAL_DISPOSABLE_DATABASE_NAME_REQUIRED/);
+assert.match(rehearsalScript, /\^deraledger_m029_disposable_\[a-z0-9_\]\+\$/);
+assert.match(rehearsalScript, /Write-LocalSqlFileNoBom/);
+assert.match(rehearsalScript, /CREATE TABLE IF NOT EXISTS public\.workspaces[\s\S]*id uuid PRIMARY KEY,[\s\S]*merchant_id uuid REFERENCES public\.merchants\(id\) ON DELETE CASCADE,[\s\S]*UNIQUE \(merchant_id\)/);
+assert.match(rehearsalScript, /\$Migration024[\s\S]*\$Migration025[\s\S]*\$Migration026[\s\S]*\$Migration027[\s\S]*\$Migration028[\s\S]*\$Migration029/);
+assert.match(rehearsalScript, /\$Preflight029[\s\S]*Invoke-LocalPsqlFile \$Preflight029[\s\S]*Invoke-LocalPsqlFile \$Migration029[\s\S]*Invoke-LocalPsqlFile \$Migration029[\s\S]*Invoke-LocalPsqlFile \$Postflight029/);
+assert.match(rehearsalScript, /zero_candidate_fails_closed[\s\S]*canonical_workspace_link_unavailable/);
+assert.match(rehearsalScript, /one_candidate_creates_link[\s\S]*canonical_workspace_link_created/);
+assert.match(rehearsalScript, /exact_replay_preserved[\s\S]*canonical_workspace_link_replay/);
+assert.match(rehearsalScript, /conflicting_idempotency_fails_closed[\s\S]*canonical_workspace_link_idempotency_mismatch/);
+assert.match(rehearsalScript, /cross_merchant_workspace_fails_closed[\s\S]*canonical_workspace_link_unavailable/);
+assert.match(rehearsalScript, /duplicate_candidate_blocked/);
+assert.match(rehearsalScript, /SET LOCAL ROLE anon[\s\S]*anon_execute_denied/);
+assert.match(rehearsalScript, /SET LOCAL ROLE authenticated[\s\S]*authenticated_execute_denied/);
+assert.match(rehearsalScript, /anon_table_denied/);
+assert.match(rehearsalScript, /authenticated_table_denied/);
+assert.match(rehearsalScript, /merchant_workspace_unchanged/);
+assert.match(rehearsalScript, /forbidden_writes_absent/);
+assert.match(rehearsalScript, /CONTROL\|LOCAL_CANONICAL_WORKSPACE_LINKAGE_REHEARSAL=PASS/);
+assert.doesNotMatch(rehearsalScript, /SET ROLE PUBLIC|SET LOCAL ROLE PUBLIC/);
+assert.match(rehearsalScript, /supabase\\\.co\|supabase\\\.com/);
+assert.match(rehearsalScript, /LOCAL_M029_REHEARSAL_CONNECTION_STRING_REJECTED/);
+assert.doesNotMatch(rehearsalScript, /STAGING_DATABASE_URL|PRODUCTION_DATABASE_URL/);
 
 for (const file of [...sourceFiles("src/app"), "src/lib/actions.ts"]) {
   const content = readFileSync(file, "utf8");
