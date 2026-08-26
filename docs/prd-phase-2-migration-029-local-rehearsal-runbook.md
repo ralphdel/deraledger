@@ -30,6 +30,11 @@ not an app-layer approximation or guessed columns.
 Generated SQL and PowerShell output must be UTF-8 without BOM. Use the
 repository's disposable-database, evidence-sanitization, and hostile-role
 requirements; do not print credentials or connection strings.
+Each executed stage is captured under an untracked local
+`local-evidence/migration-029-local-<timestamp>` directory. A failed `psql`
+stage stops the harness immediately and identifies the stage label; the final
+control line is emitted only after all baseline, M029, and behavior stages
+pass.
 
 ## Safe local command
 

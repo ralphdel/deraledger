@@ -53,6 +53,12 @@ outer `output_rows` CTE before applying the summary-last sort expression. This
 avoids PostgreSQL's invalid direct `UNION ... ORDER BY CASE` form while
 preserving compact PASS/FAIL output.
 
+The verification and migration guard resolve named roles with `to_regrole` and
+use OID-gated privilege checks. `PUBLIC` is inspected only through expanded
+function/table ACLs where grantee OID `0` denotes the pseudo-role. A missing
+browser role is treated as no direct grant; a missing `service_role` remains a
+clear fail-closed prerequisite failure.
+
 ## M028 boundary
 
 M029 deliberately leaves M028 issue/snapshot RPCs unchanged. Postflight must

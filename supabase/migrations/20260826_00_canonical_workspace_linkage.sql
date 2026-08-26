@@ -23,12 +23,28 @@ DECLARE
   v_link_created_by_attnum smallint;
   v_existing_link_contract_ok boolean := false;
   v_column record;
+  v_service_role_oid oid := to_regrole('service_role');
+  v_anon_oid oid := to_regrole('anon');
+  v_authenticated_oid oid := to_regrole('authenticated');
   v_approval_signature text := 'public.review_compliance_profile_decision_v1(uuid,uuid,text,text,uuid,bigint,text,bigint,uuid,text,text,timestamptz,text)';
   v_issue_signature text := 'public.issue_canonical_approval_decision_request_v1(uuid,uuid,text,text,text)';
   v_snapshot_signature text := 'public.read_canonical_approval_snapshot_v1(uuid)';
+  v_approval_oid oid;
+  v_issue_oid oid;
+  v_snapshot_oid oid;
+  v_rpc_oid oid;
+  v_table_oid oid;
+  v_public_execute boolean;
+  v_anon_execute boolean;
+  v_authenticated_execute boolean;
+  v_service_execute boolean;
+  v_table_security_safe boolean;
+  v_public_table_privilege boolean;
+  v_anon_table_privilege boolean;
+  v_authenticated_table_privilege boolean;
 BEGIN
-  IF to_regrole('service_role') IS NULL OR to_regrole('anon') IS NULL OR to_regrole('authenticated') IS NULL THEN
-    RAISE EXCEPTION 'Migration 029 prerequisite failed: required managed roles are unavailable';
+  IF v_service_role_oid IS NULL THEN
+    RAISE EXCEPTION 'Migration 029 prerequisite failed: service_role is unavailable';
   END IF;
 
   IF v_merchants_oid IS NULL OR v_workspaces_oid IS NULL OR v_auth_users_oid IS NULL THEN
@@ -120,61 +136,76 @@ BEGIN
     RAISE EXCEPTION 'Migration 029 prerequisite failed: workspace identity/linkage contract is incompatible';
   END IF;
 
-  IF to_regprocedure(v_approval_signature) IS NULL
-    OR to_regprocedure(v_issue_signature) IS NULL
-    OR to_regprocedure(v_snapshot_signature) IS NULL
+  v_approval_oid := to_regprocedure(v_approval_signature);
+  v_issue_oid := to_regprocedure(v_issue_signature);
+  v_snapshot_oid := to_regprocedure(v_snapshot_signature);
+
+  IF v_approval_oid IS NULL
+    OR v_issue_oid IS NULL
+    OR v_snapshot_oid IS NULL
     OR EXISTS (
       SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
       WHERE n.nspname = 'public'
         AND p.proname IN ('review_compliance_profile_decision_v1', 'issue_canonical_approval_decision_request_v1', 'read_canonical_approval_snapshot_v1')
-        AND p.oid NOT IN (to_regprocedure(v_approval_signature), to_regprocedure(v_issue_signature), to_regprocedure(v_snapshot_signature))
-    )
-    OR EXISTS (
-      SELECT 1 FROM pg_proc p
-      WHERE p.oid IN (to_regprocedure(v_approval_signature), to_regprocedure(v_issue_signature), to_regprocedure(v_snapshot_signature))
-        AND (p.prosecdef OR NOT (p.proconfig @> ARRAY['search_path=pg_catalog, public']))
-    )
-    OR has_function_privilege('PUBLIC', v_approval_signature, 'EXECUTE')
-    OR has_function_privilege('anon', v_approval_signature, 'EXECUTE')
-    OR has_function_privilege('authenticated', v_approval_signature, 'EXECUTE')
-    OR NOT has_function_privilege('service_role', v_approval_signature, 'EXECUTE') THEN
-    RAISE EXCEPTION 'Migration 029 prerequisite failed: M026-M028 RPC security/signature posture is incompatible';
-  END IF;
-
-  IF has_function_privilege('PUBLIC', v_issue_signature, 'EXECUTE')
-    OR has_function_privilege('anon', v_issue_signature, 'EXECUTE')
-    OR has_function_privilege('authenticated', v_issue_signature, 'EXECUTE')
-    OR NOT has_function_privilege('service_role', v_issue_signature, 'EXECUTE')
-    OR has_function_privilege('PUBLIC', v_snapshot_signature, 'EXECUTE')
-    OR has_function_privilege('anon', v_snapshot_signature, 'EXECUTE')
-    OR has_function_privilege('authenticated', v_snapshot_signature, 'EXECUTE')
-    OR NOT has_function_privilege('service_role', v_snapshot_signature, 'EXECUTE') THEN
-    RAISE EXCEPTION 'Migration 029 prerequisite failed: M028 issue/snapshot RPC grants are incompatible';
+        AND p.oid NOT IN (v_approval_oid, v_issue_oid, v_snapshot_oid)
+    ) THEN
+    RAISE EXCEPTION 'Migration 029 prerequisite failed: M026-M028 RPC signatures are incompatible';
   END IF;
 
   IF EXISTS (
-    SELECT 1
-    FROM pg_class c
-    WHERE c.oid IN (
-      to_regclass('public.merchant_compliance_profiles'),
-      to_regclass('public.merchant_compliance_reviews'),
-      to_regclass('public.merchant_compliance_events'),
-      to_regclass('public.approval_policy_versions'),
-      to_regclass('public.approval_decision_requests')
-    )
-      AND (NOT c.relrowsecurity OR c.relforcerowsecurity)
-  ) OR EXISTS (
-    SELECT 1
-    FROM information_schema.role_table_grants g
-    WHERE g.table_schema = 'public'
-      AND g.table_name IN (
-        'merchant_compliance_profiles', 'merchant_compliance_reviews', 'merchant_compliance_events',
-        'approval_policy_versions', 'approval_decision_requests'
-      )
-      AND g.grantee IN ('PUBLIC', 'anon', 'authenticated')
+    SELECT 1 FROM pg_proc p
+    WHERE p.oid IN (v_approval_oid, v_issue_oid, v_snapshot_oid)
+      AND (p.prosecdef OR NOT COALESCE(p.proconfig @> ARRAY['search_path=pg_catalog, public'], false))
   ) THEN
-    RAISE EXCEPTION 'Migration 029 prerequisite failed: compliance/M028 table security posture is incompatible';
+    RAISE EXCEPTION 'Migration 029 prerequisite failed: M026-M028 RPC security posture is incompatible';
   END IF;
+
+  FOR v_rpc_oid IN SELECT unnest(ARRAY[v_approval_oid, v_issue_oid, v_snapshot_oid])
+  LOOP
+    SELECT EXISTS (
+      SELECT 1
+      FROM pg_proc p
+      CROSS JOIN LATERAL aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) privilege_state
+      WHERE p.oid = v_rpc_oid
+        AND privilege_state.grantee = 0
+        AND privilege_state.privilege_type = 'EXECUTE'
+    ) INTO v_public_execute;
+    SELECT CASE WHEN v_anon_oid IS NULL THEN false ELSE has_function_privilege(v_anon_oid, v_rpc_oid, 'EXECUTE') END INTO v_anon_execute;
+    SELECT CASE WHEN v_authenticated_oid IS NULL THEN false ELSE has_function_privilege(v_authenticated_oid, v_rpc_oid, 'EXECUTE') END INTO v_authenticated_execute;
+    SELECT CASE WHEN v_service_role_oid IS NULL THEN false ELSE has_function_privilege(v_service_role_oid, v_rpc_oid, 'EXECUTE') END INTO v_service_execute;
+
+    IF v_public_execute OR v_anon_execute OR v_authenticated_execute OR NOT v_service_execute THEN
+      RAISE EXCEPTION 'Migration 029 prerequisite failed: M026-M028 RPC grants are incompatible';
+    END IF;
+  END LOOP;
+  END IF;
+
+  FOR v_table_oid IN SELECT unnest(ARRAY[
+    to_regclass('public.merchant_compliance_profiles'),
+    to_regclass('public.merchant_compliance_reviews'),
+    to_regclass('public.merchant_compliance_events'),
+    to_regclass('public.approval_policy_versions'),
+    to_regclass('public.approval_decision_requests')
+  ])
+  LOOP
+    IF v_table_oid IS NULL THEN
+      RAISE EXCEPTION 'Migration 029 prerequisite failed: compliance/M028 table is unavailable';
+    END IF;
+    SELECT c.relrowsecurity AND NOT c.relforcerowsecurity
+    INTO v_table_security_safe
+    FROM pg_class c WHERE c.oid=v_table_oid;
+    SELECT EXISTS (
+      SELECT 1 FROM pg_class c
+      CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) privilege_state
+      WHERE c.oid=v_table_oid AND privilege_state.grantee=0
+    ) INTO v_public_table_privilege;
+    SELECT CASE WHEN v_anon_oid IS NULL THEN false ELSE has_table_privilege(v_anon_oid, v_table_oid, 'SELECT') OR has_table_privilege(v_anon_oid, v_table_oid, 'INSERT') OR has_table_privilege(v_anon_oid, v_table_oid, 'UPDATE') OR has_table_privilege(v_anon_oid, v_table_oid, 'DELETE') OR has_table_privilege(v_anon_oid, v_table_oid, 'TRUNCATE') OR has_table_privilege(v_anon_oid, v_table_oid, 'REFERENCES') OR has_table_privilege(v_anon_oid, v_table_oid, 'TRIGGER') END INTO v_anon_table_privilege;
+    SELECT CASE WHEN v_authenticated_oid IS NULL THEN false ELSE has_table_privilege(v_authenticated_oid, v_table_oid, 'SELECT') OR has_table_privilege(v_authenticated_oid, v_table_oid, 'INSERT') OR has_table_privilege(v_authenticated_oid, v_table_oid, 'UPDATE') OR has_table_privilege(v_authenticated_oid, v_table_oid, 'DELETE') OR has_table_privilege(v_authenticated_oid, v_table_oid, 'TRUNCATE') OR has_table_privilege(v_authenticated_oid, v_table_oid, 'REFERENCES') OR has_table_privilege(v_authenticated_oid, v_table_oid, 'TRIGGER') END INTO v_authenticated_table_privilege;
+    IF NOT COALESCE(v_table_security_safe, false)
+      OR v_public_table_privilege OR v_anon_table_privilege OR v_authenticated_table_privilege THEN
+      RAISE EXCEPTION 'Migration 029 prerequisite failed: compliance/M028 table security posture is incompatible';
+    END IF;
+  END LOOP;
 
   IF v_link_table_oid IS NOT NULL THEN
     SELECT a.attnum INTO v_link_merchant_attnum

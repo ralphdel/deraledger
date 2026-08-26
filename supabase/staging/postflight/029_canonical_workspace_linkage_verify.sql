@@ -1,26 +1,51 @@
 WITH object_facts AS (
-  SELECT
-    to_regclass('public.merchant_canonical_workspaces') link_table_oid,
-    to_regprocedure('public.reconcile_canonical_merchant_workspace_link_v1(uuid,uuid,text)') reconcile_oid
+  SELECT to_regclass('public.merchant_canonical_workspaces') AS link_table_oid,
+    to_regprocedure('public.reconcile_canonical_merchant_workspace_link_v1(uuid,uuid,text)') AS reconcile_oid
+), role_facts AS (
+  SELECT to_regrole('service_role') AS service_role_oid,
+    to_regrole('anon') AS anon_oid,
+    to_regrole('authenticated') AS authenticated_oid
 ), function_facts AS (
-  SELECT p.oid,p.pronargs,p.prosecdef,p.proconfig,pg_get_functiondef(p.oid) definition
-  FROM pg_proc p
-  CROSS JOIN object_facts o
+  SELECT p.oid,p.pronargs,p.prosecdef,p.proconfig,p.proacl,p.proowner,pg_get_functiondef(p.oid) AS definition
+  FROM pg_proc p CROSS JOIN object_facts o
   WHERE p.oid=o.reconcile_oid
+), function_security AS (
+  SELECT f.*, r.*,
+    NOT EXISTS (
+      SELECT 1 FROM aclexplode(COALESCE(f.proacl, acldefault('f', f.proowner))) privilege_state
+      WHERE privilege_state.grantee=0 AND privilege_state.privilege_type='EXECUTE'
+    ) AS public_execute_denied,
+    CASE WHEN r.anon_oid IS NULL THEN false ELSE has_function_privilege(r.anon_oid, f.oid, 'EXECUTE') END AS anon_execute,
+    CASE WHEN r.authenticated_oid IS NULL THEN false ELSE has_function_privilege(r.authenticated_oid, f.oid, 'EXECUTE') END AS authenticated_execute,
+    CASE WHEN r.service_role_oid IS NULL THEN false ELSE has_function_privilege(r.service_role_oid, f.oid, 'EXECUTE') END AS service_execute
+  FROM function_facts f CROSS JOIN role_facts r
+), table_security AS (
+  SELECT o.*, r.*, c.relacl, c.relowner,
+    NOT EXISTS (
+      SELECT 1 FROM aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) privilege_state
+      WHERE privilege_state.grantee=0
+    ) AS public_privileges_denied,
+    CASE WHEN o.link_table_oid IS NULL OR r.anon_oid IS NULL THEN false ELSE has_table_privilege(r.anon_oid, o.link_table_oid, 'SELECT') OR has_table_privilege(r.anon_oid, o.link_table_oid, 'INSERT') OR has_table_privilege(r.anon_oid, o.link_table_oid, 'UPDATE') OR has_table_privilege(r.anon_oid, o.link_table_oid, 'DELETE') OR has_table_privilege(r.anon_oid, o.link_table_oid, 'TRUNCATE') OR has_table_privilege(r.anon_oid, o.link_table_oid, 'REFERENCES') OR has_table_privilege(r.anon_oid, o.link_table_oid, 'TRIGGER') END AS anon_privileges_any,
+    CASE WHEN o.link_table_oid IS NULL OR r.authenticated_oid IS NULL THEN false ELSE has_table_privilege(r.authenticated_oid, o.link_table_oid, 'SELECT') OR has_table_privilege(r.authenticated_oid, o.link_table_oid, 'INSERT') OR has_table_privilege(r.authenticated_oid, o.link_table_oid, 'UPDATE') OR has_table_privilege(r.authenticated_oid, o.link_table_oid, 'DELETE') OR has_table_privilege(r.authenticated_oid, o.link_table_oid, 'TRUNCATE') OR has_table_privilege(r.authenticated_oid, o.link_table_oid, 'REFERENCES') OR has_table_privilege(r.authenticated_oid, o.link_table_oid, 'TRIGGER') END AS authenticated_privileges_any,
+    CASE WHEN o.link_table_oid IS NULL OR r.service_role_oid IS NULL THEN false ELSE has_table_privilege(r.service_role_oid, o.link_table_oid, 'SELECT') END AS service_select,
+    CASE WHEN o.link_table_oid IS NULL OR r.service_role_oid IS NULL THEN false ELSE has_table_privilege(r.service_role_oid, o.link_table_oid, 'INSERT') END AS service_insert,
+    CASE WHEN o.link_table_oid IS NULL OR r.service_role_oid IS NULL THEN true ELSE has_table_privilege(r.service_role_oid, o.link_table_oid, 'UPDATE') OR has_table_privilege(r.service_role_oid, o.link_table_oid, 'DELETE') OR has_table_privilege(r.service_role_oid, o.link_table_oid, 'TRUNCATE') OR has_table_privilege(r.service_role_oid, o.link_table_oid, 'REFERENCES') OR has_table_privilege(r.service_role_oid, o.link_table_oid, 'TRIGGER') END AS service_forbidden_any
+  FROM object_facts o CROSS JOIN role_facts r
+  LEFT JOIN pg_class c ON c.oid=o.link_table_oid
 ), reconcile_overloads AS (
-  SELECT count(*) overload_count
+  SELECT count(*) AS overload_count
   FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
   WHERE n.nspname='public' AND p.proname='reconcile_canonical_merchant_workspace_link_v1'
 ), link_row_count AS (
   SELECT o.link_table_oid,
     CASE WHEN o.link_table_oid IS NULL THEN NULL::bigint
       ELSE ((xpath('/row/count/text()', query_to_xml(format('SELECT count(*) AS count FROM %s', o.link_table_oid::text), false, true, '')))[1]::text)::bigint
-    END row_count
+    END AS row_count
   FROM object_facts o
 ), checks AS (
-  SELECT 'objects.table'::text check_name,
-    CASE WHEN EXISTS (SELECT 1 FROM object_facts o WHERE o.link_table_oid IS NOT NULL) THEN 'PASS' ELSE 'FAIL' END status,
-    'Canonical workspace-link authority exists'::text details
+  SELECT 'objects.table'::text AS check_name,
+    CASE WHEN EXISTS (SELECT 1 FROM object_facts o WHERE o.link_table_oid IS NOT NULL) THEN 'PASS' ELSE 'FAIL' END AS status,
+    'Canonical workspace-link authority exists'::text AS details
   UNION ALL
   SELECT 'table.rls',
     CASE WHEN EXISTS (SELECT 1 FROM pg_class c CROSS JOIN object_facts o WHERE c.oid=o.link_table_oid AND c.relrowsecurity AND NOT c.relforcerowsecurity) THEN 'PASS' ELSE 'FAIL' END,
@@ -28,27 +53,16 @@ WITH object_facts AS (
   UNION ALL
   SELECT 'table.browser_grants',
     CASE WHEN EXISTS (
-      SELECT 1 FROM object_facts o
-      WHERE o.link_table_oid IS NOT NULL
-        AND NOT has_table_privilege('PUBLIC',o.link_table_oid,'SELECT')
-        AND NOT has_table_privilege('PUBLIC',o.link_table_oid,'INSERT')
-        AND NOT has_table_privilege('PUBLIC',o.link_table_oid,'UPDATE')
-        AND NOT has_table_privilege('PUBLIC',o.link_table_oid,'DELETE')
-        AND NOT has_table_privilege('PUBLIC',o.link_table_oid,'TRUNCATE')
-        AND NOT has_table_privilege('PUBLIC',o.link_table_oid,'REFERENCES')
-        AND NOT has_table_privilege('PUBLIC',o.link_table_oid,'TRIGGER')
-        AND NOT has_table_privilege('anon',o.link_table_oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
-        AND NOT has_table_privilege('authenticated',o.link_table_oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+      SELECT 1 FROM table_security t
+      WHERE t.link_table_oid IS NOT NULL AND t.public_privileges_denied
+        AND NOT t.anon_privileges_any AND NOT t.authenticated_privileges_any
     ) THEN 'PASS' ELSE 'FAIL' END,
-    'PUBLIC, anon, and authenticated have no effective canonical-link table privileges'
+    'PUBLIC ACL plus anon/authenticated effective canonical-link table privileges are denied'
   UNION ALL
   SELECT 'table.service_role_grants',
     CASE WHEN EXISTS (
-      SELECT 1 FROM object_facts o
-      WHERE o.link_table_oid IS NOT NULL
-        AND has_table_privilege('service_role',o.link_table_oid,'SELECT')
-        AND has_table_privilege('service_role',o.link_table_oid,'INSERT')
-        AND NOT has_table_privilege('service_role',o.link_table_oid,'UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+      SELECT 1 FROM table_security t
+      WHERE t.link_table_oid IS NOT NULL AND t.service_select AND t.service_insert AND NOT t.service_forbidden_any
     ) THEN 'PASS' ELSE 'FAIL' END,
     'service_role has only required SELECT/INSERT table privileges'
   UNION ALL
@@ -68,9 +82,8 @@ WITH object_facts AS (
   UNION ALL
   SELECT 'table.immutable_posture',
     CASE WHEN EXISTS (
-      SELECT 1 FROM object_facts o
-      WHERE o.link_table_oid IS NOT NULL
-        AND NOT has_table_privilege('service_role',o.link_table_oid,'UPDATE,DELETE')
+      SELECT 1 FROM table_security t
+      WHERE t.link_table_oid IS NOT NULL AND NOT t.service_forbidden_any
     ) AND NOT EXISTS (SELECT 1 FROM pg_trigger t CROSS JOIN object_facts o WHERE t.tgrelid=o.link_table_oid AND NOT t.tgisinternal)
     THEN 'PASS' ELSE 'FAIL' END,
     'No service-role update/delete privilege or user trigger can mutate canonical links'
@@ -82,17 +95,13 @@ WITH object_facts AS (
     'One exact reconcile_canonical_merchant_workspace_link_v1(uuid,uuid,text) signature exists'
   UNION ALL
   SELECT 'rpc.security',
-    CASE WHEN EXISTS (SELECT 1 FROM function_facts f WHERE NOT f.prosecdef AND f.proconfig @> ARRAY['search_path=pg_catalog, public']) THEN 'PASS' ELSE 'FAIL' END,
+    CASE WHEN EXISTS (SELECT 1 FROM function_facts f WHERE NOT f.prosecdef AND COALESCE(f.proconfig @> ARRAY['search_path=pg_catalog, public'], false)) THEN 'PASS' ELSE 'FAIL' END,
     'Reconcile RPC is SECURITY INVOKER with hardened search path'
   UNION ALL
   SELECT 'rpc.grants',
     CASE WHEN EXISTS (
-      SELECT 1 FROM object_facts o
-      WHERE o.reconcile_oid IS NOT NULL
-        AND NOT has_function_privilege('PUBLIC',o.reconcile_oid,'EXECUTE')
-        AND NOT has_function_privilege('anon',o.reconcile_oid,'EXECUTE')
-        AND NOT has_function_privilege('authenticated',o.reconcile_oid,'EXECUTE')
-        AND has_function_privilege('service_role',o.reconcile_oid,'EXECUTE')
+      SELECT 1 FROM function_security f
+      WHERE f.public_execute_denied AND NOT f.anon_execute AND NOT f.authenticated_execute AND f.service_execute
     ) THEN 'PASS' ELSE 'FAIL' END,
     'Only service_role can execute the exact reconcile RPC'
   UNION ALL
@@ -121,7 +130,7 @@ WITH object_facts AS (
 ), rendered AS (
   SELECT check_name,status,details FROM checks
 ), summary AS (
-  SELECT CASE WHEN bool_and(status='PASS') THEN 'PASS' ELSE 'FAIL' END status FROM rendered
+  SELECT CASE WHEN bool_and(status='PASS') THEN 'PASS' ELSE 'FAIL' END AS status FROM rendered
 ), output_rows AS (
   SELECT check_name, status, details FROM rendered
   UNION ALL

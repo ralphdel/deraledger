@@ -69,10 +69,13 @@ assert.match(migration, /REVOKE ALL ON TABLE public\.merchant_canonical_workspac
 assert.match(migration, /GRANT SELECT, INSERT ON TABLE public\.merchant_canonical_workspaces TO service_role/);
 assert.match(migration, /REVOKE ALL ON FUNCTION public\.reconcile_canonical_merchant_workspace_link_v1\(uuid, uuid, text\) FROM PUBLIC, anon, authenticated, service_role/);
 assert.match(migration, /GRANT EXECUTE ON FUNCTION public\.reconcile_canonical_merchant_workspace_link_v1\(uuid, uuid, text\) TO service_role/);
-assert.match(migration, /has_function_privilege\('service_role', v_issue_signature, 'EXECUTE'\)/);
-assert.match(migration, /has_function_privilege\('service_role', v_snapshot_signature, 'EXECUTE'\)/);
-assert.match(migration, /has_function_privilege\('anon', v_issue_signature, 'EXECUTE'\)/);
-assert.match(migration, /has_function_privilege\('authenticated', v_snapshot_signature, 'EXECUTE'\)/);
+assert.match(migration, /v_service_role_oid oid := to_regrole\('service_role'\)/);
+assert.match(migration, /v_anon_oid oid := to_regrole\('anon'\)/);
+assert.match(migration, /v_authenticated_oid oid := to_regrole\('authenticated'\)/);
+assert.match(migration, /aclexplode\(COALESCE\(p\.proacl, acldefault\('f', p\.proowner\)\)\)/);
+assert.match(migration, /aclexplode\(COALESCE\(c\.relacl, acldefault\('r', c\.relowner\)\)\)/);
+assert.match(migration, /privilege_state\.grantee = 0/);
+assert.match(migration, /has_function_privilege\(v_service_role_oid, v_rpc_oid, 'EXECUTE'\)/);
 
 assert.doesNotMatch(migration, /CREATE OR REPLACE FUNCTION public\.(?:review_compliance_profile_decision_v1|issue_canonical_approval_decision_request_v1|read_canonical_approval_snapshot_v1)\(/);
 assert.doesNotMatch(migration, /setup_mode\s*=|live_features_enabled\s*=|can_collect_payments\s*=|activation_status\s*=\s*'active'/);
@@ -87,9 +90,11 @@ assert.match(preflight, /prerequisite\.workspace_contract[\s\S]*workspace primar
 assert.match(preflight, /migration_026_028\.rpc_security/);
 assert.match(preflight, /public\.issue_canonical_approval_decision_request_v1\(uuid,uuid,text,text,text\)/);
 assert.match(preflight, /public\.read_canonical_approval_snapshot_v1\(uuid\)/);
-assert.match(preflight, /has_function_privilege\('service_role',f\.issue_oid,'EXECUTE'\)/);
-assert.match(preflight, /has_function_privilege\('service_role',f\.snapshot_oid,'EXECUTE'\)/);
-assert.doesNotMatch(preflight, /has_function_privilege\('service_role','public\.(?:review_compliance_profile_decision_v1|issue_canonical_approval_decision_request_v1|read_canonical_approval_snapshot_v1)/);
+assert.match(preflight, /role_facts AS \([\s\S]*to_regrole\('service_role'\)[\s\S]*to_regrole\('anon'\)[\s\S]*to_regrole\('authenticated'\)/);
+assert.match(preflight, /aclexplode\(COALESCE\(p\.proacl, acldefault\('f', p\.proowner\)\)\)/);
+assert.match(preflight, /protected_table_security AS \([\s\S]*aclexplode\(COALESCE\(c\.relacl, acldefault\('r', c\.relowner\)\)\)/);
+assert.match(preflight, /privilege_state\.grantee=0/);
+assert.match(preflight, /has_function_privilege\(r\.service_role_oid, f\.issue_oid, 'EXECUTE'\)/);
 assert.match(preflight, /migration_029\.objects_absent/);
 assert.match(preflight, /migration_029\.supporting_index_name/);
 assert.match(preflight, /merchant_canonical_workspace_supporting_owner_key/);
@@ -101,13 +106,20 @@ assert.doesNotMatch(preflight, /^\s*(?:INSERT INTO|UPDATE public\.|DELETE FROM|T
 assert.match(postflight, /objects\.table[\s\S]*table\.rls[\s\S]*table\.browser_grants[\s\S]*table\.service_role_grants[\s\S]*table\.constraints_indexes[\s\S]*table\.immutable_posture[\s\S]*rpc\.signature[\s\S]*rpc\.security[\s\S]*rpc\.grants[\s\S]*rpc\.diagnostics_absent[\s\S]*rpc\.forbidden_writes[\s\S]*m028\.remains_fail_closed[\s\S]*data\.empty_after_apply[\s\S]*summary/);
 assert.match(postflight, /to_regclass\('public\.merchant_canonical_workspaces'\)/);
 assert.match(postflight, /to_regprocedure\('public\.reconcile_canonical_merchant_workspace_link_v1\(uuid,uuid,text\)'\)/);
+assert.match(postflight, /^WITH object_facts AS \([\s\S]*to_regclass\('public\.merchant_canonical_workspaces'\)[\s\S]*to_regprocedure\('public\.reconcile_canonical_merchant_workspace_link_v1\(uuid,uuid,text\)'\)/);
 assert.match(postflight, /query_to_xml\(format\('SELECT count\(\*\) AS count FROM %s', o\.link_table_oid::text\)/);
 assert.doesNotMatch(postflight, /FROM public\.merchant_canonical_workspaces/);
+assert.doesNotMatch(postflight, /(?:FROM|JOIN)\s+public\.reconcile_canonical_merchant_workspace_link_v1/i);
+assert.doesNotMatch(postflight, /'public\.merchant_canonical_workspaces'::regclass/);
 assert.match(postflight, /o\.reconcile_oid IS NOT NULL/);
 assert.match(postflight, /SELECT overload_count FROM reconcile_overloads\)\s*=\s*1/);
-assert.match(postflight, /has_function_privilege\('PUBLIC',o\.reconcile_oid,'EXECUTE'\)/);
-assert.match(postflight, /NOT has_table_privilege\('anon',o\.link_table_oid/);
-assert.match(postflight, /NOT has_table_privilege\('authenticated',o\.link_table_oid/);
+assert.match(postflight, /role_facts AS \([\s\S]*to_regrole\('service_role'\)[\s\S]*to_regrole\('anon'\)[\s\S]*to_regrole\('authenticated'\)/);
+assert.match(postflight, /aclexplode\(COALESCE\(f\.proacl, acldefault\('f', f\.proowner\)\)\)/);
+assert.match(postflight, /aclexplode\(COALESCE\(c\.relacl, acldefault\('r', c\.relowner\)\)\)/);
+assert.match(postflight, /privilege_state\.grantee=0/);
+assert.match(postflight, /has_function_privilege\(r\.service_role_oid, f\.oid, 'EXECUTE'\)/);
+assert.match(postflight, /CASE WHEN o\.link_table_oid IS NULL OR r\.anon_oid IS NULL THEN false ELSE has_table_privilege\(r\.anon_oid/);
+assert.doesNotMatch(postflight, /FROM public\.merchant_canonical_workspaces/);
 assert.match(postflight, /merchant_canonical_workspaces_workspace_owner_fkey/);
 assert.match(postflight, /canonical_request_workspace_linkage_unavailable/);
 assert.match(postflight, /canonical_snapshot_workspace_linkage_unavailable/);
@@ -121,9 +133,11 @@ assert.match(rehearsalScript, /LOCAL_M029_REHEARSAL_CONNECTION_STRING_REJECTED/)
 assert.match(rehearsalScript, /LOCAL_M029_REHEARSAL_DISPOSABLE_DATABASE_NAME_REQUIRED/);
 assert.match(rehearsalScript, /\^deraledger_m029_disposable_\[a-z0-9_\]\+\$/);
 assert.match(rehearsalScript, /Write-LocalSqlFileNoBom/);
+assert.match(rehearsalScript, /local-evidence\/migration-029-local-/);
+assert.match(rehearsalScript, /Tee-Object -FilePath \$EvidencePath/);
 assert.match(rehearsalScript, /CREATE TABLE IF NOT EXISTS public\.workspaces[\s\S]*id uuid PRIMARY KEY,[\s\S]*merchant_id uuid REFERENCES public\.merchants\(id\) ON DELETE CASCADE,[\s\S]*UNIQUE \(merchant_id\)/);
 assert.match(rehearsalScript, /\$Migration024[\s\S]*\$Migration025[\s\S]*\$Migration026[\s\S]*\$Migration027[\s\S]*\$Migration028[\s\S]*\$Migration029/);
-assert.match(rehearsalScript, /\$Preflight029[\s\S]*Invoke-LocalPsqlFile \$Preflight029[\s\S]*Invoke-LocalPsqlFile \$Migration029[\s\S]*Invoke-LocalPsqlFile \$Migration029[\s\S]*Invoke-LocalPsqlFile \$Postflight029/);
+assert.match(rehearsalScript, /\$Preflight029[\s\S]*Invoke-LocalPsqlFile '029-preflight' \$Preflight029[\s\S]*Invoke-LocalPsqlFile '029-apply-first' \$Migration029[\s\S]*Invoke-LocalPsqlFile '029-apply-rerun' \$Migration029[\s\S]*Invoke-LocalPsqlFile '029-postflight' \$Postflight029/);
 assert.match(rehearsalScript, /zero_candidate_fails_closed[\s\S]*canonical_workspace_link_unavailable/);
 assert.match(rehearsalScript, /one_candidate_creates_link[\s\S]*canonical_workspace_link_created/);
 assert.match(rehearsalScript, /exact_replay_preserved[\s\S]*canonical_workspace_link_replay/);
@@ -141,6 +155,16 @@ assert.doesNotMatch(rehearsalScript, /SET ROLE PUBLIC|SET LOCAL ROLE PUBLIC/);
 assert.match(rehearsalScript, /supabase\\\.co\|supabase\\\.com/);
 assert.match(rehearsalScript, /LOCAL_M029_REHEARSAL_CONNECTION_STRING_REJECTED/);
 assert.doesNotMatch(rehearsalScript, /STAGING_DATABASE_URL|PRODUCTION_DATABASE_URL/);
+
+for (const [label, content] of [[migrationPath, migration], [preflightPath, preflight], [postflightPath, postflight]] as const) {
+  assert.doesNotMatch(content, /has_function_privilege\(\s*'PUBLIC'/, `${label} must inspect PUBLIC through ACLs`);
+  assert.doesNotMatch(content, /has_table_privilege\(\s*'PUBLIC'/, `${label} must inspect PUBLIC through ACLs`);
+  assert.doesNotMatch(content, /has_schema_privilege\(\s*'PUBLIC'/, `${label} must inspect PUBLIC through ACLs`);
+  assert.doesNotMatch(content, /pg_has_role\(\s*'PUBLIC'/, `${label} must not resolve PUBLIC as a role`);
+  assert.doesNotMatch(content, /has_(?:function|table|schema)_privilege\(\s*'(?:anon|authenticated|service_role)'/, `${label} must resolve named roles to OIDs before privilege checks`);
+  assert.doesNotMatch(content, /information_schema\.role_table_grants/, `${label} must inspect protected table grants through ACLs`);
+  assert.doesNotMatch(content, /UNION ALL\s+SELECT 'summary'[^\r\n]*\r?\nORDER BY CASE/, `${label} must wrap summary ordering outside UNION`);
+}
 
 for (const file of [...sourceFiles("src/app"), "src/lib/actions.ts"]) {
   const content = readFileSync(file, "utf8");

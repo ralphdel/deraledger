@@ -85,7 +85,9 @@ foreach ($path in @(
 
 $Psql = (Get-Command $PsqlPath -ErrorAction Stop).Source
 $TempDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ("deraledger-m029-workspace-linkage-" + [guid]::NewGuid().ToString('N'))
+$EvidenceDirectory = Join-Path $ProjectRoot ("local-evidence/migration-029-local-" + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 New-Item -ItemType Directory -Path $TempDirectory -Force | Out-Null
+New-Item -ItemType Directory -Path $EvidenceDirectory -Force | Out-Null
 $BaselineSql = Join-Path $TempDirectory '024-028-workspace-prerequisites.sql'
 $BehaviorSql = Join-Path $TempDirectory '029-workspace-linkage-behavior.sql'
 
@@ -335,34 +337,37 @@ ROLLBACK;
 SELECT 'CONTROL|LOCAL_CANONICAL_WORKSPACE_LINKAGE_REHEARSAL=PASS';
 '@
 
-  function Invoke-LocalPsqlFile([string]$FilePath) {
-    & $Psql -X -w -v ON_ERROR_STOP=1 -d $LocalConnectionString.Trim() -f $FilePath
-    if ($LASTEXITCODE -ne 0) { throw "LOCAL_M029_REHEARSAL_PSQL_FAILED: $FilePath" }
+  function Invoke-LocalPsqlFile([string]$Label, [string]$FilePath) {
+    $EvidencePath = Join-Path $EvidenceDirectory ("$Label.txt")
+    & $Psql -X -w -v ON_ERROR_STOP=1 -d $LocalConnectionString.Trim() -f $FilePath 2>&1 |
+      Tee-Object -FilePath $EvidencePath
+    if ($LASTEXITCODE -ne 0) { throw "LOCAL_M029_REHEARSAL_PSQL_FAILED: $Label" }
   }
 
   Write-Host 'Applying disposable local prerequisites and M024--M028 baseline.'
-  Invoke-LocalPsqlFile $BaselineSql
-  Invoke-LocalPsqlFile $Migration024
-  Invoke-LocalPsqlFile $Migration025
-  Invoke-LocalPsqlFile $Preflight026
-  Invoke-LocalPsqlFile $Migration026
-  Invoke-LocalPsqlFile $Migration026
-  Invoke-LocalPsqlFile $Postflight026
-  Invoke-LocalPsqlFile $Preflight027
-  Invoke-LocalPsqlFile $Migration027
-  Invoke-LocalPsqlFile $Migration027
-  Invoke-LocalPsqlFile $Postflight027
-  Invoke-LocalPsqlFile $Preflight028
-  Invoke-LocalPsqlFile $Migration028
-  Invoke-LocalPsqlFile $Migration028
-  Invoke-LocalPsqlFile $Postflight028
+  Invoke-LocalPsqlFile 'baseline' $BaselineSql
+  Invoke-LocalPsqlFile '024-apply' $Migration024
+  Invoke-LocalPsqlFile '025-apply' $Migration025
+  Invoke-LocalPsqlFile '026-preflight' $Preflight026
+  Invoke-LocalPsqlFile '026-apply-first' $Migration026
+  Invoke-LocalPsqlFile '026-apply-rerun' $Migration026
+  Invoke-LocalPsqlFile '026-postflight' $Postflight026
+  Invoke-LocalPsqlFile '027-preflight' $Preflight027
+  Invoke-LocalPsqlFile '027-apply-first' $Migration027
+  Invoke-LocalPsqlFile '027-apply-rerun' $Migration027
+  Invoke-LocalPsqlFile '027-postflight' $Postflight027
+  Invoke-LocalPsqlFile '028-preflight' $Preflight028
+  Invoke-LocalPsqlFile '028-apply-first' $Migration028
+  Invoke-LocalPsqlFile '028-apply-rerun' $Migration028
+  Invoke-LocalPsqlFile '028-postflight' $Postflight028
   Write-Host 'Running M029 preflight, first apply, rerun, and postflight.'
-  Invoke-LocalPsqlFile $Preflight029
-  Invoke-LocalPsqlFile $Migration029
-  Invoke-LocalPsqlFile $Migration029
-  Invoke-LocalPsqlFile $Postflight029
+  Invoke-LocalPsqlFile '029-preflight' $Preflight029
+  Invoke-LocalPsqlFile '029-apply-first' $Migration029
+  Invoke-LocalPsqlFile '029-apply-rerun' $Migration029
+  Invoke-LocalPsqlFile '029-postflight' $Postflight029
   Write-Host 'Running M029 disposable behavior, hostile-role, and forbidden-write rehearsal.'
-  Invoke-LocalPsqlFile $BehaviorSql
+  Invoke-LocalPsqlFile '029-behavior' $BehaviorSql
+  Write-Host "LOCAL EVIDENCE DIRECTORY: $EvidenceDirectory"
 } finally {
   if (Test-Path -LiteralPath $TempDirectory) { Remove-Item -LiteralPath $TempDirectory -Recurse -Force }
 }
