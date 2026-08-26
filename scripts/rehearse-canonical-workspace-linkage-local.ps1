@@ -26,22 +26,35 @@ $Postflight028 = Join-Path $ProjectRoot 'supabase/staging/postflight/028_canonic
 $Preflight029 = Join-Path $ProjectRoot 'supabase/staging/preflight/029_canonical_workspace_linkage_snapshot.sql'
 $Postflight029 = Join-Path $ProjectRoot 'supabase/staging/postflight/029_canonical_workspace_linkage_verify.sql'
 
-function Get-LocalPgHost {
-  param([Parameter(Mandatory = $true)][string]$ConnectionString)
-  if ($ConnectionString -match '^(?i:postgres(?:ql)?://)') {
-    try { return ([Uri]$ConnectionString).Host.ToLowerInvariant() } catch { throw 'LOCAL_M029_REHEARSAL_CONNECTION_STRING_INVALID' }
+function Get-LocalPgKeywordConnectionValue {
+  param(
+    [Parameter(Mandatory = $true)][string]$ConnectionString,
+    [Parameter(Mandatory = $true)][string]$Name
+  )
+  $pattern = '(?i)(?:^|\s)' + [regex]::Escape($Name) + '\s*=\s*(?:"(?<double>[^"]*)"|''(?<single>[^'']*)''|(?<bare>[^\s;]+))'
+  $matches = [regex]::Matches($ConnectionString, $pattern)
+  if ($matches.Count -eq 0) { return $null }
+  if ($matches.Count -ne 1) { throw "LOCAL_M029_REHEARSAL_CONNECTION_VALUE_AMBIGUOUS: $Name" }
+  foreach ($groupName in @('double', 'single', 'bare')) {
+    if ($matches[0].Groups[$groupName].Success) { return $matches[0].Groups[$groupName].Value.Trim() }
   }
-  if ($ConnectionString -match '(?i)(?:^|\s)host\s*=\s*([^\s;]+)') { return $Matches[1].Trim('"', "'").ToLowerInvariant() }
-  throw 'LOCAL_M029_REHEARSAL_HOST_MISSING'
+  throw "LOCAL_M029_REHEARSAL_CONNECTION_VALUE_INVALID: $Name"
 }
 
-function Get-LocalPgDatabaseName {
+function Get-LocalPgConnectionParts {
   param([Parameter(Mandatory = $true)][string]$ConnectionString)
   if ($ConnectionString -match '^(?i:postgres(?:ql)?://)') {
-    try { return ([Uri]$ConnectionString).AbsolutePath.Trim('/').Trim() } catch { throw 'LOCAL_M029_REHEARSAL_CONNECTION_STRING_INVALID' }
+    throw 'LOCAL_M029_REHEARSAL_KEYWORD_CONNECTION_STRING_REQUIRED'
   }
-  if ($ConnectionString -match '(?i)(?:^|\s)dbname\s*=\s*([^\s;]+)') { return $Matches[1].Trim('"', "'").Trim() }
-  throw 'LOCAL_M029_REHEARSAL_DATABASE_NAME_REQUIRED'
+  $hostName = Get-LocalPgKeywordConnectionValue -ConnectionString $ConnectionString -Name 'host'
+  $port = Get-LocalPgKeywordConnectionValue -ConnectionString $ConnectionString -Name 'port'
+  $databaseName = Get-LocalPgKeywordConnectionValue -ConnectionString $ConnectionString -Name 'dbname'
+  $userName = Get-LocalPgKeywordConnectionValue -ConnectionString $ConnectionString -Name 'user'
+  if ([string]::IsNullOrWhiteSpace($hostName)) { throw 'LOCAL_M029_REHEARSAL_HOST_MISSING' }
+  if ([string]::IsNullOrWhiteSpace($port)) { throw 'LOCAL_M029_REHEARSAL_PORT_REQUIRED' }
+  if ([string]::IsNullOrWhiteSpace($databaseName)) { throw 'LOCAL_M029_REHEARSAL_DATABASE_NAME_REQUIRED' }
+  if ([string]::IsNullOrWhiteSpace($userName)) { throw 'LOCAL_M029_REHEARSAL_USER_REQUIRED' }
+  return @{ Host = $hostName.ToLowerInvariant(); Port = $port; Database = $databaseName; User = $userName }
 }
 
 function Assert-LocalDisposableConnectionString {
@@ -52,11 +65,12 @@ function Assert-LocalDisposableConnectionString {
   if ($ConnectionString -match '(?i)(supabase\.co|supabase\.com|vercel|production|staging|service_role|anon|eyJ|password\s*=|://[^/\s]*:|[&|<>()^"%])') {
     throw 'LOCAL_M029_REHEARSAL_CONNECTION_STRING_REJECTED'
   }
-  $hostName = Get-LocalPgHost -ConnectionString $ConnectionString
-  if ($hostName -notin @('localhost', '127.0.0.1', 'host.docker.internal')) { throw 'LOCAL_M029_REHEARSAL_NONLOCAL_HOST_REJECTED' }
-  $databaseName = Get-LocalPgDatabaseName -ConnectionString $ConnectionString
-  if ($databaseName -notmatch '^deraledger_m029_disposable_[a-z0-9_]+$') { throw 'LOCAL_M029_REHEARSAL_DISPOSABLE_DATABASE_NAME_REQUIRED' }
-  return @{ Host = $hostName; Database = $databaseName }
+  $target = Get-LocalPgConnectionParts -ConnectionString $ConnectionString
+  if ($target.Host -notin @('localhost', '127.0.0.1')) { throw 'LOCAL_M029_REHEARSAL_NONLOCAL_HOST_REJECTED' }
+  if ($target.Port -notmatch '^\d+$' -or [int]$target.Port -ne 55432) { throw 'LOCAL_M029_REHEARSAL_LOCAL_PORT_REQUIRED' }
+  if ($target.Database -notmatch '^deraledger_m029_disposable_[a-z0-9_]+$') { throw 'LOCAL_M029_REHEARSAL_DISPOSABLE_DATABASE_NAME_REQUIRED' }
+  if ($target.User -notmatch '^[A-Za-z_][A-Za-z0-9_$-]*$') { throw 'LOCAL_M029_REHEARSAL_USER_INVALID' }
+  return $target
 }
 
 function Write-LocalSqlFileNoBom {
@@ -70,7 +84,7 @@ function Write-LocalSqlFileNoBom {
 
 if ($Confirmation.Trim() -cne $ConfirmationPhrase) { throw 'LOCAL_M029_REHEARSAL_CONFIRMATION_REQUIRED' }
 $Target = Assert-LocalDisposableConnectionString -ConnectionString $LocalConnectionString.Trim()
-Write-Host "LOCAL-ONLY DISPOSABLE TARGET: $($Target.Host)/$($Target.Database)"
+Write-Host "LOCAL-ONLY DISPOSABLE TARGET: $($Target.Host):$($Target.Port)/$($Target.Database)"
 Write-Host 'FORBIDDEN: staging, production, Supabase projects, runtime adoption, collection unlock, activation, and provider/payment testing.'
 if (-not $Execute) {
   Write-Host 'DRY RUN ONLY. Re-run with -Execute only for the named disposable local database.'
@@ -349,7 +363,8 @@ SELECT 'CONTROL|LOCAL_CANONICAL_WORKSPACE_LINKAGE_REHEARSAL=PASS';
     # standard Windows psql path with spaces is never parsed by cmd.exe.
     # stderr remains evidence rather than a PowerShell NativeCommandError.
     $PsqlProcess = Start-Process -FilePath $Psql -ArgumentList @(
-      '-X', '-w', '-v', 'ON_ERROR_STOP=1', '-d', $LocalConnectionString.Trim(), '-f', $FilePath
+      '-X', '-w', '-v', 'ON_ERROR_STOP=1', '-h', $Target.Host, '-p', $Target.Port,
+      '-U', $Target.User, '-d', $Target.Database, '-f', $FilePath
     ) -RedirectStandardOutput $StdoutPath -RedirectStandardError $StderrPath -Wait -PassThru -NoNewWindow
     $PsqlExitCode = $PsqlProcess.ExitCode
 

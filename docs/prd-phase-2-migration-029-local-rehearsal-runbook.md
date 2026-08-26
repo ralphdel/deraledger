@@ -35,10 +35,13 @@ Each executed stage is captured under an untracked local
 stage stops the harness immediately and identifies the stage label; the final
 control line is emitted only after all baseline, M029, and behavior stages
 pass. The harness invokes each SQL file with `Start-Process`, passing the
-resolved `psql` path and argument array separately. It captures standard
-output and standard error into per-stage files, combines them into the labelled
-evidence file, then prints that evidence after the stage. This supports the
-standard `C:\Program Files\PostgreSQL\15\bin\psql.exe` path without command-shell
+resolved `psql` path and argument array separately. It parses the required
+local keyword connection string into validated host, port, database, and user
+values and passes them as individual psql arguments; it never passes the full
+keyword string to `-d`. It captures standard output and standard error into
+per-stage files, combines them into the labelled evidence file, then prints
+that evidence after the stage. This supports the standard
+`C:\Program Files\PostgreSQL\15\bin\psql.exe` path without command-shell
 quoting. It sets `PGOPTIONS=-c client_min_messages=warning` only for the
 harness process and restores the prior environment afterwards. Harmless
 PostgreSQL `NOTICE` output from idempotent reruns is therefore retained as
@@ -50,12 +53,15 @@ run.
 
 Set `PGPASSWORD` only in the current PowerShell process if the local server
 requires it; do not place credentials in the repository or connection string.
-The command rejects Supabase, staging, production, non-local hosts, and a
-database name that does not match the disposable M029 pattern.
+The command accepts only a keyword connection string with an explicit local
+host (`127.0.0.1` or `localhost`), port `55432`, database name matching the
+disposable M029 pattern, and user. It rejects Supabase, staging, production,
+and database URLs so psql cannot silently fall back to default connection
+settings.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\rehearse-canonical-workspace-linkage-local.ps1 `
-  -LocalConnectionString 'postgresql://localhost/deraledger_m029_disposable_20260826' `
+  -LocalConnectionString 'host=127.0.0.1 port=55432 dbname=deraledger_m029_disposable_20260826 user=postgres' `
   -Confirmation 'REHEARSE MIGRATION 029 LOCAL DISPOSABLE DB ONLY' `
   -Execute `
   -PsqlPath 'C:\Program Files\PostgreSQL\15\bin\psql.exe'
