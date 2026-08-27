@@ -300,24 +300,20 @@ DO $$ DECLARE v_actual text := 'unexpected'; BEGIN BEGIN PERFORM * FROM public.r
 DO $$ DECLARE v_actual text := 'unexpected'; BEGIN BEGIN PERFORM 1 FROM public.merchant_canonical_workspaces; v_actual:='table_allowed'; EXCEPTION WHEN insufficient_privilege THEN v_actual:='table_denied'; END; PERFORM pg_temp.record_m030('authenticated_table_denied','table_denied',v_actual); END $$;
 RESET ROLE;
 
--- Durable-idempotency and ownership corruption attempts are owner fixture probes, not M030 writes.
+-- Durable idempotency is probed without mutating M029 authority.
 DO $$ DECLARE v_actual text := 'idempotency_reuse_allowed'; BEGIN
   BEGIN INSERT INTO public.approval_decision_requests(decision_idempotency_key,reviewer_id,merchant_id,workspace_id,profile_id,plan_code,source_type,source_id,source_version,expected_profile_row_version,target_compliance_status,policy_version,reviewed_at)
     SELECT decision_idempotency_key,reviewer_id,merchant_id,workspace_id,profile_id,plan_code,source_type,source_id,source_version,expected_profile_row_version,target_compliance_status,policy_version,reviewed_at FROM public.approval_decision_requests WHERE profile_id='00000000-0000-4000-8000-000000003102';
   EXCEPTION WHEN unique_violation THEN v_actual:='idempotency_key_reuse_blocked'; END;
   PERFORM pg_temp.record_m030('conflicting_idempotency_reuse_blocked','idempotency_key_reuse_blocked',v_actual);
 END $$;
-DO $$ DECLARE v_actual text := 'corrupt_ownership_allowed'; BEGIN
-  BEGIN INSERT INTO public.merchant_canonical_workspaces(merchant_id,workspace_id,link_version,reconcile_idempotency_key,created_by) VALUES ('00000000-0000-4000-8000-000000003011','00000000-0000-4000-8000-000000003023',1,'m030-corrupt','00000000-0000-4000-8000-000000003001');
-  EXCEPTION WHEN foreign_key_violation THEN v_actual:='corrupt_ownership_blocked'; END;
-  PERFORM pg_temp.record_m030('cross_merchant_ownership_blocked','corrupt_ownership_blocked',v_actual);
-END $$;
 
--- A request tied to the wrong otherwise-valid workspace must not become ready.
+-- The separate workspace already belongs to another seeded merchant, while the
+-- M029 canonical-link authority remains valid and unchanged.
 INSERT INTO public.approval_decision_requests(reviewer_id,merchant_id,workspace_id,profile_id,plan_code,source_type,source_id,source_version,expected_profile_row_version,target_compliance_status,policy_version,reviewed_at)
 SELECT reviewer_id,merchant_id,'00000000-0000-4000-8000-000000003023',profile_id,plan_code,source_type,source_id,source_version,expected_profile_row_version,target_compliance_status,policy_version,reviewed_at FROM public.approval_decision_requests WHERE profile_id='00000000-0000-4000-8000-000000003102';
 SET LOCAL ROLE service_role;
-SELECT pg_temp.capture_snapshot('request_workspace_mismatch_blocked','canonical_snapshot_v2_workspace_linkage_conflict',(SELECT id FROM public.approval_decision_requests WHERE profile_id='00000000-0000-4000-8000-000000003102' AND workspace_id='00000000-0000-4000-8000-000000003023'));
+SELECT pg_temp.capture_snapshot('cross_merchant_request_link_mismatch_blocked','canonical_snapshot_v2_workspace_linkage_conflict',(SELECT id FROM public.approval_decision_requests WHERE profile_id='00000000-0000-4000-8000-000000003102' AND workspace_id='00000000-0000-4000-8000-000000003023'));
 DO $$ DECLARE v_actual text; BEGIN
   SELECT CASE WHEN has_table_privilege(current_user,'public.merchant_compliance_profiles','SELECT') AND has_table_privilege(current_user,'public.approval_decision_requests','INSERT') AND NOT has_table_privilege(current_user,'public.merchant_compliance_profiles','UPDATE') AND NOT has_table_privilege(current_user,'public.merchant_canonical_workspaces','UPDATE') THEN 'minimum_reads_inserts_only' ELSE 'grant_boundary_invalid' END INTO v_actual;
   PERFORM pg_temp.record_m030('service_role_minimum_reads_inserts_only','minimum_reads_inserts_only',v_actual);

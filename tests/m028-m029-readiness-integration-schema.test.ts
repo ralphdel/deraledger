@@ -167,7 +167,7 @@ for (const requiredScenario of [
   'business_issue_created', 'solo_plus_issue_created', 'matching_retry_replay',
   'matching_snapshot_ready', 'stale_profile_version_blocked', 'stale_source_version_blocked',
   'incompatible_plan_status_blocked', 'conflicting_idempotency_reuse_blocked',
-  'request_workspace_mismatch_blocked', 'cross_merchant_ownership_blocked',
+  'cross_merchant_request_link_mismatch_blocked',
   'anon_execute_denied', 'authenticated_execute_denied', 'anon_table_denied',
   'authenticated_table_denied', 'service_role_minimum_reads_inserts_only',
   'failed_issue_has_no_partial_request', 'm028_v1_still_fail_closed', 'no_m026_profile_event_mutation',
@@ -195,6 +195,8 @@ for (const forbiddenTable of [
   assert.match(rehearsalScript, new RegExp(`snapshot_forbidden_business_table\\('[^']+','${forbiddenTable}'\\)`));
 }
 assert.match(rehearsalScript, /FORBIDDEN_TABLE_BASELINE\|/);
+assert.doesNotMatch(rehearsalScript, /INSERT INTO public\.merchant_canonical_workspaces/);
+assert.doesNotMatch(rehearsalScript, /corrupt_ownership|cross_merchant_ownership_blocked/);
 
 for (const file of sourceFiles("src")) {
   assert.doesNotMatch(

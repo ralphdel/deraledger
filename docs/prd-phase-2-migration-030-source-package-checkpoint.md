@@ -71,6 +71,9 @@ The matching local-only harness also snapshots known optional subscription,
 provider/settlement, checkout, and storefront relations using `to_regclass`
 before behavior execution. Absent historical relations are recorded safely;
 present relations must have unchanged row counts after the behavior matrix.
+Cross-merchant readiness behavior uses a valid request/workspace mismatch and
+does not inject an M029-invalid canonical-link row; M029 ownership integrity
+remains proven by its catalog and constraint checks.
 
 ## Next gate
 

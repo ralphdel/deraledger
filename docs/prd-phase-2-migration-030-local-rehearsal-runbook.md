@@ -43,8 +43,10 @@ emit a final control line only after every required gate passes.
   are returned as a replay;
 - snapshot of the matching request/link: returns ready without trusting a UI
   workspace value;
-- changed canonical workspace, broken ownership join, or contradictory link:
-  returns a safe conflict/blocked result with no partial context;
+- a request tied to a valid workspace belonging to a different merchant than
+  its current canonical link: returns a safe conflict/blocked result with no
+  partial context. The harness does not manufacture invalid M029 link rows;
+  ownership integrity remains a catalog/constraint verification;
 - stale profile or source version and cross-plan/incompatible status: blocked
   without a new request;
 - changed reviewer, source/version, target, policy, reason, or workspace under
