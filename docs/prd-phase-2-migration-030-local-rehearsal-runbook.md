@@ -79,18 +79,23 @@ collection unlock, or provider/payment testing.
 
 ## Harness invocation after separate approval
 
-The harness accepts only a PostgreSQL keyword connection string with
-`host=localhost` or `host=127.0.0.1`, `port=55432`, and a database name matching
-`deraledger_m030_disposable_*`. It uses a confirmation phrase and runs every
-psql file stage through `Start-Process` with discrete `-h`, `-p`, `-U`, `-d`,
-and `-f` arguments, so a Windows psql path or keyword connection string cannot
-be split by shell quoting. It captures stdout/stderr in local evidence files,
-uses `ON_ERROR_STOP=1`, and emits the control line only after every gate and
+The harness accepts discrete local inputs instead of a connection string:
+`LocalHost` defaults to `127.0.0.1`, `LocalPort` defaults to `55432`, and
+`LocalUser` defaults to `postgres`; `LocalDatabase` is required and must match
+`deraledger_m030_disposable_*`. After the local-only target and confirmation
+checks pass, it prompts only for the local PostgreSQL password through
+`Read-Host -AsSecureString`, sets `PGPASSWORD` only for the child psql process
+environment, and restores it during cleanup without printing it.
+
+Every psql file stage uses `Start-Process` with discrete `-h`, `-p`, `-U`,
+`-d`, and `-f` arguments, so a Windows psql path cannot be split by shell
+quoting. The harness captures stdout/stderr in local evidence files, uses
+`ON_ERROR_STOP=1`, and emits the control line only after every gate and
 behavior scenario passes.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/rehearse-m028-m029-readiness-integration-local.ps1 `
-  -LocalConnectionString 'host=127.0.0.1 port=55432 dbname=deraledger_m030_disposable_example user=postgres' `
+  -LocalDatabase 'deraledger_m030_disposable_example' `
   -Confirmation 'REHEARSE MIGRATION 030 LOCAL DISPOSABLE DB ONLY' `
   -Execute `
   -PsqlPath 'C:\Program Files\PostgreSQL\15\bin\psql.exe'

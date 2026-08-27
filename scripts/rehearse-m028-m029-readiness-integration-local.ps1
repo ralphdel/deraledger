@@ -1,6 +1,9 @@
 [CmdletBinding()]
 param(
-  [Parameter(Mandatory = $true)][string]$LocalConnectionString,
+  [string]$LocalHost = '127.0.0.1',
+  [int]$LocalPort = 55432,
+  [string]$LocalUser = 'postgres',
+  [Parameter(Mandatory = $true)][string]$LocalDatabase,
   [Parameter(Mandatory = $true)][string]$Confirmation,
   [switch]$Execute,
   [string]$PsqlPath = 'psql'
@@ -27,41 +30,19 @@ $Postflight029 = Join-Path $ProjectRoot 'supabase/staging/postflight/029_canonic
 $Preflight030 = Join-Path $ProjectRoot 'supabase/staging/preflight/030_m028_m029_readiness_integration_snapshot.sql'
 $Postflight030 = Join-Path $ProjectRoot 'supabase/staging/postflight/030_m028_m029_readiness_integration_verify.sql'
 
-function Get-LocalPgKeywordConnectionValue {
-  param([Parameter(Mandatory = $true)][string]$ConnectionString, [Parameter(Mandatory = $true)][string]$Name)
-  $pattern = '(?i)(?:^|\s)' + [regex]::Escape($Name) + '\s*=\s*(?:"(?<double>[^"]*)"|''(?<single>[^'']*)''|(?<bare>[^\s;]+))'
-  $matches = [regex]::Matches($ConnectionString, $pattern)
-  if ($matches.Count -eq 0) { return $null }
-  if ($matches.Count -ne 1) { throw "LOCAL_M030_REHEARSAL_CONNECTION_VALUE_AMBIGUOUS: $Name" }
-  foreach ($groupName in @('double', 'single', 'bare')) {
-    if ($matches[0].Groups[$groupName].Success) { return $matches[0].Groups[$groupName].Value.Trim() }
-  }
-  throw "LOCAL_M030_REHEARSAL_CONNECTION_VALUE_INVALID: $Name"
-}
-
-function Get-LocalPgConnectionParts {
-  param([Parameter(Mandatory = $true)][string]$ConnectionString)
-  if ($ConnectionString -match '^(?i:postgres(?:ql)?://)') { throw 'LOCAL_M030_REHEARSAL_KEYWORD_CONNECTION_STRING_REQUIRED' }
-  $hostName = Get-LocalPgKeywordConnectionValue $ConnectionString 'host'
-  $port = Get-LocalPgKeywordConnectionValue $ConnectionString 'port'
-  $databaseName = Get-LocalPgKeywordConnectionValue $ConnectionString 'dbname'
-  $userName = Get-LocalPgKeywordConnectionValue $ConnectionString 'user'
-  if ([string]::IsNullOrWhiteSpace($hostName)) { throw 'LOCAL_M030_REHEARSAL_HOST_MISSING' }
-  if ([string]::IsNullOrWhiteSpace($port)) { throw 'LOCAL_M030_REHEARSAL_PORT_REQUIRED' }
-  if ([string]::IsNullOrWhiteSpace($databaseName)) { throw 'LOCAL_M030_REHEARSAL_DATABASE_NAME_REQUIRED' }
-  if ([string]::IsNullOrWhiteSpace($userName)) { throw 'LOCAL_M030_REHEARSAL_USER_REQUIRED' }
-  @{ Host = $hostName.ToLowerInvariant(); Port = $port; Database = $databaseName; User = $userName }
-}
-
-function Assert-LocalDisposableConnectionString {
-  param([Parameter(Mandatory = $true)][string]$ConnectionString)
-  if ([string]::IsNullOrWhiteSpace($ConnectionString)) { throw 'LOCAL_M030_REHEARSAL_CONNECTION_STRING_REQUIRED' }
-  if ($ConnectionString -match '(?i)(supabase\.(?:co|com)|vercel|production|staging|service_role|anon|eyJ|password\s*=|://[^/\s]*:|[&|<>()^"%])') {
-    throw 'LOCAL_M030_REHEARSAL_CONNECTION_STRING_REJECTED'
-  }
-  $target = Get-LocalPgConnectionParts $ConnectionString
+function Assert-LocalDisposableTarget {
+  param(
+    [Parameter(Mandatory = $true)][string]$HostName,
+    [Parameter(Mandatory = $true)][int]$Port,
+    [Parameter(Mandatory = $true)][string]$DatabaseName,
+    [Parameter(Mandatory = $true)][string]$UserName
+  )
+  if ([string]::IsNullOrWhiteSpace($HostName)) { throw 'LOCAL_M030_REHEARSAL_HOST_MISSING' }
+  if ([string]::IsNullOrWhiteSpace($DatabaseName)) { throw 'LOCAL_M030_REHEARSAL_DATABASE_NAME_REQUIRED' }
+  if ([string]::IsNullOrWhiteSpace($UserName)) { throw 'LOCAL_M030_REHEARSAL_USER_REQUIRED' }
+  $target = @{ Host = $HostName.Trim().ToLowerInvariant(); Port = $Port; Database = $DatabaseName.Trim(); User = $UserName.Trim() }
   if ($target.Host -notin @('localhost', '127.0.0.1')) { throw 'LOCAL_M030_REHEARSAL_NONLOCAL_HOST_REJECTED' }
-  if ($target.Port -notmatch '^\d+$' -or [int]$target.Port -ne 55432) { throw 'LOCAL_M030_REHEARSAL_LOCAL_PORT_REQUIRED' }
+  if ($target.Port -ne 55432) { throw 'LOCAL_M030_REHEARSAL_LOCAL_PORT_REQUIRED' }
   if ($target.Database -notmatch '^deraledger_m030_disposable_[a-z0-9_]+$') { throw 'LOCAL_M030_REHEARSAL_DISPOSABLE_DATABASE_NAME_REQUIRED' }
   if ($target.User -notmatch '^[A-Za-z_][A-Za-z0-9_$-]*$') { throw 'LOCAL_M030_REHEARSAL_USER_INVALID' }
   return $target
@@ -73,7 +54,7 @@ function Write-LocalSqlFileNoBom {
 }
 
 if ($Confirmation.Trim() -cne $ConfirmationPhrase) { throw 'LOCAL_M030_REHEARSAL_CONFIRMATION_REQUIRED' }
-$Target = Assert-LocalDisposableConnectionString $LocalConnectionString.Trim()
+$Target = Assert-LocalDisposableTarget -HostName $LocalHost -Port $LocalPort -DatabaseName $LocalDatabase -UserName $LocalUser
 Write-Host "LOCAL-ONLY DISPOSABLE TARGET: $($Target.Host):$($Target.Port)/$($Target.Database)"
 Write-Host 'FORBIDDEN: staging, production, Supabase projects, runtime adoption, approval execution against real data, activation, collection unlock, and payment/provider testing.'
 if (-not $Execute) {
@@ -97,9 +78,18 @@ New-Item -ItemType Directory -Path $EvidenceDirectory -Force | Out-Null
 $BaselineSql = Join-Path $TempDirectory '024-029-workspace-prerequisites.sql'
 $BehaviorSql = Join-Path $TempDirectory '030-readiness-behavior.sql'
 $OriginalPGOPTIONS = $env:PGOPTIONS
-$env:PGOPTIONS = '-c client_min_messages=warning'
-
+$OriginalPGPASSWORD = $env:PGPASSWORD
 try {
+  $LocalPasswordSecure = Read-Host "Enter LOCAL PostgreSQL password for $($Target.User)@$($Target.Host)" -AsSecureString
+  if ($LocalPasswordSecure.Length -eq 0) { throw 'LOCAL_M030_REHEARSAL_PASSWORD_REQUIRED' }
+  $LocalPasswordBstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($LocalPasswordSecure)
+  try {
+    $env:PGPASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($LocalPasswordBstr)
+  } finally {
+    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($LocalPasswordBstr)
+  }
+  $env:PGOPTIONS = '-c client_min_messages=warning'
+
   # Owner-only fixture schema. It establishes the historic local workspace
   # contract needed by M029; this is never a staging/production repair path.
   Write-LocalSqlFileNoBom $BaselineSql @'
@@ -392,5 +382,6 @@ SELECT 'CONTROL|LOCAL_M028_M029_READINESS_INTEGRATION_REHEARSAL=PASS';
   Write-Host "LOCAL EVIDENCE DIRECTORY: $EvidenceDirectory"
 } finally {
   if ($null -eq $OriginalPGOPTIONS) { Remove-Item -Path Env:PGOPTIONS -ErrorAction SilentlyContinue } else { $env:PGOPTIONS = $OriginalPGOPTIONS }
+  if ($null -eq $OriginalPGPASSWORD) { Remove-Item -Path Env:PGPASSWORD -ErrorAction SilentlyContinue } else { $env:PGPASSWORD = $OriginalPGPASSWORD }
   if (Test-Path -LiteralPath $TempDirectory) { Remove-Item -LiteralPath $TempDirectory -Recurse -Force }
 }
