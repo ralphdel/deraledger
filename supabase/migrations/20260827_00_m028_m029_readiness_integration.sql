@@ -13,6 +13,13 @@ DECLARE
   v_reconcile_oid oid := to_regprocedure('public.reconcile_canonical_merchant_workspace_link_v1(uuid,uuid,text)');
   v_issue_v2_oid oid := to_regprocedure('public.issue_canonical_approval_decision_request_v2(uuid,uuid,text,text,text)');
   v_snapshot_v2_oid oid := to_regprocedure('public.read_canonical_approval_snapshot_v2(uuid)');
+  v_workspaces_oid regclass := to_regclass('public.workspaces');
+  v_canonical_link_oid regclass := to_regclass('public.merchant_canonical_workspaces');
+  v_workspace_id_attnum smallint;
+  v_workspace_merchant_id_attnum smallint;
+  v_link_merchant_id_attnum smallint;
+  v_link_workspace_id_attnum smallint;
+  v_m029_authority_valid boolean := false;
   v_rpc_oid oid;
   v_table_oid oid;
   v_required_table text;
@@ -132,10 +139,90 @@ BEGIN
     RAISE EXCEPTION 'Migration 030 prerequisite failed: service_role lacks a required v2 prerequisite read or request insert grant';
   END IF;
 
+  SELECT a.attnum INTO v_workspace_id_attnum
+  FROM pg_attribute a
+  WHERE a.attrelid = v_workspaces_oid AND a.attname = 'id' AND a.attnum > 0 AND NOT a.attisdropped;
+  SELECT a.attnum INTO v_workspace_merchant_id_attnum
+  FROM pg_attribute a
+  WHERE a.attrelid = v_workspaces_oid AND a.attname = 'merchant_id' AND a.attnum > 0 AND NOT a.attisdropped;
+  SELECT a.attnum INTO v_link_merchant_id_attnum
+  FROM pg_attribute a
+  WHERE a.attrelid = v_canonical_link_oid AND a.attname = 'merchant_id' AND a.attnum > 0 AND NOT a.attisdropped;
+  SELECT a.attnum INTO v_link_workspace_id_attnum
+  FROM pg_attribute a
+  WHERE a.attrelid = v_canonical_link_oid AND a.attname = 'workspace_id' AND a.attnum > 0 AND NOT a.attisdropped;
+
+  SELECT COALESCE(
+    EXISTS (
+      SELECT 1
+      FROM pg_index index_state
+      WHERE index_state.indexrelid = to_regclass('public.merchant_canonical_workspace_supporting_owner_key')
+        AND index_state.indrelid = v_workspaces_oid
+        AND index_state.indisunique
+        AND index_state.indisvalid
+        AND index_state.indisready
+        AND index_state.indpred IS NULL
+        AND index_state.indnkeyatts = 2
+        AND index_state.indnatts = 2
+        AND ARRAY(
+          SELECT key_state.attnum
+          FROM unnest(index_state.indkey::smallint[]) WITH ORDINALITY AS key_state(attnum, ordinal_position)
+          ORDER BY key_state.ordinal_position
+        ) = ARRAY[v_workspace_id_attnum, v_workspace_merchant_id_attnum]::smallint[]
+    )
+    AND EXISTS (
+      SELECT 1
+      FROM pg_constraint constraint_state
+      WHERE constraint_state.conrelid = v_canonical_link_oid
+        AND constraint_state.conname = 'merchant_canonical_workspaces_pkey'
+        AND constraint_state.contype = 'p'::"char"
+        AND constraint_state.convalidated
+        AND ARRAY(
+          SELECT key_state.attnum
+          FROM unnest(constraint_state.conkey) WITH ORDINALITY AS key_state(attnum, ordinal_position)
+          ORDER BY key_state.ordinal_position
+        ) = ARRAY[v_link_merchant_id_attnum]::smallint[]
+    )
+    AND EXISTS (
+      SELECT 1
+      FROM pg_constraint constraint_state
+      WHERE constraint_state.conrelid = v_canonical_link_oid
+        AND constraint_state.conname = 'merchant_canonical_workspaces_workspace_key'
+        AND constraint_state.contype = 'u'::"char"
+        AND constraint_state.convalidated
+        AND ARRAY(
+          SELECT key_state.attnum
+          FROM unnest(constraint_state.conkey) WITH ORDINALITY AS key_state(attnum, ordinal_position)
+          ORDER BY key_state.ordinal_position
+        ) = ARRAY[v_link_workspace_id_attnum]::smallint[]
+    )
+    AND EXISTS (
+      SELECT 1
+      FROM pg_constraint constraint_state
+      WHERE constraint_state.conrelid = v_canonical_link_oid
+        AND constraint_state.conname = 'merchant_canonical_workspaces_workspace_owner_fkey'
+        AND constraint_state.contype = 'f'::"char"
+        AND constraint_state.convalidated
+        AND constraint_state.confrelid = v_workspaces_oid
+        AND constraint_state.confupdtype = 'a'::"char"
+        AND constraint_state.confdeltype = 'r'::"char"
+        AND constraint_state.confmatchtype = 's'::"char"
+        AND ARRAY(
+          SELECT key_state.attnum
+          FROM unnest(constraint_state.conkey) WITH ORDINALITY AS key_state(attnum, ordinal_position)
+          ORDER BY key_state.ordinal_position
+        ) = ARRAY[v_link_workspace_id_attnum, v_link_merchant_id_attnum]::smallint[]
+        AND ARRAY(
+          SELECT key_state.attnum
+          FROM unnest(constraint_state.confkey) WITH ORDINALITY AS key_state(attnum, ordinal_position)
+          ORDER BY key_state.ordinal_position
+        ) = ARRAY[v_workspace_id_attnum, v_workspace_merchant_id_attnum]::smallint[]
+    ),
+    false
+  ) INTO v_m029_authority_valid;
+
   IF NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid=to_regclass('public.approval_decision_requests') AND c.conname='approval_decision_requests_fingerprint_unique' AND c.contype='u'::"char" AND c.convalidated)
-    OR NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid=to_regclass('public.merchant_canonical_workspaces') AND c.conname='merchant_canonical_workspaces_pkey' AND c.contype='p'::"char" AND c.convalidated)
-    OR NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid=to_regclass('public.merchant_canonical_workspaces') AND c.conname='merchant_canonical_workspaces_workspace_owner_fkey' AND c.contype='f'::"char" AND c.convalidated)
-    OR to_regclass('public.merchant_canonical_workspace_supporting_owner_key') IS NULL THEN
+    OR NOT v_m029_authority_valid THEN
     RAISE EXCEPTION 'Migration 030 prerequisite failed: M028 request or M029 ownership authority is incompatible';
   END IF;
 

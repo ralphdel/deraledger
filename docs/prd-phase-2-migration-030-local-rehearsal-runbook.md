@@ -20,7 +20,11 @@ emit a final control line only after every required gate passes.
 1. Start from a fresh disposable baseline containing the proven M024--M029
    prerequisites, including the historical workspace contract needed by M029.
 2. Verify M026 and M027 approval RPC security, M028 v1 fail-closed posture,
-   and M029 canonical-link authority before M030 preflight.
+   and M029 canonical-link authority before M030 preflight. The M029 gate must
+   prove the exact non-partial unique `workspaces (id, merchant_id)` supporting
+   index and the canonical-link primary key, unique workspace key, and
+   composite ownership-FK columns, target columns, and actions; matching names
+   alone are not sufficient.
 3. Run M030 preflight and stop on any FAIL or SQL execution error.
 4. Apply M030 once, rerun it to prove idempotency, then run M030 postflight.
 5. Seed only disposable fixtures after installation/security checks. Reconcile

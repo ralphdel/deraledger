@@ -55,11 +55,17 @@ or set `activation_status='active'`.
 
 Preflight rejects missing or unsafe M026/M028/M029 prerequisites, role grants,
 RLS/policy drift, browser access, ownership constraints, and conflicting v2
-overloads with compact FAIL rows rather than unsafe catalog failures.
+overloads with compact FAIL rows rather than unsafe catalog failures. The M029
+ownership manifest is structural: it verifies the named support index is a
+non-partial unique `public.workspaces (id, merchant_id)` index using ordered
+`pg_index.indkey` expansion, and verifies the canonical link merchant primary
+key, unique workspace key, and composite ownership FK columns, target columns,
+and `NO ACTION`/`RESTRICT` actions.
 
-Postflight verifies exact v2 signatures, M028 v1 preservation, M029 authority,
-security/grants, no diagnostics, safe result-code vocabulary, forbidden-write
-absence, and zero new M028 request/M029 link rows from installation.
+Postflight verifies exact v2 signatures, M028 v1 preservation, the same exact
+M029 authority structure, security/grants, no diagnostics, safe result-code
+vocabulary, forbidden-write absence, and zero new M028 request/M029 link rows
+from installation.
 
 ## Next gate
 

@@ -50,6 +50,66 @@ WITH role_facts AS (
     CASE WHEN table_fact.oid IS NULL OR roles.anon_oid IS NULL THEN false ELSE has_table_privilege(roles.anon_oid, table_fact.oid, 'SELECT') OR has_table_privilege(roles.anon_oid, table_fact.oid, 'INSERT') OR has_table_privilege(roles.anon_oid, table_fact.oid, 'UPDATE') OR has_table_privilege(roles.anon_oid, table_fact.oid, 'DELETE') END AS anon_privilege_exists,
     CASE WHEN table_fact.oid IS NULL OR roles.authenticated_oid IS NULL THEN false ELSE has_table_privilege(roles.authenticated_oid, table_fact.oid, 'SELECT') OR has_table_privilege(roles.authenticated_oid, table_fact.oid, 'INSERT') OR has_table_privilege(roles.authenticated_oid, table_fact.oid, 'UPDATE') OR has_table_privilege(roles.authenticated_oid, table_fact.oid, 'DELETE') END AS authenticated_privilege_exists
   FROM table_facts table_fact CROSS JOIN role_facts roles
+), m029_authority AS (
+  SELECT COALESCE(
+    EXISTS (
+      SELECT 1
+      FROM pg_index index_state
+      WHERE index_state.indexrelid = to_regclass('public.merchant_canonical_workspace_supporting_owner_key')
+        AND index_state.indrelid = to_regclass('public.workspaces')
+        AND index_state.indisunique
+        AND index_state.indisvalid
+        AND index_state.indisready
+        AND index_state.indpred IS NULL
+        AND index_state.indnkeyatts = 2
+        AND index_state.indnatts = 2
+        AND ARRAY(
+          SELECT key_state.attnum
+          FROM unnest(index_state.indkey::smallint[]) WITH ORDINALITY AS key_state(attnum, ordinal_position)
+          ORDER BY key_state.ordinal_position
+        ) = ARRAY[
+          (SELECT a.attnum FROM pg_attribute a WHERE a.attrelid = to_regclass('public.workspaces') AND a.attname = 'id' AND a.attnum > 0 AND NOT a.attisdropped),
+          (SELECT a.attnum FROM pg_attribute a WHERE a.attrelid = to_regclass('public.workspaces') AND a.attname = 'merchant_id' AND a.attnum > 0 AND NOT a.attisdropped)
+        ]::smallint[]
+    )
+    AND EXISTS (
+      SELECT 1 FROM pg_constraint constraint_state
+      WHERE constraint_state.conrelid = to_regclass('public.merchant_canonical_workspaces')
+        AND constraint_state.conname = 'merchant_canonical_workspaces_pkey'
+        AND constraint_state.contype = 'p'::"char" AND constraint_state.convalidated
+        AND ARRAY(SELECT key_state.attnum FROM unnest(constraint_state.conkey) WITH ORDINALITY AS key_state(attnum, ordinal_position) ORDER BY key_state.ordinal_position)
+          = ARRAY[(SELECT a.attnum FROM pg_attribute a WHERE a.attrelid = to_regclass('public.merchant_canonical_workspaces') AND a.attname = 'merchant_id' AND a.attnum > 0 AND NOT a.attisdropped)]::smallint[]
+    )
+    AND EXISTS (
+      SELECT 1 FROM pg_constraint constraint_state
+      WHERE constraint_state.conrelid = to_regclass('public.merchant_canonical_workspaces')
+        AND constraint_state.conname = 'merchant_canonical_workspaces_workspace_key'
+        AND constraint_state.contype = 'u'::"char" AND constraint_state.convalidated
+        AND ARRAY(SELECT key_state.attnum FROM unnest(constraint_state.conkey) WITH ORDINALITY AS key_state(attnum, ordinal_position) ORDER BY key_state.ordinal_position)
+          = ARRAY[(SELECT a.attnum FROM pg_attribute a WHERE a.attrelid = to_regclass('public.merchant_canonical_workspaces') AND a.attname = 'workspace_id' AND a.attnum > 0 AND NOT a.attisdropped)]::smallint[]
+    )
+    AND EXISTS (
+      SELECT 1 FROM pg_constraint constraint_state
+      WHERE constraint_state.conrelid = to_regclass('public.merchant_canonical_workspaces')
+        AND constraint_state.conname = 'merchant_canonical_workspaces_workspace_owner_fkey'
+        AND constraint_state.contype = 'f'::"char" AND constraint_state.convalidated
+        AND constraint_state.confrelid = to_regclass('public.workspaces')
+        AND constraint_state.confupdtype = 'a'::"char"
+        AND constraint_state.confdeltype = 'r'::"char"
+        AND constraint_state.confmatchtype = 's'::"char"
+        AND ARRAY(SELECT key_state.attnum FROM unnest(constraint_state.conkey) WITH ORDINALITY AS key_state(attnum, ordinal_position) ORDER BY key_state.ordinal_position)
+          = ARRAY[
+            (SELECT a.attnum FROM pg_attribute a WHERE a.attrelid = to_regclass('public.merchant_canonical_workspaces') AND a.attname = 'workspace_id' AND a.attnum > 0 AND NOT a.attisdropped),
+            (SELECT a.attnum FROM pg_attribute a WHERE a.attrelid = to_regclass('public.merchant_canonical_workspaces') AND a.attname = 'merchant_id' AND a.attnum > 0 AND NOT a.attisdropped)
+          ]::smallint[]
+        AND ARRAY(SELECT key_state.attnum FROM unnest(constraint_state.confkey) WITH ORDINALITY AS key_state(attnum, ordinal_position) ORDER BY key_state.ordinal_position)
+          = ARRAY[
+            (SELECT a.attnum FROM pg_attribute a WHERE a.attrelid = to_regclass('public.workspaces') AND a.attname = 'id' AND a.attnum > 0 AND NOT a.attisdropped),
+            (SELECT a.attnum FROM pg_attribute a WHERE a.attrelid = to_regclass('public.workspaces') AND a.attname = 'merchant_id' AND a.attnum > 0 AND NOT a.attisdropped)
+          ]::smallint[]
+    ),
+    false
+  ) AS valid
 ), checks AS (
   SELECT 'prerequisite.roles'::text AS check_name,
     CASE WHEN (SELECT service_role_oid IS NOT NULL AND anon_oid IS NOT NULL AND authenticated_oid IS NOT NULL FROM role_facts) THEN 'PASS' ELSE 'FAIL' END AS status,
@@ -110,11 +170,9 @@ WITH role_facts AS (
   UNION ALL
   SELECT 'prerequisite.m028_m029_constraints',
     CASE WHEN EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid = to_regclass('public.approval_decision_requests') AND c.conname = 'approval_decision_requests_fingerprint_unique' AND c.contype = 'u'::"char" AND c.convalidated)
-      AND EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid = to_regclass('public.merchant_canonical_workspaces') AND c.conname = 'merchant_canonical_workspaces_pkey' AND c.contype = 'p'::"char" AND c.convalidated)
-      AND EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid = to_regclass('public.merchant_canonical_workspaces') AND c.conname = 'merchant_canonical_workspaces_workspace_owner_fkey' AND c.contype = 'f'::"char" AND c.convalidated)
-      AND to_regclass('public.merchant_canonical_workspace_supporting_owner_key') IS NOT NULL
+      AND (SELECT valid FROM m029_authority)
     THEN 'PASS' ELSE 'FAIL' END,
-    'M028 request fingerprint and M029 canonical composite ownership proof are intact'
+    'M028 fingerprint plus exact M029 key, unique workspace, composite ownership FK, and supporting index facts are intact'
   UNION ALL
   SELECT 'migration_030.v2_objects_absent',
     CASE WHEN NOT EXISTS (

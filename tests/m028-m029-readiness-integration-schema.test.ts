@@ -84,6 +84,32 @@ assert.match(migration, /has_table_privilege\(v_service_role_oid, to_regclass\('
 assert.match(migration, /has_table_privilege\(v_service_role_oid, to_regclass\('public\.merchant_canonical_workspaces'\), 'SELECT'\)/);
 assert.match(migration, /has_table_privilege\(v_service_role_oid, to_regclass\('auth\.users'\), 'SELECT'\)/);
 
+for (const [label, source] of [[migrationPath, migration], [preflightPath, preflight], [postflightPath, postflight]] as const) {
+  assert.doesNotMatch(
+    source,
+    /to_regclass\('public\.merchant_canonical_workspace_supporting_owner_key'\)\s+IS\s+NOT\s+NULL/,
+    `${label} must not accept the M029 ownership index by name alone`,
+  );
+  assert.match(source, /merchant_canonical_workspace_supporting_owner_key/);
+  assert.match(source, /index_state\.indrelid\s*=\s*(?:v_workspaces_oid|to_regclass\('public\.workspaces'\))/);
+  assert.match(source, /index_state\.indisunique/);
+  assert.match(source, /index_state\.indisvalid/);
+  assert.match(source, /index_state\.indisready/);
+  assert.match(source, /index_state\.indpred IS NULL/);
+  assert.match(source, /index_state\.indnkeyatts\s*=\s*2/);
+  assert.match(source, /index_state\.indnatts\s*=\s*2/);
+  assert.match(source, /unnest\(index_state\.indkey::smallint\[\]\) WITH ORDINALITY/);
+  assert.doesNotMatch(source, /index_state\.indkey\s*=/, `${label} must normalize pg_index.indkey before comparison`);
+  assert.match(source, /merchant_canonical_workspaces_pkey/);
+  assert.match(source, /merchant_canonical_workspaces_workspace_key/);
+  assert.match(source, /merchant_canonical_workspaces_workspace_owner_fkey/);
+  assert.match(source, /unnest\(constraint_state\.conkey\) WITH ORDINALITY/);
+  assert.match(source, /unnest\(constraint_state\.confkey\) WITH ORDINALITY/);
+  assert.match(source, /constraint_state\.confupdtype\s*=\s*'a'::"char"/);
+  assert.match(source, /constraint_state\.confdeltype\s*=\s*'r'::"char"/);
+  assert.match(source, /constraint_state\.confmatchtype\s*=\s*'s'::"char"/);
+}
+
 assert.match(preflight, /to_regclass\(format\('public\.%I', expected\.table_name\)\)/);
 assert.match(preflight, /to_regprocedure\(expected\.signature\)/);
 assert.match(preflight, /aclexplode\(COALESCE\(p\.proacl, acldefault\('f', p\.proowner\)\)\)/);
@@ -93,6 +119,7 @@ assert.match(preflight, /prerequisite\.m028_v1_fail_closed/);
 assert.match(preflight, /prerequisite\.m028_m029_rls_browser_security/);
 assert.match(preflight, /prerequisite\.service_role_read_contract/);
 assert.match(preflight, /prerequisite\.m028_m029_constraints/);
+assert.match(preflight, /m029_authority AS \(/);
 assert.match(preflight, /migration_030\.v2_objects_absent/);
 assert.match(preflight, /output_rows AS \([\s\S]*FROM output_rows[\s\S]*ORDER BY CASE WHEN check_name = 'summary'/);
 assert.doesNotMatch(preflight, /^\s*(?:INSERT INTO|UPDATE public\.|DELETE FROM|TRUNCATE)/im);
@@ -106,6 +133,7 @@ assert.match(postflight, /canonical_snapshot_workspace_linkage_unavailable/);
 assert.match(postflight, /canonical_request_v2_workspace_linkage_unavailable/);
 assert.match(postflight, /canonical_snapshot_v2_workspace_linkage_unavailable/);
 assert.match(postflight, /output_rows AS \([\s\S]*FROM output_rows[\s\S]*ORDER BY CASE WHEN check_name='summary'/);
+assert.match(postflight, /m029_authority AS \(/);
 assert.doesNotMatch(postflight, /^\s*(?:INSERT INTO|UPDATE public\.|DELETE FROM|TRUNCATE)/im);
 
 for (const file of sourceFiles("src")) {

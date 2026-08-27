@@ -57,6 +57,66 @@ WITH role_facts AS (
     END AS row_count
   FROM table_facts table_fact
   WHERE table_fact.table_name IN ('approval_decision_requests', 'merchant_canonical_workspaces')
+), m029_authority AS (
+  SELECT COALESCE(
+    EXISTS (
+      SELECT 1
+      FROM pg_index index_state
+      WHERE index_state.indexrelid = to_regclass('public.merchant_canonical_workspace_supporting_owner_key')
+        AND index_state.indrelid = to_regclass('public.workspaces')
+        AND index_state.indisunique
+        AND index_state.indisvalid
+        AND index_state.indisready
+        AND index_state.indpred IS NULL
+        AND index_state.indnkeyatts = 2
+        AND index_state.indnatts = 2
+        AND ARRAY(
+          SELECT key_state.attnum
+          FROM unnest(index_state.indkey::smallint[]) WITH ORDINALITY AS key_state(attnum, ordinal_position)
+          ORDER BY key_state.ordinal_position
+        ) = ARRAY[
+          (SELECT a.attnum FROM pg_attribute a WHERE a.attrelid = to_regclass('public.workspaces') AND a.attname = 'id' AND a.attnum > 0 AND NOT a.attisdropped),
+          (SELECT a.attnum FROM pg_attribute a WHERE a.attrelid = to_regclass('public.workspaces') AND a.attname = 'merchant_id' AND a.attnum > 0 AND NOT a.attisdropped)
+        ]::smallint[]
+    )
+    AND EXISTS (
+      SELECT 1 FROM pg_constraint constraint_state
+      WHERE constraint_state.conrelid = to_regclass('public.merchant_canonical_workspaces')
+        AND constraint_state.conname = 'merchant_canonical_workspaces_pkey'
+        AND constraint_state.contype = 'p'::"char" AND constraint_state.convalidated
+        AND ARRAY(SELECT key_state.attnum FROM unnest(constraint_state.conkey) WITH ORDINALITY AS key_state(attnum, ordinal_position) ORDER BY key_state.ordinal_position)
+          = ARRAY[(SELECT a.attnum FROM pg_attribute a WHERE a.attrelid = to_regclass('public.merchant_canonical_workspaces') AND a.attname = 'merchant_id' AND a.attnum > 0 AND NOT a.attisdropped)]::smallint[]
+    )
+    AND EXISTS (
+      SELECT 1 FROM pg_constraint constraint_state
+      WHERE constraint_state.conrelid = to_regclass('public.merchant_canonical_workspaces')
+        AND constraint_state.conname = 'merchant_canonical_workspaces_workspace_key'
+        AND constraint_state.contype = 'u'::"char" AND constraint_state.convalidated
+        AND ARRAY(SELECT key_state.attnum FROM unnest(constraint_state.conkey) WITH ORDINALITY AS key_state(attnum, ordinal_position) ORDER BY key_state.ordinal_position)
+          = ARRAY[(SELECT a.attnum FROM pg_attribute a WHERE a.attrelid = to_regclass('public.merchant_canonical_workspaces') AND a.attname = 'workspace_id' AND a.attnum > 0 AND NOT a.attisdropped)]::smallint[]
+    )
+    AND EXISTS (
+      SELECT 1 FROM pg_constraint constraint_state
+      WHERE constraint_state.conrelid = to_regclass('public.merchant_canonical_workspaces')
+        AND constraint_state.conname = 'merchant_canonical_workspaces_workspace_owner_fkey'
+        AND constraint_state.contype = 'f'::"char" AND constraint_state.convalidated
+        AND constraint_state.confrelid = to_regclass('public.workspaces')
+        AND constraint_state.confupdtype = 'a'::"char"
+        AND constraint_state.confdeltype = 'r'::"char"
+        AND constraint_state.confmatchtype = 's'::"char"
+        AND ARRAY(SELECT key_state.attnum FROM unnest(constraint_state.conkey) WITH ORDINALITY AS key_state(attnum, ordinal_position) ORDER BY key_state.ordinal_position)
+          = ARRAY[
+            (SELECT a.attnum FROM pg_attribute a WHERE a.attrelid = to_regclass('public.merchant_canonical_workspaces') AND a.attname = 'workspace_id' AND a.attnum > 0 AND NOT a.attisdropped),
+            (SELECT a.attnum FROM pg_attribute a WHERE a.attrelid = to_regclass('public.merchant_canonical_workspaces') AND a.attname = 'merchant_id' AND a.attnum > 0 AND NOT a.attisdropped)
+          ]::smallint[]
+        AND ARRAY(SELECT key_state.attnum FROM unnest(constraint_state.confkey) WITH ORDINALITY AS key_state(attnum, ordinal_position) ORDER BY key_state.ordinal_position)
+          = ARRAY[
+            (SELECT a.attnum FROM pg_attribute a WHERE a.attrelid = to_regclass('public.workspaces') AND a.attname = 'id' AND a.attnum > 0 AND NOT a.attisdropped),
+            (SELECT a.attnum FROM pg_attribute a WHERE a.attrelid = to_regclass('public.workspaces') AND a.attname = 'merchant_id' AND a.attnum > 0 AND NOT a.attisdropped)
+          ]::smallint[]
+    ),
+    false
+  ) AS valid
 ), checks AS (
   SELECT 'rpc.signatures'::text AS check_name,
     CASE WHEN (SELECT count(*) FROM function_security WHERE oid IS NOT NULL) = 6
@@ -82,11 +142,9 @@ WITH role_facts AS (
   SELECT 'm029.authority_intact',
     CASE WHEN to_regclass('public.merchant_canonical_workspaces') IS NOT NULL
       AND EXISTS (SELECT 1 FROM pg_class c WHERE c.oid=to_regclass('public.merchant_canonical_workspaces') AND c.relrowsecurity AND NOT c.relforcerowsecurity)
-      AND EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid=to_regclass('public.merchant_canonical_workspaces') AND c.conname='merchant_canonical_workspaces_pkey' AND c.contype='p'::"char" AND c.convalidated)
-      AND EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid=to_regclass('public.merchant_canonical_workspaces') AND c.conname='merchant_canonical_workspaces_workspace_owner_fkey' AND c.contype='f'::"char" AND c.convalidated)
-      AND to_regclass('public.merchant_canonical_workspace_supporting_owner_key') IS NOT NULL
+      AND (SELECT valid FROM m029_authority)
     THEN 'PASS' ELSE 'FAIL' END,
-    'M029 canonical link authority, RLS, and composite ownership proof remain intact'
+    'M029 canonical authority retains exact merchant key, workspace uniqueness, composite ownership FK actions, and support index shape'
   UNION ALL
   SELECT 'tables.browser_security',
     CASE WHEN NOT EXISTS (
