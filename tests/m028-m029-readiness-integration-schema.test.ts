@@ -5,9 +5,11 @@ import { join } from "node:path";
 const migrationPath = "supabase/migrations/20260827_00_m028_m029_readiness_integration.sql";
 const preflightPath = "supabase/staging/preflight/030_m028_m029_readiness_integration_snapshot.sql";
 const postflightPath = "supabase/staging/postflight/030_m028_m029_readiness_integration_verify.sql";
+const rehearsalScriptPath = "scripts/rehearse-m028-m029-readiness-integration-local.ps1";
 const migration = readFileSync(migrationPath, "utf8");
 const preflight = readFileSync(preflightPath, "utf8");
 const postflight = readFileSync(postflightPath, "utf8");
+const rehearsalScript = readFileSync(rehearsalScriptPath, "utf8");
 
 function sourceFiles(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -135,6 +137,37 @@ assert.match(postflight, /canonical_snapshot_v2_workspace_linkage_unavailable/);
 assert.match(postflight, /output_rows AS \([\s\S]*FROM output_rows[\s\S]*ORDER BY CASE WHEN check_name='summary'/);
 assert.match(postflight, /m029_authority AS \(/);
 assert.doesNotMatch(postflight, /^\s*(?:INSERT INTO|UPDATE public\.|DELETE FROM|TRUNCATE)/im);
+
+assert.notEqual(readFileSync(rehearsalScriptPath)[0], 0xef, `${rehearsalScriptPath} must not start with a UTF-8 BOM`);
+assert.match(rehearsalScript, /REHEARSE MIGRATION 030 LOCAL DISPOSABLE DB ONLY/);
+assert.match(rehearsalScript, /\^deraledger_m030_disposable_\[a-z0-9_\]\+\$/);
+assert.match(rehearsalScript, /\$target\.Host -notin @\('localhost', '127\.0\.0\.1'\)/);
+assert.match(rehearsalScript, /\[int\]\$target\.Port -ne 55432/);
+assert.match(rehearsalScript, /supabase\.(?:co\|com)|vercel\|production\|staging/);
+assert.match(rehearsalScript, /LOCAL_M030_REHEARSAL_CONNECTION_STRING_REJECTED/);
+assert.match(rehearsalScript, /Start-Process -FilePath \$Psql -ArgumentList @\(/);
+assert.match(rehearsalScript, /'-h',\$Target\.Host,'-p',\$Target\.Port,'-U',\$Target\.User,'-d',\$Target\.Database,'-f',\$FilePath/);
+assert.doesNotMatch(rehearsalScript, /cmd\.exe\s+\/d\s+\/c/i);
+assert.doesNotMatch(rehearsalScript, /-d\s+\$LocalConnectionString/);
+assert.match(rehearsalScript, /\$env:PGOPTIONS = '-c client_min_messages=warning'/);
+assert.match(rehearsalScript, /ON_ERROR_STOP=1/);
+assert.match(rehearsalScript, /CONTROL\|LOCAL_M028_M029_READINESS_INTEGRATION_REHEARSAL=PASS/);
+for (const requiredStage of ['030-preflight', '030-apply-first', '030-apply-rerun', '030-postflight', '030-behavior']) {
+  assert.match(rehearsalScript, new RegExp(`'${requiredStage}'`));
+}
+for (const requiredScenario of [
+  'no_canonical_link_issue_blocked', 'no_canonical_link_snapshot_blocked', 'lite_issue_created',
+  'business_issue_created', 'solo_plus_issue_created', 'matching_retry_replay',
+  'matching_snapshot_ready', 'stale_profile_version_blocked', 'stale_source_version_blocked',
+  'incompatible_plan_status_blocked', 'conflicting_idempotency_reuse_blocked',
+  'request_workspace_mismatch_blocked', 'cross_merchant_ownership_blocked',
+  'anon_execute_denied', 'authenticated_execute_denied', 'anon_table_denied',
+  'authenticated_table_denied', 'service_role_minimum_reads_inserts_only',
+  'failed_issue_has_no_partial_request', 'm028_v1_still_fail_closed', 'no_m026_profile_event_mutation',
+  'merchant_workspace_canonical_link_unchanged', 'activation_collection_payment_forbidden_writes_absent',
+]) {
+  assert.match(rehearsalScript, new RegExp(requiredScenario));
+}
 
 for (const file of sourceFiles("src")) {
   assert.doesNotMatch(

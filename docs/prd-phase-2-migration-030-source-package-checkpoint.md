@@ -69,6 +69,6 @@ from installation.
 
 ## Next gate
 
-Independently review this source package before preparing or executing a
-disposable local rehearsal. Staging and production remain out of scope until a
-separately approved local rehearsal passes.
+Independently review the source-only disposable local harness before executing
+it. Staging and production remain out of scope until the separately approved
+local rehearsal passes.
