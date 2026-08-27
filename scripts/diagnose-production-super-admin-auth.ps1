@@ -1,6 +1,10 @@
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+param(
+  [string]$ServiceRoleKeyEnvVarName = ""
+)
+
 function Read-RequiredTrimmed([string]$Prompt) {
   $value = (Read-Host $Prompt).Trim()
   if ([string]::IsNullOrWhiteSpace($value)) {
@@ -36,6 +40,15 @@ function Get-Sha256Hex([string]$Value) {
   finally { $sha.Dispose() }
 }
 
+function Get-ExactSha256Hex([string]$Value) {
+  $sha = [Security.Cryptography.SHA256]::Create()
+  try {
+    $bytes = [Text.Encoding]::UTF8.GetBytes($Value)
+    return -join ($sha.ComputeHash($bytes) | ForEach-Object { $_.ToString("x2") })
+  }
+  finally { $sha.Dispose() }
+}
+
 function Get-PropertyKeys($Value) {
   if ($null -eq $Value) { return @() }
   return @($Value.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object)
@@ -48,9 +61,87 @@ function Get-OptionalProperty($Value, [string]$Name) {
   return $property.Value
 }
 
+function Get-CredentialKind([string]$Credential) {
+  if ($Credential.StartsWith("sb_secret_", [StringComparison]::Ordinal)) { return "starts_with_sb_secret" }
+  if ($Credential.StartsWith("eyJ", [StringComparison]::Ordinal)) { return "starts_with_eyJ" }
+  return "other"
+}
+
+function Get-CredentialFingerprint([string]$Credential) {
+  $sha256 = Get-ExactSha256Hex $Credential
+  return [ordered]@{
+    credential_length = $Credential.Length
+    credential_sha256_12 = $sha256.Substring(0, 12)
+    credential_kind = Get-CredentialKind $Credential
+  }
+}
+
+function Get-CredentialFromEnvironment([string]$EnvVarName) {
+  if ([string]::IsNullOrWhiteSpace($EnvVarName)) { return $null }
+  $envValue = [Environment]::GetEnvironmentVariable($EnvVarName)
+  if ([string]::IsNullOrWhiteSpace($envValue)) {
+    throw "Credential environment variable '$EnvVarName' was not supplied."
+  }
+  return $envValue
+}
+
+function Get-CredentialPlainText([string]$EnvVarName) {
+  $fromEnvironment = Get-CredentialFromEnvironment $EnvVarName
+  if ($null -ne $fromEnvironment) {
+    return $fromEnvironment
+  }
+
+  $credentialSecure = Read-Host "Production service-role key or approved Auth-admin read credential" -AsSecureString
+  if ($credentialSecure.Length -eq 0) {
+    throw "Credential was not supplied."
+  }
+
+  try {
+    return Convert-SecureStringToPlainText $credentialSecure
+  }
+  finally {
+    $credentialSecure.Dispose()
+  }
+}
+
 function Write-RedactedEvidence([string]$EvidencePath, [object]$Payload) {
   [IO.File]::WriteAllText($EvidencePath, ($Payload | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
   Get-Content -LiteralPath $EvidencePath
+}
+
+function Get-HttpFailureSummary([object]$ErrorRecord) {
+  $statusCode = $null
+  $errorCode = $null
+  $errorMessage = $null
+  $exceptionResponse = Get-OptionalProperty (Get-OptionalProperty $ErrorRecord "Exception") "Response"
+  if ($null -ne $exceptionResponse) {
+    $statusCodeValue = Get-OptionalProperty $exceptionResponse "StatusCode"
+    if ($null -ne $statusCodeValue) {
+      $statusCode = [int]$statusCodeValue
+    }
+  }
+
+  $errorDetails = Get-OptionalProperty $ErrorRecord "ErrorDetails"
+  $errorBodyRaw = Get-OptionalProperty $errorDetails "Message"
+  if ($errorBodyRaw -is [string] -and -not [string]::IsNullOrWhiteSpace($errorBodyRaw)) {
+    try {
+      $errorBody = $errorBodyRaw | ConvertFrom-Json -ErrorAction Stop
+      $errorCode = Get-OptionalProperty $errorBody "code"
+      $errorMessage = Get-OptionalProperty $errorBody "msg"
+      if ($null -eq $errorMessage) {
+        $errorMessage = Get-OptionalProperty $errorBody "message"
+      }
+    }
+    catch {
+      $errorMessage = "unparsed_error_body"
+    }
+  }
+
+  return [ordered]@{
+    http_status_code = $statusCode
+    auth_error_code = if ($errorCode) { [string]$errorCode } else { $null }
+    auth_error_message = if ($errorMessage) { [string]$errorMessage } else { $null }
+  }
 }
 
 $confirmation = Read-RequiredTrimmed "Type exactly: READ ONLY PRODUCTION SUPER ADMIN AUTH DIAGNOSTIC"
@@ -70,10 +161,6 @@ $targetAuthUserId = Read-RequiredTrimmed "Verified immutable production Auth use
 if ($targetAuthUserId -notmatch '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$') {
   throw "Target Auth user ID is invalid."
 }
-$credentialSecure = Read-Host "Production service-role key or approved Auth-admin read credential" -AsSecureString
-if ($credentialSecure.Length -eq 0) {
-  throw "Credential was not supplied."
-}
 
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $evidenceDirectory = Join-Path (Get-Location) ".local-evidence/production-super-admin-auth-diagnostic-$timestamp"
@@ -82,19 +169,31 @@ $evidencePath = Join-Path $evidenceDirectory "diagnostic-redacted.json"
 
 $credential = $null
 try {
-  $credential = Convert-SecureStringToPlainText $credentialSecure
+  $credential = Get-CredentialPlainText $ServiceRoleKeyEnvVarName
+  if ([string]::IsNullOrWhiteSpace($credential)) {
+    throw "Credential was not supplied."
+  }
+
+  $credentialFingerprint = Get-CredentialFingerprint $credential
+  Write-Output ("CREDENTIAL_FINGERPRINT length={0} sha256_12={1} kind={2}" -f $credentialFingerprint.credential_length, $credentialFingerprint.credential_sha256_12, $credentialFingerprint.credential_kind)
+
   $headers = @{ apikey = $credential; Authorization = "Bearer $credential" }
   $endpoint = "$($projectUrl.TrimEnd('/'))/auth/v1/admin/users/$targetAuthUserId"
   try {
     $response = Invoke-RestMethod -Method Get -Uri $endpoint -Headers $headers -ErrorAction Stop
   }
   catch {
+    $httpFailure = Get-HttpFailureSummary $_
     $safeFailure = [ordered]@{
       control = "PRODUCTION_SUPER_ADMIN_AUTH_DIAGNOSTIC=FAIL"
       target_email_sha256 = Get-Sha256Hex $targetEmail
       request_status = "FAIL"
       failure_code = "auth_admin_read_request_failed"
       repair_eligibility = "FAIL"
+      credential_fingerprint = $credentialFingerprint
+      http_status_code = $httpFailure.http_status_code
+      auth_error_code = $httpFailure.auth_error_code
+      auth_error_message = $httpFailure.auth_error_message
     }
     Write-RedactedEvidence $evidencePath $safeFailure
     throw "Read-only Auth diagnostic request failed. Inspect redacted evidence only."
@@ -166,5 +265,4 @@ try {
 }
 finally {
   $credential = $null
-  $credentialSecure.Dispose()
 }

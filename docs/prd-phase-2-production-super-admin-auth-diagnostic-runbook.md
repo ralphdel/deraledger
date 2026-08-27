@@ -40,9 +40,24 @@ Enter the exact confirmation phrase:
 READ ONLY PRODUCTION SUPER ADMIN AUTH DIAGNOSTIC
 ```
 
+Preferred local credential flow:
+
+```powershell
+$env:DERALEDGER_PROD_SUPABASE_SERVICE_ROLE_KEY = Read-Host "Paste production service role key"
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\diagnose-production-super-admin-auth.ps1 -ServiceRoleKeyEnvVarName "DERALEDGER_PROD_SUPABASE_SERVICE_ROLE_KEY"
+```
+
+Fallback flow:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\diagnose-production-super-admin-auth.ps1
+```
+
 The script prompts for the project URL, target email, verified Auth user ID,
-and a secure credential. It never prints or stores the credential. It writes
-only redacted evidence to:
+and either reads the credential from the supplied local environment variable or
+falls back to a secure prompt. It never prints or stores the credential value.
+It prints only a safe credential fingerprint: length, SHA-256 first 12 hex
+characters, and a coarse key-kind label. It writes only redacted evidence to:
 
 ```text
 .local-evidence/production-super-admin-auth-diagnostic-YYYYMMDD-HHMMSS
@@ -52,10 +67,11 @@ only redacted evidence to:
 
 The evidence contains an email hash, candidate count, redacted Auth user ID,
 email-confirmation state, provider summary, app-metadata keys, safe
-`is_super_admin` boolean, user-metadata keys, ambiguity status, and repair
-eligibility. It intentionally records `MANUAL_REVIEW_REQUIRED` for the
-merchant/customer identity cross-check because this runner has no approved
-read-only application-table path.
+`is_super_admin` boolean, user-metadata keys, ambiguity status, repair
+eligibility, and for request failures only a redacted HTTP status plus safe
+Auth error code/message when available. It intentionally records
+`MANUAL_REVIEW_REQUIRED` for the merchant/customer identity cross-check because
+this runner has no approved read-only application-table path.
 
 ## Stop conditions
 
