@@ -75,6 +75,11 @@ Cross-merchant readiness behavior uses a valid request/workspace mismatch and
 does not inject an M029-invalid canonical-link row; M029 ownership integrity
 remains proven by its catalog and constraint checks.
 
+The v2 workspace-link lookup uses an ordered UUID `array_agg(...)[1]` paired
+with the exact-one count check. It must not use `min(uuid)`, which PostgreSQL
+does not support and which would otherwise bypass the safe readiness branches
+through the generic exception mapper.
+
 ## Next gate
 
 Independently review the source-only disposable local harness before executing

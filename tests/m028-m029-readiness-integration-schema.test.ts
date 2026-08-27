@@ -72,6 +72,8 @@ const v2Bodies = migration.slice(migration.indexOf("CREATE OR REPLACE FUNCTION p
 assert.doesNotMatch(v2Bodies, /RAISE NOTICE|LOCAL_APPROVAL_BRANCH|LOCAL_APPROVAL_EXCEPTION|deraledger\.local_approval_rehearsal_diagnostics|approval_rpc_internal_diagnostics|GET STACKED DIAGNOSTICS/);
 
 assert.match(migration, /FROM public\.merchant_canonical_workspaces canonical_link[\s\S]*JOIN public\.workspaces workspace_owner[\s\S]*workspace_owner\.id = canonical_link\.workspace_id[\s\S]*workspace_owner\.merchant_id = canonical_link\.merchant_id/);
+assert.doesNotMatch(migration, /min\(canonical_link\.workspace_id\)/i);
+assert.equal((migration.match(/array_agg\(canonical_link\.workspace_id ORDER BY canonical_link\.workspace_id\)\)\[1\]/g) ?? []).length, 2);
 assert.match(migration, /canonical_link\.merchant_id = v_profile\.merchant_id[\s\S]*canonical_link\.link_version = 1/);
 assert.match(migration, /v_request\.workspace_id IS DISTINCT FROM v_workspace_id/);
 assert.doesNotMatch(migration, /merchants\.workspace_id|m\.workspace_id/);
@@ -197,6 +199,10 @@ for (const forbiddenTable of [
 assert.match(rehearsalScript, /FORBIDDEN_TABLE_BASELINE\|/);
 assert.doesNotMatch(rehearsalScript, /INSERT INTO public\.merchant_canonical_workspaces/);
 assert.doesNotMatch(rehearsalScript, /corrupt_ownership|cross_merchant_ownership_blocked/);
+assert.match(rehearsalScript, /has_table_privilege\(current_user,'public\.merchant_compliance_reviews','SELECT'\)/);
+assert.match(rehearsalScript, /has_table_privilege\(current_user,'public\.approval_decision_requests','INSERT'\)/);
+assert.match(rehearsalScript, /NOT has_table_privilege\(current_user,'public\.approval_decision_requests','UPDATE'\)/);
+assert.doesNotMatch(rehearsalScript, /NOT has_table_privilege\(current_user,'public\.merchant_compliance_profiles','UPDATE'\)/);
 
 for (const file of sourceFiles("src")) {
   assert.doesNotMatch(

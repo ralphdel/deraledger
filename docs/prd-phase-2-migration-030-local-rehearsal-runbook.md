@@ -57,6 +57,11 @@ emit a final control line only after every required gate passes.
   activation, collection, limit, payment, provider, checkout, subscription,
   invoice, or storefront write.
 
+The service-role grant scenario asserts the v2 contract's required reads and
+the `approval_decision_requests` SELECT/INSERT-only write boundary. It does
+not reject unrelated historical M024/M029 grants, such as a profile update
+grant retained for earlier approved database paths.
+
 The harness snapshots row counts before behavior scenarios for every known
 forbidden business relation. Optional historical relations are first resolved
 with `to_regclass`: an absent relation is recorded as `not_present`/`skipped`,

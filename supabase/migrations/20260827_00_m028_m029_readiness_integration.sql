@@ -305,7 +305,7 @@ BEGIN
     RETURN;
   END IF;
 
-  SELECT count(*), min(canonical_link.workspace_id)
+  SELECT count(*), (array_agg(canonical_link.workspace_id ORDER BY canonical_link.workspace_id))[1]
   INTO v_workspace_link_count, v_workspace_id
   FROM public.merchant_canonical_workspaces canonical_link
   JOIN public.workspaces workspace_owner
@@ -512,7 +512,7 @@ BEGIN
     RETURN;
   END IF;
 
-  SELECT count(*), min(canonical_link.workspace_id)
+  SELECT count(*), (array_agg(canonical_link.workspace_id ORDER BY canonical_link.workspace_id))[1]
   INTO v_workspace_link_count, v_workspace_id
   FROM public.merchant_canonical_workspaces canonical_link
   JOIN public.workspaces workspace_owner

@@ -315,7 +315,18 @@ SELECT reviewer_id,merchant_id,'00000000-0000-4000-8000-000000003023',profile_id
 SET LOCAL ROLE service_role;
 SELECT pg_temp.capture_snapshot('cross_merchant_request_link_mismatch_blocked','canonical_snapshot_v2_workspace_linkage_conflict',(SELECT id FROM public.approval_decision_requests WHERE profile_id='00000000-0000-4000-8000-000000003102' AND workspace_id='00000000-0000-4000-8000-000000003023'));
 DO $$ DECLARE v_actual text; BEGIN
-  SELECT CASE WHEN has_table_privilege(current_user,'public.merchant_compliance_profiles','SELECT') AND has_table_privilege(current_user,'public.approval_decision_requests','INSERT') AND NOT has_table_privilege(current_user,'public.merchant_compliance_profiles','UPDATE') AND NOT has_table_privilege(current_user,'public.merchant_canonical_workspaces','UPDATE') THEN 'minimum_reads_inserts_only' ELSE 'grant_boundary_invalid' END INTO v_actual;
+  SELECT CASE WHEN has_table_privilege(current_user,'public.merchant_compliance_profiles','SELECT')
+    AND has_table_privilege(current_user,'public.merchant_compliance_reviews','SELECT')
+    AND has_table_privilege(current_user,'public.solo_plus_cases','SELECT')
+    AND has_table_privilege(current_user,'public.approval_policy_versions','SELECT')
+    AND has_table_privilege(current_user,'public.approval_decision_requests','SELECT')
+    AND has_table_privilege(current_user,'public.approval_decision_requests','INSERT')
+    AND has_table_privilege(current_user,'public.merchant_canonical_workspaces','SELECT')
+    AND has_table_privilege(current_user,'public.workspaces','SELECT')
+    AND has_table_privilege(current_user,'auth.users','SELECT')
+    AND NOT has_table_privilege(current_user,'public.approval_decision_requests','UPDATE')
+    AND NOT has_table_privilege(current_user,'public.approval_decision_requests','DELETE')
+    THEN 'minimum_reads_inserts_only' ELSE 'grant_boundary_invalid' END INTO v_actual;
   PERFORM pg_temp.record_m030('service_role_minimum_reads_inserts_only','minimum_reads_inserts_only',v_actual);
 END $$;
 RESET ROLE;
