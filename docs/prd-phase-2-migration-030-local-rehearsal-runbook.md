@@ -55,6 +55,15 @@ emit a final control line only after every required gate passes.
   activation, collection, limit, payment, provider, checkout, subscription,
   invoice, or storefront write.
 
+The harness snapshots row counts before behavior scenarios for every known
+forbidden business relation. Optional historical relations are first resolved
+with `to_regclass`: an absent relation is recorded as `not_present`/`skipped`,
+while every present relation must keep its exact row count. The category result
+rows are `subscriptions_unchanged`, `providers_settlements_unchanged`,
+`checkout_unchanged`, `storefront_unchanged`, and
+`forbidden_business_writes_absent`. Invoice, payment-record, and collection
+limit checks remain in the same dynamic count baseline.
+
 ## Pass criteria
 
 The future harness must report M030 preflight PASS, first apply COMMIT, rerun

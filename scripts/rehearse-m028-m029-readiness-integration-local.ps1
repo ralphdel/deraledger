@@ -183,6 +183,75 @@ DECLARE v_actual text := 'canonical_snapshot_v2_failed'; BEGIN
   BEGIN SELECT result_code INTO v_actual FROM public.read_canonical_approval_snapshot_v2(p_request); EXCEPTION WHEN OTHERS THEN v_actual := 'canonical_snapshot_v2_invocation_failed'; END;
   PERFORM pg_temp.record_m030(p_name,p_expected,v_actual);
 END; $$;
+-- Optional commerce relations vary across historical local baselines. Capture
+-- their state through to_regclass so absent relations are evidence, not errors.
+CREATE TEMP TABLE m030_forbidden_business_before(
+  category text NOT NULL,
+  table_name text NOT NULL,
+  relation_was_present boolean NOT NULL,
+  before_count bigint,
+  presence_status text NOT NULL,
+  PRIMARY KEY(category, table_name)
+);
+CREATE OR REPLACE FUNCTION pg_temp.snapshot_forbidden_business_table(p_category text,p_table_name text) RETURNS void LANGUAGE plpgsql AS $$
+DECLARE v_relation regclass; v_count bigint; BEGIN
+  v_relation := to_regclass(format('public.%I', p_table_name));
+  IF v_relation IS NULL THEN
+    INSERT INTO pg_temp.m030_forbidden_business_before(category,table_name,relation_was_present,before_count,presence_status)
+    VALUES (p_category,p_table_name,false,NULL,'not_present');
+  ELSE
+    EXECUTE format('SELECT count(*) FROM %s', v_relation) INTO v_count;
+    INSERT INTO pg_temp.m030_forbidden_business_before(category,table_name,relation_was_present,before_count,presence_status)
+    VALUES (p_category,p_table_name,true,v_count,'present');
+  END IF;
+END; $$;
+CREATE OR REPLACE FUNCTION pg_temp.forbidden_business_category_unchanged(p_category text) RETURNS boolean LANGUAGE plpgsql AS $$
+DECLARE v_row record; v_relation regclass; v_after_count bigint; BEGIN
+  FOR v_row IN SELECT * FROM pg_temp.m030_forbidden_business_before WHERE category=p_category LOOP
+    v_relation := to_regclass(format('public.%I', v_row.table_name));
+    IF v_row.relation_was_present IS DISTINCT FROM (v_relation IS NOT NULL) THEN RETURN false; END IF;
+    IF v_relation IS NOT NULL THEN
+      EXECUTE format('SELECT count(*) FROM %s', v_relation) INTO v_after_count;
+      IF v_after_count IS DISTINCT FROM v_row.before_count THEN RETURN false; END IF;
+    END IF;
+  END LOOP;
+  RETURN true;
+END; $$;
+DO $$ BEGIN
+  PERFORM pg_temp.snapshot_forbidden_business_table('subscriptions','subscriptions');
+  PERFORM pg_temp.snapshot_forbidden_business_table('subscriptions','subscription_payments');
+  PERFORM pg_temp.snapshot_forbidden_business_table('subscriptions','manual_payments');
+  PERFORM pg_temp.snapshot_forbidden_business_table('providers_settlements','payment_records');
+  PERFORM pg_temp.snapshot_forbidden_business_table('providers_settlements','payments');
+  PERFORM pg_temp.snapshot_forbidden_business_table('providers_settlements','payment_providers');
+  PERFORM pg_temp.snapshot_forbidden_business_table('providers_settlements','providers');
+  PERFORM pg_temp.snapshot_forbidden_business_table('providers_settlements','provider_accounts');
+  PERFORM pg_temp.snapshot_forbidden_business_table('providers_settlements','provider_settlement_accounts');
+  PERFORM pg_temp.snapshot_forbidden_business_table('providers_settlements','settlements');
+  PERFORM pg_temp.snapshot_forbidden_business_table('providers_settlements','payment_settlements');
+  PERFORM pg_temp.snapshot_forbidden_business_table('checkout','checkout_sessions');
+  PERFORM pg_temp.snapshot_forbidden_business_table('checkout','checkout_session');
+  PERFORM pg_temp.snapshot_forbidden_business_table('checkout','payment_intents');
+  PERFORM pg_temp.snapshot_forbidden_business_table('checkout','payment_intent');
+  PERFORM pg_temp.snapshot_forbidden_business_table('checkout','payment_sessions');
+  PERFORM pg_temp.snapshot_forbidden_business_table('checkout','checkout_payment_sessions');
+  PERFORM pg_temp.snapshot_forbidden_business_table('storefront','storefronts');
+  PERFORM pg_temp.snapshot_forbidden_business_table('storefront','storefront_products');
+  PERFORM pg_temp.snapshot_forbidden_business_table('storefront','products');
+  PERFORM pg_temp.snapshot_forbidden_business_table('storefront','storefront_orders');
+  PERFORM pg_temp.snapshot_forbidden_business_table('storefront','orders');
+  PERFORM pg_temp.snapshot_forbidden_business_table('storefront','storefront_carts');
+  PERFORM pg_temp.snapshot_forbidden_business_table('storefront','carts');
+  PERFORM pg_temp.snapshot_forbidden_business_table('storefront','storefront_customers');
+  PERFORM pg_temp.snapshot_forbidden_business_table('storefront','customers');
+  PERFORM pg_temp.snapshot_forbidden_business_table('invoices_limits','invoices');
+  PERFORM pg_temp.snapshot_forbidden_business_table('invoices_limits','merchant_collection_limit_windows');
+  PERFORM pg_temp.snapshot_forbidden_business_table('invoices_limits','merchant_collection_limit_reservations');
+  PERFORM pg_temp.snapshot_forbidden_business_table('invoices_limits','merchant_collection_limit_reservation_windows');
+  PERFORM pg_temp.snapshot_forbidden_business_table('invoices_limits','merchant_collection_usage_events');
+END $$;
+SELECT 'FORBIDDEN_TABLE_BASELINE|' || category || '|' || table_name || '|' || presence_status || '|' || COALESCE(before_count::text,'skipped')
+FROM pg_temp.m030_forbidden_business_before ORDER BY category,table_name;
 GRANT EXECUTE ON FUNCTION pg_temp.capture_issue(text,text,uuid,text,text,text), pg_temp.capture_snapshot(text,text,uuid) TO service_role;
 
 SET LOCAL ROLE service_role;
@@ -276,8 +345,20 @@ DO $$ DECLARE v_actual text; BEGIN
   PERFORM pg_temp.record_m030('merchant_workspace_canonical_link_unchanged','merchant_workspace_canonical_link_unchanged',v_actual);
   SELECT CASE WHEN NOT EXISTS ((SELECT * FROM pg_temp.m030_profile_event_before EXCEPT SELECT id,row_version,compliance_status,activation_status,can_collect_payments FROM public.merchant_compliance_profiles) UNION ALL (SELECT id,row_version,compliance_status,activation_status,can_collect_payments FROM public.merchant_compliance_profiles EXCEPT SELECT * FROM pg_temp.m030_profile_event_before)) AND NOT EXISTS ((SELECT id FROM pg_temp.m030_event_before EXCEPT SELECT id FROM public.merchant_compliance_events) UNION ALL (SELECT id FROM public.merchant_compliance_events EXCEPT SELECT id FROM pg_temp.m030_event_before)) THEN 'no_m026_profile_event_mutation' ELSE 'profile_or_event_mutated' END INTO v_actual;
   PERFORM pg_temp.record_m030('no_m026_profile_event_mutation','no_m026_profile_event_mutation',v_actual);
-  SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM public.merchants WHERE NOT setup_mode OR live_features_enabled) AND NOT EXISTS (SELECT 1 FROM public.merchant_compliance_profiles WHERE can_collect_payments OR activation_status='active') AND NOT EXISTS (SELECT 1 FROM public.merchant_collection_limit_windows) AND NOT EXISTS (SELECT 1 FROM public.merchant_collection_limit_reservations) AND NOT EXISTS (SELECT 1 FROM public.merchant_collection_limit_reservation_windows) AND NOT EXISTS (SELECT 1 FROM public.merchant_collection_usage_events) AND NOT EXISTS (SELECT 1 FROM public.invoices) AND NOT EXISTS (SELECT 1 FROM public.payment_records) THEN 'forbidden_writes_absent' ELSE 'forbidden_write_detected' END INTO v_actual;
+  SELECT CASE WHEN pg_temp.forbidden_business_category_unchanged('subscriptions') THEN 'subscriptions_unchanged' ELSE 'subscriptions_mutated' END INTO v_actual;
+  PERFORM pg_temp.record_m030('subscriptions_unchanged','subscriptions_unchanged',v_actual);
+  SELECT CASE WHEN pg_temp.forbidden_business_category_unchanged('providers_settlements') THEN 'providers_settlements_unchanged' ELSE 'providers_settlements_mutated' END INTO v_actual;
+  PERFORM pg_temp.record_m030('providers_settlements_unchanged','providers_settlements_unchanged',v_actual);
+  SELECT CASE WHEN pg_temp.forbidden_business_category_unchanged('checkout') THEN 'checkout_unchanged' ELSE 'checkout_mutated' END INTO v_actual;
+  PERFORM pg_temp.record_m030('checkout_unchanged','checkout_unchanged',v_actual);
+  SELECT CASE WHEN pg_temp.forbidden_business_category_unchanged('storefront') THEN 'storefront_unchanged' ELSE 'storefront_mutated' END INTO v_actual;
+  PERFORM pg_temp.record_m030('storefront_unchanged','storefront_unchanged',v_actual);
+  SELECT CASE WHEN pg_temp.forbidden_business_category_unchanged('invoices_limits') THEN 'invoice_payment_limit_tables_unchanged' ELSE 'invoice_payment_limit_tables_mutated' END INTO v_actual;
+  PERFORM pg_temp.record_m030('invoice_payment_limit_tables_unchanged','invoice_payment_limit_tables_unchanged',v_actual);
+  SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM public.merchants WHERE NOT setup_mode OR live_features_enabled) AND NOT EXISTS (SELECT 1 FROM public.merchant_compliance_profiles WHERE can_collect_payments OR activation_status='active') AND pg_temp.forbidden_business_category_unchanged('subscriptions') AND pg_temp.forbidden_business_category_unchanged('providers_settlements') AND pg_temp.forbidden_business_category_unchanged('checkout') AND pg_temp.forbidden_business_category_unchanged('storefront') AND pg_temp.forbidden_business_category_unchanged('invoices_limits') THEN 'forbidden_writes_absent' ELSE 'forbidden_write_detected' END INTO v_actual;
   PERFORM pg_temp.record_m030('activation_collection_payment_forbidden_writes_absent','forbidden_writes_absent',v_actual);
+  SELECT CASE WHEN v_actual='forbidden_writes_absent' THEN 'forbidden_business_writes_absent' ELSE 'forbidden_business_write_detected' END INTO v_actual;
+  PERFORM pg_temp.record_m030('forbidden_business_writes_absent','forbidden_business_writes_absent',v_actual);
 END $$;
 
 SELECT scenario_name, expected_result, actual_result, CASE WHEN passed THEN 'PASS' ELSE 'FAIL' END AS pass_fail, safe_failure_code FROM pg_temp.m030_results ORDER BY scenario_name;

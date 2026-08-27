@@ -67,6 +67,11 @@ M029 authority structure, security/grants, no diagnostics, safe result-code
 vocabulary, forbidden-write absence, and zero new M028 request/M029 link rows
 from installation.
 
+The matching local-only harness also snapshots known optional subscription,
+provider/settlement, checkout, and storefront relations using `to_regclass`
+before behavior execution. Absent historical relations are recorded safely;
+present relations must have unchanged row counts after the behavior matrix.
+
 ## Next gate
 
 Independently review the source-only disposable local harness before executing

@@ -165,9 +165,29 @@ for (const requiredScenario of [
   'authenticated_table_denied', 'service_role_minimum_reads_inserts_only',
   'failed_issue_has_no_partial_request', 'm028_v1_still_fail_closed', 'no_m026_profile_event_mutation',
   'merchant_workspace_canonical_link_unchanged', 'activation_collection_payment_forbidden_writes_absent',
+  'subscriptions_unchanged', 'providers_settlements_unchanged', 'checkout_unchanged',
+  'storefront_unchanged', 'forbidden_business_writes_absent',
 ]) {
   assert.match(rehearsalScript, new RegExp(requiredScenario));
 }
+assert.match(rehearsalScript, /CREATE TEMP TABLE m030_forbidden_business_before/);
+assert.match(rehearsalScript, /to_regclass\(format\('public\.%I', p_table_name\)\)/);
+assert.match(rehearsalScript, /EXECUTE format\('SELECT count\(\*\) FROM %s', v_relation\) INTO v_count/);
+assert.match(rehearsalScript, /EXECUTE format\('SELECT count\(\*\) FROM %s', v_relation\) INTO v_after_count/);
+assert.match(rehearsalScript, /relation_was_present IS DISTINCT FROM \(v_relation IS NOT NULL\)/);
+assert.match(rehearsalScript, /subscriptions','subscriptions/);
+assert.match(rehearsalScript, /subscriptions','subscription_payments/);
+assert.match(rehearsalScript, /subscriptions','manual_payments/);
+for (const forbiddenTable of [
+  'payment_providers', 'provider_settlement_accounts', 'settlements',
+  'checkout_sessions', 'payment_intents', 'payment_sessions',
+  'storefront_products', 'storefront_orders', 'storefront_carts', 'storefront_customers',
+  'invoices', 'merchant_collection_limit_windows', 'merchant_collection_limit_reservations',
+  'merchant_collection_limit_reservation_windows', 'merchant_collection_usage_events',
+]) {
+  assert.match(rehearsalScript, new RegExp(`snapshot_forbidden_business_table\\('[^']+','${forbiddenTable}'\\)`));
+}
+assert.match(rehearsalScript, /FORBIDDEN_TABLE_BASELINE\|/);
 
 for (const file of sourceFiles("src")) {
   assert.doesNotMatch(
