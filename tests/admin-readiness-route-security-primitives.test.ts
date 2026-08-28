@@ -87,14 +87,14 @@ async function run() {
   const first = createAdminReadinessCorrelationId(), second = createAdminReadinessCorrelationId(); assert.notEqual(first, second);
   assert.ok(createAdminReadinessOperationalEvent({ operation: "issue", resultKind: "denied", resultCode: "invalid_request", redactedIdentifier: "...abcd" }));
   assert.equal(createAdminReadinessOperationalEvent({ operation: "issue", resultKind: "denied", resultCode: "invalid_request", redactedIdentifier: "full@example.test" }), null);
-  for (const file of ["admin-readiness-route-json.ts", "admin-readiness-route-validation.ts", "admin-readiness-route-csrf.ts", "admin-readiness-route-cors.ts", "admin-readiness-route-rate-limit.ts", "admin-readiness-route-response.ts", "admin-readiness-route-logging.ts"]) {
+  for (const file of ["admin-readiness-route-json.ts", "admin-readiness-route-validation.ts", "admin-readiness-route-csrf.ts", "admin-readiness-route-cors.ts", "admin-readiness-route-rate-limit.ts", "admin-readiness-route-response.ts", "admin-readiness-route-logging.ts", "admin-readiness-route-security-composition.ts"]) {
     const source = readFileSync(`src/lib/compliance/server/${file}`, "utf8");
     assert.match(source, /^import\s+["']server-only["']/);
     assert.doesNotMatch(source, /canonical-approval-readiness-service-factory|createCanonicalApprovalReadinessServerService|createClient|auth\.admin|service.role|\.from\(|\.rpc\(|\.insert\(|\.update\(|\.delete\(/i);
     assert.doesNotMatch(source, /src\/app|route\.ts|page\.tsx|webhook/i);
     assert.doesNotMatch(source, /activation|collection unlock|payment|provider|checkout|subscription|invoice|storefront|compliance_reviewer|support manager|compliance manager|compliance officer/i);
   }
-  const primitive = /admin-readiness-route-(?:json|validation|csrf|cors|rate-limit|response|logging)/;
+  const primitive = /admin-readiness-route-(?:json|validation|csrf|cors|rate-limit|response|logging|security-composition)/;
   for (const file of sourceFiles("src")) {
     const source = readFileSync(file, "utf8");
     const normalized = normalizedPath(file);
@@ -107,9 +107,10 @@ async function run() {
   }
   assert.deepEqual(Object.keys(require("../src/lib/compliance/server/admin-readiness-route-json")).sort(), ["readAdminReadinessJsonBody"]);
   assert.deepEqual(Object.keys(require("../src/lib/compliance/server/admin-readiness-route-validation")).sort(), ["validateAdminReadinessIssue", "validateAdminReadinessSnapshot"]);
-  assert.deepEqual(Object.keys(require("../src/lib/compliance/server/admin-readiness-route-csrf")).sort(), ["createAdminReadinessCsrfValidator"]);
-  assert.deepEqual(Object.keys(require("../src/lib/compliance/server/admin-readiness-route-cors")).sort(), ["adminReadinessPreflight", "checkAdminReadinessOrigin"]);
-  assert.deepEqual(Object.keys(require("../src/lib/compliance/server/admin-readiness-route-rate-limit")).sort(), ["createAdminReadinessThrottle"]);
+  assert.deepEqual(Object.keys(require("../src/lib/compliance/server/admin-readiness-route-csrf")).sort(), ["createAdminReadinessCsrfValidator", "createAdminReadinessLifecycleCsrfValidator"]);
+  assert.deepEqual(Object.keys(require("../src/lib/compliance/server/admin-readiness-route-cors")).sort(), ["adminReadinessPreflight", "checkAdminReadinessOrigin", "createAdminReadinessConfiguredOriginChecker"]);
+  assert.deepEqual(Object.keys(require("../src/lib/compliance/server/admin-readiness-route-rate-limit")).sort(), ["createAdminReadinessConfiguredRouteThrottle", "createAdminReadinessThrottle"]);
+  assert.deepEqual(Object.keys(require("../src/lib/compliance/server/admin-readiness-route-security-composition")).sort(), ["createAdminReadinessRouteSecurityComposition"]);
   assert.deepEqual(Object.keys(require("../src/lib/compliance/server/admin-readiness-route-response")).sort(), ["mapAdminReadinessRouteOutcome"]);
   assert.deepEqual(Object.keys(require("../src/lib/compliance/server/admin-readiness-route-logging")).sort(), ["createAdminReadinessCorrelationId", "createAdminReadinessOperationalEvent"]);
   console.log("admin-readiness-route-security-primitives.test.ts passed");

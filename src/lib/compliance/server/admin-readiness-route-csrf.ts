@@ -1,5 +1,11 @@
 import "server-only";
 
+import {
+  createAdminReadinessCsrfLifecycleValidator,
+  type AdminReadinessCsrfLifecycleInput,
+} from "./admin-readiness-csrf-issuer";
+import type { AdminReadinessCsrfStorage } from "./admin-readiness-csrf-storage";
+
 export interface AdminReadinessCsrfInput {
   operation: "issue" | "snapshot";
   method: "GET" | "POST";
@@ -32,4 +38,17 @@ export function createAdminReadinessCsrfValidator(validator?: AdminReadinessCsrf
     if (!validator) return { kind: "unavailable", code: "csrf_unavailable" };
     try { return normalize(await validator.validate(input)); } catch { return { kind: "unavailable", code: "csrf_unavailable" }; }
   } };
+}
+
+/** Wraps the synchronizer-token lifecycle in the route's normalized result boundary. */
+export function createAdminReadinessLifecycleCsrfValidator(dependencies: Readonly<{
+  storage: AdminReadinessCsrfStorage | null;
+  now?: () => number;
+}>): AdminReadinessCsrfValidator {
+  const lifecycle = createAdminReadinessCsrfLifecycleValidator(dependencies);
+  return createAdminReadinessCsrfValidator({
+    validate(input: AdminReadinessCsrfInput) {
+      return lifecycle.validate(input as AdminReadinessCsrfLifecycleInput);
+    },
+  });
 }

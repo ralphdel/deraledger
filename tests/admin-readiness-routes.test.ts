@@ -96,17 +96,14 @@ function installRoute(require: NodeRequire, routePath: string, state: Scenario):
     },
   }) as never;
 
-  const csrfPath = require.resolve("../src/lib/compliance/server/admin-readiness-route-csrf");
-  require.cache[csrfPath] = moduleShim(csrfPath, {
-    createAdminReadinessCsrfValidator() {
-      return { async validate() { state.trace.push("csrf"); return state.csrf; } };
-    },
-  }) as never;
-
-  const throttlePath = require.resolve("../src/lib/compliance/server/admin-readiness-route-rate-limit");
-  require.cache[throttlePath] = moduleShim(throttlePath, {
-    createAdminReadinessThrottle() {
-      return { async check() { state.trace.push("throttle"); return state.throttle; } };
+  const securityPath = require.resolve("../src/lib/compliance/server/admin-readiness-route-security-composition");
+  require.cache[securityPath] = moduleShim(securityPath, {
+    createAdminReadinessRouteSecurityComposition() {
+      return {
+        checkOrigin() { return { ok: true }; },
+        async validateCsrf() { state.trace.push("csrf"); return state.csrf; },
+        async checkThrottle() { state.trace.push("throttle"); return state.throttle; },
+      };
     },
   }) as never;
 
@@ -141,15 +138,13 @@ async function result(route: RouteModule, body: string): Promise<{ status: numbe
 async function run() {
   const require = createRequire(import.meta.url);
   const previousGate = process.env.DERALEDGER_ADMIN_READINESS_ROUTES_ENABLED;
-  const previousOrigin = process.env.DERALEDGER_ADMIN_READINESS_EXPECTED_ORIGIN;
-  process.env.DERALEDGER_ADMIN_READINESS_EXPECTED_ORIGIN = origin;
 
   try {
     for (const file of routeFiles) {
       const source = readFileSync(file, "utf8");
       assert.match(source, /^import\s+["']server-only["']/);
       assert.match(source, /canonical-approval-readiness-service-factory/);
-      assert.match(source, /admin-readiness-route-(?:csrf|cors|json|logging|rate-limit|response|validation)/);
+      assert.match(source, /admin-readiness-route-(?:json|logging|response|validation|security-composition)/);
       assert.doesNotMatch(source, /createClient|Supabase|auth\.admin|service.role|\.from\(|\.rpc\(|\.insert\(|\.update\(|\.delete\(/i);
       assert.doesNotMatch(source, /approval decision|activate|collection unlock|payment|provider|checkout|subscription|invoice|storefront|compliance_reviewer|support manager|compliance manager|compliance officer/i);
       assert.doesNotMatch(source, /deraledger\.com\/admin/i);
@@ -210,8 +205,6 @@ async function run() {
   } finally {
     if (previousGate === undefined) delete process.env.DERALEDGER_ADMIN_READINESS_ROUTES_ENABLED;
     else process.env.DERALEDGER_ADMIN_READINESS_ROUTES_ENABLED = previousGate;
-    if (previousOrigin === undefined) delete process.env.DERALEDGER_ADMIN_READINESS_EXPECTED_ORIGIN;
-    else process.env.DERALEDGER_ADMIN_READINESS_EXPECTED_ORIGIN = previousOrigin;
   }
 
   console.log("admin-readiness-routes.test.ts passed");

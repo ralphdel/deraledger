@@ -1,5 +1,11 @@
 import "server-only";
 
+import {
+  createAdminReadinessConfiguredThrottle,
+  type AdminReadinessThrottleStorage,
+  type AdminReadinessThrottleEnvironment,
+} from "./admin-readiness-throttle-config";
+
 export interface AdminReadinessThrottleKey { operation: "issue" | "snapshot"; subjectHash: string; }
 export type AdminReadinessThrottleResult = { kind: "allow" } | { kind: "deny"; code: "rate_limited" } | { kind: "unavailable"; code: "throttle_unavailable" };
 export interface AdminReadinessThrottleChecker { check(key: AdminReadinessThrottleKey): Promise<AdminReadinessThrottleResult>; }
@@ -19,4 +25,18 @@ export function createAdminReadinessThrottle(checker?: AdminReadinessThrottleChe
     if (!checker) return { kind: "unavailable", code: "throttle_unavailable" };
     try { return normalize(await checker.check(key)); } catch { return { kind: "unavailable", code: "throttle_unavailable" }; }
   } };
+}
+
+/** Wraps the configured storage seam in the route's normalized throttle boundary. */
+export function createAdminReadinessConfiguredRouteThrottle(dependencies: Readonly<{
+  environment: AdminReadinessThrottleEnvironment;
+  namespace: string;
+  storage: AdminReadinessThrottleStorage | null;
+}>): AdminReadinessThrottleChecker {
+  const configured = createAdminReadinessConfiguredThrottle(dependencies);
+  return createAdminReadinessThrottle({
+    check(key: AdminReadinessThrottleKey) {
+      return configured.check(key);
+    },
+  });
 }
