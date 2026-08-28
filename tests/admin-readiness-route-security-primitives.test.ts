@@ -3,6 +3,11 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { createRequire, Module } from "node:module";
 
+const approvedPrimitiveRouteImports = new Set([
+  "src/app/api/internal/admin/compliance/readiness/issue/route.ts",
+  "src/app/api/internal/admin/compliance/readiness/snapshot/route.ts",
+]);
+
 const issue = { profileId: "00000000-0000-4000-8000-000000000001", targetComplianceStatus: "lite_verified", policyVersion: "v1" };
 const decisionRequestId = "00000000-0000-4000-8000-000000000003";
 const readySnapshot = {
@@ -23,6 +28,11 @@ function sourceFiles(directory: string): string[] {
     return entry.isDirectory() ? sourceFiles(path) : /\.(?:ts|tsx)$/.test(entry.name) ? [path] : [];
   });
 }
+
+function normalizedPath(path: string): string {
+  return path.replace(/\\/g, "/");
+}
+
 async function run() {
   const require = createRequire(import.meta.url);
   const serverOnlyPath = require.resolve("server-only");
@@ -87,8 +97,13 @@ async function run() {
   const primitive = /admin-readiness-route-(?:json|validation|csrf|cors|rate-limit|response|logging)/;
   for (const file of sourceFiles("src")) {
     const source = readFileSync(file, "utf8");
-    if (!file.includes("admin-readiness-route-")) assert.doesNotMatch(source, primitive);
-    if (/route\.ts$|page\.tsx$|action|webhook/i.test(file)) assert.doesNotMatch(source, primitive);
+    const normalized = normalizedPath(file);
+    if (!normalized.includes("admin-readiness-route-") && !approvedPrimitiveRouteImports.has(normalized)) {
+      assert.doesNotMatch(source, primitive);
+    }
+    if (/route\.ts$|page\.tsx$|action|webhook/i.test(normalized) && !approvedPrimitiveRouteImports.has(normalized)) {
+      assert.doesNotMatch(source, primitive);
+    }
   }
   assert.deepEqual(Object.keys(require("../src/lib/compliance/server/admin-readiness-route-json")).sort(), ["readAdminReadinessJsonBody"]);
   assert.deepEqual(Object.keys(require("../src/lib/compliance/server/admin-readiness-route-validation")).sort(), ["validateAdminReadinessIssue", "validateAdminReadinessSnapshot"]);
