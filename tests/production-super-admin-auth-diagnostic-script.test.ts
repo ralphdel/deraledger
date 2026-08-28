@@ -5,6 +5,13 @@ import { join } from "node:path";
 const scriptPath = "scripts/diagnose-production-super-admin-auth.ps1";
 const script = readFileSync(scriptPath, "utf8");
 const trimmedScriptStart = script.replace(/^\uFEFF?/, "").trimStart();
+const headerFactory = script.slice(
+  script.indexOf("function New-AuthAdminReadHeaders"),
+  script.indexOf("function Write-RedactedEvidence"),
+);
+const secretHeaderBranch = headerFactory
+  .split('"starts_with_sb_secret"')[1]
+  .split('"legacy_jwt_service_role_like"')[0];
 
 function sourceFiles(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -22,13 +29,23 @@ assert.match(script, /CREDENTIAL_FINGERPRINT length=\{0\} sha256_12=\{1\} kind=\
 assert.match(script, /credential_sha256_12/);
 assert.match(script, /credential_kind/);
 assert.match(script, /credential_length/);
+assert.match(script, /starts_with_sb_secret/);
+assert.match(script, /legacy_jwt_service_role_like/);
+assert.match(script, /unsupported_credential_kind/);
+assert.match(script, /apikey_only_secret/);
+assert.match(script, /apikey_and_bearer_legacy_jwt/);
+assert.match(script, /"User-Agent" = "DeraLedger-Server-Diagnostic\/1\.0"/);
+assert.match(script, /apikey = \$Credential/);
+assert.match(script, /\$headers\.Authorization = "Bearer \$Credential"/);
+assert.match(script, /"starts_with_sb_secret" \{[\s\S]*?header_mode = "apikey_only_secret"[\s\S]*?headers = \$headers[\s\S]*?\}/);
+assert.doesNotMatch(secretHeaderBranch, /Authorization = "Bearer \$Credential"/);
+assert.match(script, /credential_kind = \$credentialFingerprint\.credential_kind/);
+assert.match(script, /header_mode = \$headerMode/);
 assert.match(script, /target_email_sha256/);
 assert.match(script, /auth_user_id_redacted/);
 assert.match(script, /\.local-evidence\/production-super-admin-auth-diagnostic-\$timestamp/);
 assert.match(script, /Invoke-RestMethod\s+-Method Get/);
 assert.match(script, /-Headers \$headers/);
-assert.match(script, /apikey = \$credential/);
-assert.match(script, /Authorization = "Bearer \$credential"/);
 assert.match(script, /Read-RequiredTrimmed\s+"Verified immutable production Auth user ID"/);
 assert.match(script, /\/auth\/v1\/admin\/users\/\$targetAuthUserId/);
 assert.doesNotMatch(script, /\/auth\/v1\/admin\/users\?email=/);
@@ -48,6 +65,7 @@ assert.doesNotMatch(script, /(?:route\.ts|page\.tsx|webhook|src\/app)/i);
 assert.doesNotMatch(script, /@[A-Za-z0-9._%+-]+\.[A-Za-z]{2,}/);
 assert.doesNotMatch(script, /Write-Output\s+\$credential\b/);
 assert.doesNotMatch(script, /Write-Output.*Bearer \$credential/);
+assert.doesNotMatch(script, /Write-RedactedEvidence\s+\$evidencePath\s+\$credential\b/);
 for (const file of sourceFiles("src/app")) {
   assert.doesNotMatch(readFileSync(file, "utf8"), /diagnose-production-super-admin-auth|production-super-admin-auth-diagnostic/);
 }

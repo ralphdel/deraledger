@@ -63,6 +63,21 @@ characters, and a coarse key-kind label. It writes only redacted evidence to:
 .local-evidence/production-super-admin-auth-diagnostic-YYYYMMDD-HHMMSS
 ```
 
+Credential header modes are chosen locally from the coarse key kind. An
+`sb_secret_...` Supabase secret key uses `apikey` only plus the non-browser
+`DeraLedger-Server-Diagnostic/1.0` User-Agent; it is never sent as a Bearer
+token. A legacy JWT service-role-like key beginning with `eyJ` uses both
+`apikey` and `Authorization: Bearer`. Any other credential kind stops before
+the GET request and records only `unsupported_credential_kind` with the safe
+fingerprint.
+
+After the run, clear the local shell credential variable if the preferred flow
+was used:
+
+```powershell
+$env:DERALEDGER_PROD_SUPABASE_SERVICE_ROLE_KEY = $null
+```
+
 ## Expected evidence
 
 The evidence contains an email hash, candidate count, redacted Auth user ID,
@@ -72,6 +87,8 @@ eligibility, and for request failures only a redacted HTTP status plus safe
 Auth error code/message when available. It intentionally records
 `MANUAL_REVIEW_REQUIRED` for the merchant/customer identity cross-check because
 this runner has no approved read-only application-table path.
+It additionally records only `credential_kind` and `header_mode`
+(`apikey_only_secret` or `apikey_and_bearer_legacy_jwt`), never header values.
 
 ## Stop conditions
 

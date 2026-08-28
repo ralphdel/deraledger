@@ -63,8 +63,8 @@ function Get-OptionalProperty($Value, [string]$Name) {
 
 function Get-CredentialKind([string]$Credential) {
   if ($Credential.StartsWith("sb_secret_", [StringComparison]::Ordinal)) { return "starts_with_sb_secret" }
-  if ($Credential.StartsWith("eyJ", [StringComparison]::Ordinal)) { return "starts_with_eyJ" }
-  return "other"
+  if ($Credential.StartsWith("eyJ", [StringComparison]::Ordinal)) { return "legacy_jwt_service_role_like" }
+  return "unknown"
 }
 
 function Get-CredentialFingerprint([string]$Credential) {
@@ -101,6 +101,32 @@ function Get-CredentialPlainText([string]$EnvVarName) {
   }
   finally {
     $credentialSecure.Dispose()
+  }
+}
+
+function New-AuthAdminReadHeaders([string]$Credential, [string]$CredentialKind) {
+  $headers = @{
+    apikey = $Credential
+    "User-Agent" = "DeraLedger-Server-Diagnostic/1.0"
+  }
+
+  switch ($CredentialKind) {
+    "starts_with_sb_secret" {
+      return [ordered]@{
+        header_mode = "apikey_only_secret"
+        headers = $headers
+      }
+    }
+    "legacy_jwt_service_role_like" {
+      $headers.Authorization = "Bearer $Credential"
+      return [ordered]@{
+        header_mode = "apikey_and_bearer_legacy_jwt"
+        headers = $headers
+      }
+    }
+    default {
+      throw "Unsupported credential kind. Use an sb_secret_ key or a legacy JWT service-role-like key."
+    }
   }
 }
 
@@ -177,7 +203,26 @@ try {
   $credentialFingerprint = Get-CredentialFingerprint $credential
   Write-Output ("CREDENTIAL_FINGERPRINT length={0} sha256_12={1} kind={2}" -f $credentialFingerprint.credential_length, $credentialFingerprint.credential_sha256_12, $credentialFingerprint.credential_kind)
 
-  $headers = @{ apikey = $credential; Authorization = "Bearer $credential" }
+  try {
+    $requestHeaders = New-AuthAdminReadHeaders $credential $credentialFingerprint.credential_kind
+  }
+  catch {
+    $safeFailure = [ordered]@{
+      control = "PRODUCTION_SUPER_ADMIN_AUTH_DIAGNOSTIC=FAIL"
+      target_email_sha256 = Get-Sha256Hex $targetEmail
+      request_status = "NOT_SENT"
+      failure_code = "unsupported_credential_kind"
+      repair_eligibility = "FAIL"
+      credential_fingerprint = $credentialFingerprint
+      credential_kind = $credentialFingerprint.credential_kind
+      header_mode = $null
+    }
+    Write-RedactedEvidence $evidencePath $safeFailure
+    throw "Read-only Auth diagnostic stopped: unsupported credential kind. No request was sent."
+  }
+
+  $headerMode = $requestHeaders.header_mode
+  $headers = $requestHeaders.headers
   $endpoint = "$($projectUrl.TrimEnd('/'))/auth/v1/admin/users/$targetAuthUserId"
   try {
     $response = Invoke-RestMethod -Method Get -Uri $endpoint -Headers $headers -ErrorAction Stop
@@ -191,6 +236,8 @@ try {
       failure_code = "auth_admin_read_request_failed"
       repair_eligibility = "FAIL"
       credential_fingerprint = $credentialFingerprint
+      credential_kind = $credentialFingerprint.credential_kind
+      header_mode = $headerMode
       http_status_code = $httpFailure.http_status_code
       auth_error_code = $httpFailure.auth_error_code
       auth_error_message = $httpFailure.auth_error_message
@@ -255,6 +302,8 @@ try {
     user_metadata_keys = @(Get-PropertyKeys $userMetadata)
     duplicate_ambiguity = "PASS"
     app_metadata_super_admin = if ($isSuperAdmin) { "PASS" } else { "FAIL" }
+    credential_kind = $credentialFingerprint.credential_kind
+    header_mode = $headerMode
     identity_cross_check = "MANUAL_REVIEW_REQUIRED"
     repair_eligibility = "FAIL"
     next_step = "Manual merchant/customer identity cross-check and separate repair approval are required."
