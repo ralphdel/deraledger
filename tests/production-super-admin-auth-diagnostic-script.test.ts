@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 const scriptPath = "scripts/diagnose-production-super-admin-auth.ps1";
 const script = readFileSync(scriptPath, "utf8");
+const trimmedScriptStart = script.replace(/^\uFEFF?/, "").trimStart();
 
 function sourceFiles(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -14,6 +15,7 @@ function sourceFiles(directory: string): string[] {
 
 assert.match(script, /READ ONLY PRODUCTION SUPER ADMIN AUTH DIAGNOSTIC/);
 assert.match(script, /param\([\s\S]*\[string\]\$ServiceRoleKeyEnvVarName = ""[\s\S]*\)/);
+assert.match(trimmedScriptStart, /^param\(/);
 assert.match(script, /GetEnvironmentVariable\(\$EnvVarName\)/);
 assert.match(script, /Read-Host\s+"Production service-role key or approved Auth-admin read credential"\s+-AsSecureString/);
 assert.match(script, /CREDENTIAL_FINGERPRINT length=\{0\} sha256_12=\{1\} kind=\{2\}/);

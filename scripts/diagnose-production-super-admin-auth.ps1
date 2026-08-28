@@ -1,9 +1,9 @@
-$ErrorActionPreference = "Stop"
-Set-StrictMode -Version Latest
-
 param(
   [string]$ServiceRoleKeyEnvVarName = ""
 )
+
+$ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
 
 function Read-RequiredTrimmed([string]$Prompt) {
   $value = (Read-Host $Prompt).Trim()
