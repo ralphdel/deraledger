@@ -28,6 +28,11 @@ async function run() {
   const require = createRequire(import.meta.url);
   const serverOnlyPath = require.resolve("server-only");
   require.cache[serverOnlyPath] = moduleShim(serverOnlyPath, {}) as never;
+  let injectedConfiguration: object | null = null;
+  const securityConfigPath = require.resolve("../src/lib/compliance/server/admin-readiness-route-security-config");
+  require.cache[securityConfigPath] = moduleShim(securityConfigPath, {
+    createAdminReadinessRouteSecurityConfiguration() { return injectedConfiguration; },
+  }) as never;
   const composition = require("../src/lib/compliance/server/admin-readiness-route-security-composition") as typeof import("../src/lib/compliance/server/admin-readiness-route-security-composition");
   const csrfStorage = require("../src/lib/compliance/server/admin-readiness-csrf-storage") as typeof import("../src/lib/compliance/server/admin-readiness-csrf-storage");
   const csrfIssuer = require("../src/lib/compliance/server/admin-readiness-csrf-issuer") as typeof import("../src/lib/compliance/server/admin-readiness-csrf-issuer");
@@ -41,46 +46,50 @@ async function run() {
   assert.ok(issued);
   if (!issued) throw new Error("expected test CSRF token");
 
-  const secure = composition.createAdminReadinessRouteSecurityComposition({
+  injectedConfiguration = {
     environmentPolicyInput: policy(),
     csrfStorage: storage,
-    sessionBindingReader: { async readSessionBindingReference() { return sessionBinding; } },
+    securityContextReader: { async readSecurityContext() { return { sessionBindingReference: sessionBinding, throttleSubjectHash: subjectHash }; } },
     throttleEnvironment: "local",
     throttleNamespace: "admin_readiness_local_test",
     throttleStorage: { async check() { return { kind: "allow" }; } },
     now: () => now,
-  });
+  };
+  const secure = composition.createAdminReadinessRouteSecurityComposition();
   assert.equal(secure.checkOrigin("http://localhost:3000").ok, true);
   assert.equal(secure.checkOrigin("https://deraledger.com/admin").ok, false);
   assert.equal(secure.checkOrigin(null).ok, false);
   assert.deepEqual(await secure.validateCsrf({ operation: "issue", method: "POST", csrfEvidence: issued.token }), { kind: "allow" });
   assert.deepEqual(await secure.validateCsrf({ operation: "issue", method: "POST", csrfEvidence: null }), { kind: "deny", code: "csrf_denied" });
-  assert.deepEqual(await secure.checkThrottle({ operation: "issue", subjectHash }), { kind: "allow" });
+  assert.deepEqual(await secure.checkThrottle({ operation: "issue" }), { kind: "allow" });
 
-  const mismatchedSession = composition.createAdminReadinessRouteSecurityComposition({
+  injectedConfiguration = {
     environmentPolicyInput: policy(), csrfStorage: storage,
-    sessionBindingReader: { async readSessionBindingReference() { return otherSessionBinding; } },
+    securityContextReader: { async readSecurityContext() { return { sessionBindingReference: otherSessionBinding, throttleSubjectHash: subjectHash }; } },
     throttleEnvironment: "local", throttleNamespace: "admin_readiness_local_test",
     throttleStorage: { async check() { return { kind: "allow" }; } }, now: () => now,
-  });
+  };
+  const mismatchedSession = composition.createAdminReadinessRouteSecurityComposition();
   assert.deepEqual(await mismatchedSession.validateCsrf({ operation: "issue", method: "POST", csrfEvidence: issued.token }), { kind: "deny", code: "csrf_denied" });
   now += 101;
   assert.deepEqual(await secure.validateCsrf({ operation: "issue", method: "POST", csrfEvidence: issued.token }), { kind: "deny", code: "csrf_denied" });
 
-  const missingDependencies = composition.createAdminReadinessRouteSecurityComposition({ environmentPolicyInput: policy() });
+  injectedConfiguration = { environmentPolicyInput: policy() };
+  const missingDependencies = composition.createAdminReadinessRouteSecurityComposition();
   assert.deepEqual(await missingDependencies.validateCsrf({ operation: "issue", method: "POST", csrfEvidence: issued.token }), { kind: "unavailable", code: "csrf_unavailable" });
-  assert.deepEqual(await missingDependencies.checkThrottle({ operation: "issue", subjectHash }), { kind: "unavailable", code: "throttle_unavailable" });
+  assert.deepEqual(await missingDependencies.checkThrottle({ operation: "issue" }), { kind: "unavailable", code: "throttle_unavailable" });
 
-  const throwing = composition.createAdminReadinessRouteSecurityComposition({
+  injectedConfiguration = {
     environmentPolicyInput: policy(), csrfStorage: {
       async write() {}, async read() { throw new Error("storage"); }, async remove() {}, async invalidateSessionBinding() {},
     },
-    sessionBindingReader: { async readSessionBindingReference() { throw new Error("session"); } },
+    securityContextReader: { async readSecurityContext() { throw new Error("session"); } },
     throttleEnvironment: "local", throttleNamespace: "admin_readiness_local_test",
     throttleStorage: { async check() { throw new Error("throttle"); } }, now: () => now,
-  });
+  };
+  const throwing = composition.createAdminReadinessRouteSecurityComposition();
   assert.deepEqual(await throwing.validateCsrf({ operation: "issue", method: "POST", csrfEvidence: issued.token }), { kind: "unavailable", code: "csrf_unavailable" });
-  assert.deepEqual(await throwing.checkThrottle({ operation: "issue", subjectHash }), { kind: "unavailable", code: "throttle_unavailable" });
+  assert.deepEqual(await throwing.checkThrottle({ operation: "issue" }), { kind: "unavailable", code: "throttle_unavailable" });
 
   assert.equal(environment.validateAdminReadinessEnvironmentPolicy(policy({ adminOrigin: "https://deraledger.com/admin" })).ok, false);
   assert.equal(environment.validateAdminReadinessEnvironmentPolicy(policy({ browserEnvironmentVariables: [{ name: "NEXT_PUBLIC_CONFIG", value: "sb_secret_hidden" }] })).ok, false);

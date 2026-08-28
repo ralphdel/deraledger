@@ -105,6 +105,20 @@ function digestEqual(left: unknown, right: string): boolean {
   return typeof left === "string" && DIGEST.test(left) && equalAdminReadinessCsrfDigests(left, right);
 }
 
+function createRecord(
+  token: string,
+  input: AdminReadinessCsrfIssueInput,
+  expiresAtEpochMs: number,
+): AdminReadinessCsrfStoredRecord {
+  return {
+    tokenDigest: digestAdminReadinessCsrfValue(token),
+    sessionBindingDigest: digestAdminReadinessCsrfValue(input.sessionBindingReference),
+    operation: input.operation,
+    method: input.method,
+    expiresAtEpochMs,
+  };
+}
+
 async function issueToken(
   storage: AdminReadinessCsrfStorage,
   clock: Clock,
@@ -116,13 +130,7 @@ async function issueToken(
   if (now === null || !validTtl(ttl) || now > Number.MAX_SAFE_INTEGER - ttl) return null;
   const token = createAdminReadinessCsrfToken();
   const expiresAtEpochMs = now + ttl;
-  const record: AdminReadinessCsrfStoredRecord = {
-    tokenDigest: digestAdminReadinessCsrfValue(token),
-    sessionBindingDigest: digestAdminReadinessCsrfValue(input.sessionBindingReference),
-    operation: input.operation,
-    method: input.method,
-    expiresAtEpochMs,
-  };
+  const record = createRecord(token, input, expiresAtEpochMs);
   try {
     await storage.write(record);
     return { token, expiresAt: new Date(expiresAtEpochMs).toISOString() };
@@ -154,6 +162,14 @@ export function createAdminReadinessCsrfIssuer(dependencies: Dependencies): {
           || !digestEqual(previous.tokenDigest, previousDigest)
           || !digestEqual(previous.sessionBindingDigest, digestAdminReadinessCsrfValue(input.sessionBindingReference))
           || previous.operation !== input.operation || previous.method !== input.method) return null;
+        if (storage.rotate) {
+          const ttl = input.expiresInMs ?? DEFAULT_TTL_MS;
+          if (!validTtl(ttl) || now > Number.MAX_SAFE_INTEGER - ttl) return null;
+          const token = createAdminReadinessCsrfToken();
+          const replacement = createRecord(token, input, now + ttl);
+          if (!await storage.rotate(previousDigest, replacement)) return null;
+          return { token, expiresAt: new Date(replacement.expiresAtEpochMs).toISOString() };
+        }
         const issued = await issueToken(storage, clock, input);
         if (!issued) return null;
         await storage.remove(previousDigest);

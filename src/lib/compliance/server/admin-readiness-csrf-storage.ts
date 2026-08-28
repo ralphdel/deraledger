@@ -17,6 +17,8 @@ export interface AdminReadinessCsrfStorage {
   read(tokenDigest: string): Promise<unknown | null>;
   remove(tokenDigest: string): Promise<void>;
   invalidateSessionBinding(sessionBindingDigest: string): Promise<void>;
+  /** Durable stores may replace a predecessor atomically during rotation. */
+  rotate?(previousTokenDigest: string, record: AdminReadinessCsrfStoredRecord): Promise<boolean>;
 }
 
 function copy(record: AdminReadinessCsrfStoredRecord): AdminReadinessCsrfStoredRecord {
@@ -37,6 +39,13 @@ export function createInMemoryAdminReadinessCsrfStorage(): AdminReadinessCsrfSto
       for (const [tokenDigest, record] of records) {
         if (record.sessionBindingDigest === sessionBindingDigest) records.delete(tokenDigest);
       }
+    },
+    async rotate(previousTokenDigest, record) {
+      const previous = records.get(previousTokenDigest);
+      if (!previous) return false;
+      records.set(record.tokenDigest, copy(record));
+      records.delete(previousTokenDigest);
+      return true;
     },
   };
 }

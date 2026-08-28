@@ -8,8 +8,6 @@ import { mapAdminReadinessRouteOutcome } from "@/lib/compliance/server/admin-rea
 import { validateAdminReadinessSnapshot } from "@/lib/compliance/server/admin-readiness-route-validation";
 
 const ROUTE_GATE_ENV = "DERALEDGER_ADMIN_READINESS_ROUTES_ENABLED";
-const OPERATION_THROTTLE_SUBJECT_HASH = "dcd20ea5647d1d47cbf590e70851cc2e57d0b0de3e70210a92a9c95e6fe5d7d1";
-
 function routeEnabled(): boolean {
   return process.env[ROUTE_GATE_ENV] === "true";
 }
@@ -92,8 +90,6 @@ export async function POST(request: Request): Promise<Response> {
 
   const throttle = await security.checkThrottle({
     operation: "snapshot",
-    // This opaque, operation-level bucket is not identity or reviewer authority.
-    subjectHash: OPERATION_THROTTLE_SUBJECT_HASH,
   });
   if (throttle.kind === "deny") return responseFor(correlationId, { kind: "throttled" });
   if (throttle.kind !== "allow") return responseFor(correlationId, { kind: "unavailable" });
