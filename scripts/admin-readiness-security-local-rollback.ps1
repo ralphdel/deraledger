@@ -1,0 +1,42 @@
+[CmdletBinding()]
+param([switch]$RequireBusinessSchemaBaseline, [string]$PsqlPath = 'psql')
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference='Stop'
+$ProjectRoot=Split-Path -Parent $PSScriptRoot
+$EvidenceRoot=Join-Path $ProjectRoot 'local-evidence/admin-readiness-security'
+$PostgresEnvironmentNames=@('PGHOST','PGHOSTADDR','PGPORT','PGDATABASE','PGUSER','PGPASSWORD','PGSERVICE','PGSERVICEFILE','PGPASSFILE','PGOPTIONS','PGSSLMODE')
+function Write-Result {param([string]$State,[string]$Message)Write-Output("{0}|{1}" -f $State,$Message)}
+function Assert-RouteFlagDisabled {foreach($scope in @('Process','User','Machine')){if([Environment]::GetEnvironmentVariable('DERALEDGER_ADMIN_READINESS_ROUTES_ENABLED',$scope) -eq 'true'){throw 'ADMIN_READINESS_LOCAL_REHEARSAL_ROUTE_FLAG_MUST_REMAIN_DISABLED'}}}
+function Assert-PlainConnectionFields {param([string]$Value)if([string]::IsNullOrWhiteSpace($Value) -or $Value -match '(?i)://|(?:^|\s)(?:host|port|dbname|user|password)\s*='){throw 'ADMIN_READINESS_LOCAL_REHEARSAL_CONNECTION_STRING_REJECTED'}}
+function Read-LocalTarget {$DbHost=(Read-Host 'Local database host (localhost or 127.0.0.1 only)').Trim().ToLowerInvariant();$DbPort=(Read-Host 'Local database port (default 5432)').Trim();$DbName=(Read-Host 'Disposable local database name').Trim().ToLowerInvariant();$DbUser=(Read-Host 'Local database user').Trim();if([string]::IsNullOrWhiteSpace($DbPort)){$DbPort='5432'};foreach($value in @($DbHost,$DbPort,$DbName,$DbUser)){Assert-PlainConnectionFields $value};if($DbHost -match '(?i)supabase\.(?:co|com)'){throw 'ADMIN_READINESS_LOCAL_REHEARSAL_SUPABASE_CLOUD_HOST_REJECTED'};if($DbHost -notin @('localhost','127.0.0.1')){throw 'ADMIN_READINESS_LOCAL_REHEARSAL_NONLOCAL_HOST_REJECTED'};if($DbPort -notmatch '^[0-9]{1,5}$' -or [int]$DbPort -lt 1 -or [int]$DbPort -gt 65535){throw 'ADMIN_READINESS_LOCAL_REHEARSAL_PORT_REJECTED'};if($DbName -match '(?i)(?:production|prod|staging|preview|main|^postgres$)'){throw 'ADMIN_READINESS_LOCAL_REHEARSAL_DATABASE_NAME_REJECTED'};if($DbName -notmatch '(?i)(local|test|rehearsal|disposable|admin_readiness)'){throw 'ADMIN_READINESS_LOCAL_REHEARSAL_DISPOSABLE_DATABASE_NAME_REQUIRED'};[pscustomobject]@{DbHost=$DbHost;DbPort=$DbPort;DbName=$DbName;DbUser=$DbUser}}
+function Get-BusinessSchemaBaseline {param($Target)$EvidenceFile=Get-ChildItem -LiteralPath $EvidenceRoot -Filter 'preflight-*.txt' -File -ErrorAction SilentlyContinue|Sort-Object LastWriteTimeUtc -Descending|Select-Object -First 1;if($null -eq $EvidenceFile){return $null};$Evidence=Get-Content -LiteralPath $EvidenceFile.FullName;if($Evidence -notcontains ("connected_database={0}" -f $Target.DbName)){throw 'ADMIN_READINESS_LOCAL_REHEARSAL_PREFLIGHT_TARGET_EVIDENCE_MISMATCH'};return @($Evidence|Where-Object{$_ -match '^business_schema_baseline=[0-9a-f]{32}$'})[0]}
+function Invoke-RollbackPsql {param($Target,[string]$Psql,[string]$Sql)$SavedPgEnvironment=@{};foreach($environmentName in $PostgresEnvironmentNames){$SavedPgEnvironment[$environmentName]=[Environment]::GetEnvironmentVariable($environmentName,'Process');[Environment]::SetEnvironmentVariable($environmentName,$null,'Process')};$SecurePassword=Read-Host 'Local database password (not stored or echoed)' -AsSecureString;$PasswordBstr=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecurePassword);$PlainPassword=$null;try{$PlainPassword=[Runtime.InteropServices.Marshal]::PtrToStringBSTR($PasswordBstr);[Environment]::SetEnvironmentVariable('PGPASSWORD',$PlainPassword,'Process');$output=& $Psql -X -v ON_ERROR_STOP=1 -h $Target.DbHost -p $Target.DbPort -U $Target.DbUser -d $Target.DbName -At -c $Sql 2>$null;if($LASTEXITCODE -ne 0){throw 'ADMIN_READINESS_LOCAL_REHEARSAL_ROLLBACK_FAILED'};return @($output)}finally{if($null -ne $PasswordBstr){[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($PasswordBstr)};$PlainPassword=$null;foreach($environmentName in $PostgresEnvironmentNames){[Environment]::SetEnvironmentVariable($environmentName,$SavedPgEnvironment[$environmentName],'Process')}}}
+try {
+  Assert-RouteFlagDisabled;$Psql=(Get-Command $PsqlPath -ErrorAction Stop).Source;$Target=Read-LocalTarget;$ExpectedBaseline=Get-BusinessSchemaBaseline -Target $Target;if($RequireBusinessSchemaBaseline -and [string]::IsNullOrWhiteSpace($ExpectedBaseline)){throw 'ADMIN_READINESS_LOCAL_REHEARSAL_BUSINESS_SCHEMA_BASELINE_REQUIRED'};$Confirmation=(Read-Host 'Type exact confirmation before local rollback').Trim();if($Confirmation -cne 'ROLLBACK ADMIN READINESS SECURITY MIGRATION FROM LOCAL DISPOSABLE DB'){throw 'ADMIN_READINESS_LOCAL_REHEARSAL_ROLLBACK_CONFIRMATION_REQUIRED'}
+  $RollbackSql=@'
+BEGIN;
+REVOKE ALL ON FUNCTION public.create_admin_readiness_csrf_token_v1(text,text,text,text,timestamptz) FROM service_role;
+REVOKE ALL ON FUNCTION public.read_admin_readiness_csrf_token_v1(text) FROM service_role;
+REVOKE ALL ON FUNCTION public.rotate_admin_readiness_csrf_token_v1(text,text,text,text,text,timestamptz) FROM service_role;
+REVOKE ALL ON FUNCTION public.invalidate_admin_readiness_csrf_binding_v1(text,integer) FROM service_role;
+REVOKE ALL ON FUNCTION public.decide_admin_readiness_throttle_v1(text,text,text,timestamptz,timestamptz,integer) FROM service_role;
+REVOKE ALL ON FUNCTION public.cleanup_admin_readiness_security_storage_v1(integer) FROM service_role;
+DROP FUNCTION public.cleanup_admin_readiness_security_storage_v1(integer);
+DROP FUNCTION public.decide_admin_readiness_throttle_v1(text,text,text,timestamptz,timestamptz,integer);
+DROP FUNCTION public.invalidate_admin_readiness_csrf_binding_v1(text,integer);
+DROP FUNCTION public.rotate_admin_readiness_csrf_token_v1(text,text,text,text,text,timestamptz);
+DROP FUNCTION public.read_admin_readiness_csrf_token_v1(text);
+DROP FUNCTION public.create_admin_readiness_csrf_token_v1(text,text,text,text,timestamptz);
+REVOKE ALL ON TABLE public.admin_readiness_csrf_tokens, public.admin_readiness_csrf_binding_index, public.admin_readiness_throttle_windows FROM service_role;
+DROP TABLE public.admin_readiness_throttle_windows;
+DROP TABLE public.admin_readiness_csrf_binding_index;
+DROP TABLE public.admin_readiness_csrf_tokens;
+COMMIT;
+SELECT 'remaining_tables=' || count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname IN ('admin_readiness_csrf_tokens','admin_readiness_csrf_binding_index','admin_readiness_throttle_windows');
+SELECT 'remaining_functions=' || count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.proname IN ('create_admin_readiness_csrf_token_v1','read_admin_readiness_csrf_token_v1','rotate_admin_readiness_csrf_token_v1','invalidate_admin_readiness_csrf_binding_v1','decide_admin_readiness_throttle_v1','cleanup_admin_readiness_security_storage_v1');
+SELECT 'business_schema_baseline=' || md5(coalesce(string_agg(c.relname || ':' || c.relfilenode || ':' || c.relnatts, ',' ORDER BY c.relname), 'empty')) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p') AND c.relname NOT IN ('admin_readiness_csrf_tokens','admin_readiness_csrf_binding_index','admin_readiness_throttle_windows');
+'@
+  $Output=Invoke-RollbackPsql -Target $Target -Psql $Psql -Sql $RollbackSql;if($Output -notcontains 'remaining_tables=0' -or $Output -notcontains 'remaining_functions=0'){throw 'ADMIN_READINESS_LOCAL_REHEARSAL_ROLLBACK_REMOVAL_VERIFICATION_FAILED'};$ActualBaseline=@($Output|Where-Object{$_ -match '^business_schema_baseline=[0-9a-f]{32}$'})[0];if(-not [string]::IsNullOrWhiteSpace($ExpectedBaseline) -and $ExpectedBaseline -ne $ActualBaseline){throw 'ADMIN_READINESS_LOCAL_REHEARSAL_BUSINESS_SCHEMA_BASELINE_MISMATCH'};if($RequireBusinessSchemaBaseline -and [string]::IsNullOrWhiteSpace($ActualBaseline)){throw 'ADMIN_READINESS_LOCAL_REHEARSAL_BUSINESS_SCHEMA_BASELINE_REQUIRED'}
+  New-Item -ItemType Directory -Path $EvidenceRoot -Force|Out-Null;$EvidencePath=Join-Path $EvidenceRoot ("rollback-{0}.txt" -f [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss'));[System.IO.File]::WriteAllLines($EvidencePath,@('ROLLBACK=PASS','TARGET=LOCAL_DISPOSABLE','OBJECTS_REMOVED=APPROVED_ADMIN_READINESS_SECURITY_ONLY','BUSINESS_SCHEMA_BASELINE=VERIFIED_OR_SKIPPED','ROUTE_FLAG=DISABLED'),[System.Text.UTF8Encoding]::new($false));Write-Result 'PASS' 'exact_security_objects_removed_from_local_disposable_target';Write-Result 'PASS' 'rollback_complete'
+} catch {Write-Result 'FAIL' $_.Exception.Message;exit 1}
