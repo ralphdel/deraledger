@@ -14,7 +14,7 @@ The new user-run scripts are:
 - `scripts/admin-readiness-security-local-behavior.ps1`
 - `scripts/admin-readiness-security-local-rollback.ps1`
 
-Each script independently prompts for separate local connection fields, rejects connection strings and non-loopback hosts, requires a disposable database name, rejects staging/production-looking names, and writes compact credential-free evidence only under `local-evidence/admin-readiness-security/`. The scripts never use PowerShell's `$Host` variable, never echo or persist passwords, use UTF-8 evidence, and require only `psql` when the user later runs them. Docker Desktop, WSL, and the Supabase CLI are not prerequisites.
+Each script independently prompts for separate local connection fields, rejects connection strings and non-loopback hosts, requires a disposable database name, rejects staging/production-looking names, and writes compact credential-free evidence only under `local-evidence/admin-readiness-security/`. The staging/production checks are rejection guards only, not target requirements. The local Supabase/Postgres default database name `postgres` is permitted only for `localhost` or `127.0.0.1`, port `55432`, and user `postgres`, after the typed local-disposable confirmation and passing server-identity checks. The scripts never use PowerShell's `$Host` variable, never echo or persist passwords, use UTF-8 evidence, and require only `psql` when the user later runs them. Docker Desktop, WSL, and the Supabase CLI are not prerequisites.
 
 ## Run boundaries
 

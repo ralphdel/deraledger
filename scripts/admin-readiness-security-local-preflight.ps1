@@ -31,9 +31,18 @@ function Read-LocalTarget {
   if ($DbHost -match '(?i)supabase\.(?:co|com)') { throw 'ADMIN_READINESS_LOCAL_REHEARSAL_SUPABASE_CLOUD_HOST_REJECTED' }
   if ($DbHost -notin @('localhost', '127.0.0.1')) { throw 'ADMIN_READINESS_LOCAL_REHEARSAL_NONLOCAL_HOST_REJECTED' }
   if ($DbPort -notmatch '^[0-9]{1,5}$' -or [int]$DbPort -lt 1 -or [int]$DbPort -gt 65535) { throw 'ADMIN_READINESS_LOCAL_REHEARSAL_PORT_REJECTED' }
-  if ($DbName -match '(?i)(?:production|prod|staging|preview|main|^postgres$)') { throw 'ADMIN_READINESS_LOCAL_REHEARSAL_DATABASE_NAME_REJECTED' }
-  if ($DbName -notmatch '(?i)(local|test|rehearsal|disposable|admin_readiness)') { throw 'ADMIN_READINESS_LOCAL_REHEARSAL_DISPOSABLE_DATABASE_NAME_REQUIRED' }
-  [pscustomobject]@{ DbHost = $DbHost; DbPort = $DbPort; DbName = $DbName; DbUser = $DbUser }
+  if ($DbName -match '(?i)(?:production|prod|staging|preview|main)') { throw 'ADMIN_READINESS_LOCAL_REHEARSAL_DATABASE_NAME_REJECTED' }
+  $IsLocalSupabasePostgresDefault = $DbName -eq 'postgres'
+  if ($IsLocalSupabasePostgresDefault) {
+    if ($DbHost -notin @('localhost', '127.0.0.1') -or $DbPort -ne '55432' -or $DbUser -ine 'postgres') { throw 'ADMIN_READINESS_LOCAL_REHEARSAL_POSTGRES_DEFAULT_TARGET_REJECTED' }
+  } elseif ($DbName -notmatch '(?i)(local|test|rehearsal|disposable|admin_readiness)') { throw 'ADMIN_READINESS_LOCAL_REHEARSAL_DISPOSABLE_DATABASE_NAME_REQUIRED' }
+  [pscustomobject]@{ DbHost = $DbHost; DbPort = $DbPort; DbName = $DbName; DbUser = $DbUser; IsLocalSupabasePostgresDefault = $IsLocalSupabasePostgresDefault }
+}
+function Assert-LocalPostgresDefaultConfirmation {
+  param($Target)
+  if (-not $Target.IsLocalSupabasePostgresDefault) { return }
+  $Confirmation = (Read-Host 'Type LOCAL DISPOSABLE POSTGRES TARGET to confirm the loopback Supabase default database').Trim()
+  if ($Confirmation -cne 'LOCAL DISPOSABLE POSTGRES TARGET') { throw 'ADMIN_READINESS_LOCAL_REHEARSAL_POSTGRES_DEFAULT_CONFIRMATION_REQUIRED' }
 }
 function Invoke-ReadOnlyPsql {
   param($Target, [string]$Psql, [string]$Sql)
@@ -68,6 +77,7 @@ try {
   if (-not (Test-Path -LiteralPath $MigrationPath -PathType Leaf)) { throw 'ADMIN_READINESS_LOCAL_REHEARSAL_MIGRATION_MISSING' }
   $Psql = (Get-Command $PsqlPath -ErrorAction Stop).Source
   $Target = Read-LocalTarget
+  Assert-LocalPostgresDefaultConfirmation -Target $Target
   $Confirmation = (Read-Host 'Type LOCAL DISPOSABLE PREFLIGHT to continue; localhost tunnels remain operator risk').Trim()
   if ($Confirmation -cne 'LOCAL DISPOSABLE PREFLIGHT') { throw 'ADMIN_READINESS_LOCAL_REHEARSAL_PREFLIGHT_CONFIRMATION_REQUIRED' }
   Write-Result 'PASS' 'local_target_guard_passed'; Write-Result 'PASS' 'migration_source_present'; Write-Result 'PASS' 'route_flag_disabled'
@@ -103,6 +113,7 @@ SELECT 'business_schema_baseline=' || md5(coalesce(string_agg(c.relname || ':' |
   if ($ServerAddress -notin @('server_address=127.0.0.1', 'server_address=::1')) { throw 'ADMIN_READINESS_LOCAL_REHEARSAL_SERVER_ADDRESS_NOT_LOOPBACK' }
   if ($ServerPort -notmatch '^server_port=[0-9]{1,5}$' -or $ServerVersion -match '(?i)(supabase|cloud|amazon|neon)' -or [string]::IsNullOrWhiteSpace($Baseline)) { throw 'ADMIN_READINESS_LOCAL_REHEARSAL_SUSPICIOUS_SERVER_METADATA' }
   if ($null -eq $ServiceRoleExists -or $null -eq $ServiceRoleBypassRls -or $null -eq $ServiceRoleAssumable) { throw 'ADMIN_READINESS_LOCAL_REHEARSAL_SERVICE_ROLE_PREREQUISITE_FAILED' }
-  Write-SafeEvidence @('PRELIGHT=PASS', 'TARGET=LOCAL_DISPOSABLE', 'READ_ONLY_METADATA=PASS', $ReportedDatabase, $ServerAddress, $ServerPort, $ServerVersion, 'SERVICE_ROLE_EXISTS=PASS', 'SERVICE_ROLE_BYPASSRLS=PASS', 'SERVICE_ROLE_ASSUMABLE=PASS', $Baseline, 'ROUTE_FLAG=DISABLED')
+  $PostgresDefaultEvidence = if ($Target.IsLocalSupabasePostgresDefault) { 'LOCAL_POSTGRES_DEFAULT=PASS' } else { 'LOCAL_POSTGRES_DEFAULT=NOT_USED' }
+  Write-SafeEvidence @('PRELIGHT=PASS', 'TARGET=LOCAL_DISPOSABLE', 'READ_ONLY_METADATA=PASS', $ReportedDatabase, $ServerAddress, $ServerPort, $ServerVersion, 'SERVICE_ROLE_EXISTS=PASS', 'SERVICE_ROLE_BYPASSRLS=PASS', 'SERVICE_ROLE_ASSUMABLE=PASS', $Baseline, $PostgresDefaultEvidence, 'ROUTE_FLAG=DISABLED')
   Write-Result 'PASS' 'connected_server_identity_verified'; Write-Result 'PASS' 'service_role_prerequisites_verified'; Write-Result 'PASS' 'preflight_complete'
 } catch { Write-Result 'BLOCKED' $_.Exception.Message; exit 1 }

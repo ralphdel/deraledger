@@ -31,6 +31,13 @@ for (const { scriptPath, source } of scripts) {
   assert.match(source, /SUPABASE_CLOUD_HOST_REJECTED/, `${scriptPath} must explicitly reject Supabase cloud hosts`);
   assert.match(source, /DISPOSABLE_DATABASE_NAME_REQUIRED/, `${scriptPath} must require a disposable database name`);
   assert.match(source, /DATABASE_NAME_REJECTED/, `${scriptPath} must reject staging/production-looking database names`);
+  assert.match(source, /IsLocalSupabasePostgresDefault/, `${scriptPath} must identify the narrow local Supabase postgres exception`);
+  assert.match(source, /\$DbName\s+-eq\s+'postgres'/, `${scriptPath} must scope the exception to the postgres database name only`);
+  assert.match(source, /\$DbPort\s+-ne\s+'55432'/, `${scriptPath} must reject postgres outside the local Supabase port`);
+  assert.match(source, /\$DbUser\s+-ine\s+'postgres'/, `${scriptPath} must reject postgres unless the local user is postgres`);
+  assert.match(source, /POSTGRES_DEFAULT_TARGET_REJECTED/, `${scriptPath} must reject unsafe postgres targets`);
+  assert.match(source, /LOCAL DISPOSABLE POSTGRES TARGET/, `${scriptPath} must require a typed local-disposable confirmation for postgres`);
+  assert.doesNotMatch(source, /\^postgres\$/, `${scriptPath} must not categorically reject the local Supabase postgres database`);
   assert.match(source, /DERALEDGER_ADMIN_READINESS_ROUTES_ENABLED/, `${scriptPath} must keep the route flag disabled`);
   assert.match(source, /local-evidence\/admin-readiness-security/, `${scriptPath} must write only local evidence`);
   assert.match(source, /UTF8Encoding\]::new\(\$false\)/, `${scriptPath} must write UTF-8 evidence without a BOM`);
@@ -61,6 +68,11 @@ for (const identityField of ["current_database()", "inet_server_addr()", "inet_s
 }
 for (const prerequisite of ["service_role_exists", "service_role_bypassrls", "service_role_assumable", "SERVICE_ROLE_PREREQUISITE_FAILED"]) {
   assert.match(preflight, new RegExp(prerequisite), `preflight must verify ${prerequisite}`);
+}
+assert.match(preflight, /LOCAL_POSTGRES_DEFAULT=PASS/, "preflight must record passing identity evidence for the narrow postgres exception");
+
+for (const { scriptPath, source } of scripts.filter(({ scriptPath }) => !scriptPath.includes("preflight"))) {
+  assert.match(source, /POSTGRES_DEFAULT_IDENTITY_EVIDENCE_REQUIRED/, `${scriptPath} must require identity-backed preflight evidence before using the postgres exception`);
 }
 
 const apply = scripts.find(({ scriptPath }) => scriptPath.includes("apply"))!.source;
@@ -109,5 +121,8 @@ assert.match(rollback, /PREFLIGHT_TARGET_EVIDENCE_MISMATCH/, "rollback must bind
 
 const checkpoint = readFileSync("docs/prd-phase-2-admin-readiness-local-rehearsal-harness-source-checkpoint.md", "utf8");
 assert.match(checkpoint, /process, user, and machine scopes/i, "checkpoint must describe every route-flag scope");
+assert.match(checkpoint, /rejection guards only, not target requirements/i, "checkpoint must clarify that staging/production checks are safeguards rather than target requirements");
+assert.match(checkpoint, /127\.0\.0\.1|localhost/, "checkpoint must document the narrow loopback postgres exception");
+assert.match(checkpoint, /55432/, "checkpoint must document the narrow local Supabase port exception");
 
 console.log("admin-readiness-local-rehearsal-harness.test.ts passed");
