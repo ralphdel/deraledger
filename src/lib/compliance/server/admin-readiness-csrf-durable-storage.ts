@@ -1,171 +1,191 @@
 import "server-only";
 
-import type { AdminReadinessRedisCommandClient } from "./admin-readiness-durable-redis-client";
 import type { AdminReadinessCsrfStorage, AdminReadinessCsrfStoredRecord } from "./admin-readiness-csrf-storage";
 
+export type AdminReadinessSupabaseSecurityRpcClient = Readonly<{
+  rpc(functionName: string, arguments_: Record<string, unknown>): Promise<Readonly<{ data: unknown; error: unknown | null }>>;
+}>;
+
 type Dependencies = Readonly<{
-  client: AdminReadinessRedisCommandClient | null;
-  namespace: string;
+  client: AdminReadinessSupabaseSecurityRpcClient | null;
   now?: () => number;
 }>;
 
-const DIGEST = /^[a-f0-9]{64}$/i;
-const NAMESPACE = /^admin_readiness_(production|staging|preview|local)_v1$/;
+const DIGEST = /^[a-f0-9]{64}$/;
 const MAX_ACTIVE_PER_BINDING = 4;
+const MAX_TTL_MS = 30 * 60 * 1_000;
 
-const CREATE_SCRIPT = `
--- admin-readiness-csrf-create-v1
-redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', ARGV[3])
-if redis.call('SET', KEYS[1], ARGV[1], 'NX', 'PX', ARGV[2]) == false then return 0 end
-if redis.call('ZCARD', KEYS[2]) >= tonumber(ARGV[4]) then redis.call('DEL', KEYS[1]); return -1 end
-redis.call('ZADD', KEYS[2], ARGV[5], ARGV[6])
-local existingTtl = redis.call('PTTL', KEYS[2])
-if existingTtl < tonumber(ARGV[2]) then redis.call('PEXPIRE', KEYS[2], ARGV[2]) end
-return 1`;
+const CREATE_RPC = "create_admin_readiness_csrf_token_v1";
+const READ_RPC = "read_admin_readiness_csrf_token_v1";
+const ROTATE_RPC = "rotate_admin_readiness_csrf_token_v1";
+const INVALIDATE_RPC = "invalidate_admin_readiness_csrf_binding_v1";
 
-const ROTATE_SCRIPT = `
--- admin-readiness-csrf-rotate-v1
-local prior = redis.call('GET', KEYS[1])
-if not prior then return 0 end
-local ok, record = pcall(cjson.decode, prior)
-if not ok or record.tokenDigest ~= ARGV[7] or record.sessionBindingDigest ~= ARGV[8] or record.operation ~= ARGV[9] or record.method ~= ARGV[10] or tonumber(record.expiresAtEpochMs) <= tonumber(ARGV[3]) then return 0 end
-redis.call('ZREMRANGEBYSCORE', KEYS[3], '-inf', ARGV[3])
-local active = redis.call('ZCARD', KEYS[3])
-if redis.call('ZSCORE', KEYS[3], ARGV[7]) then active = active - 1 end
-if active >= tonumber(ARGV[4]) then return -1 end
-if redis.call('SET', KEYS[2], ARGV[1], 'NX', 'PX', ARGV[2]) == false then return -1 end
-redis.call('ZADD', KEYS[3], ARGV[5], ARGV[6])
-local existingTtl = redis.call('PTTL', KEYS[3])
-if existingTtl < tonumber(ARGV[2]) then redis.call('PEXPIRE', KEYS[3], ARGV[2]) end
-redis.call('DEL', KEYS[1])
-redis.call('ZREM', KEYS[3], ARGV[7])
-return 1`;
+type CreateRow = Readonly<{ result_code: "created" | "conflict" | "invalid" | "csrf_unavailable" }>;
+type ReadRow = Readonly<{
+  result_code: "found" | "missing" | "expired" | "invalid" | "csrf_unavailable";
+  operation: string | null;
+  method: string | null;
+  session_binding_digest: string | null;
+  expires_at: string | null;
+}>;
+type RotateRow = Readonly<{ result_code: "rotated" | "conflict" | "missing" | "expired" | "binding_mismatch" | "operation_mismatch" | "method_mismatch" | "invalid" | "csrf_unavailable" }>;
+type InvalidateRow = Readonly<{ result_code: "invalidated" | "missing" | "invalid" | "csrf_unavailable"; deleted_count: number | null }>;
 
-const INVALIDATE_SCRIPT = `
--- admin-readiness-csrf-invalidate-v1
-local members = redis.call('ZRANGE', KEYS[1], 0, -1)
-for _, member in ipairs(members) do redis.call('DEL', ARGV[1] .. member) end
-redis.call('DEL', KEYS[1])
-return 1`;
+function exact(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+    && Object.keys(value as object).length === keys.length
+    && keys.every((key) => Object.hasOwn(value as object, key));
+}
 
-const REMOVE_SCRIPT = `return redis.call('DEL', KEYS[1])`;
+function oneRow(value: unknown): Record<string, unknown> | null {
+  return Array.isArray(value) && value.length === 1 && value[0] && typeof value[0] === "object" && !Array.isArray(value[0])
+    ? value[0] as Record<string, unknown>
+    : null;
+}
+
+function operationForRpc(operation: AdminReadinessCsrfStoredRecord["operation"]): "readiness_issue" | "readiness_snapshot" {
+  return operation === "issue" ? "readiness_issue" : "readiness_snapshot";
+}
+
+function operationFromRpc(value: unknown): AdminReadinessCsrfStoredRecord["operation"] | null {
+  if (value === "readiness_issue") return "issue";
+  if (value === "readiness_snapshot") return "snapshot";
+  return null;
+}
+
+function timestamp(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  const epochMs = Date.parse(value);
+  return Number.isSafeInteger(epochMs) && epochMs > 0 ? epochMs : null;
+}
 
 function validRecord(value: AdminReadinessCsrfStoredRecord): boolean {
   return DIGEST.test(value.tokenDigest) && DIGEST.test(value.sessionBindingDigest)
     && (value.operation === "issue" || value.operation === "snapshot")
-    && (value.method === "GET" || value.method === "POST")
+    && value.method === "POST"
     && Number.isSafeInteger(value.expiresAtEpochMs) && value.expiresAtEpochMs > 0;
 }
 
-function nowEpoch(clock: () => number): number | null {
-  const value = clock();
-  return Number.isSafeInteger(value) && value > 0 ? value : null;
+function ttl(record: AdminReadinessCsrfStoredRecord, clock: () => number): number | null {
+  const now = clock();
+  if (!validRecord(record) || !Number.isSafeInteger(now) || now <= 0 || record.expiresAtEpochMs <= now) return null;
+  const ttlMs = record.expiresAtEpochMs - now;
+  return ttlMs <= MAX_TTL_MS ? ttlMs : null;
 }
 
-function keyPrefix(namespace: string): string {
-  return `dl:admin-readiness:v1:${namespace}`;
+function createResult(value: unknown): CreateRow | null {
+  const row = oneRow(value);
+  return row && exact(row, ["result_code"])
+    && (row.result_code === "created" || row.result_code === "conflict" || row.result_code === "invalid" || row.result_code === "csrf_unavailable")
+    ? row as CreateRow
+    : null;
 }
 
-function tokenKey(namespace: string, digest: string): string {
-  return `${keyPrefix(namespace)}:csrf:token:${digest}`;
+function readResult(value: unknown): ReadRow | null {
+  const row = oneRow(value);
+  return row && exact(row, ["result_code", "operation", "method", "session_binding_digest", "expires_at"])
+    && (row.result_code === "found" || row.result_code === "missing" || row.result_code === "expired" || row.result_code === "invalid" || row.result_code === "csrf_unavailable")
+    && (typeof row.operation === "string" || row.operation === null)
+    && (typeof row.method === "string" || row.method === null)
+    && (typeof row.session_binding_digest === "string" || row.session_binding_digest === null)
+    && (typeof row.expires_at === "string" || row.expires_at === null)
+    ? row as ReadRow
+    : null;
 }
 
-function bindingKey(namespace: string, digest: string): string {
-  return `${keyPrefix(namespace)}:csrf:binding:${digest}`;
+function rotateResult(value: unknown): RotateRow | null {
+  const row = oneRow(value);
+  return row && exact(row, ["result_code"])
+    && (row.result_code === "rotated" || row.result_code === "conflict" || row.result_code === "missing" || row.result_code === "expired"
+      || row.result_code === "binding_mismatch" || row.result_code === "operation_mismatch" || row.result_code === "method_mismatch"
+      || row.result_code === "invalid" || row.result_code === "csrf_unavailable")
+    ? row as RotateRow
+    : null;
 }
 
-function result(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
+function invalidateResult(value: unknown): InvalidateRow | null {
+  const row = oneRow(value);
+  return row && exact(row, ["result_code", "deleted_count"])
+    && (row.result_code === "invalidated" || row.result_code === "missing" || row.result_code === "invalid" || row.result_code === "csrf_unavailable")
+    && (typeof row.deleted_count === "number" || row.deleted_count === null)
+    ? row as InvalidateRow
+    : null;
 }
 
-function recordJson(record: AdminReadinessCsrfStoredRecord): string {
-  return JSON.stringify({
-    v: 1,
-    tokenDigest: record.tokenDigest,
-    sessionBindingDigest: record.sessionBindingDigest,
-    operation: record.operation,
-    method: record.method,
-    expiresAtEpochMs: record.expiresAtEpochMs,
-  });
-}
-
-/** A digest-only Redis implementation; configuration/provider failure is represented by rejected storage operations. */
+/**
+ * Server-only adapter for the reviewed Supabase CSRF RPCs. It stores no raw
+ * token/session material, exposes no generic client, and maps every malformed
+ * provider response or error to the existing fail-closed storage seam.
+ */
 export function createAdminReadinessDurableCsrfStorage(dependencies: Dependencies): AdminReadinessCsrfStorage {
   const client = dependencies.client;
-  const namespace = NAMESPACE.test(dependencies.namespace) ? dependencies.namespace : null;
   const clock = dependencies.now ?? Date.now;
-  const usable = () => client !== null && namespace !== null;
-
-  function ttl(record: AdminReadinessCsrfStoredRecord): readonly [number, number] | null {
-    const now = nowEpoch(clock);
-    if (!validRecord(record) || now === null || record.expiresAtEpochMs <= now) return null;
-    const ttlMs = record.expiresAtEpochMs - now;
-    return ttlMs > 0 && ttlMs <= 60 * 60 * 1_000 ? [ttlMs, now] : null;
-  }
 
   return {
     async write(record) {
-      const expiry = ttl(record);
-      if (!usable() || !expiry || !client || !namespace) throw new Error("csrf storage unavailable");
-      const [ttlMs, now] = expiry;
+      if (!client || ttl(record, clock) === null) throw new Error("csrf storage unavailable");
       try {
-        const response = result(await client.eval(CREATE_SCRIPT,
-          [tokenKey(namespace, record.tokenDigest), bindingKey(namespace, record.sessionBindingDigest)],
-          [recordJson(record), ttlMs, now, MAX_ACTIVE_PER_BINDING, record.expiresAtEpochMs, record.tokenDigest]));
-        if (response !== 1) throw new Error("csrf storage rejected");
+        const response = await client.rpc(CREATE_RPC, {
+          p_token_digest: record.tokenDigest,
+          p_session_binding_digest: record.sessionBindingDigest,
+          p_operation: operationForRpc(record.operation),
+          p_method: record.method,
+          p_expires_at: new Date(record.expiresAtEpochMs).toISOString(),
+        });
+        const row = response.error ? null : createResult(response.data);
+        if (!row || row.result_code !== "created") throw new Error("csrf storage unavailable");
       } catch {
         throw new Error("csrf storage unavailable");
       }
     },
     async read(tokenDigest) {
-      if (!usable() || !DIGEST.test(tokenDigest) || !client || !namespace) throw new Error("csrf storage unavailable");
+      if (!client || !DIGEST.test(tokenDigest)) throw new Error("csrf storage unavailable");
       try {
-        const raw = await client.get(tokenKey(namespace, tokenDigest));
-        if (raw === null) return null;
-        if (typeof raw !== "string") return raw;
-        try {
-          const parsed: unknown = JSON.parse(raw);
-          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return raw;
-          const value = parsed as Record<string, unknown>;
-          if (value.v !== 1) return raw;
-          return {
-            tokenDigest: value.tokenDigest,
-            sessionBindingDigest: value.sessionBindingDigest,
-            operation: value.operation,
-            method: value.method,
-            expiresAtEpochMs: value.expiresAtEpochMs,
-          };
-        } catch { return raw; }
+        const response = await client.rpc(READ_RPC, { p_token_digest: tokenDigest });
+        const row = response.error ? null : readResult(response.data);
+        if (!row) throw new Error("csrf storage unavailable");
+        if (row.result_code === "missing" || row.result_code === "expired") return null;
+        if (row.result_code !== "found" || !row.session_binding_digest || !DIGEST.test(row.session_binding_digest)
+          || row.method !== "POST") throw new Error("csrf storage unavailable");
+        const operation = operationFromRpc(row.operation);
+        const expiresAtEpochMs = timestamp(row.expires_at);
+        if (!operation || expiresAtEpochMs === null) throw new Error("csrf storage unavailable");
+        return { tokenDigest, sessionBindingDigest: row.session_binding_digest, operation, method: "POST", expiresAtEpochMs };
       } catch {
         throw new Error("csrf storage unavailable");
       }
     },
-    async remove(tokenDigest) {
-      if (!usable() || !DIGEST.test(tokenDigest) || !client || !namespace) throw new Error("csrf storage unavailable");
-      try {
-        if (result(await client.eval(REMOVE_SCRIPT, [tokenKey(namespace, tokenDigest)], [])) === null) throw new Error("bad result");
-      } catch {
-        throw new Error("csrf storage unavailable");
-      }
+    async remove() {
+      // The reviewed RPC surface deliberately has no single-token delete. The
+      // issuer uses atomic rotate, so a fallback remove must fail closed.
+      throw new Error("csrf storage unavailable");
     },
     async invalidateSessionBinding(sessionBindingDigest) {
-      if (!usable() || !DIGEST.test(sessionBindingDigest) || !client || !namespace) throw new Error("csrf storage unavailable");
+      if (!client || !DIGEST.test(sessionBindingDigest)) throw new Error("csrf storage unavailable");
       try {
-        if (result(await client.eval(INVALIDATE_SCRIPT, [bindingKey(namespace, sessionBindingDigest)], [`${keyPrefix(namespace)}:csrf:token:`])) !== 1) throw new Error("bad result");
+        const response = await client.rpc(INVALIDATE_RPC, {
+          p_session_binding_digest: sessionBindingDigest,
+          p_max_delete_count: MAX_ACTIVE_PER_BINDING,
+        });
+        const row = response.error ? null : invalidateResult(response.data);
+        if (!row || (row.result_code !== "invalidated" && row.result_code !== "missing")) throw new Error("csrf storage unavailable");
       } catch {
         throw new Error("csrf storage unavailable");
       }
     },
     async rotate(previousTokenDigest, record) {
-      const expiry = ttl(record);
-      if (!usable() || !DIGEST.test(previousTokenDigest) || !expiry || !client || !namespace) return false;
-      const [ttlMs, now] = expiry;
+      if (!client || !DIGEST.test(previousTokenDigest) || ttl(record, clock) === null) return false;
       try {
-        const response = result(await client.eval(ROTATE_SCRIPT,
-          [tokenKey(namespace, previousTokenDigest), tokenKey(namespace, record.tokenDigest), bindingKey(namespace, record.sessionBindingDigest)],
-          [recordJson(record), ttlMs, now, MAX_ACTIVE_PER_BINDING, record.expiresAtEpochMs, record.tokenDigest,
-            previousTokenDigest, record.sessionBindingDigest, record.operation, record.method]));
-        return response === 1;
+        const response = await client.rpc(ROTATE_RPC, {
+          p_previous_token_digest: previousTokenDigest,
+          p_new_token_digest: record.tokenDigest,
+          p_session_binding_digest: record.sessionBindingDigest,
+          p_operation: operationForRpc(record.operation),
+          p_method: record.method,
+          p_expires_at: new Date(record.expiresAtEpochMs).toISOString(),
+        });
+        const row = response.error ? null : rotateResult(response.data);
+        return row?.result_code === "rotated";
       } catch {
         return false;
       }

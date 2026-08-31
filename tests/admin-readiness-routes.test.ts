@@ -163,7 +163,7 @@ async function run() {
     let received = await result(route, JSON.stringify({ profileId: id, targetComplianceStatus: "lite_verified", policyVersion: "policy-v1" }));
     assert.deepEqual(received, { status: 500, body: { kind: "unavailable", code: "internal_unavailable" } });
     assert.equal(state.factoryCalls, 0);
-    assert.deepEqual(state.trace, ["csrf", "throttle"]);
+    assert.deepEqual(state.trace, []);
 
     // Parser and command validation reject before security controls and the factory.
     process.env.DERALEDGER_ADMIN_READINESS_ROUTES_ENABLED = "true";

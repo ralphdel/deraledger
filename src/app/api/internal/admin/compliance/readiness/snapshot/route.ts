@@ -59,6 +59,9 @@ function publicOutcome(outcome: Awaited<ReturnType<ReturnType<typeof createCanon
 
 export async function POST(request: Request): Promise<Response> {
   const correlationId = createAdminReadinessCorrelationId();
+  // This is deliberately the first operational gate: disabled routes never
+  // construct security/service dependencies or read request-derived evidence.
+  if (!routeEnabled()) return responseFor(correlationId, { kind: "unavailable" });
   let rawBody: string;
   try {
     rawBody = await request.text();
@@ -93,8 +96,6 @@ export async function POST(request: Request): Promise<Response> {
   });
   if (throttle.kind === "deny") return responseFor(correlationId, { kind: "throttled" });
   if (throttle.kind !== "allow") return responseFor(correlationId, { kind: "unavailable" });
-
-  if (!routeEnabled()) return responseFor(correlationId, { kind: "unavailable" });
 
   try {
     const service = createCanonicalApprovalReadinessServerService();

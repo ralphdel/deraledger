@@ -1,19 +1,26 @@
 import "server-only";
 
+import { createClient as createSupabaseClient } from "@supabase/supabase-js";
+
 import { createAdminReadinessCsrfSessionBindingReader, isAdminReadinessSecurityHmacKey } from "./admin-readiness-csrf-session-binding";
-import { createAdminReadinessDurableCsrfStorage } from "./admin-readiness-csrf-durable-storage";
-import { createAdminReadinessDurableRedisClient } from "./admin-readiness-durable-redis-client";
+import { createAdminReadinessDurableCsrfStorage, type AdminReadinessSupabaseSecurityRpcClient } from "./admin-readiness-csrf-durable-storage";
+import { createAdminReadinessCsrfIssuer } from "./admin-readiness-csrf-issuer";
 import { validateAdminReadinessEnvironmentPolicy, type AdminReadinessDeploymentEnvironment } from "./admin-readiness-environment-policy";
 import { createAdminReadinessDurableThrottleStorage } from "./admin-readiness-throttle-durable-storage";
+import { createCanonicalApprovalReadinessReviewerResolver } from "./canonical-approval-readiness-reviewer-resolver";
+import { createCanonicalApprovalReadinessSessionReader } from "./canonical-approval-readiness-session-reader";
 
 type SecurityContextReader = Readonly<{
   readSecurityContext(): Promise<Readonly<{ sessionBindingReference: string; throttleSubjectHash: string }> | null>;
 }>;
+type AdminAuthorizer = Readonly<{ isCurrentRequestAdmin(): Promise<boolean> }>;
 
 export type AdminReadinessRouteSecurityConfiguration = Readonly<{
   environmentPolicyInput: unknown;
   csrfStorage: ReturnType<typeof createAdminReadinessDurableCsrfStorage>;
+  csrfIssuer: ReturnType<typeof createAdminReadinessCsrfIssuer>;
   securityContextReader: SecurityContextReader;
+  adminAuthorizer: AdminAuthorizer;
   throttleEnvironment: AdminReadinessDeploymentEnvironment;
   throttleNamespace: string;
   throttleStorage: ReturnType<typeof createAdminReadinessDurableThrottleStorage>;
@@ -37,34 +44,70 @@ function policyInputFromProcess(): unknown {
   };
 }
 
+function nonEmpty(value: string | undefined): string | null {
+  const normalized = value?.trim() ?? "";
+  return normalized || null;
+}
+
+function createAdminReadinessSupabaseSecurityRpcClient(): AdminReadinessSupabaseSecurityRpcClient | null {
+  const url = nonEmpty(process.env.SUPABASE_URL) ?? nonEmpty(process.env.NEXT_PUBLIC_SUPABASE_URL);
+  const serviceRoleKey = nonEmpty(process.env.SUPABASE_SERVICE_ROLE_KEY);
+  if (!url || !serviceRoleKey) return null;
+  try {
+    return createSupabaseClient(url, serviceRoleKey, {
+      auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
+    }) as unknown as AdminReadinessSupabaseSecurityRpcClient;
+  } catch {
+    return null;
+  }
+}
+
+function createAdminReadinessAdminAuthorizer(): AdminAuthorizer {
+  const resolver = createCanonicalApprovalReadinessReviewerResolver({
+    sessionUserReader: createCanonicalApprovalReadinessSessionReader(),
+  });
+  return {
+    async isCurrentRequestAdmin() {
+      try {
+        return (await resolver.resolveServerSessionReviewer())?.actorKind === "super_admin";
+      } catch {
+        return false;
+      }
+    },
+  };
+}
+
 /** Returns null unless every server-only configuration component is complete and matched. */
 export function createAdminReadinessRouteSecurityConfiguration(): AdminReadinessRouteSecurityConfiguration | null {
   const environmentPolicyInput = policyInputFromProcess();
   const policyResult = validateAdminReadinessEnvironmentPolicy(environmentPolicyInput);
   if (!policyResult.ok) return null;
-  const redis = createAdminReadinessDurableRedisClient();
+  const supabase = createAdminReadinessSupabaseSecurityRpcClient();
   const csrfKey = process.env.DERALEDGER_ADMIN_READINESS_CSRF_BINDING_HMAC_KEY;
   const throttleKey = process.env.DERALEDGER_ADMIN_READINESS_THROTTLE_SUBJECT_HMAC_KEY;
   const issueLimit = decimal(process.env.DERALEDGER_ADMIN_READINESS_THROTTLE_ISSUE_LIMIT, 100);
   const snapshotLimit = decimal(process.env.DERALEDGER_ADMIN_READINESS_THROTTLE_SNAPSHOT_LIMIT, 100);
   const windowSeconds = decimal(process.env.DERALEDGER_ADMIN_READINESS_THROTTLE_WINDOW_SECONDS, 3_600);
-  if (!redis || !isAdminReadinessSecurityHmacKey(csrfKey) || !isAdminReadinessSecurityHmacKey(throttleKey) || csrfKey === throttleKey
+  if (!supabase || !isAdminReadinessSecurityHmacKey(csrfKey) || !isAdminReadinessSecurityHmacKey(throttleKey) || csrfKey === throttleKey
     || issueLimit === null || snapshotLimit === null || windowSeconds === null
-    || redis.configuration.environment !== policyResult.policy.environment) return null;
+  ) return null;
   const securityContextReader = createAdminReadinessCsrfSessionBindingReader({
     csrfBindingHmacKey: csrfKey,
     throttleSubjectHmacKey: throttleKey,
   });
+  const csrfStorage = createAdminReadinessDurableCsrfStorage({ client: supabase });
   return {
     environmentPolicyInput,
-    csrfStorage: createAdminReadinessDurableCsrfStorage({ client: redis.client, namespace: redis.configuration.namespace }),
+    csrfStorage,
+    csrfIssuer: createAdminReadinessCsrfIssuer({ storage: csrfStorage }),
     securityContextReader,
-    throttleEnvironment: redis.configuration.environment,
-    throttleNamespace: redis.configuration.namespace,
+    adminAuthorizer: createAdminReadinessAdminAuthorizer(),
+    throttleEnvironment: policyResult.policy.environment,
+    throttleNamespace: `admin_readiness_${policyResult.policy.environment}_v1`,
     throttleStorage: createAdminReadinessDurableThrottleStorage({
-      client: redis.client,
-      environment: redis.configuration.environment,
-      namespace: redis.configuration.namespace,
+      client: supabase,
+      environment: policyResult.policy.environment,
+      namespace: `admin_readiness_${policyResult.policy.environment}_v1`,
       issueLimit,
       snapshotLimit,
       windowSeconds,

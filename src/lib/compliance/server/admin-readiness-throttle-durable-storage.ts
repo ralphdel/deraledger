@@ -1,10 +1,10 @@
 import "server-only";
 
-import type { AdminReadinessRedisCommandClient } from "./admin-readiness-durable-redis-client";
+import type { AdminReadinessSupabaseSecurityRpcClient } from "./admin-readiness-csrf-durable-storage";
 import type { AdminReadinessThrottleEnvironment, AdminReadinessThrottleStorage } from "./admin-readiness-throttle-config";
 
 type Dependencies = Readonly<{
-  client: AdminReadinessRedisCommandClient | null;
+  client: AdminReadinessSupabaseSecurityRpcClient | null;
   environment: AdminReadinessThrottleEnvironment;
   namespace: string;
   issueLimit: number;
@@ -13,28 +13,31 @@ type Dependencies = Readonly<{
   now?: () => number;
 }>;
 
-const HASH = /^[a-f0-9]{64}$/i;
+const HASH = /^[a-f0-9]{64}$/;
 const NAMESPACE = /^admin_readiness_(production|staging|preview|local)_v1$/;
-const FIXED_WINDOW_SCRIPT = `
--- admin-readiness-throttle-fixed-window-v1
-local count = redis.call('INCR', KEYS[1])
-if count == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]) end
-if count <= tonumber(ARGV[2]) then return 1 end
-return 0`;
+const THROTTLE_RPC = "decide_admin_readiness_throttle_v1";
 
 function validPositiveInteger(value: unknown, maximum: number): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= maximum;
 }
 
-function result(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
+function exact(value: unknown): value is Readonly<{ result_code: unknown }> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+    && Object.keys(value as object).length === 1 && Object.hasOwn(value as object, "result_code");
 }
 
-function prefix(namespace: string): string {
-  return `dl:admin-readiness:v1:${namespace}:throttle`;
+function decision(value: unknown): "allow" | "rate_limited" | "unavailable" {
+  if (!Array.isArray(value) || value.length !== 1 || !exact(value[0])) return "unavailable";
+  if (value[0].result_code === "allow") return "allow";
+  if (value[0].result_code === "rate_limited") return "rate_limited";
+  return "unavailable";
 }
 
-/** A provider-backed fixed window; all non-exact results fail closed. */
+function operationForRpc(operation: "issue" | "snapshot"): "readiness_issue" | "readiness_snapshot" {
+  return operation === "issue" ? "readiness_issue" : "readiness_snapshot";
+}
+
+/** Reviewed Supabase RPC fixed-window adapter; every non-exact result fails closed. */
 export function createAdminReadinessDurableThrottleStorage(dependencies: Dependencies): AdminReadinessThrottleStorage {
   const client = dependencies.client;
   const configured = client !== null && NAMESPACE.test(dependencies.namespace)
@@ -53,15 +56,23 @@ export function createAdminReadinessDurableThrottleStorage(dependencies: Depende
       const windowMs = dependencies.windowSeconds * 1_000;
       const windowStart = Math.floor(now / windowMs) * windowMs;
       const limit = input.operation === "issue" ? dependencies.issueLimit : dependencies.snapshotLimit;
-      const key = `${prefix(dependencies.namespace)}:${input.operation}:${input.subjectHash}:${windowStart}`;
       try {
-        const decision = result(await client.eval(FIXED_WINDOW_SCRIPT, [key], [windowMs, limit]));
-        if (decision === 1) return { kind: "allow" };
-        if (decision === 0) return { kind: "deny", code: "rate_limited" };
-        return { kind: "unavailable", code: "throttle_unavailable" };
+        const response = await client.rpc(THROTTLE_RPC, {
+          p_security_namespace: dependencies.namespace,
+          p_operation: operationForRpc(input.operation),
+          p_subject_hash: input.subjectHash,
+          p_window_started_at: new Date(windowStart).toISOString(),
+          p_window_expires_at: new Date(windowStart + windowMs).toISOString(),
+          p_limit: limit,
+        });
+        if (response.error) return { kind: "unavailable", code: "throttle_unavailable" };
+        const result = decision(response.data);
+        if (result === "allow") return { kind: "allow" };
+        if (result === "rate_limited") return { kind: "deny", code: "rate_limited" };
       } catch {
-        return { kind: "unavailable", code: "throttle_unavailable" };
+        // Provider diagnostics never cross the route security boundary.
       }
+      return { kind: "unavailable", code: "throttle_unavailable" };
     },
   };
 }
