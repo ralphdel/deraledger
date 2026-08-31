@@ -23,19 +23,24 @@ staging-specific approval and plan.
 
 ## Staging target and evidence boundary
 
-Each script anchors the approved non-secret staging identity in reviewed source:
-project ref `fsjljliiyfchkwbjifzw` and direct database host
-`db.fsjljliiyfchkwbjifzw.supabase.co`. It prompts locally for separate host,
-port, database, user, and a project-ref confirmation, but that confirmation is
-not authority: the entered host must exactly equal the source-approved host and
-the ref parsed from that host and separately confirmed by the operator must
-exactly equal the source-approved ref. Any other syntactically valid opaque
-Supabase ref fails closed. The scripts never accept a connection string,
-reject local/loopback targets and production-looking indicators, and fail
-closed on ambiguous identity. Passwords are prompted as secure local input
-only, are not echoed or written to disk, and inherited PostgreSQL environment
-settings are cleared around each later user-run `psql` invocation and restored
-afterward.
+Each script anchors the approved non-secret staging pooler identity in reviewed
+source: project ref `fsjljliiyfchkwbjifzw`, pooler host
+`aws-1-eu-central-2.pooler.supabase.com`, port `5432`, database `postgres`,
+and pooler username `postgres.fsjljliiyfchkwbjifzw`. The entered host, port,
+database, user, and project-ref confirmation must all exactly match these
+source-approved values. The project ref is parsed from the pooler `DbUser`, not
+from SQL `current_user`: Supabase pooler sessions may report `postgres` as SQL
+`current_user`. The operator confirmation is not authority. Any other pooler
+host or syntactically valid opaque pooler-user ref fails closed. The direct
+`db.<ref>.supabase.co` endpoint is not accepted by this harness.
+
+The harness requires SSL mode `require`, uses a Windows PowerShell-compatible
+SHA-256 implementation rather than `SHA256.HashData`, never accepts a
+connection string, rejects local/loopback targets and production-looking
+indicators, and fails closed on ambiguous identity. Passwords are prompted as
+secure local input only, are not echoed or written to disk, and inherited
+PostgreSQL environment settings are cleared around each later user-run `psql`
+invocation and restored afterward.
 
 Compact evidence is written only under
 `local-evidence/admin-readiness-security/staging/`. Evidence contains
@@ -67,3 +72,8 @@ or storefront behavior.
 Local rehearsal evidence is a prerequisite only; it does not authorize staging
 execution. Staging and production remain untouched, and the route flag remains
 disabled until later independent review and separate approval.
+
+The migration was already applied and validated on staging through the prior
+manual pooler-safe path recorded in the staging evidence checkpoint. A future
+harness run must not re-apply it unless separately approved after a fresh
+preflight and evidence review.

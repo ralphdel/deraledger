@@ -33,33 +33,48 @@ const isolatedPgVariables = [
   "PGSERVICE", "PGSERVICEFILE", "PGPASSFILE", "PGOPTIONS", "PGSSLMODE",
 ] as const;
 const approvedStagingProjectRef = "fsjljliiyfchkwbjifzw";
-const approvedStagingDbHost = "db.fsjljliiyfchkwbjifzw.supabase.co";
-const unapprovedOpaqueDbHost = "db.abcdefghijklmnopqrst.supabase.co";
+const approvedStagingPoolerHost = "aws-1-eu-central-2.pooler.supabase.com";
+const approvedStagingPort = "5432";
+const approvedStagingDatabase = "postgres";
+const approvedStagingUser = "postgres.fsjljliiyfchkwbjifzw";
+const unapprovedOpaquePoolerHost = "aws-1-eu-central-2.pooler.supabase.com";
+const unapprovedOpaquePoolerUser = "postgres.abcdefghijklmnopqrst";
 
-function sourceAnchoredStagingTargetAllows(host: string, confirmedProjectRef: string): boolean {
-  const parsed = /^db\.([a-z0-9-]+)\.supabase\.co$/.exec(host);
-  return host === approvedStagingDbHost
+function sourceAnchoredStagingTargetAllows(host: string, port: string, database: string, user: string, confirmedProjectRef: string): boolean {
+  const parsed = /^postgres\.([a-z0-9]+)$/.exec(user);
+  return host === approvedStagingPoolerHost
+    && port === approvedStagingPort
+    && database === approvedStagingDatabase
+    && user === approvedStagingUser
     && parsed?.[1] === approvedStagingProjectRef
     && confirmedProjectRef === approvedStagingProjectRef;
 }
 
-assert.equal(sourceAnchoredStagingTargetAllows(approvedStagingDbHost, approvedStagingProjectRef), true, "the reviewed staging host/ref pair must be accepted");
-assert.equal(sourceAnchoredStagingTargetAllows(unapprovedOpaqueDbHost, "abcdefghijklmnopqrst"), false, "a syntactically valid opaque Supabase ref must be rejected when it is not source-approved");
+assert.equal(sourceAnchoredStagingTargetAllows(approvedStagingPoolerHost, approvedStagingPort, approvedStagingDatabase, approvedStagingUser, approvedStagingProjectRef), true, "the reviewed staging pooler identity tuple must be accepted");
+assert.equal(sourceAnchoredStagingTargetAllows(unapprovedOpaquePoolerHost, approvedStagingPort, approvedStagingDatabase, unapprovedOpaquePoolerUser, "abcdefghijklmnopqrst"), false, "a syntactically valid opaque Supabase pooler ref must be rejected when it is not source-approved");
+assert.equal(sourceAnchoredStagingTargetAllows("aws-1-eu-west-1.pooler.supabase.com", approvedStagingPort, approvedStagingDatabase, approvedStagingUser, approvedStagingProjectRef), false, "an unapproved pooler host must be rejected even when its user has the approved ref");
 
 for (const { scriptPath, source } of scripts) {
   assert.match(source, /Set-StrictMode -Version Latest/, `${scriptPath} must use strict mode`);
   assert.match(source, /\$ErrorActionPreference\s*=\s*'Stop'/, `${scriptPath} must stop on error`);
   assert.doesNotMatch(source, /\$Host\b/, `${scriptPath} must not use PowerShell's built-in $Host variable`);
-  for (const safeVariable of ["$DbHost", "$DbPort", "$DbName", "$DbUser", "$ApprovedStagingProjectRef", "$ApprovedStagingDbHost", "$ConfirmedStagingProjectRef"]) {
+  for (const safeVariable of ["$DbHost", "$DbPort", "$DbName", "$DbUser", "$ApprovedStagingProjectRef", "$ApprovedStagingPoolerHost", "$ApprovedStagingPort", "$ApprovedStagingDatabase", "$ApprovedStagingUser", "$ConfirmedStagingProjectRef"]) {
     assert.ok(source.includes(safeVariable), `${scriptPath} must use ${safeVariable}`);
   }
   assert.match(source, new RegExp(`\\$ApprovedStagingProjectRef\\s*=\\s*'${approvedStagingProjectRef}'`), `${scriptPath} must source-anchor the approved staging project ref`);
-  assert.match(source, new RegExp(`\\$ApprovedStagingDbHost\\s*=\\s*'${approvedStagingDbHost.replace(/\./g, "\\.")}'`), `${scriptPath} must source-anchor the approved staging host`);
-  assert.match(source, /\$DbHost\s+-cne\s+\$ApprovedStagingDbHost/, `${scriptPath} must compare entered host to the approved host`);
-  assert.match(source, /\$ParsedStagingProjectRef\s+-cne\s+\$ApprovedStagingProjectRef/, `${scriptPath} must compare parsed host ref to the approved ref`);
+  assert.match(source, new RegExp(`\\$ApprovedStagingPoolerHost\\s*=\\s*'${approvedStagingPoolerHost.replace(/\./g, "\\.")}'`), `${scriptPath} must source-anchor the approved staging pooler host`);
+  assert.match(source, new RegExp(`\\$ApprovedStagingPort\\s*=\\s*'${approvedStagingPort}'`), `${scriptPath} must source-anchor the approved staging port`);
+  assert.match(source, new RegExp(`\\$ApprovedStagingDatabase\\s*=\\s*'${approvedStagingDatabase}'`), `${scriptPath} must source-anchor the approved staging database`);
+  assert.match(source, new RegExp(`\\$ApprovedStagingUser\\s*=\\s*'${approvedStagingUser}'`), `${scriptPath} must source-anchor the approved staging pooler user`);
+  assert.match(source, /\$DbHost\s+-cne\s+\$ApprovedStagingPoolerHost/, `${scriptPath} must compare entered host to the approved pooler host`);
+  assert.match(source, /\$DbPort\s+-cne\s+\$ApprovedStagingPort/, `${scriptPath} must compare entered port to the approved port`);
+  assert.match(source, /\$DbName\s+-cne\s+\$ApprovedStagingDatabase/, `${scriptPath} must compare entered database to the approved database`);
+  assert.match(source, /\$DbUser\s+-cne\s+\$ApprovedStagingUser/, `${scriptPath} must compare entered user to the approved pooler user`);
+  assert.match(source, /\$UserMatch\s*=\s*\[regex\]::Match\(\$DbUser/, `${scriptPath} must parse the project ref from the pooler user`);
+  assert.match(source, /\$ParsedStagingProjectRef\s+-cne\s+\$ApprovedStagingProjectRef/, `${scriptPath} must compare parsed pooler-user ref to the approved ref`);
   assert.match(source, /\$ConfirmedStagingProjectRef\s+-cne\s+\$ApprovedStagingProjectRef/, `${scriptPath} must treat user ref input as confirmation only`);
   assert.doesNotMatch(source, /\$ExpectedStagingProjectRef/, `${scriptPath} must not allow user-provided ref input to define target authority`);
-  assert.match(source, /ADMIN_READINESS_STAGING_HOST_NOT_APPROVED/, `${scriptPath} must fail closed for unapproved opaque Supabase hosts`);
+  assert.match(source, /ADMIN_READINESS_STAGING_POOLER_HOST_NOT_APPROVED/, `${scriptPath} must fail closed for unapproved opaque Supabase pooler hosts`);
   assert.match(source, /Read-Host/, `${scriptPath} must prompt locally`);
   assert.match(source, /CONNECTION_STRING_REJECTED/, `${scriptPath} must reject connection strings`);
   assert.match(source, /localhost/, `${scriptPath} must identify localhost for rejection`);
@@ -73,6 +88,10 @@ for (const { scriptPath, source } of scripts) {
   assert.match(source, /local-evidence\/admin-readiness-security\/staging/, `${scriptPath} must keep evidence local and untracked`);
   assert.match(source, /UTF8Encoding\]::new\(\$false\)/, `${scriptPath} must write UTF-8 evidence without a BOM`);
   assert.match(source, /PsqlPath = 'psql'/, `${scriptPath} must use psql only when a user later runs it`);
+  assert.doesNotMatch(source, /SHA256\]::HashData/, `${scriptPath} must not use unavailable SHA256.HashData`);
+  assert.match(source, /SHA256\]::Create\(\)/, `${scriptPath} must use a Windows PowerShell-compatible SHA-256 implementation`);
+  assert.match(source, /PGSSLMODE.*require/, `${scriptPath} must require SSL for the approved pooler path`);
+  assert.doesNotMatch(source, /\^db\\\.\(\[a-z0-9-\]\+\)\\\.supabase\\\.co\$/, `${scriptPath} must not require the unused direct Supabase database host`);
   assert.doesNotMatch(source, /Get-Command\s+(?:docker|wsl|supabase)/i, `${scriptPath} must not require Docker, WSL, or Supabase CLI`);
   assert.doesNotMatch(source, /(?:issue_canonical_approval|review_compliance_profile_decision|activate merchant|collection unlock|checkout|paystack|subscription|invoice|storefront)/i, `${scriptPath} must not introduce forbidden behavior`);
   for (const environmentName of isolatedPgVariables) assert.match(source, new RegExp(environmentName), `${scriptPath} must isolate inherited ${environmentName}`);
@@ -95,6 +114,8 @@ for (const preflightCheck of [
   "business_schema_baseline", "security_table_bytes", "Get-FileHash",
   "STAGING PREFLIGHT TARGET CONFIRMED", "STAGING_AMBIGUOUS_OR_LOCAL_SERVER_IDENTITY",
 ]) assert.match(preflight, new RegExp(preflightCheck.replace(/[()]/g, "\\$&")), `preflight must verify ${preflightCheck}`);
+assert.match(preflight, /current_user=postgres/, "preflight may record the expected pooler current_user without treating it as project identity");
+assert.match(preflight, /\$ParsedStagingProjectRef\s*=\s*\$UserMatch\.Groups\[1\]\.Value/, "preflight must derive project identity from DbUser, not SQL current_user");
 
 const apply = scripts.find(({ scriptPath }) => scriptPath.includes("apply"))!.source;
 assert.match(apply, new RegExp(migrationFile), "apply must reference the exact migration");

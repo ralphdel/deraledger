@@ -11,7 +11,10 @@ $MigrationPath = Join-Path $ProjectRoot 'supabase/migrations/20260831_00_admin_r
 $EvidenceRoot = Join-Path $ProjectRoot 'local-evidence/admin-readiness-security/staging'
 $PostgresEnvironmentNames = @('PGHOST', 'PGHOSTADDR', 'PGPORT', 'PGDATABASE', 'PGUSER', 'PGPASSWORD', 'PGSERVICE', 'PGSERVICEFILE', 'PGPASSFILE', 'PGOPTIONS', 'PGSSLMODE')
 $ApprovedStagingProjectRef = 'fsjljliiyfchkwbjifzw'
-$ApprovedStagingDbHost = 'db.fsjljliiyfchkwbjifzw.supabase.co'
+$ApprovedStagingPoolerHost = 'aws-1-eu-central-2.pooler.supabase.com'
+$ApprovedStagingPort = '5432'
+$ApprovedStagingDatabase = 'postgres'
+$ApprovedStagingUser = 'postgres.fsjljliiyfchkwbjifzw'
 
 function Write-Result { param([string]$State, [string]$Message) Write-Output ("{0}|{1}" -f $State, $Message) }
 function Assert-RouteFlagDisabled {
@@ -23,27 +26,40 @@ function Assert-PlainConnectionField {
   param([string]$Value)
   if ([string]::IsNullOrWhiteSpace($Value) -or $Value -match '(?i)://|(?:^|\s)(?:host|port|dbname|user|password)\s*=') { throw 'ADMIN_READINESS_STAGING_CONNECTION_STRING_REJECTED' }
 }
-function Get-Sha256Hex { param([string]$Value) return ([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($Value)))).ToLowerInvariant() }
+function Get-Sha256Hex {
+  param([string]$Value)
+  $Sha256 = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $Bytes = [System.Text.Encoding]::UTF8.GetBytes($Value)
+    return ([System.BitConverter]::ToString($Sha256.ComputeHash($Bytes))).Replace('-', '').ToLowerInvariant()
+  } finally {
+    if ($null -ne $Sha256) { $Sha256.Dispose() }
+  }
+}
 function Read-StagingTarget {
-  $DbHost = (Read-Host 'Exact reviewed staging Supabase database host').Trim().ToLowerInvariant()
-  $DbPort = (Read-Host 'Staging database port (default 5432)').Trim()
+  $DbHost = (Read-Host 'Exact reviewed staging Supabase pooler host').Trim().ToLowerInvariant()
+  $DbPort = (Read-Host 'Staging pooler port (default 5432)').Trim()
   $DbName = (Read-Host 'Staging database name').Trim().ToLowerInvariant()
-  $DbUser = (Read-Host 'Staging database user').Trim()
+  $DbUser = (Read-Host 'Staging pooler database user').Trim().ToLowerInvariant()
   $ConfirmedStagingProjectRef = (Read-Host 'Confirm the reviewed staging Supabase project ref').Trim().ToLowerInvariant()
   if ([string]::IsNullOrWhiteSpace($DbPort)) { $DbPort = '5432' }
   foreach ($value in @($DbHost, $DbPort, $DbName, $DbUser, $ConfirmedStagingProjectRef)) { Assert-PlainConnectionField $value }
   if ($DbHost -in @('localhost', '127.0.0.1', '::1')) { throw 'ADMIN_READINESS_STAGING_LOCALHOST_REJECTED' }
-  $HostMatch = [regex]::Match($DbHost, '^db\.([a-z0-9-]+)\.supabase\.co$')
-  if (-not $HostMatch.Success) { throw 'ADMIN_READINESS_STAGING_UNRECOGNIZED_HOST_REJECTED' }
-  $ParsedStagingProjectRef = $HostMatch.Groups[1].Value
-  if ($ApprovedStagingDbHost -cne "db.$ApprovedStagingProjectRef.supabase.co") { throw 'ADMIN_READINESS_STAGING_APPROVED_IDENTITY_MANIFEST_INVALID' }
-  if ($DbHost -cne $ApprovedStagingDbHost) { throw 'ADMIN_READINESS_STAGING_HOST_NOT_APPROVED' }
+  if ($DbHost -notmatch '^[a-z0-9-]+\.pooler\.supabase\.com$') { throw 'ADMIN_READINESS_STAGING_UNRECOGNIZED_HOST_REJECTED' }
+  $UserMatch = [regex]::Match($DbUser, '^postgres\.([a-z0-9]+)$')
+  if (-not $UserMatch.Success) { throw 'ADMIN_READINESS_STAGING_UNRECOGNIZED_USER_REJECTED' }
+  $ParsedStagingProjectRef = $UserMatch.Groups[1].Value
+  if ($ApprovedStagingUser -cne "postgres.$ApprovedStagingProjectRef") { throw 'ADMIN_READINESS_STAGING_APPROVED_IDENTITY_MANIFEST_INVALID' }
+  if ($DbHost -cne $ApprovedStagingPoolerHost) { throw 'ADMIN_READINESS_STAGING_POOLER_HOST_NOT_APPROVED' }
+  if ($DbPort -cne $ApprovedStagingPort) { throw 'ADMIN_READINESS_STAGING_PORT_NOT_APPROVED' }
+  if ($DbName -cne $ApprovedStagingDatabase) { throw 'ADMIN_READINESS_STAGING_DATABASE_NOT_APPROVED' }
+  if ($DbUser -cne $ApprovedStagingUser) { throw 'ADMIN_READINESS_STAGING_USER_NOT_APPROVED' }
   if ($ParsedStagingProjectRef -cne $ApprovedStagingProjectRef) { throw 'ADMIN_READINESS_STAGING_PROJECT_REF_NOT_APPROVED' }
   if ($ConfirmedStagingProjectRef -cne $ApprovedStagingProjectRef) { throw 'ADMIN_READINESS_STAGING_PROJECT_REF_CONFIRMATION_MISMATCH' }
   if ($DbHost -match '(?i)(prod|production|live)' -or $DbName -match '(?i)(prod|production|live)' -or $DbUser -match '(?i)(prod|production|live)') { throw 'ADMIN_READINESS_STAGING_PRODUCTION_INDICATOR_REJECTED' }
   if ($DbPort -notmatch '^[0-9]{1,5}$' -or [int]$DbPort -lt 1 -or [int]$DbPort -gt 65535) { throw 'ADMIN_READINESS_STAGING_PORT_REJECTED' }
   $TargetFingerprint = Get-Sha256Hex "$DbHost|$DbPort|$DbName|$DbUser|$ApprovedStagingProjectRef"
-  [pscustomobject]@{ DbHost=$DbHost; DbPort=$DbPort; DbName=$DbName; DbUser=$DbUser; ApprovedStagingProjectRef=$ApprovedStagingProjectRef; ApprovedStagingDbHost=$ApprovedStagingDbHost; TargetFingerprint=$TargetFingerprint }
+  [pscustomobject]@{ DbHost=$DbHost; DbPort=$DbPort; DbName=$DbName; DbUser=$DbUser; ApprovedStagingProjectRef=$ApprovedStagingProjectRef; ApprovedStagingPoolerHost=$ApprovedStagingPoolerHost; TargetFingerprint=$TargetFingerprint }
 }
 function Invoke-StagingPsql {
   param($Target, [string]$Psql, [string]$Sql)
@@ -55,6 +71,7 @@ function Invoke-StagingPsql {
   try {
     $PlainPassword = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($PasswordBstr)
     [Environment]::SetEnvironmentVariable('PGPASSWORD', $PlainPassword, 'Process')
+    [Environment]::SetEnvironmentVariable('PGSSLMODE', 'require', 'Process')
     $output = & $Psql -X -v ON_ERROR_STOP=1 -h $Target.DbHost -p $Target.DbPort -U $Target.DbUser -d $Target.DbName -At -c $Sql 2>$null
     if ($LASTEXITCODE -ne 0) { throw 'ADMIN_READINESS_STAGING_READONLY_PREFLIGHT_FAILED' }
     return @($output)
@@ -104,7 +121,7 @@ SELECT 'business_schema_baseline=' || md5(coalesce(string_agg(c.relname || ':' |
 SELECT 'security_table_bytes=' || coalesce(sum(pg_total_relation_size(c.oid)),0) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='r' AND c.relname IN ('admin_readiness_csrf_tokens','admin_readiness_csrf_binding_index','admin_readiness_throttle_windows');
 '@
   $Output = Invoke-StagingPsql -Target $Target -Psql $Psql -Sql $PreflightSql
-  foreach ($required in @(("connected_database={0}" -f $Target.DbName), 'service_role_exists=true', 'service_role_bypassrls=true', 'service_role_assumable=true', 'operator_can_apply=true', 'existing_security_tables=0', 'existing_security_functions=0')) { if ($Output -notcontains $required) { throw "ADMIN_READINESS_STAGING_PREFLIGHT_FAILED:$required" } }
+  foreach ($required in @(("connected_database={0}" -f $Target.DbName), 'current_user=postgres', 'service_role_exists=true', 'service_role_bypassrls=true', 'service_role_assumable=true', 'operator_can_apply=true', 'existing_security_tables=0', 'existing_security_functions=0')) { if ($Output -notcontains $required) { throw "ADMIN_READINESS_STAGING_PREFLIGHT_FAILED:$required" } }
   $ServerAddress = @($Output | Where-Object { $_ -match '^server_address=' })[0]
   $ServerVersion = @($Output | Where-Object { $_ -match '^server_version=' })[0]
   $Baseline = @($Output | Where-Object { $_ -match '^business_schema_baseline=[0-9a-f]{32}$' })[0]
