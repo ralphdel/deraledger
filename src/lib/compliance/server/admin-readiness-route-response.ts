@@ -2,7 +2,12 @@ import "server-only";
 
 export type AdminReadinessRouteEnvelope = Readonly<{
   status: 200 | 201 | 400 | 401 | 403 | 404 | 409 | 429 | 500;
-  body: Readonly<{ kind: "created" | "replay" | "ready" | "denied" | "missing" | "conflict" | "throttled" | "unavailable"; code: string }>;
+  body: Readonly<{
+    kind: "issued" | "created" | "replay" | "ready" | "denied" | "missing" | "conflict" | "throttled" | "unavailable";
+    code: string;
+    csrfToken?: string;
+    expiresAt?: string;
+  }>;
 }>;
 export type AdminReadinessPublicCode =
   | "invalid_command" | "csrf_denied" | "csrf_unavailable" | "rate_limited" | "throttle_unavailable"
@@ -24,6 +29,7 @@ function opaque(): AdminReadinessRouteEnvelope { return { status: 500, body: { k
 function knownCode(value: unknown): AdminReadinessPublicCode | null { return typeof value === "string" && publicCodes.has(value as AdminReadinessPublicCode) ? value as AdminReadinessPublicCode : null; }
 function keys(value: object, expected: readonly string[]): boolean { return Object.keys(value).length === expected.length && expected.every((key) => Object.hasOwn(value, key)); }
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const csrfToken = /^[A-Za-z0-9_-]{43,128}$/;
 const plans = new Set(["solo_lite", "solo_plus", "business"]);
 const sources = new Set(["solo_lite_review", "solo_plus_case", "business_kyb_review"]);
 const currentStatuses = new Set(["lite_pending", "enhanced_pending", "business_pending", "needs_attention"]);
@@ -60,6 +66,23 @@ function rejectionEnvelope(code: AdminReadinessPublicCode): AdminReadinessRouteE
 export function mapAdminReadinessRouteOutcome(outcome: unknown): AdminReadinessRouteEnvelope {
   if (!outcome || typeof outcome !== "object" || Array.isArray(outcome)) return opaque();
   const value = outcome as { kind?: unknown; code?: unknown; diagnostics?: unknown; decisionRequestId?: unknown; decisionIdempotencyKey?: unknown; snapshot?: unknown };
+  if (value.kind === "issued" && keys(value, ["kind", "token", "expiresAt"])
+    && typeof (value as { token?: unknown }).token === "string" && csrfToken.test((value as { token: string }).token)
+    && typeof (value as { expiresAt?: unknown }).expiresAt === "string"
+    && Number.isFinite(Date.parse((value as { expiresAt: string }).expiresAt))) {
+    return {
+      status: 201,
+      body: {
+        kind: "issued",
+        code: "csrf_issued",
+        csrfToken: (value as { token: string }).token,
+        expiresAt: (value as { expiresAt: string }).expiresAt,
+      },
+    };
+  }
+  if (value.kind === "deny" && value.code === "origin_denied") return { status: 400, body: { kind: "denied", code: "origin_denied" } };
+  if (value.kind === "deny" && value.code === "authority_denied") return { status: 403, body: { kind: "denied", code: "authority_denied" } };
+  if (value.kind === "deny" && value.code === "rate_limited") return { status: 429, body: { kind: "throttled", code: "rate_limited" } };
   if (value.kind === "created" && validIssueSuccess(value)) return { status: 201, body: { kind: "created", code: "created" } };
   if (value.kind === "replay" && validIssueSuccess(value)) return { status: 200, body: { kind: "replay", code: "replay" } };
   if (value.kind === "ready" && keys(value, ["kind", "snapshot", "diagnostics"]) && Array.isArray(value.diagnostics) && value.diagnostics.length === 0 && validSnapshotSuccess(value)) return { status: 200, body: { kind: "ready", code: "ready" } };

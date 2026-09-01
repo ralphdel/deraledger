@@ -6,7 +6,7 @@ export type AdminReadinessOperationalEvent = Readonly<{
   timestamp: string;
   operation: "issue" | "snapshot";
   correlationId: string;
-  resultKind: "created" | "replay" | "ready" | "denied" | "missing" | "conflict" | "throttled" | "unavailable";
+  resultKind: "issued" | "created" | "replay" | "ready" | "denied" | "missing" | "conflict" | "throttled" | "unavailable";
   resultCode: string;
   redactedIdentifier?: string;
 }>;

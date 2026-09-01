@@ -19,6 +19,11 @@ This checkpoint does not authorize route enablement or any runtime release.
 - The issue and snapshot routes check their disabled-by-default flag before
   request parsing, security context reads, durable storage calls, or readiness
   service construction.
+- The issue route is now a narrow, non-business CSRF issuance endpoint. It
+  calls server-only `issueCsrfToken` for a `snapshot`-scoped synchronizer token
+  and never constructs the canonical readiness service or executes a readiness
+  command. Snapshot continues to require the returned token and never issues
+  one.
 - `createAdminReadinessRouteSecurityComposition()` now exposes the reachable
   server-only `issueCsrfToken` lifecycle seam. It requires approved origin,
   server-derived super-admin authority, session binding, and throttle approval
@@ -52,12 +57,30 @@ missing configuration, failed authority/session checks, throttle failure, or
 issuer failure.
 
 Rotation and binding invalidation remain available only through the same
-server-only issuer lifecycle seam. No HTTP delivery endpoint, scheduler, or
-logout hook is added by this source-only package; any such delivery/lifecycle
-integration requires a later reviewed gate. Routes remain disabled and do not
-invoke the seam while the flag is absent or false.
+server-only issuer lifecycle seam. The issue endpoint is the reviewed HTTP
+delivery path for create only; it does not expose rotation or invalidation.
+No scheduler or logout hook is added by this source-only package. Routes remain
+disabled and do not invoke the seam while the flag is absent or false.
+
+## Staging smoke diagnostic follow-up
+
+The first enabled staging smoke was blocked by opaque `500
+internal_unavailable` results, and an earlier custom-domain `404` was a
+deployment-domain mismatch. The source gap was that no HTTP path invoked
+`issueCsrfToken`. This checkpoint now records the narrow issue-route repair.
+The staging route flag was rolled back to `false` while the repair is reviewed;
+no database, production, or additional environment action occurred. The exact
+runtime key names requiring a separately reviewed deployment-target check are
+recorded in `prd-phase-2-admin-readiness-staging-route-flag-smoke-diagnostic.md`;
+no values are recorded.
 
 ## Validation
+
+- Current HTTP-issuance repair validation:
+  `admin-readiness-route-runtime-adoption`, `admin-readiness-routes`,
+  `admin-readiness-route-composition`, and
+  `admin-readiness-durable-security-adapters` tests — PASS;
+  `npx tsc --noEmit` — PASS; `git diff --check` — PASS.
 
 - `npx tsx tests/admin-readiness-route-runtime-adoption.test.ts` — PASS
 - `npx tsx tests/admin-readiness-routes.test.ts` — PASS
