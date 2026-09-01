@@ -27,10 +27,15 @@ issuance-flow repair.
 - `PASS|source_requires_explicit_bounded_throttle_env_values`
 - `PASS|exact_staging_smoke_deployment_url_known_from_prior_reviewed_diagnostic`
 - `PASS|custom_staging_domain_was_previously_identified_as_non_serving_route_target`
-- `SKIPPED|vercel_cli_not_available_in_workspace`
-- `SKIPPED|no_linked_vercel_project_metadata_present_in_workspace`
-- `BLOCKED|exact_deployment_env_target_not_independently_verifiable_from_available_local_or_vercel_mechanisms`
-- `BLOCKED|exact_deployment_env_key_presence_and_value_compatibility_not_proven_for_reenable_decision`
+- `PASS|previous_exact_deployment_env_validity_blocker_cleared_by_user_confirmed_safe_staging_values`
+- `PASS|exact_deployment_target_readiness_keys_present_and_valid`
+- `PASS|exact_deployment_origin_policy_supports_reviewed_staging_origin`
+- `PASS|deployment_and_supabase_environment_labels_are_staging_aligned`
+- `PASS|csrf_and_throttle_hmac_keys_present_and_distinct`
+- `PASS|throttle_settings_present_and_bounded`
+- `PASS|route_flag_present_and_literal_false_for_exact_deployment_target`
+- `PASS|exact_deployment_ready_for_separate_staging_reenable_approval`
+- `PASS|staging_redeployed_after_env_fix`
 
 No secrets, env values, tokens, cookies, JWTs, headers, connection strings, or
 service-role material are recorded here.
@@ -62,39 +67,47 @@ do not satisfy the readiness origin-policy requirement by themselves.
   enables the issue and snapshot routes.
 - Supabase runtime: the committed source accepts `SUPABASE_URL` or
   `NEXT_PUBLIC_SUPABASE_URL`, but it requires `SUPABASE_SERVICE_ROLE_KEY`
-  exactly for the server-only durable RPC client.
+  exactly for the server-only durable RPC client. The exact deployment target
+  now has the required accepted Supabase URL key and the server-only
+  `SUPABASE_SERVICE_ROLE_KEY` present.
 - Origin policy: the runtime requires
   `DERALEDGER_ADMIN_READINESS_ADMIN_ORIGIN` and may additionally use
   `DERALEDGER_ADMIN_READINESS_ALLOWED_ORIGINS`. No wildcard origin is allowed.
+  The staging/preview target now has an origin policy that supports the exact
+  reviewed staging deployment origin.
 - Environment labels:
   `DERALEDGER_ADMIN_READINESS_DEPLOYMENT_ENVIRONMENT` and
   `DERALEDGER_ADMIN_READINESS_SUPABASE_ENVIRONMENT` must both be present,
-  individually valid, and exactly equal, or the runtime fails closed.
+  individually valid, and exactly equal, or the runtime fails closed. The
+  exact deployment target now has both labels staging-aligned.
 - HMAC keys:
   `DERALEDGER_ADMIN_READINESS_CSRF_BINDING_HMAC_KEY` and
   `DERALEDGER_ADMIN_READINESS_THROTTLE_SUBJECT_HMAC_KEY` must both be present,
-  individually valid, and distinct, or the runtime fails closed.
+  individually valid, and distinct, or the runtime fails closed. The exact
+  deployment target now has both keys present and distinct.
 - Throttle settings:
   `DERALEDGER_ADMIN_READINESS_THROTTLE_ISSUE_LIMIT`,
   `DERALEDGER_ADMIN_READINESS_THROTTLE_SNAPSHOT_LIMIT`, and
   `DERALEDGER_ADMIN_READINESS_THROTTLE_WINDOW_SECONDS` must all be present and
   parse to bounded positive integers. Missing values do not fall back safely
-  for this runtime path; missing or malformed values fail closed.
+  for this runtime path; missing or malformed values fail closed. The exact
+  deployment target now has bounded reviewed values: issue limit `10`,
+  snapshot limit `30`, and window seconds `60`.
 
 ## Exact-deployment target review
 
 - Exact deployment URL to be smoked is known:
   `https://deraledger-staging-git-main-ralphs-projects-25fcfa46.vercel.app/admin`
-- The likely deployment class is a Vercel preview/branch deployment, but the
-  exact Vercel target classification could not be independently confirmed from
-  the available local tooling in this workspace.
-- The repo has no linked `.vercel` project metadata, and `vercel` CLI is not
-  available here.
-- Because the exact deployed env target could not be inspected directly, this
-  review cannot prove that the deployment currently serving that URL has:
-  the route flag present and false, the required readiness keys present, the
-  exact readiness origin compatible with that URL, or staging-aligned
-  environment-label values.
+- The exact Vercel staging/preview target was corrected after the earlier
+  blocked review.
+- The user confirmed that every source-read readiness key required by the
+  committed route/runtime package is now present and valid enough for the exact
+  deployment target.
+- The staging deployment was redeployed after the env fix.
+- The route flag remains present and literal `false`, so the exact deployment
+  remains disabled by default at this stage.
+- This clears the previous deployment-env validity blocker, but it does not
+  approve a staging smoke retry or a route-flag change by itself.
 
 ## Custom staging-domain status
 
@@ -104,21 +117,31 @@ does not attempt to reclassify or reuse that domain for re-enable approval.
 
 ## Current safe state
 
-- No environment value was changed during this review.
+- Environment was changed only to safe staging values for the exact deployment
+  target; no secret values were printed.
 - No database was touched.
 - No staging or production DB action occurred.
 - No route flag was enabled.
 - No smoke run was performed.
 - Production remains untouched.
 
+## Redeploy Record
+
+- `STAGING_REDEPLOYED_AFTER_ENV_FIX=YES`
+- exact deployment env/key blocker remains cleared
+- route flag remains false
+- route flag enabled = NO
+- ready for staging re-enable approval = YES
+- no staging smoke retry yet
+
 ## Conclusion
 
 The source-side readiness env contract is now explicit and complete, but the
-exact deployment currently serving the reviewed staging smoke URL has not been
-independently verified for key presence or target alignment from the available
-workspace tooling. Staging route re-enable approval should remain blocked until
-that exact deployment target is reviewed through a linked Vercel mechanism or
-equivalent names-only deployment inspection.
+exact deployment target now has the required source-read readiness env keys,
+staging-aligned labels, distinct HMAC keys, bounded throttle settings, and a
+literal disabled route flag. This clears the previous exact-deployment
+env-validity blocker. Staging route re-enable approval remains a separate gate,
+and no staging smoke retry or production action is approved here.
 
 ## Remaining Gates
 
