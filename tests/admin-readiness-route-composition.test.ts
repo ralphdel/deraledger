@@ -152,6 +152,91 @@ async function run() {
   assert.equal(environment.validateAdminReadinessEnvironmentPolicy(policy({ browserEnvironmentVariables: [{ name: "NEXT_PUBLIC_CONFIG", value: "sb_secret_hidden" }] })).ok, false);
   assert.equal(environment.validateAdminReadinessEnvironmentPolicy(policy({ browserEnvironmentVariables: [{ name: "NEXT_PUBLIC_CONFIG", value: "eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIn0.signature" }] })).ok, false);
 
+  const redactedOriginDiagnostic = environment.createAdminReadinessRedactedOriginPolicyDiagnostic({
+    environment: "staging",
+    supabaseEnvironment: "staging",
+    adminOrigin: "https://deraledger-staging.vercel.app",
+    additionalAllowedOrigins: ["https://deraledger-staging.vercel.app"],
+    allowedOriginsKeyPresent: true,
+    allowedOriginsEmptyString: false,
+    browserEnvironmentVariables: [],
+    requestOrigin: "https://deraledger-staging.vercel.app",
+  });
+  assert.equal(redactedOriginDiagnostic.allowed_origins_duplicates_admin_origin, true);
+  assert.equal(redactedOriginDiagnostic.origin_policy_created, false);
+  assert.equal(redactedOriginDiagnostic.final_failure_category, "environment_policy_invalid");
+
+  const emptyAllowedOriginsDiagnostic = environment.createAdminReadinessRedactedOriginPolicyDiagnostic({
+    environment: "staging",
+    supabaseEnvironment: "staging",
+    adminOrigin: "https://deraledger-staging.vercel.app",
+    additionalAllowedOrigins: [""],
+    allowedOriginsKeyPresent: true,
+    allowedOriginsEmptyString: true,
+    browserEnvironmentVariables: [],
+    requestOrigin: "https://deraledger-staging.vercel.app",
+  });
+  assert.equal(emptyAllowedOriginsDiagnostic.allowed_origins_empty_string, true);
+  assert.equal(emptyAllowedOriginsDiagnostic.origin_policy_created, false);
+
+  delete require.cache[securityConfigPath];
+  const securityConfig = require("../src/lib/compliance/server/admin-readiness-route-security-config") as typeof import("../src/lib/compliance/server/admin-readiness-route-security-config");
+  const csrfDiagnosticKey = Buffer.alloc(32, 1).toString("base64url");
+  const throttleDiagnosticKey = Buffer.alloc(32, 2).toString("base64url");
+  const hiddenServiceRoleValue = "diagnostic-service-role-value-must-not-appear";
+  const validDiagnosticEnvironment = {
+    DERALEDGER_ADMIN_READINESS_DEPLOYMENT_ENVIRONMENT: "staging",
+    DERALEDGER_ADMIN_READINESS_SUPABASE_ENVIRONMENT: "staging",
+    DERALEDGER_ADMIN_READINESS_ADMIN_ORIGIN: "https://deraledger-staging.vercel.app",
+    SUPABASE_URL: "https://diagnostic-project.supabase.co",
+    SUPABASE_SERVICE_ROLE_KEY: hiddenServiceRoleValue,
+    DERALEDGER_ADMIN_READINESS_CSRF_BINDING_HMAC_KEY: csrfDiagnosticKey,
+    DERALEDGER_ADMIN_READINESS_THROTTLE_SUBJECT_HMAC_KEY: throttleDiagnosticKey,
+    DERALEDGER_ADMIN_READINESS_THROTTLE_ISSUE_LIMIT: "10",
+    DERALEDGER_ADMIN_READINESS_THROTTLE_SNAPSHOT_LIMIT: "30",
+    DERALEDGER_ADMIN_READINESS_THROTTLE_WINDOW_SECONDS: "60",
+  };
+  const validRuntimeDiagnostic = securityConfig.createAdminReadinessRedactedRuntimeDiagnostic(
+    "https://deraledger-staging.vercel.app",
+    validDiagnosticEnvironment,
+  );
+  assert.equal(validRuntimeDiagnostic.origin_policy_created, true);
+  assert.equal(validRuntimeDiagnostic.security_configuration_created, true);
+  assert.equal(validRuntimeDiagnostic.final_failure_category, "origin_policy_ready");
+  assert.equal(JSON.stringify(validRuntimeDiagnostic).includes(hiddenServiceRoleValue), false);
+  assert.equal(JSON.stringify(validRuntimeDiagnostic).includes(csrfDiagnosticKey), false);
+  assert.equal(JSON.stringify(validRuntimeDiagnostic).includes(throttleDiagnosticKey), false);
+  assert.equal(JSON.stringify(validRuntimeDiagnostic).includes("https://diagnostic-project.supabase.co"), false);
+  for (const value of Object.values(validRuntimeDiagnostic)) {
+    assert.equal(typeof value === "boolean" || value === "origin_policy_ready", true);
+  }
+
+  const missingLabelDiagnostic = securityConfig.createAdminReadinessRedactedRuntimeDiagnostic(
+    "https://deraledger-staging.vercel.app",
+    { ...validDiagnosticEnvironment, DERALEDGER_ADMIN_READINESS_DEPLOYMENT_ENVIRONMENT: undefined },
+  );
+  assert.equal(missingLabelDiagnostic.deployment_environment_present, false);
+  assert.equal(missingLabelDiagnostic.origin_policy_created, false);
+  const mismatchedLabelDiagnostic = securityConfig.createAdminReadinessRedactedRuntimeDiagnostic(
+    "https://deraledger-staging.vercel.app",
+    { ...validDiagnosticEnvironment, DERALEDGER_ADMIN_READINESS_SUPABASE_ENVIRONMENT: "preview" },
+  );
+  assert.equal(mismatchedLabelDiagnostic.deployment_and_supabase_environment_equal, false);
+  assert.equal(mismatchedLabelDiagnostic.origin_policy_created, false);
+
+  const missingHmacDiagnostic = securityConfig.createAdminReadinessRedactedRuntimeDiagnostic(
+    "https://deraledger-staging.vercel.app",
+    { ...validDiagnosticEnvironment, DERALEDGER_ADMIN_READINESS_CSRF_BINDING_HMAC_KEY: undefined },
+  );
+  assert.equal(missingHmacDiagnostic.csrf_hmac_key_present, false);
+  assert.equal(missingHmacDiagnostic.final_failure_category, "hmac_configuration_invalid");
+  const missingThrottleDiagnostic = securityConfig.createAdminReadinessRedactedRuntimeDiagnostic(
+    "https://deraledger-staging.vercel.app",
+    { ...validDiagnosticEnvironment, DERALEDGER_ADMIN_READINESS_THROTTLE_WINDOW_SECONDS: undefined },
+  );
+  assert.equal(missingThrottleDiagnostic.throttle_window_seconds_valid, false);
+  assert.equal(missingThrottleDiagnostic.final_failure_category, "throttle_configuration_invalid");
+
   const compositionSource = readFileSync("src/lib/compliance/server/admin-readiness-route-security-composition.ts", "utf8");
   assert.match(compositionSource, /^import\s+["']server-only["']/);
   assert.doesNotMatch(compositionSource, /canonical-approval-readiness-service-factory|createCanonicalApprovalReadinessServerService|createClient|auth\.admin|service.role|\.from\(|\.rpc\(|\.insert\(|\.update\(|\.delete\(/i);

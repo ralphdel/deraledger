@@ -12,6 +12,22 @@ export type AdminReadinessEnvironmentPolicyResult =
   | { ok: true; policy: AdminReadinessEnvironmentPolicy }
   | { ok: false; code: "environment_policy_invalid" };
 
+/** Safe-to-log policy facts only; it deliberately contains no environment values. */
+export type AdminReadinessRedactedOriginPolicyDiagnostic = Readonly<{
+  request_origin_present: boolean;
+  request_origin_matches_admin_origin: boolean;
+  admin_origin_present: boolean;
+  admin_origin_parse_valid: boolean;
+  allowed_origins_key_present: boolean;
+  allowed_origins_empty_string: boolean;
+  allowed_origins_duplicates_admin_origin: boolean;
+  deployment_environment_present: boolean;
+  supabase_environment_present: boolean;
+  deployment_and_supabase_environment_equal: boolean;
+  origin_policy_created: boolean;
+  final_failure_category: "origin_policy_ready" | "environment_policy_invalid" | "request_origin_missing_or_invalid" | "request_origin_mismatch";
+}>;
+
 type BrowserEnvironmentVariable = Readonly<{ name: string; value: string | undefined }>;
 type EnvironmentPolicyInput = Readonly<{
   environment: AdminReadinessDeploymentEnvironment;
@@ -101,4 +117,64 @@ export function checkAdminReadinessConfiguredOrigin(
   return origin === policy.adminOrigin || policy.allowedOrigins.includes(origin)
     ? { ok: true }
     : { ok: false, code: "origin_denied" };
+}
+
+/**
+ * Produces only redacted booleans and a fixed category for staging log diagnosis.
+ * It never returns an origin, environment value, key, cookie, or token.
+ */
+export function createAdminReadinessRedactedOriginPolicyDiagnostic(input: Readonly<{
+  environment: unknown;
+  supabaseEnvironment: unknown;
+  adminOrigin: unknown;
+  additionalAllowedOrigins: unknown;
+  allowedOriginsKeyPresent: boolean;
+  allowedOriginsEmptyString: boolean;
+  browserEnvironmentVariables: readonly BrowserEnvironmentVariable[];
+  requestOrigin: unknown;
+}>): AdminReadinessRedactedOriginPolicyDiagnostic {
+  const additionalAllowedOrigins = Array.isArray(input.additionalAllowedOrigins)
+    ? input.additionalAllowedOrigins
+    : [];
+  const environment = input.environment;
+  const allowLocalHttp = environment === "local";
+  const adminOrigin = input.adminOrigin;
+  const requestOrigin = input.requestOrigin;
+  const policyResult = validateAdminReadinessEnvironmentPolicy({
+    environment: input.environment,
+    supabaseEnvironment: input.supabaseEnvironment,
+    adminOrigin,
+    additionalAllowedOrigins,
+    browserEnvironmentVariables: input.browserEnvironmentVariables,
+  });
+  const requestOriginValid = exactOrigin(requestOrigin, allowLocalHttp);
+  const requestOriginMatchesAdminOrigin = typeof requestOrigin === "string"
+    && typeof adminOrigin === "string"
+    && requestOrigin === adminOrigin;
+  const requestOriginAllowed = typeof requestOrigin === "string"
+    && additionalAllowedOrigins.includes(requestOrigin);
+  const finalFailureCategory = !policyResult.ok
+    ? "environment_policy_invalid"
+    : !requestOriginValid
+      ? "request_origin_missing_or_invalid"
+      : requestOriginMatchesAdminOrigin || requestOriginAllowed
+        ? "origin_policy_ready"
+        : "request_origin_mismatch";
+
+  return {
+    request_origin_present: typeof requestOrigin === "string" && requestOrigin.length > 0,
+    request_origin_matches_admin_origin: requestOriginMatchesAdminOrigin,
+    admin_origin_present: typeof adminOrigin === "string" && adminOrigin.length > 0,
+    admin_origin_parse_valid: exactOrigin(adminOrigin, allowLocalHttp),
+    allowed_origins_key_present: input.allowedOriginsKeyPresent,
+    allowed_origins_empty_string: input.allowedOriginsEmptyString,
+    allowed_origins_duplicates_admin_origin: typeof adminOrigin === "string" && additionalAllowedOrigins.includes(adminOrigin),
+    deployment_environment_present: typeof environment === "string" && environment.length > 0,
+    supabase_environment_present: typeof input.supabaseEnvironment === "string" && input.supabaseEnvironment.length > 0,
+    deployment_and_supabase_environment_equal: typeof environment === "string"
+      && typeof input.supabaseEnvironment === "string"
+      && environment === input.supabaseEnvironment,
+    origin_policy_created: policyResult.ok,
+    final_failure_category: finalFailureCategory,
+  };
 }

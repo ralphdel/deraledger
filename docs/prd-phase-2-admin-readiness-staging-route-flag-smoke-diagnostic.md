@@ -12,6 +12,34 @@ before any separately approved staging retry.
 - Tested deployment: `https://deraledger-staging-git-main-ralphs-projects-25fcfa46.vercel.app/admin`
 - Earlier custom staging-domain `404` evidence was a deployment-domain
   mismatch; it was not evidence that the committed route files were absent.
+- `BLOCKED|route=issue|status=400|code=origin_denied` was later observed from
+  `https://deraledger-staging.vercel.app/admin` after the exact staging origin
+  and primary origin-policy keys were rechecked.
+
+## Persistent origin-denied runtime diagnostic
+
+After the exact staging page origin and the primary origin-policy keys were
+rechecked, `POST /issue` still returned `400 origin_denied`. The route's
+fail-closed design deliberately uses that same public response for an invalid
+origin policy and for an unavailable full security configuration, so source
+inspection alone cannot identify the failing staging category.
+
+A temporary staging-only server log is therefore emitted only when `/issue`
+returns `origin_denied` for the exact staging deployment origin
+`https://deraledger-staging.vercel.app`. The first implementation used the
+deployment label as its staging gate. Review found that this could suppress
+the diagnostic when that label was missing, malformed, or quoted—the very
+condition under investigation. The gate now uses the non-secret request URL
+origin instead, so deployment-label failures remain diagnosable. Its payload
+contains boolean status only for request-origin, origin-policy,
+environment-label, Supabase-presence, HMAC-presence/distinctness, throttle
+bound, and configuration-creation checks, plus a fixed failure-category
+label. It contains no origin values, URLs, keys, cookies, JWTs, headers,
+tokens, or database diagnostics. The client response remains the same opaque
+`400 origin_denied` response.
+
+No database, production, or environment action occurred. This diagnostic is
+temporary and must be removed after staging smoke passes under separate review.
 
 ## Diagnosis and repair
 
@@ -28,9 +56,9 @@ does not call the canonical readiness service, and logs no token. The returned
 token and expiry are the only metadata needed for the next snapshot request.
 `snapshot` remains a CSRF-protected, non-token-issuing endpoint.
 
-The staging route flag was rolled back to `false` while this source repair is
-reviewed. No database or production action occurred, and no environment value
-is recorded here.
+This source-only diagnostic makes no route-flag or environment change. No
+database or production action occurred, and no environment value is recorded
+here.
 
 ## Required readiness runtime key names
 
@@ -56,7 +84,7 @@ than `APP_URL` or `NEXT_PUBLIC_APP_URL`, controls this route's CORS check.
 
 ## Current safe state and remaining gates
 
-- Staging route flag: `false` while fixing.
+- Staging route flag is not changed by this diagnostic source package.
 - Production: untouched and blocked.
 - No M030/live readiness, approval execution, merchant activation, collection
   unlock, or payment/provider/checkout/subscription/invoice/storefront behavior.
