@@ -203,6 +203,12 @@ async function run() {
   assert.equal(validRuntimeDiagnostic.origin_policy_created, true);
   assert.equal(validRuntimeDiagnostic.security_configuration_created, true);
   assert.equal(validRuntimeDiagnostic.final_failure_category, "origin_policy_ready");
+  assert.deepEqual(Object.keys(validRuntimeDiagnostic).sort(), [
+    "admin_origin_parse_valid", "admin_origin_present", "allowed_origins_duplicates_admin_origin", "allowed_origins_empty_string", "allowed_origins_key_present",
+    "csrf_hmac_key_present", "deployment_and_supabase_environment_equal", "deployment_environment_present", "final_failure_category", "hmac_keys_distinct",
+    "origin_policy_created", "request_origin_matches_admin_origin", "request_origin_present", "security_configuration_created", "service_role_key_present",
+    "supabase_environment_present", "supabase_url_present", "throttle_hmac_key_present", "throttle_issue_limit_valid", "throttle_snapshot_limit_valid", "throttle_window_seconds_valid",
+  ]);
   assert.equal(JSON.stringify(validRuntimeDiagnostic).includes(hiddenServiceRoleValue), false);
   assert.equal(JSON.stringify(validRuntimeDiagnostic).includes(csrfDiagnosticKey), false);
   assert.equal(JSON.stringify(validRuntimeDiagnostic).includes(throttleDiagnosticKey), false);

@@ -38,6 +38,17 @@ label. It contains no origin values, URLs, keys, cookies, JWTs, headers,
 tokens, or database diagnostics. The client response remains the same opaque
 `400 origin_denied` response.
 
+Vercel did not surface the redacted server-log event during the next smoke
+attempt. To make the failing category directly observable without exposing
+runtime values, this temporary diagnostic is also included in the `/issue`
+JSON response only for that same exact staging request URL and only for
+`400 origin_denied`. The response field is `stagingDiagnostic`; it contains
+the same booleans and fixed category label as the server log, never raw
+origins, environment values, Supabase values, credentials, cookies, JWTs,
+headers, connection strings, or CSRF tokens. Non-staging and successful
+responses remain unchanged. Remove this response-visible staging smoke aid
+after diagnosis is complete under separate review.
+
 No database, production, or environment action occurred. This diagnostic is
 temporary and must be removed after staging smoke passes under separate review.
 
