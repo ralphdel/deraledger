@@ -1,8 +1,20 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
+import { resolveOperationalPortalRouting } from "@/lib/server/admin-domain-routing";
+
 export async function proxy(request: NextRequest) {
   const url = request.nextUrl.clone();
+  const operationalRouting = resolveOperationalPortalRouting(request.nextUrl.hostname, url.pathname);
+  if (operationalRouting === "redirect_to_admin") {
+    url.pathname = "/admin";
+    return NextResponse.redirect(url);
+  }
+  if (operationalRouting === "redirect_to_public_root") {
+    url.pathname = "/";
+    return NextResponse.redirect(url);
+  }
+
   if (url.pathname.startsWith('/admin') && url.pathname !== '/admin-login') {
     const adminSession = request.cookies.get('admin_session')?.value;
     if (adminSession !== 'authenticated') {
