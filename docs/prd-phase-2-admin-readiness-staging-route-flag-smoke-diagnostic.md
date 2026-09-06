@@ -2,79 +2,57 @@
 
 ## Objective
 
-Record the blocked staging smoke result and the source-only repair required
-before any separately approved staging retry.
+Record the staging route-security diagnosis, remediation evidence, and the
+removal of the temporary diagnostic implementation.
 
-## Redacted smoke result
+## Earlier blocked smoke evidence
 
 - `BLOCKED|route=issue|status=500|code=internal_unavailable`
 - `BLOCKED|route=snapshot_without_csrf|status=500|code=internal_unavailable`
-- Tested deployment: `https://deraledger-staging-git-main-ralphs-projects-25fcfa46.vercel.app/admin`
-- Earlier custom staging-domain `404` evidence was a deployment-domain
-  mismatch; it was not evidence that the committed route files were absent.
-- `BLOCKED|route=issue|status=400|code=origin_denied` was later observed from
-  `https://deraledger-staging.vercel.app/admin` after the exact staging origin
-  and primary origin-policy keys were rechecked.
+- An earlier custom staging-domain `404` was a deployment-domain mismatch,
+  not evidence that the committed route files were absent.
+- A later `/issue` smoke from `https://deraledger-staging.vercel.app/admin`
+  returned `400 origin_denied` after the exact staging origin and primary
+  origin-policy keys were rechecked.
 
-## Persistent origin-denied runtime diagnostic
+## Diagnosis and temporary diagnostic removal
 
-After the exact staging page origin and the primary origin-policy keys were
-rechecked, `POST /issue` still returned `400 origin_denied`. The route's
-fail-closed design deliberately uses that same public response for an invalid
-origin policy and for an unavailable full security configuration, so source
-inspection alone cannot identify the failing staging category.
+The temporary redacted staging diagnostic identified
+`hmac_configuration_invalid` as the failure category. The staging HMAC
+environment values were replaced outside this source task. This source task
+did not change any environment value.
 
-A temporary staging-only server log is therefore emitted only when `/issue`
-returns `origin_denied` for the exact staging deployment origin
-`https://deraledger-staging.vercel.app`. The first implementation used the
-deployment label as its staging gate. Review found that this could suppress
-the diagnostic when that label was missing, malformed, or quoted—the very
-condition under investigation. The gate now uses the non-secret request URL
-origin instead, so deployment-label failures remain diagnosable. Its payload
-contains boolean status only for request-origin, origin-policy,
-environment-label, Supabase-presence, HMAC-presence/distinctness, throttle
-bound, and configuration-creation checks, plus a fixed failure-category
-label. It contains no origin values, URLs, keys, cookies, JWTs, headers,
-tokens, or database diagnostics. The client response remains the same opaque
-`400 origin_denied` response.
+The temporary response-visible `stagingDiagnostic` field and the temporary
+`admin_readiness_staging_runtime_diagnostic` server log were removed after
+diagnosis. `/issue` has returned to its planned opaque response behavior.
 
-Vercel did not surface the redacted server-log event during the next smoke
-attempt. To make the failing category directly observable without exposing
-runtime values, this temporary diagnostic is also included in the `/issue`
-JSON response only for that same exact staging request URL and only for
-`400 origin_denied`. The response field is `stagingDiagnostic`; it contains
-the same booleans and fixed category label as the server log, never raw
-origins, environment values, Supabase values, credentials, cookies, JWTs,
-headers, connection strings, or CSRF tokens. Non-staging and successful
-responses remain unchanged. Remove this response-visible staging smoke aid
-after diagnosis is complete under separate review.
+## Passed staging route-security smoke
 
-No database, production, or environment action occurred. This diagnostic is
-temporary and must be removed after staging smoke passes under separate review.
+- `PASS|route=issue|status=201|code=csrf_issued`
+- `PASS|route=snapshot_without_csrf|status=400|code=csrf_denied`
+- `PASS|route=snapshot_with_valid_csrf|status=404|code=canonical_snapshot_v2_request_missing|random_uuid`
 
-## Diagnosis and repair
+The random UUID in the valid-CSRF snapshot smoke deliberately has no canonical
+readiness request, so the safe `404 canonical_snapshot_v2_request_missing`
+response confirms the security path reached the snapshot service without
+performing any business action.
 
-The enabled routes deliberately fail closed to `internal_unavailable` when
-their security configuration or cookie-bound security context is unavailable.
-The prior source also had no HTTP delivery path for a synchronizer CSRF token:
-the server-only `issueCsrfToken` composition seam existed but neither route
-called it.
+## Permanent route behavior
 
-This repair makes the non-business `POST /api/internal/admin/compliance/
-readiness/issue` endpoint call the server-only `issueCsrfToken` seam for a
-`snapshot`-scoped token. It does not parse or execute a readiness command,
-does not call the canonical readiness service, and logs no token. The returned
-token and expiry are the only metadata needed for the next snapshot request.
-`snapshot` remains a CSRF-protected, non-token-issuing endpoint.
+The non-business `POST /api/internal/admin/compliance/readiness/issue`
+endpoint calls the server-only `issueCsrfToken` seam for a snapshot-scoped
+synchronizer token. It does not parse or execute a readiness command and does
+not call the canonical readiness service. `snapshot` remains CSRF-protected
+and does not issue tokens.
 
-This source-only diagnostic makes no route-flag or environment change. No
-database or production action occurred, and no environment value is recorded
-here.
+The source preserves route-flag gating, explicit origin validation, durable
+CSRF issuance, redacted logging, and opaque errors. No database, staging
+database, production, or release action occurred in this source task.
 
 ## Required readiness runtime key names
 
-The source reads the following key names. Presence and validity must be
-reviewed in the exact deployment target without recording their values.
+The source reads the following names; review presence and validity in the
+exact deployment target without recording values.
 
 - `DERALEDGER_ADMIN_READINESS_ROUTES_ENABLED`
 - `SUPABASE_URL` or `NEXT_PUBLIC_SUPABASE_URL`
@@ -89,18 +67,16 @@ reviewed in the exact deployment target without recording their values.
 - `DERALEDGER_ADMIN_READINESS_THROTTLE_SNAPSHOT_LIMIT`
 - `DERALEDGER_ADMIN_READINESS_THROTTLE_WINDOW_SECONDS`
 
-The service-role key is server-only. The HMAC keys must be valid, distinct,
-and never exposed to a browser. The explicit readiness origin policy, rather
-than `APP_URL` or `NEXT_PUBLIC_APP_URL`, controls this route's CORS check.
+The service-role key remains server-only. HMAC keys remain valid, distinct,
+and never browser-exposed.
 
 ## Current safe state and remaining gates
 
-- Staging route flag is not changed by this diagnostic source package.
-- Production: untouched and blocked.
+- Route flag is not changed by this source task.
+- Production remains untouched and blocked.
 - No M030/live readiness, approval execution, merchant activation, collection
   unlock, or payment/provider/checkout/subscription/invoice/storefront behavior.
 
-Remaining gates are unchanged: independent source review; exact-deployment
-staging environment review; staging flag-enable approval; staging smoke;
-production environment review and approval; production smoke; admin UI
-integration/release; and M030/live-readiness review.
+Remaining gates are unchanged: independent source review; staging smoke
+evidence review; production environment review and approval; production
+smoke; admin UI integration/release; and M030/live-readiness review.

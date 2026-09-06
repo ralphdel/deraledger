@@ -17,7 +17,6 @@ type Scenario = {
   csrfIssueCalls: number;
   snapshotCalls: number;
   csrfEvidence: string | null | undefined;
-  runtimeDiagnosticCalls: Array<string | null>;
 };
 
 const routeFiles = [
@@ -84,7 +83,6 @@ function scenario(): Scenario {
     csrfIssueCalls: 0,
     snapshotCalls: 0,
     csrfEvidence: undefined,
-    runtimeDiagnosticCalls: [],
   };
 }
 
@@ -122,46 +120,16 @@ function installRoute(require: NodeRequire, routePath: string, state: Scenario):
     createAdminReadinessOperationalEvent(input: object) { state.events.push(input); return input; },
   }) as never;
 
-  const securityConfigPath = require.resolve("../src/lib/compliance/server/admin-readiness-route-security-config");
-  require.cache[securityConfigPath] = moduleShim(securityConfigPath, {
-    createAdminReadinessRedactedRuntimeDiagnostic(requestOrigin: string | null) {
-      state.runtimeDiagnosticCalls.push(requestOrigin);
-      return {
-        request_origin_present: true,
-        request_origin_matches_admin_origin: false,
-        admin_origin_present: true,
-        admin_origin_parse_valid: true,
-        allowed_origins_key_present: false,
-        allowed_origins_empty_string: false,
-        allowed_origins_duplicates_admin_origin: false,
-        deployment_environment_present: false,
-        supabase_environment_present: true,
-        deployment_and_supabase_environment_equal: false,
-        supabase_url_present: true,
-        service_role_key_present: true,
-        csrf_hmac_key_present: true,
-        throttle_hmac_key_present: true,
-        hmac_keys_distinct: true,
-        throttle_issue_limit_valid: true,
-        throttle_snapshot_limit_valid: true,
-        throttle_window_seconds_valid: true,
-        security_configuration_created: false,
-        origin_policy_created: false,
-        final_failure_category: "environment_policy_invalid",
-      };
-    },
-  }) as never;
-
   const resolvedRoutePath = require.resolve(routePath);
   delete require.cache[resolvedRoutePath];
   return require(routePath) as RouteModule;
 }
 
-function request(body = "", includeCsrf = true, requestUrlOrigin = origin, requestHeaderOrigin = origin): Request {
-  return new Request(`${requestUrlOrigin}/api/internal/admin/compliance/readiness`, {
+function request(body = "", includeCsrf = true): Request {
+  return new Request(`${origin}/api/internal/admin/compliance/readiness`, {
     method: "POST",
     headers: {
-      origin: requestHeaderOrigin,
+      origin,
       ...(body ? { "content-type": "application/json" } : {}),
       ...(includeCsrf ? { "x-deraledger-readiness-csrf": "test-csrf-evidence" } : {}),
     },
@@ -169,8 +137,8 @@ function request(body = "", includeCsrf = true, requestUrlOrigin = origin, reque
   });
 }
 
-async function result(route: RouteModule, body = "", includeCsrf = true, requestUrlOrigin = origin, requestHeaderOrigin = origin): Promise<{ status: number; body: Record<string, unknown> }> {
-  const response = await route.POST(request(body, includeCsrf, requestUrlOrigin, requestHeaderOrigin));
+async function result(route: RouteModule, body = "", includeCsrf = true): Promise<{ status: number; body: Record<string, unknown> }> {
+  const response = await route.POST(request(body, includeCsrf));
   return { status: response.status, body: await response.json() as Record<string, unknown> };
 }
 
@@ -189,12 +157,6 @@ async function run() {
     }
     const issueSource = readFileSync(routeFiles[0], "utf8");
     assert.match(issueSource, /issueCsrfToken\(\{[\s\S]*operation: "snapshot"/);
-    assert.match(issueSource, /const STAGING_DIAGNOSTIC_ORIGIN = "https:\/\/deraledger-staging\.vercel\.app"/);
-    assert.match(issueSource, /new URL\(request\.url\)\.origin !== STAGING_DIAGNOSTIC_ORIGIN/);
-    assert.match(issueSource, /stagingOriginDiagnostic\(request, requestOrigin\)/);
-    assert.match(issueSource, /stagingDiagnostic \? \{ \.\.\.envelope\.body, stagingDiagnostic \} : envelope\.body/);
-    assert.doesNotMatch(issueSource, /DERALEDGER_ADMIN_READINESS_DEPLOYMENT_ENVIRONMENT !== "staging"/);
-    assert.doesNotMatch(issueSource, /SUPABASE_SERVICE_ROLE_KEY|DERALEDGER_ADMIN_READINESS_CSRF_BINDING_HMAC_KEY|DERALEDGER_ADMIN_READINESS_THROTTLE_SUBJECT_HMAC_KEY/);
     assert.doesNotMatch(issueSource, /canonical-approval-readiness-service-factory|createCanonicalApprovalReadinessServerService|validateAdminReadinessIssue|validateCsrf\(/);
     assert.match(readFileSync(routeFiles[1], "utf8"), /canonical-approval-readiness-service-factory/);
     for (const file of sourceFiles("src/app")) {
@@ -224,71 +186,9 @@ async function run() {
     assert.equal("token" in (state.events[0] as Record<string, unknown>), false);
     assert.equal("csrfToken" in (state.events[0] as Record<string, unknown>), false);
 
-    // The staging diagnostic is anchored to the request URL rather than the
-    // deployment-label key, because that key can itself be malformed.
-    const stagingOrigin = "https://deraledger-staging.vercel.app";
-    const previousDeploymentLabel = process.env.DERALEDGER_ADMIN_READINESS_DEPLOYMENT_ENVIRONMENT;
-    const originalWarn = console.warn;
-    const warningEvents: unknown[][] = [];
-    console.warn = (...args: unknown[]) => { warningEvents.push(args); };
-    try {
-      delete process.env.DERALEDGER_ADMIN_READINESS_DEPLOYMENT_ENVIRONMENT;
-      state = scenario(); state.csrfIssue = { kind: "deny", code: "origin_denied" }; route = installRoute(require, issuePath, state);
-      received = await result(route, "", false, stagingOrigin, "https://arbitrary-header.example");
-      assert.equal(received.status, 400);
-      assert.equal(received.body.kind, "denied");
-      assert.equal(received.body.code, "origin_denied");
-      assert.deepEqual(received.body.stagingDiagnostic, {
-        request_origin_present: true,
-        request_origin_matches_admin_origin: false,
-        admin_origin_present: true,
-        admin_origin_parse_valid: true,
-        allowed_origins_key_present: false,
-        allowed_origins_empty_string: false,
-        allowed_origins_duplicates_admin_origin: false,
-        deployment_environment_present: false,
-        supabase_environment_present: true,
-        deployment_and_supabase_environment_equal: false,
-        supabase_url_present: true,
-        service_role_key_present: true,
-        csrf_hmac_key_present: true,
-        throttle_hmac_key_present: true,
-        hmac_keys_distinct: true,
-        throttle_issue_limit_valid: true,
-        throttle_snapshot_limit_valid: true,
-        throttle_window_seconds_valid: true,
-        security_configuration_created: false,
-        origin_policy_created: false,
-        final_failure_category: "environment_policy_invalid",
-      });
-      const stagingDiagnosticJson = JSON.stringify(received.body.stagingDiagnostic);
-      assert.doesNotMatch(stagingDiagnosticJson, /arbitrary-header|cookie|jwt|authorization|supabase\.co|service\.role|csrfToken|connection/i);
-      assert.deepEqual(state.runtimeDiagnosticCalls, ["https://arbitrary-header.example"]);
-      assert.equal(warningEvents.length, 1);
-
-      process.env.DERALEDGER_ADMIN_READINESS_DEPLOYMENT_ENVIRONMENT = '"staging"';
-      state = scenario(); state.csrfIssue = { kind: "deny", code: "origin_denied" }; route = installRoute(require, issuePath, state);
-      received = await result(route, "", false, stagingOrigin);
-      assert.equal(received.status, 400);
-      assert.equal(received.body.code, "origin_denied");
-      assert.equal("stagingDiagnostic" in received.body, true);
-      assert.deepEqual(state.runtimeDiagnosticCalls, [origin]);
-      assert.equal(warningEvents.length, 2);
-
-      state = scenario(); state.csrfIssue = { kind: "deny", code: "origin_denied" }; route = installRoute(require, issuePath, state);
-      received = await result(route, "", false, "https://not-staging.example.test");
-      assert.deepEqual(received, { status: 400, body: { kind: "denied", code: "origin_denied" } });
-      assert.deepEqual(state.runtimeDiagnosticCalls, []);
-      assert.equal(warningEvents.length, 2);
-    } finally {
-      console.warn = originalWarn;
-      if (previousDeploymentLabel === undefined) delete process.env.DERALEDGER_ADMIN_READINESS_DEPLOYMENT_ENVIRONMENT;
-      else process.env.DERALEDGER_ADMIN_READINESS_DEPLOYMENT_ENVIRONMENT = previousDeploymentLabel;
-    }
-    state = scenario(); route = installRoute(require, issuePath, state);
-    received = await result(route, "", false, stagingOrigin);
-    assert.equal(received.status, 201);
-    assert.equal("stagingDiagnostic" in received.body, false);
+    state = scenario(); state.csrfIssue = { kind: "deny", code: "origin_denied" }; route = installRoute(require, issuePath, state);
+    received = await result(route, "", false);
+    assert.deepEqual(received, { status: 400, body: { kind: "denied", code: "origin_denied" } });
     assert.equal(state.factoryCalls, 0);
     state = scenario(); state.csrfIssue = { kind: "deny", code: "authority_denied" }; route = installRoute(require, issuePath, state);
     received = await result(route, "", false);
