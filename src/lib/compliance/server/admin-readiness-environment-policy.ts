@@ -60,6 +60,11 @@ type EnvironmentPolicyInput = Readonly<{
 
 const PRODUCTION_ADMIN_ORIGIN = "https://admin.deraledger.com";
 const ENVIRONMENTS = new Set<AdminReadinessDeploymentEnvironment>(["production", "staging", "preview", "local"]);
+const INTENTIONAL_PUBLIC_BROWSER_VARIABLE_NAMES = new Set([
+  "NEXT_PUBLIC_SUPABASE_URL",
+  "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+  "NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY",
+]);
 const CLIENT_SECRET_NAME = /(?:service[_-]?role|sb[_-]?secret|secret|private|password|token)/i;
 const BASE64URL = /^[A-Za-z0-9_-]+$/;
 const MAX_JWT_PAYLOAD_CHARS = 4_096;
@@ -103,10 +108,18 @@ function isServiceRoleJwtLike(value: unknown): boolean {
 }
 
 function hasClientSecret(variables: readonly BrowserEnvironmentVariable[]): boolean {
-  return variables.some((variable) => typeof variable.name !== "string"
-    || !variable.name.startsWith("NEXT_PUBLIC_")
-    || CLIENT_SECRET_NAME.test(variable.name)
-    || typeof variable.value === "string" && (/^sb_secret_/i.test(variable.value) || isServiceRoleJwtLike(variable.value)));
+  return variables.some((variable) => {
+    if (typeof variable.name !== "string" || !variable.name.startsWith("NEXT_PUBLIC_")) return true;
+
+    // Known browser credentials are public by design, but their values still
+    // pass the same fail-closed service-role/secret-value checks as every other
+    // browser variable. The name allowlist must never authorize a secret value.
+    const sensitiveValue = typeof variable.value === "string"
+      && (/^sb_secret_/i.test(variable.value) || isServiceRoleJwtLike(variable.value));
+    if (sensitiveValue) return true;
+    if (INTENTIONAL_PUBLIC_BROWSER_VARIABLE_NAMES.has(variable.name)) return false;
+    return CLIENT_SECRET_NAME.test(variable.name);
+  });
 }
 
 /** Validates explicit deployment inputs. Origin is browser defense-in-depth, never authority. */

@@ -152,6 +152,29 @@ async function run() {
   assert.equal(environment.validateAdminReadinessEnvironmentPolicy(policy({ adminOrigin: "https://deraledger.com/admin" })).ok, false);
   assert.equal(environment.validateAdminReadinessEnvironmentPolicy(policy({ browserEnvironmentVariables: [{ name: "NEXT_PUBLIC_CONFIG", value: "sb_secret_hidden" }] })).ok, false);
   assert.equal(environment.validateAdminReadinessEnvironmentPolicy(policy({ browserEnvironmentVariables: [{ name: "NEXT_PUBLIC_CONFIG", value: "eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIn0.signature" }] })).ok, false);
+  for (const browserEnvironmentVariable of [
+    { name: "NEXT_PUBLIC_SUPABASE_URL", value: "https://public-project.supabase.co" },
+    { name: "NEXT_PUBLIC_SUPABASE_ANON_KEY", value: "public-anon-key" },
+    { name: "NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY", value: "pk_live_public-key" },
+  ]) {
+    assert.equal(environment.validateAdminReadinessEnvironmentPolicy(policy({
+      browserEnvironmentVariables: [browserEnvironmentVariable],
+    })).ok, true, `${browserEnvironmentVariable.name} must remain an intentional public browser variable`);
+  }
+  for (const dangerousBrowserVariableName of [
+    "NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY",
+    "NEXT_PUBLIC_SERVICE_ROLE_KEY",
+    "NEXT_PUBLIC_SECRET_KEY",
+    "NEXT_PUBLIC_PRIVATE_KEY",
+    "NEXT_PUBLIC_ACCESS_TOKEN",
+  ]) {
+    assert.equal(environment.validateAdminReadinessEnvironmentPolicy(policy({
+      browserEnvironmentVariables: [{ name: dangerousBrowserVariableName, value: "browser-value" }],
+    })).ok, false, `${dangerousBrowserVariableName} must remain blocked`);
+  }
+  assert.equal(environment.validateAdminReadinessEnvironmentPolicy(policy({
+    browserEnvironmentVariables: [{ name: "NEXT_PUBLIC_SUPABASE_ANON_KEY", value: "sb_secret_hidden" }],
+  })).ok, false, "an allowed public name must not authorize a secret-shaped value");
 
   const secretSentinels = {
     supabaseUrl: "https://production-project.supabase.co",
@@ -234,6 +257,21 @@ async function run() {
   assert.equal(browserSecretDiagnostic.browser_environment_secret_exposure_detected, true);
   assert.equal(browserSecretDiagnostic.final_failure_category, "environment_policy_browser_secret_exposure");
   assert.equal(JSON.stringify(browserSecretDiagnostic).includes("browser-secret-sentinel"), false);
+
+  const intentionalPublicKeysDiagnostic = actualSecurityConfig.createAdminReadinessRedactedRuntimeDiagnostic(
+    "https://admin.deraledger.com",
+    {
+      ...diagnosticEnvironment,
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: "public-anon-diagnostic-sentinel",
+      NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY: "pk_live_diagnostic-sentinel",
+    },
+  );
+  assert.equal(intentionalPublicKeysDiagnostic.browser_environment_secret_exposure_detected, false);
+  assert.equal(intentionalPublicKeysDiagnostic.security_configuration_created, true);
+  assert.equal(intentionalPublicKeysDiagnostic.final_failure_category, "origin_policy_ready");
+  const intentionalPublicKeysDiagnosticJson = JSON.stringify(intentionalPublicKeysDiagnostic);
+  assert.equal(intentionalPublicKeysDiagnosticJson.includes("public-anon-diagnostic-sentinel"), false);
+  assert.equal(intentionalPublicKeysDiagnosticJson.includes("pk_live_diagnostic-sentinel"), false);
 
   const compositionSource = readFileSync("src/lib/compliance/server/admin-readiness-route-security-composition.ts", "utf8");
   assert.match(compositionSource, /^import\s+["']server-only["']/);

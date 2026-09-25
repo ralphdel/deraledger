@@ -38,6 +38,26 @@ any `NEXT_PUBLIC_*` name/value appears to expose a service-role credential or
 secret. The refined diagnostic reports these as separate booleans and closed
 categories; it does not weaken any policy rule.
 
+The refined production diagnostic later reported
+`environment_policy_browser_secret_exposure`. A source audit found that the
+two intentional browser credentials reported by the operator,
+`NEXT_PUBLIC_SUPABASE_ANON_KEY` and `NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY`, were not
+matched by the existing forbidden-name expression. The policy now makes that
+intent explicit with a narrow allowlist containing those names and
+`NEXT_PUBLIC_SUPABASE_URL`.
+
+The allowlist applies to names only. All allowlisted variables still undergo
+the fail-closed sensitive-value checks, so an `sb_secret_` value or a JWT whose
+role is `service_role` remains rejected. Any `NEXT_PUBLIC_*` name containing a
+service-role, secret, private, password, or token marker also remains rejected,
+including `NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY`,
+`NEXT_PUBLIC_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_SECRET_KEY`,
+`NEXT_PUBLIC_PRIVATE_KEY`, and `NEXT_PUBLIC_ACCESS_TOKEN`. The diagnostic does
+not return variable names or values. Consequently, the two intentional public
+keys alone do not explain the earlier exposure category; a separate forbidden
+browser-variable name or sensitive-shaped value must still be checked through
+a names-only Vercel review before another production smoke decision.
+
 ## Narrow production gate
 
 The `/api/internal/admin/compliance/readiness/issue` response includes a
@@ -115,3 +135,5 @@ separate, explicit gate.
 - `ENV_CHANGED=NO`
 - `ROUTE_FLAG_CHANGED=NO`
 - `PRODUCTION_RELEASE=NO`
+- The production readiness route flag remains `false` pending a separate
+  reviewed diagnostic deployment and smoke decision.
