@@ -3,7 +3,7 @@ export const PUBLIC_PORTAL_HOSTS = ["deraledger.com", "www.deraledger.com"] as c
 
 // Add future operational departments here only after their separate routing
 // and authorization gates are reviewed.
-export const OPERATIONAL_PORTAL_PREFIXES = ["/admin", "/compliance"] as const;
+export const OPERATIONAL_PORTAL_PREFIXES = ["/admin", "/admin-login", "/compliance"] as const;
 
 export type OperationalPortalRoutingDecision = "allow" | "redirect_to_admin" | "redirect_to_public_root";
 

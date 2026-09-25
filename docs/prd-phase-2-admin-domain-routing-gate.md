@@ -26,6 +26,15 @@ root landing page and must not render an operational portal:
 - `https://deraledger.com/compliance`
 - `https://www.deraledger.com/compliance`
 
+Production verification found that public `/admin` requests were still
+reaching the existing `/admin-login` redirect. The source guard already
+executes before that redirect, so this observation also requires confirmation
+that the routing commit is deployed to the production Vercel target. This
+source repair additionally treats `/admin-login` as an operational path:
+direct public-host requests now redirect to public root before admin auth can
+render a login page. `admin.deraledger.com/admin-login` remains available for
+the existing admin authentication flow.
+
 The root cause was that `admin.deraledger.com/` had no host-root redirect;
 the application only had the `/admin` path. Staging and preview hosts are not
 public production hosts, so their existing `/admin` behavior is unchanged.
@@ -40,6 +49,6 @@ Production readiness `DERALEDGER_ADMIN_READINESS_ADMIN_ORIGIN` remains
 `false` until separate explicit approval.
 
 This source-only gate changed no database, environment value, deployment, or
-production setting. It does not approve M030/live readiness, approval
+production readiness setting. It does not approve M030/live readiness, approval
 execution, merchant activation, collection unlock, or payment/provider/
 checkout/subscription/invoice/storefront behavior.
