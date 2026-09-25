@@ -153,6 +153,8 @@ async function run() {
   assert.equal(environment.validateAdminReadinessEnvironmentPolicy(policy({ browserEnvironmentVariables: [{ name: "NEXT_PUBLIC_CONFIG", value: "sb_secret_hidden" }] })).ok, false);
   assert.equal(environment.validateAdminReadinessEnvironmentPolicy(policy({ browserEnvironmentVariables: [{ name: "NEXT_PUBLIC_CONFIG", value: "eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIn0.signature" }] })).ok, false);
   for (const browserEnvironmentVariable of [
+    { name: "NEXT_PUBLIC_APP_URL", value: "https://admin.deraledger.com" },
+    { name: "NEXT_PUBLIC_APP_ENV", value: "production" },
     { name: "NEXT_PUBLIC_SUPABASE_URL", value: "https://public-project.supabase.co" },
     { name: "NEXT_PUBLIC_SUPABASE_ANON_KEY", value: "public-anon-key" },
     { name: "NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY", value: "pk_live_public-key" },
@@ -173,8 +175,17 @@ async function run() {
     })).ok, false, `${dangerousBrowserVariableName} must remain blocked`);
   }
   assert.equal(environment.validateAdminReadinessEnvironmentPolicy(policy({
+    browserEnvironmentVariables: [{ name: "NEXT_PUBLIC_APP_URL", value: "sb_secret_hidden" }],
+  })).ok, false, "an allowed app URL name must not authorize an sb_secret value");
+  assert.equal(environment.validateAdminReadinessEnvironmentPolicy(policy({
+    browserEnvironmentVariables: [{
+      name: "NEXT_PUBLIC_APP_ENV",
+      value: "eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIn0.signature",
+    }],
+  })).ok, false, "an allowed app environment name must not authorize a service-role JWT");
+  assert.equal(environment.validateAdminReadinessEnvironmentPolicy(policy({
     browserEnvironmentVariables: [{ name: "NEXT_PUBLIC_SUPABASE_ANON_KEY", value: "sb_secret_hidden" }],
-  })).ok, false, "an allowed public name must not authorize a secret-shaped value");
+  })).ok, false, "an allowed anon-key name must not authorize a secret-shaped value");
 
   const secretSentinels = {
     supabaseUrl: "https://production-project.supabase.co",
@@ -262,6 +273,8 @@ async function run() {
     "https://admin.deraledger.com",
     {
       ...diagnosticEnvironment,
+      NEXT_PUBLIC_APP_URL: "https://app-metadata-diagnostic.example",
+      NEXT_PUBLIC_APP_ENV: "public-app-environment-diagnostic-sentinel",
       NEXT_PUBLIC_SUPABASE_ANON_KEY: "public-anon-diagnostic-sentinel",
       NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY: "pk_live_diagnostic-sentinel",
     },
@@ -272,6 +285,8 @@ async function run() {
   const intentionalPublicKeysDiagnosticJson = JSON.stringify(intentionalPublicKeysDiagnostic);
   assert.equal(intentionalPublicKeysDiagnosticJson.includes("public-anon-diagnostic-sentinel"), false);
   assert.equal(intentionalPublicKeysDiagnosticJson.includes("pk_live_diagnostic-sentinel"), false);
+  assert.equal(intentionalPublicKeysDiagnosticJson.includes("https://app-metadata-diagnostic.example"), false);
+  assert.equal(intentionalPublicKeysDiagnosticJson.includes("public-app-environment-diagnostic-sentinel"), false);
 
   const compositionSource = readFileSync("src/lib/compliance/server/admin-readiness-route-security-composition.ts", "utf8");
   assert.match(compositionSource, /^import\s+["']server-only["']/);

@@ -61,6 +61,8 @@ type EnvironmentPolicyInput = Readonly<{
 const PRODUCTION_ADMIN_ORIGIN = "https://admin.deraledger.com";
 const ENVIRONMENTS = new Set<AdminReadinessDeploymentEnvironment>(["production", "staging", "preview", "local"]);
 const INTENTIONAL_PUBLIC_BROWSER_VARIABLE_NAMES = new Set([
+  "NEXT_PUBLIC_APP_URL",
+  "NEXT_PUBLIC_APP_ENV",
   "NEXT_PUBLIC_SUPABASE_URL",
   "NEXT_PUBLIC_SUPABASE_ANON_KEY",
   "NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY",

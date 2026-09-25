@@ -46,6 +46,14 @@ matched by the existing forbidden-name expression. The policy now makes that
 intent explicit with a narrow allowlist containing those names and
 `NEXT_PUBLIC_SUPABASE_URL`.
 
+The subsequent names-only production audit found exactly five browser-visible
+variables. In addition to the three already documented public Supabase and
+Paystack names, it found `NEXT_PUBLIC_APP_URL` and `NEXT_PUBLIC_APP_ENV`.
+These are intentional public application metadata, so both are now included
+in the explicit allowlist. Neither name matched the prior forbidden-name
+expression, so ordinary values under these names were already accepted; the
+new entries make that contract explicit and protect it with regression tests.
+
 The allowlist applies to names only. All allowlisted variables still undergo
 the fail-closed sensitive-value checks, so an `sb_secret_` value or a JWT whose
 role is `service_role` remains rejected. Any `NEXT_PUBLIC_*` name containing a
@@ -54,9 +62,12 @@ including `NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY`,
 `NEXT_PUBLIC_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_SECRET_KEY`,
 `NEXT_PUBLIC_PRIVATE_KEY`, and `NEXT_PUBLIC_ACCESS_TOKEN`. The diagnostic does
 not return variable names or values. Consequently, the two intentional public
-keys alone do not explain the earlier exposure category; a separate forbidden
-browser-variable name or sensitive-shaped value must still be checked through
-a names-only Vercel review before another production smoke decision.
+keys alone did not explain the earlier exposure category, and neither do the
+two application metadata names by themselves. With the names-only audit now
+complete, a sensitive-shaped value under one of the five audited names remains
+the likely policy trigger if the diagnostic persists. This source refinement
+does not weaken that value-level rejection. A later production smoke decision
+remains separate and explicitly gated.
 
 ## Narrow production gate
 
