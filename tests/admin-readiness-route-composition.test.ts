@@ -177,6 +177,13 @@ async function run() {
   );
   assert.equal(runtimeDiagnostic.request_origin_matches_admin_origin, true);
   assert.equal(runtimeDiagnostic.origin_policy_created, true);
+  assert.equal(runtimeDiagnostic.deployment_environment_literal_valid, true);
+  assert.equal(runtimeDiagnostic.supabase_environment_literal_valid, true);
+  assert.equal(runtimeDiagnostic.deployment_environment_is_production, true);
+  assert.equal(runtimeDiagnostic.supabase_environment_is_production, true);
+  assert.equal(runtimeDiagnostic.production_pair_allowed, true);
+  assert.equal(runtimeDiagnostic.environment_pair_allowed, true);
+  assert.equal(runtimeDiagnostic.browser_environment_secret_exposure_detected, false);
   assert.equal(runtimeDiagnostic.security_configuration_created, true);
   assert.equal(runtimeDiagnostic.final_failure_category, "origin_policy_ready");
   const runtimeDiagnosticJson = JSON.stringify(runtimeDiagnostic);
@@ -196,6 +203,37 @@ async function run() {
   assert.equal(invalidHmacDiagnostic.hmac_keys_distinct, false);
   assert.equal(invalidHmacDiagnostic.security_configuration_created, false);
   assert.equal(invalidHmacDiagnostic.final_failure_category, "hmac_configuration_invalid");
+
+  const unsupportedDeploymentDiagnostic = actualSecurityConfig.createAdminReadinessRedactedRuntimeDiagnostic(
+    "https://admin.deraledger.com",
+    { ...diagnosticEnvironment, DERALEDGER_ADMIN_READINESS_DEPLOYMENT_ENVIRONMENT: "PRODUCTION" },
+  );
+  assert.equal(unsupportedDeploymentDiagnostic.deployment_environment_literal_valid, false);
+  assert.equal(unsupportedDeploymentDiagnostic.final_failure_category, "environment_policy_unsupported_deployment");
+
+  const unsupportedSupabaseDiagnostic = actualSecurityConfig.createAdminReadinessRedactedRuntimeDiagnostic(
+    "https://admin.deraledger.com",
+    { ...diagnosticEnvironment, DERALEDGER_ADMIN_READINESS_SUPABASE_ENVIRONMENT: "PRODUCTION" },
+  );
+  assert.equal(unsupportedSupabaseDiagnostic.supabase_environment_literal_valid, false);
+  assert.equal(unsupportedSupabaseDiagnostic.final_failure_category, "environment_policy_unsupported_supabase");
+
+  const mismatchedPairDiagnostic = actualSecurityConfig.createAdminReadinessRedactedRuntimeDiagnostic(
+    "https://admin.deraledger.com",
+    { ...diagnosticEnvironment, DERALEDGER_ADMIN_READINESS_SUPABASE_ENVIRONMENT: "staging" },
+  );
+  assert.equal(mismatchedPairDiagnostic.deployment_environment_literal_valid, true);
+  assert.equal(mismatchedPairDiagnostic.supabase_environment_literal_valid, true);
+  assert.equal(mismatchedPairDiagnostic.environment_pair_allowed, false);
+  assert.equal(mismatchedPairDiagnostic.final_failure_category, "environment_policy_pair_mismatch");
+
+  const browserSecretDiagnostic = actualSecurityConfig.createAdminReadinessRedactedRuntimeDiagnostic(
+    "https://admin.deraledger.com",
+    { ...diagnosticEnvironment, NEXT_PUBLIC_SERVICE_ROLE_KEY: "browser-secret-sentinel" },
+  );
+  assert.equal(browserSecretDiagnostic.browser_environment_secret_exposure_detected, true);
+  assert.equal(browserSecretDiagnostic.final_failure_category, "environment_policy_browser_secret_exposure");
+  assert.equal(JSON.stringify(browserSecretDiagnostic).includes("browser-secret-sentinel"), false);
 
   const compositionSource = readFileSync("src/lib/compliance/server/admin-readiness-route-security-composition.ts", "utf8");
   assert.match(compositionSource, /^import\s+["']server-only["']/);

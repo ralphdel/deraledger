@@ -6,8 +6,9 @@ This is a temporary, source-only production diagnostic for the admin
 readiness CSRF-issuance route. Production smoke from
 `https://admin.deraledger.com` returned `400 origin_denied` twice even though
 the browser origin was the reviewed production admin origin. The production
-route flag must be returned to `false` while this diagnostic is reviewed and
-deployed through a separate approved action.
+route flag was rolled back to `false` after the failed smoke and must remain
+false while this diagnostic is reviewed and deployed through a separate
+approved action.
 
 The source task changed no environment value, touched no database, performed
 no deployment, and ran no production smoke. It authorizes no M030/live
@@ -21,6 +22,21 @@ composition cannot create its complete security configuration. Staging showed
 the same symptom; its redacted diagnostic identified
 `hmac_configuration_invalid`, after which externally replacing the staging
 HMAC values allowed the staging smoke to pass.
+
+The first production diagnostic reported the deployment and Supabase labels
+as present and equal but collapsed the policy failure into
+`environment_policy_invalid`. Source review confirms that lowercase
+`production` is an accepted literal, the `production`/`production` pair is
+allowed, there is no separate pair allowlist, and labels are compared exactly
+without trimming or case normalization. There is no staging-only guard in the
+environment policy.
+
+The policy also validates rules that the first diagnostic did not distinguish:
+the exact supported label literals, pair equality, environment-compatible
+admin origin, every additional origin, duplicate admin origins, and whether
+any `NEXT_PUBLIC_*` name/value appears to expose a service-role credential or
+secret. The refined diagnostic reports these as separate booleans and closed
+categories; it does not weaken any policy rule.
 
 ## Narrow production gate
 
@@ -48,9 +64,17 @@ The response diagnostic contains only booleans and one fixed category label:
 - `allowed_origins_key_present`
 - `allowed_origins_empty_string`
 - `allowed_origins_duplicates_admin_origin`
+- `allowed_origins_all_valid`
 - `deployment_environment_present`
 - `supabase_environment_present`
 - `deployment_and_supabase_environment_equal`
+- `deployment_environment_literal_valid`
+- `supabase_environment_literal_valid`
+- `deployment_environment_is_production`
+- `supabase_environment_is_production`
+- `production_pair_allowed`
+- `environment_pair_allowed`
+- `browser_environment_secret_exposure_detected`
 - `origin_policy_created`
 - `supabase_url_present`
 - `service_role_key_present`
@@ -68,6 +92,13 @@ contains raw environment values, origins, Supabase URLs, service-role values,
 HMAC values, cookies, JWTs, headers, connection strings, CSRF tokens, UUIDs,
 or database diagnostics.
 
+Environment-policy failure categories distinguish unsupported deployment and
+Supabase labels, a valid-label pair mismatch, invalid or environment-conflicting
+admin origins, invalid or duplicate additional origins, browser-visible secret
+exposure, and an unknown fail-closed fallback. Configuration categories for
+Supabase presence, HMAC validity/distinctness, throttle validity, and final
+configuration construction remain separate.
+
 ## Removal requirement
 
 This response-visible diagnostic must be removed immediately after the
@@ -84,4 +115,3 @@ separate, explicit gate.
 - `ENV_CHANGED=NO`
 - `ROUTE_FLAG_CHANGED=NO`
 - `PRODUCTION_RELEASE=NO`
-

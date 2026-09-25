@@ -134,9 +134,17 @@ function installRoute(require: NodeRequire, routePath: string, state: Scenario):
         allowed_origins_key_present: false,
         allowed_origins_empty_string: false,
         allowed_origins_duplicates_admin_origin: false,
+        allowed_origins_all_valid: true,
         deployment_environment_present: true,
         supabase_environment_present: true,
         deployment_and_supabase_environment_equal: true,
+        deployment_environment_literal_valid: true,
+        supabase_environment_literal_valid: true,
+        deployment_environment_is_production: true,
+        supabase_environment_is_production: true,
+        production_pair_allowed: true,
+        environment_pair_allowed: true,
+        browser_environment_secret_exposure_detected: false,
         origin_policy_created: true,
         supabase_url_present: true,
         service_role_key_present: true,
@@ -252,14 +260,21 @@ async function run() {
     assert.deepEqual(state.runtimeDiagnosticCalls, [productionOrigin]);
     assert.deepEqual(Object.keys(diagnostic).sort(), [
       "request_origin_present", "request_origin_matches_admin_origin", "admin_origin_present", "admin_origin_parse_valid",
-      "allowed_origins_key_present", "allowed_origins_empty_string", "allowed_origins_duplicates_admin_origin",
+      "allowed_origins_key_present", "allowed_origins_empty_string", "allowed_origins_duplicates_admin_origin", "allowed_origins_all_valid",
       "deployment_environment_present", "supabase_environment_present", "deployment_and_supabase_environment_equal",
+      "deployment_environment_literal_valid", "supabase_environment_literal_valid", "deployment_environment_is_production",
+      "supabase_environment_is_production", "production_pair_allowed", "environment_pair_allowed",
+      "browser_environment_secret_exposure_detected",
       "origin_policy_created", "supabase_url_present", "service_role_key_present", "csrf_hmac_key_present",
       "throttle_hmac_key_present", "hmac_keys_distinct", "throttle_issue_limit_valid", "throttle_snapshot_limit_valid",
       "throttle_window_seconds_valid", "security_configuration_created", "final_failure_category",
     ].sort());
     const categories = new Set([
-      "origin_policy_ready", "environment_policy_invalid", "request_origin_missing_or_invalid", "request_origin_mismatch",
+      "origin_policy_ready", "environment_policy_unsupported_deployment", "environment_policy_unsupported_supabase",
+      "environment_policy_pair_mismatch", "environment_policy_admin_origin_invalid", "environment_policy_production_origin_mismatch",
+      "environment_policy_non_production_origin_conflict", "environment_policy_allowed_origins_invalid",
+      "environment_policy_allowed_origins_duplicate", "environment_policy_browser_secret_exposure",
+      "environment_policy_unknown_failure", "request_origin_missing_or_invalid", "request_origin_mismatch",
       "supabase_configuration_invalid", "hmac_configuration_invalid", "throttle_configuration_invalid", "security_configuration_unavailable",
     ]);
     assert.ok(Object.values(diagnostic).every((value) => typeof value === "boolean" || typeof value === "string" && categories.has(value)));

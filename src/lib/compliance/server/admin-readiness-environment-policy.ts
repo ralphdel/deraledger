@@ -21,11 +21,32 @@ export type AdminReadinessRedactedOriginPolicyDiagnostic = Readonly<{
   allowed_origins_key_present: boolean;
   allowed_origins_empty_string: boolean;
   allowed_origins_duplicates_admin_origin: boolean;
+  allowed_origins_all_valid: boolean;
   deployment_environment_present: boolean;
   supabase_environment_present: boolean;
   deployment_and_supabase_environment_equal: boolean;
+  deployment_environment_literal_valid: boolean;
+  supabase_environment_literal_valid: boolean;
+  deployment_environment_is_production: boolean;
+  supabase_environment_is_production: boolean;
+  production_pair_allowed: boolean;
+  environment_pair_allowed: boolean;
+  browser_environment_secret_exposure_detected: boolean;
   origin_policy_created: boolean;
-  final_failure_category: "origin_policy_ready" | "environment_policy_invalid" | "request_origin_missing_or_invalid" | "request_origin_mismatch";
+  final_failure_category:
+    | "origin_policy_ready"
+    | "environment_policy_unsupported_deployment"
+    | "environment_policy_unsupported_supabase"
+    | "environment_policy_pair_mismatch"
+    | "environment_policy_admin_origin_invalid"
+    | "environment_policy_production_origin_mismatch"
+    | "environment_policy_non_production_origin_conflict"
+    | "environment_policy_allowed_origins_invalid"
+    | "environment_policy_allowed_origins_duplicate"
+    | "environment_policy_browser_secret_exposure"
+    | "environment_policy_unknown_failure"
+    | "request_origin_missing_or_invalid"
+    | "request_origin_mismatch";
 }>;
 
 type BrowserEnvironmentVariable = Readonly<{ name: string; value: string | undefined }>;
@@ -154,27 +175,52 @@ export function createAdminReadinessRedactedOriginPolicyDiagnostic(input: Readon
     && requestOrigin === adminOrigin;
   const requestOriginAllowed = typeof requestOrigin === "string"
     && additionalAllowedOrigins.includes(requestOrigin);
-  const finalFailureCategory = !policyResult.ok
-    ? "environment_policy_invalid"
-    : !requestOriginValid
-      ? "request_origin_missing_or_invalid"
-      : requestOriginMatchesAdminOrigin || requestOriginAllowed
-        ? "origin_policy_ready"
-        : "request_origin_mismatch";
+  const deploymentEnvironmentLiteralValid = isEnvironment(environment);
+  const supabaseEnvironmentLiteralValid = isEnvironment(input.supabaseEnvironment);
+  const deploymentAndSupabaseEnvironmentEqual = typeof environment === "string"
+    && typeof input.supabaseEnvironment === "string"
+    && environment === input.supabaseEnvironment;
+  const environmentPairAllowed = deploymentEnvironmentLiteralValid
+    && supabaseEnvironmentLiteralValid
+    && deploymentAndSupabaseEnvironmentEqual;
+  const productionPairAllowed = environment === "production" && input.supabaseEnvironment === "production";
+  const adminOriginParseValid = exactOrigin(adminOrigin, allowLocalHttp);
+  const allowedOriginsAllValid = additionalAllowedOrigins.every((origin) => exactOrigin(origin, allowLocalHttp));
+  const browserEnvironmentSecretExposureDetected = hasClientSecret(input.browserEnvironmentVariables);
+  let finalFailureCategory: AdminReadinessRedactedOriginPolicyDiagnostic["final_failure_category"];
+  if (!deploymentEnvironmentLiteralValid) finalFailureCategory = "environment_policy_unsupported_deployment";
+  else if (!supabaseEnvironmentLiteralValid) finalFailureCategory = "environment_policy_unsupported_supabase";
+  else if (!environmentPairAllowed) finalFailureCategory = "environment_policy_pair_mismatch";
+  else if (!adminOriginParseValid) finalFailureCategory = "environment_policy_admin_origin_invalid";
+  else if (!allowedOriginsAllValid) finalFailureCategory = "environment_policy_allowed_origins_invalid";
+  else if (browserEnvironmentSecretExposureDetected) finalFailureCategory = "environment_policy_browser_secret_exposure";
+  else if (environment === "production" && adminOrigin !== PRODUCTION_ADMIN_ORIGIN) finalFailureCategory = "environment_policy_production_origin_mismatch";
+  else if (environment !== "production" && adminOrigin === PRODUCTION_ADMIN_ORIGIN) finalFailureCategory = "environment_policy_non_production_origin_conflict";
+  else if (typeof adminOrigin === "string" && additionalAllowedOrigins.includes(adminOrigin)) finalFailureCategory = "environment_policy_allowed_origins_duplicate";
+  else if (!policyResult.ok) finalFailureCategory = "environment_policy_unknown_failure";
+  else if (!requestOriginValid) finalFailureCategory = "request_origin_missing_or_invalid";
+  else if (requestOriginMatchesAdminOrigin || requestOriginAllowed) finalFailureCategory = "origin_policy_ready";
+  else finalFailureCategory = "request_origin_mismatch";
 
   return {
     request_origin_present: typeof requestOrigin === "string" && requestOrigin.length > 0,
     request_origin_matches_admin_origin: requestOriginMatchesAdminOrigin,
     admin_origin_present: typeof adminOrigin === "string" && adminOrigin.length > 0,
-    admin_origin_parse_valid: exactOrigin(adminOrigin, allowLocalHttp),
+    admin_origin_parse_valid: adminOriginParseValid,
     allowed_origins_key_present: input.allowedOriginsKeyPresent,
     allowed_origins_empty_string: input.allowedOriginsEmptyString,
     allowed_origins_duplicates_admin_origin: typeof adminOrigin === "string" && additionalAllowedOrigins.includes(adminOrigin),
+    allowed_origins_all_valid: allowedOriginsAllValid,
     deployment_environment_present: typeof environment === "string" && environment.length > 0,
     supabase_environment_present: typeof input.supabaseEnvironment === "string" && input.supabaseEnvironment.length > 0,
-    deployment_and_supabase_environment_equal: typeof environment === "string"
-      && typeof input.supabaseEnvironment === "string"
-      && environment === input.supabaseEnvironment,
+    deployment_and_supabase_environment_equal: deploymentAndSupabaseEnvironmentEqual,
+    deployment_environment_literal_valid: deploymentEnvironmentLiteralValid,
+    supabase_environment_literal_valid: supabaseEnvironmentLiteralValid,
+    deployment_environment_is_production: environment === "production",
+    supabase_environment_is_production: input.supabaseEnvironment === "production",
+    production_pair_allowed: productionPairAllowed,
+    environment_pair_allowed: environmentPairAllowed,
+    browser_environment_secret_exposure_detected: browserEnvironmentSecretExposureDetected,
     origin_policy_created: policyResult.ok,
     final_failure_category: finalFailureCategory,
   };
