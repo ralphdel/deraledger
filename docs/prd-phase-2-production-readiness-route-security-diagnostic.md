@@ -69,6 +69,39 @@ the likely policy trigger if the diagnostic persists. This source refinement
 does not weaken that value-level rejection. A later production smoke decision
 remains separate and explicitly gated.
 
+Production continued to report browser-visible secret exposure after the
+names-only audit. The next diagnostic step is therefore a local-only value-shape
+audit using `scripts/audit-readiness-public-env.ts`. The script and runtime
+policy share the same classifier. It inspects only `NEXT_PUBLIC_*` variables
+and prints only `PASS|<key-name>|<fixed-reason>` or
+`BLOCKED|<key-name>|<fixed-reason>`; it never prints values or JWT payloads.
+
+The operator may create the ignored local file
+`.env.production-public-audit.local` with the five production public variables
+and run:
+
+```text
+# Local template only: replace each placeholder on the operator's machine.
+NEXT_PUBLIC_APP_URL=<local-value>
+NEXT_PUBLIC_APP_ENV=<local-value>
+NEXT_PUBLIC_SUPABASE_URL=<local-value>
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<local-value>
+NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY=<local-value>
+```
+
+Then run:
+
+```text
+npx tsx scripts/audit-readiness-public-env.ts .env.production-public-audit.local
+```
+
+The file is covered by the repository's `.env*` ignore rule and must never be
+committed. Production environment values must not be pasted into chat or
+checkpoint evidence. Exit code `0` means no inspected variable was blocked;
+exit code `1` means at least one variable was blocked or the requested file
+could not be read. A missing optional file emits only
+`WARN|LOCAL_ENV_FILE|file_missing` and audits the current process environment.
+
 ## Narrow production gate
 
 The `/api/internal/admin/compliance/readiness/issue` response includes a
