@@ -35,6 +35,7 @@ async function run() {
   const require = createRequire(import.meta.url);
   const serverOnlyPath = require.resolve("server-only");
   require.cache[serverOnlyPath] = moduleShim(serverOnlyPath, {}) as never;
+  const actualSecurityConfig = require("../src/lib/compliance/server/admin-readiness-route-security-config") as typeof import("../src/lib/compliance/server/admin-readiness-route-security-config");
   let injectedConfiguration: object | null = null;
   const securityConfigPath = require.resolve("../src/lib/compliance/server/admin-readiness-route-security-config");
   require.cache[securityConfigPath] = moduleShim(securityConfigPath, {
@@ -151,6 +152,50 @@ async function run() {
   assert.equal(environment.validateAdminReadinessEnvironmentPolicy(policy({ adminOrigin: "https://deraledger.com/admin" })).ok, false);
   assert.equal(environment.validateAdminReadinessEnvironmentPolicy(policy({ browserEnvironmentVariables: [{ name: "NEXT_PUBLIC_CONFIG", value: "sb_secret_hidden" }] })).ok, false);
   assert.equal(environment.validateAdminReadinessEnvironmentPolicy(policy({ browserEnvironmentVariables: [{ name: "NEXT_PUBLIC_CONFIG", value: "eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIn0.signature" }] })).ok, false);
+
+  const secretSentinels = {
+    supabaseUrl: "https://production-project.supabase.co",
+    serviceRole: "service-role-value-must-not-appear",
+    csrfHmac: "A".repeat(43),
+    throttleHmac: "B".repeat(43),
+  };
+  const diagnosticEnvironment = {
+    DERALEDGER_ADMIN_READINESS_DEPLOYMENT_ENVIRONMENT: "production",
+    DERALEDGER_ADMIN_READINESS_SUPABASE_ENVIRONMENT: "production",
+    DERALEDGER_ADMIN_READINESS_ADMIN_ORIGIN: "https://admin.deraledger.com",
+    SUPABASE_URL: secretSentinels.supabaseUrl,
+    SUPABASE_SERVICE_ROLE_KEY: secretSentinels.serviceRole,
+    DERALEDGER_ADMIN_READINESS_CSRF_BINDING_HMAC_KEY: secretSentinels.csrfHmac,
+    DERALEDGER_ADMIN_READINESS_THROTTLE_SUBJECT_HMAC_KEY: secretSentinels.throttleHmac,
+    DERALEDGER_ADMIN_READINESS_THROTTLE_ISSUE_LIMIT: "10",
+    DERALEDGER_ADMIN_READINESS_THROTTLE_SNAPSHOT_LIMIT: "30",
+    DERALEDGER_ADMIN_READINESS_THROTTLE_WINDOW_SECONDS: "60",
+  };
+  const runtimeDiagnostic = actualSecurityConfig.createAdminReadinessRedactedRuntimeDiagnostic(
+    "https://admin.deraledger.com",
+    diagnosticEnvironment,
+  );
+  assert.equal(runtimeDiagnostic.request_origin_matches_admin_origin, true);
+  assert.equal(runtimeDiagnostic.origin_policy_created, true);
+  assert.equal(runtimeDiagnostic.security_configuration_created, true);
+  assert.equal(runtimeDiagnostic.final_failure_category, "origin_policy_ready");
+  const runtimeDiagnosticJson = JSON.stringify(runtimeDiagnostic);
+  for (const secret of Object.values(secretSentinels)) assert.equal(runtimeDiagnosticJson.includes(secret), false);
+  assert.doesNotMatch(runtimeDiagnosticJson, /cookie|jwt|authorization|header|connection|string_value/i);
+  assert.ok(Object.entries(runtimeDiagnostic).every(([name, value]) => name === "final_failure_category"
+    ? typeof value === "string"
+    : typeof value === "boolean"));
+
+  const invalidHmacDiagnostic = actualSecurityConfig.createAdminReadinessRedactedRuntimeDiagnostic(
+    "https://admin.deraledger.com",
+    {
+      ...diagnosticEnvironment,
+      DERALEDGER_ADMIN_READINESS_THROTTLE_SUBJECT_HMAC_KEY: secretSentinels.csrfHmac,
+    },
+  );
+  assert.equal(invalidHmacDiagnostic.hmac_keys_distinct, false);
+  assert.equal(invalidHmacDiagnostic.security_configuration_created, false);
+  assert.equal(invalidHmacDiagnostic.final_failure_category, "hmac_configuration_invalid");
 
   const compositionSource = readFileSync("src/lib/compliance/server/admin-readiness-route-security-composition.ts", "utf8");
   assert.match(compositionSource, /^import\s+["']server-only["']/);

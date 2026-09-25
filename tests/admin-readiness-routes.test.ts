@@ -17,6 +17,7 @@ type Scenario = {
   csrfIssueCalls: number;
   snapshotCalls: number;
   csrfEvidence: string | null | undefined;
+  runtimeDiagnosticCalls: Array<string | null>;
 };
 
 const routeFiles = [
@@ -83,6 +84,7 @@ function scenario(): Scenario {
     csrfIssueCalls: 0,
     snapshotCalls: 0,
     csrfEvidence: undefined,
+    runtimeDiagnosticCalls: [],
   };
 }
 
@@ -120,16 +122,52 @@ function installRoute(require: NodeRequire, routePath: string, state: Scenario):
     createAdminReadinessOperationalEvent(input: object) { state.events.push(input); return input; },
   }) as never;
 
+  const securityConfigPath = require.resolve("../src/lib/compliance/server/admin-readiness-route-security-config");
+  require.cache[securityConfigPath] = moduleShim(securityConfigPath, {
+    createAdminReadinessRedactedRuntimeDiagnostic(requestOrigin: string | null) {
+      state.runtimeDiagnosticCalls.push(requestOrigin);
+      return {
+        request_origin_present: true,
+        request_origin_matches_admin_origin: true,
+        admin_origin_present: true,
+        admin_origin_parse_valid: true,
+        allowed_origins_key_present: false,
+        allowed_origins_empty_string: false,
+        allowed_origins_duplicates_admin_origin: false,
+        deployment_environment_present: true,
+        supabase_environment_present: true,
+        deployment_and_supabase_environment_equal: true,
+        origin_policy_created: true,
+        supabase_url_present: true,
+        service_role_key_present: true,
+        csrf_hmac_key_present: true,
+        throttle_hmac_key_present: true,
+        hmac_keys_distinct: false,
+        throttle_issue_limit_valid: true,
+        throttle_snapshot_limit_valid: true,
+        throttle_window_seconds_valid: true,
+        security_configuration_created: false,
+        final_failure_category: "hmac_configuration_invalid",
+      };
+    },
+  }) as never;
+
   const resolvedRoutePath = require.resolve(routePath);
   delete require.cache[resolvedRoutePath];
   return require(routePath) as RouteModule;
 }
 
-function request(body = "", includeCsrf = true): Request {
-  return new Request(`${origin}/api/internal/admin/compliance/readiness`, {
+function request(
+  body = "",
+  includeCsrf = true,
+  requestUrlOrigin = origin,
+  requestHeaderOrigin = origin,
+  pathname = "/api/internal/admin/compliance/readiness",
+): Request {
+  return new Request(`${requestUrlOrigin}${pathname}`, {
     method: "POST",
     headers: {
-      origin,
+      origin: requestHeaderOrigin,
       ...(body ? { "content-type": "application/json" } : {}),
       ...(includeCsrf ? { "x-deraledger-readiness-csrf": "test-csrf-evidence" } : {}),
     },
@@ -137,14 +175,23 @@ function request(body = "", includeCsrf = true): Request {
   });
 }
 
-async function result(route: RouteModule, body = "", includeCsrf = true): Promise<{ status: number; body: Record<string, unknown> }> {
-  const response = await route.POST(request(body, includeCsrf));
+async function result(
+  route: RouteModule,
+  body = "",
+  includeCsrf = true,
+  requestUrlOrigin = origin,
+  requestHeaderOrigin = origin,
+  pathname = "/api/internal/admin/compliance/readiness",
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const response = await route.POST(request(body, includeCsrf, requestUrlOrigin, requestHeaderOrigin, pathname));
   return { status: response.status, body: await response.json() as Record<string, unknown> };
 }
 
 async function run() {
   const require = createRequire(import.meta.url);
+  const mutableEnvironment = process.env as Record<string, string | undefined>;
   const previousGate = process.env.DERALEDGER_ADMIN_READINESS_ROUTES_ENABLED;
+  const previousNodeEnvironment = mutableEnvironment.NODE_ENV;
 
   try {
     for (const file of routeFiles) {
@@ -157,6 +204,10 @@ async function run() {
     }
     const issueSource = readFileSync(routeFiles[0], "utf8");
     assert.match(issueSource, /issueCsrfToken\(\{[\s\S]*operation: "snapshot"/);
+    assert.match(issueSource, /const PRODUCTION_DIAGNOSTIC_ORIGIN = "https:\/\/admin\.deraledger\.com"/);
+    assert.match(issueSource, /process\.env\.NODE_ENV !== "production"/);
+    assert.match(issueSource, /url\.origin !== PRODUCTION_DIAGNOSTIC_ORIGIN \|\| url\.pathname !== ISSUE_PATH/);
+    assert.match(issueSource, /issuance\.kind === "deny" && issuance\.code === "origin_denied"/);
     assert.doesNotMatch(issueSource, /canonical-approval-readiness-service-factory|createCanonicalApprovalReadinessServerService|validateAdminReadinessIssue|validateCsrf\(/);
     assert.match(readFileSync(routeFiles[1], "utf8"), /canonical-approval-readiness-service-factory/);
     for (const file of sourceFiles("src/app")) {
@@ -185,6 +236,51 @@ async function run() {
     assert.equal((state.events[0] as Record<string, unknown>).operation, "issue");
     assert.equal("token" in (state.events[0] as Record<string, unknown>), false);
     assert.equal("csrfToken" in (state.events[0] as Record<string, unknown>), false);
+
+    // The temporary diagnostic is response-visible only for the exact
+    // production /issue origin_denied path and never exposes arbitrary data.
+    mutableEnvironment.NODE_ENV = "production";
+    const productionOrigin = "https://admin.deraledger.com";
+    const productionIssuePath = "/api/internal/admin/compliance/readiness/issue";
+    state = scenario(); state.csrfIssue = { kind: "deny", code: "origin_denied" }; route = installRoute(require, issuePath, state);
+    received = await result(route, "", false, productionOrigin, productionOrigin, productionIssuePath);
+    assert.equal(received.status, 400);
+    assert.equal(received.body.kind, "denied");
+    assert.equal(received.body.code, "origin_denied");
+    const diagnostic = received.body.productionDiagnostic as Record<string, unknown>;
+    assert.ok(diagnostic);
+    assert.deepEqual(state.runtimeDiagnosticCalls, [productionOrigin]);
+    assert.deepEqual(Object.keys(diagnostic).sort(), [
+      "request_origin_present", "request_origin_matches_admin_origin", "admin_origin_present", "admin_origin_parse_valid",
+      "allowed_origins_key_present", "allowed_origins_empty_string", "allowed_origins_duplicates_admin_origin",
+      "deployment_environment_present", "supabase_environment_present", "deployment_and_supabase_environment_equal",
+      "origin_policy_created", "supabase_url_present", "service_role_key_present", "csrf_hmac_key_present",
+      "throttle_hmac_key_present", "hmac_keys_distinct", "throttle_issue_limit_valid", "throttle_snapshot_limit_valid",
+      "throttle_window_seconds_valid", "security_configuration_created", "final_failure_category",
+    ].sort());
+    const categories = new Set([
+      "origin_policy_ready", "environment_policy_invalid", "request_origin_missing_or_invalid", "request_origin_mismatch",
+      "supabase_configuration_invalid", "hmac_configuration_invalid", "throttle_configuration_invalid", "security_configuration_unavailable",
+    ]);
+    assert.ok(Object.values(diagnostic).every((value) => typeof value === "boolean" || typeof value === "string" && categories.has(value)));
+
+    state = scenario(); state.csrfIssue = { kind: "deny", code: "origin_denied" }; route = installRoute(require, issuePath, state);
+    received = await result(route, "", false, "https://deraledger.com", productionOrigin, productionIssuePath);
+    assert.deepEqual(received, { status: 400, body: { kind: "denied", code: "origin_denied" } });
+    assert.deepEqual(state.runtimeDiagnosticCalls, []);
+
+    state = scenario(); route = installRoute(require, issuePath, state);
+    received = await result(route, "", false, productionOrigin, productionOrigin, productionIssuePath);
+    assert.equal(received.status, 201);
+    assert.equal("productionDiagnostic" in received.body, false);
+    assert.deepEqual(state.runtimeDiagnosticCalls, []);
+
+    mutableEnvironment.NODE_ENV = "development";
+    state = scenario(); state.csrfIssue = { kind: "deny", code: "origin_denied" }; route = installRoute(require, issuePath, state);
+    received = await result(route, "", false, productionOrigin, productionOrigin, productionIssuePath);
+    assert.deepEqual(received, { status: 400, body: { kind: "denied", code: "origin_denied" } });
+    assert.deepEqual(state.runtimeDiagnosticCalls, []);
+    mutableEnvironment.NODE_ENV = "production";
 
     state = scenario(); state.csrfIssue = { kind: "deny", code: "origin_denied" }; route = installRoute(require, issuePath, state);
     received = await result(route, "", false);
@@ -216,6 +312,8 @@ async function run() {
   } finally {
     if (previousGate === undefined) delete process.env.DERALEDGER_ADMIN_READINESS_ROUTES_ENABLED;
     else process.env.DERALEDGER_ADMIN_READINESS_ROUTES_ENABLED = previousGate;
+    if (previousNodeEnvironment === undefined) delete mutableEnvironment.NODE_ENV;
+    else mutableEnvironment.NODE_ENV = previousNodeEnvironment;
   }
 
   console.log("admin-readiness-routes.test.ts passed");

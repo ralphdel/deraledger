@@ -5,7 +5,12 @@ import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { createAdminReadinessCsrfSessionBindingReader, isAdminReadinessSecurityHmacKey } from "./admin-readiness-csrf-session-binding";
 import { createAdminReadinessDurableCsrfStorage, type AdminReadinessSupabaseSecurityRpcClient } from "./admin-readiness-csrf-durable-storage";
 import { createAdminReadinessCsrfIssuer } from "./admin-readiness-csrf-issuer";
-import { validateAdminReadinessEnvironmentPolicy, type AdminReadinessDeploymentEnvironment } from "./admin-readiness-environment-policy";
+import {
+  createAdminReadinessRedactedOriginPolicyDiagnostic,
+  validateAdminReadinessEnvironmentPolicy,
+  type AdminReadinessDeploymentEnvironment,
+  type AdminReadinessRedactedOriginPolicyDiagnostic,
+} from "./admin-readiness-environment-policy";
 import { createAdminReadinessDurableThrottleStorage } from "./admin-readiness-throttle-durable-storage";
 import { createCanonicalApprovalReadinessReviewerResolver } from "./canonical-approval-readiness-reviewer-resolver";
 import { createCanonicalApprovalReadinessSessionReader } from "./canonical-approval-readiness-session-reader";
@@ -25,6 +30,26 @@ export type AdminReadinessRouteSecurityConfiguration = Readonly<{
   throttleNamespace: string;
   throttleStorage: ReturnType<typeof createAdminReadinessDurableThrottleStorage>;
 }>;
+
+export type AdminReadinessRedactedRuntimeDiagnostic = Readonly<
+  Omit<AdminReadinessRedactedOriginPolicyDiagnostic, "final_failure_category"> & {
+    supabase_url_present: boolean;
+    service_role_key_present: boolean;
+    csrf_hmac_key_present: boolean;
+    throttle_hmac_key_present: boolean;
+    hmac_keys_distinct: boolean;
+    throttle_issue_limit_valid: boolean;
+    throttle_snapshot_limit_valid: boolean;
+    throttle_window_seconds_valid: boolean;
+    security_configuration_created: boolean;
+    final_failure_category:
+      | AdminReadinessRedactedOriginPolicyDiagnostic["final_failure_category"]
+      | "supabase_configuration_invalid"
+      | "hmac_configuration_invalid"
+      | "throttle_configuration_invalid"
+      | "security_configuration_unavailable";
+  }
+>;
 
 type ReadinessEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -120,4 +145,64 @@ function createAdminReadinessRouteSecurityConfigurationForEnvironment(environmen
 /** Returns null unless every server-only configuration component is complete and matched. */
 export function createAdminReadinessRouteSecurityConfiguration(): AdminReadinessRouteSecurityConfiguration | null {
   return createAdminReadinessRouteSecurityConfigurationForEnvironment(process.env);
+}
+
+/**
+ * Temporary production-smoke classifier. It returns booleans and fixed
+ * categories only and performs no database operation.
+ */
+export function createAdminReadinessRedactedRuntimeDiagnostic(
+  requestOrigin: string | null | undefined,
+  environment: ReadinessEnvironment = process.env,
+): AdminReadinessRedactedRuntimeDiagnostic {
+  const adminOrigin = environment.DERALEDGER_ADMIN_READINESS_ADMIN_ORIGIN;
+  const allowedOrigins = environment.DERALEDGER_ADMIN_READINESS_ALLOWED_ORIGINS;
+  const csrfKey = environment.DERALEDGER_ADMIN_READINESS_CSRF_BINDING_HMAC_KEY;
+  const throttleKey = environment.DERALEDGER_ADMIN_READINESS_THROTTLE_SUBJECT_HMAC_KEY;
+  const issueLimit = decimal(environment.DERALEDGER_ADMIN_READINESS_THROTTLE_ISSUE_LIMIT, 100);
+  const snapshotLimit = decimal(environment.DERALEDGER_ADMIN_READINESS_THROTTLE_SNAPSHOT_LIMIT, 100);
+  const windowSeconds = decimal(environment.DERALEDGER_ADMIN_READINESS_THROTTLE_WINDOW_SECONDS, 3_600);
+  const originDiagnostic = createAdminReadinessRedactedOriginPolicyDiagnostic({
+    environment: environment.DERALEDGER_ADMIN_READINESS_DEPLOYMENT_ENVIRONMENT,
+    supabaseEnvironment: environment.DERALEDGER_ADMIN_READINESS_SUPABASE_ENVIRONMENT,
+    adminOrigin,
+    additionalAllowedOrigins: allowedOrigins?.split(",") ?? [],
+    allowedOriginsKeyPresent: allowedOrigins !== undefined,
+    allowedOriginsEmptyString: allowedOrigins === "",
+    browserEnvironmentVariables: Object.entries(environment)
+      .filter(([name]) => name.startsWith("NEXT_PUBLIC_"))
+      .map(([name, value]) => ({ name, value })),
+    requestOrigin,
+  });
+  const supabaseUrlPresent = Boolean(nonEmpty(environment.SUPABASE_URL) ?? nonEmpty(environment.NEXT_PUBLIC_SUPABASE_URL));
+  const serviceRoleKeyPresent = Boolean(nonEmpty(environment.SUPABASE_SERVICE_ROLE_KEY));
+  const csrfHmacKeyPresent = Boolean(nonEmpty(csrfKey));
+  const throttleHmacKeyPresent = Boolean(nonEmpty(throttleKey));
+  const hmacKeysDistinct = csrfHmacKeyPresent && throttleHmacKeyPresent && csrfKey !== throttleKey;
+  const securityConfigurationCreated = createAdminReadinessRouteSecurityConfigurationForEnvironment(environment) !== null;
+  const finalFailureCategory = !originDiagnostic.origin_policy_created
+    ? originDiagnostic.final_failure_category
+    : !supabaseUrlPresent || !serviceRoleKeyPresent
+      ? "supabase_configuration_invalid"
+      : !isAdminReadinessSecurityHmacKey(csrfKey) || !isAdminReadinessSecurityHmacKey(throttleKey) || !hmacKeysDistinct
+        ? "hmac_configuration_invalid"
+        : issueLimit === null || snapshotLimit === null || windowSeconds === null
+          ? "throttle_configuration_invalid"
+          : !securityConfigurationCreated
+            ? "security_configuration_unavailable"
+            : originDiagnostic.final_failure_category;
+
+  return {
+    ...originDiagnostic,
+    supabase_url_present: supabaseUrlPresent,
+    service_role_key_present: serviceRoleKeyPresent,
+    csrf_hmac_key_present: csrfHmacKeyPresent,
+    throttle_hmac_key_present: throttleHmacKeyPresent,
+    hmac_keys_distinct: hmacKeysDistinct,
+    throttle_issue_limit_valid: issueLimit !== null,
+    throttle_snapshot_limit_valid: snapshotLimit !== null,
+    throttle_window_seconds_valid: windowSeconds !== null,
+    security_configuration_created: securityConfigurationCreated,
+    final_failure_category: finalFailureCategory,
+  };
 }
