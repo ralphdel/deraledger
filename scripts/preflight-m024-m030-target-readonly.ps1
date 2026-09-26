@@ -124,7 +124,9 @@ SELECT 'CONTROL|PROJECT_REF|' || CASE
   WHEN :'target_label' = 'local' THEN 'PASS|not_required_local'
   ELSE 'FAIL|BLOCKED_PROJECT_REF_UNPROVEN'
 END;
-SELECT 'CONTROL|MIGRATION_HISTORY|' || CASE WHEN to_regclass('supabase_migrations.schema_migrations') IS NULL THEN 'FAIL|history_table_missing' ELSE 'PASS|history_table_present' END;
+SELECT CASE WHEN to_regclass('supabase_migrations.schema_migrations') IS NULL THEN 'false' ELSE 'true' END AS migration_history_exists \gset
+\if :migration_history_exists
+SELECT 'CONTROL|MIGRATION_HISTORY|PASS|history_table_present';
 WITH expected(version_name, ordinal) AS (
   VALUES
     ('20260820_00_prd_phase_2_compliance_schema_substrate', 1),
@@ -143,6 +145,14 @@ SELECT 'CONTROL|CHAIN_STATE|' || CASE
   ELSE 'FAIL|CHAIN_PARTIAL'
 END
 FROM expected LEFT JOIN observed USING (version_name);
+SELECT count(*) AS history_recorded_count
+FROM supabase_migrations.schema_migrations
+WHERE version IN ('20260820_00_prd_phase_2_compliance_schema_substrate','20260824_00_reviewed_profile_bootstrap_rpc','20260825_00_reviewed_profile_approval_rpc','20260825_01_cleanup_approval_rpc_diagnostics','20260825_02_canonical_approval_snapshot_idempotency','20260826_00_canonical_workspace_linkage','20260827_00_m028_m029_readiness_integration') \gset
+\else
+\set history_recorded_count 0
+SELECT 'CONTROL|MIGRATION_HISTORY|FAIL|history_table_missing';
+SELECT 'CONTROL|CHAIN_STATE|PASS|CHAIN_ABSENT';
+\endif
 WITH expected(name) AS (VALUES
   ('merchant_compliance_profiles'), ('merchant_compliance_reviews'), ('merchant_compliance_events'),
   ('merchant_collection_limit_windows'), ('merchant_collection_limit_reservations'),
@@ -150,7 +160,7 @@ WITH expected(name) AS (VALUES
   ('approval_policy_versions'), ('approval_decision_requests'), ('merchant_canonical_workspaces')
 )
 SELECT 'CONTROL|TABLES|' || CASE
-  WHEN (SELECT count(*) FROM supabase_migrations.schema_migrations WHERE version IN ('20260820_00_prd_phase_2_compliance_schema_substrate','20260824_00_reviewed_profile_bootstrap_rpc','20260825_00_reviewed_profile_approval_rpc','20260825_01_cleanup_approval_rpc_diagnostics','20260825_02_canonical_approval_snapshot_idempotency','20260826_00_canonical_workspace_linkage','20260827_00_m028_m029_readiness_integration')) = 0 AND count(to_regclass('public.' || name)) = 0 THEN 'PASS|absent_consistent'
+  WHEN (:'history_recorded_count')::integer = 0 AND count(to_regclass('public.' || name)) = 0 THEN 'PASS|absent_consistent'
   WHEN count(*) = count(to_regclass('public.' || name)) THEN 'PASS|required_tables_present'
   ELSE 'FAIL|history_object_conflict_or_missing_table'
 END FROM expected;
@@ -164,7 +174,7 @@ WITH expected(signature) AS (VALUES
   ('public.read_canonical_approval_snapshot_v2(uuid)')
 )
 SELECT 'CONTROL|RPC_SIGNATURES|' || CASE
-  WHEN (SELECT count(*) FROM supabase_migrations.schema_migrations WHERE version IN ('20260820_00_prd_phase_2_compliance_schema_substrate','20260824_00_reviewed_profile_bootstrap_rpc','20260825_00_reviewed_profile_approval_rpc','20260825_01_cleanup_approval_rpc_diagnostics','20260825_02_canonical_approval_snapshot_idempotency','20260826_00_canonical_workspace_linkage','20260827_00_m028_m029_readiness_integration')) = 0 AND count(to_regprocedure(signature)) = 0 THEN 'PASS|absent_consistent'
+  WHEN (:'history_recorded_count')::integer = 0 AND count(to_regprocedure(signature)) = 0 THEN 'PASS|absent_consistent'
   WHEN count(*) = count(to_regprocedure(signature)) THEN 'PASS|expected_signatures_present'
   ELSE 'FAIL|history_object_conflict_or_missing_signature'
 END FROM expected;
@@ -204,7 +214,7 @@ SELECT 'CONTROL|RPC_GRANTS|' || CASE WHEN count(*) = 7 AND bool_and(
 ) THEN 'PASS|service_role_only' ELSE 'FAIL|function_grant_mismatch' END FROM expected;
 SELECT 'CONTROL|M027_CLEANUP|' || CASE
   WHEN to_regprocedure('public.review_compliance_profile_decision_v1(uuid,uuid,text,text,uuid,bigint,text,bigint,uuid,text,text,timestamptz,text)') IS NULL
-    AND NOT EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version IN ('20260820_00_prd_phase_2_compliance_schema_substrate','20260824_00_reviewed_profile_bootstrap_rpc','20260825_00_reviewed_profile_approval_rpc','20260825_01_cleanup_approval_rpc_diagnostics','20260825_02_canonical_approval_snapshot_idempotency','20260826_00_canonical_workspace_linkage','20260827_00_m028_m029_readiness_integration')) THEN 'PASS|absent_consistent'
+    AND (:'history_recorded_count')::integer = 0 THEN 'PASS|absent_consistent'
   WHEN pg_get_functiondef(to_regprocedure('public.review_compliance_profile_decision_v1(uuid,uuid,text,text,uuid,bigint,text,bigint,uuid,text,text,timestamptz,text)')) !~ 'LOCAL_APPROVAL_BRANCH|LOCAL_APPROVAL_EXCEPTION|deraledger\.local_approval_rehearsal_diagnostics|approval_rpc_internal_diagnostics|GET STACKED DIAGNOSTICS' THEN 'PASS|hardened_cleanup_state'
   ELSE 'FAIL|cleanup_or_function_drift'
 END;
@@ -260,7 +270,7 @@ function Invoke-ReadOnlyPsql {
   Write-Evidence PASS PSQL resolved
   $sqlPath = Join-Path ([System.IO.Path]::GetTempPath()) ('deraledger-m024-m030-readonly-{0}.sql' -f [guid]::NewGuid().ToString('N'))
   $saved = @{}; foreach ($name in $PgEnvironmentNames) { $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process'); [Environment]::SetEnvironmentVariable($name, $null, 'Process') }
-  $bstr = [IntPtr]::Zero; $plainPassword = $null; $process = $null
+  $bstr = [IntPtr]::Zero; $plainPassword = $null; $process = $null; $stderrText = ''
   try {
     [System.IO.File]::WriteAllText($sqlPath, (Get-ReadOnlySql), [System.Text.UTF8Encoding]::new($false))
     $securePassword = Read-Host 'Database password (secure prompt; never echoed or written)' -AsSecureString
@@ -269,10 +279,16 @@ function Invoke-ReadOnlyPsql {
     [Environment]::SetEnvironmentVariable('PGPASSWORD', $plainPassword, 'Process')
     $arguments = @('-X','-w','-q','-A','-t','-v','ON_ERROR_STOP=1','-v',("target_label={0}" -f $Target),'-v',("expected_database={0}" -f $(if ($Target -eq 'local') { $Config.Database } else { $ExpectedDatabaseName })),'-v',("expected_role={0}" -f $(if ($Target -eq 'local') { $Config.User } else { $ExpectedConnectedRole })),'-h',$Config.Host,'-p',$Config.Port,'-U',$Config.User,'-d',$Config.Database,'-f',$sqlPath)
     $start = [Diagnostics.ProcessStartInfo]::new(); $start.FileName = $psql; $start.Arguments = (($arguments | ForEach-Object { ConvertTo-WindowsCommandLineArgument -Argument $_ }) -join ' '); $start.UseShellExecute = $false; $start.RedirectStandardOutput = $true; $start.RedirectStandardError = $true; $start.CreateNoWindow = $true
-    $process = [Diagnostics.Process]::new(); $process.StartInfo = $start; [void]$process.Start()
+    $process = [Diagnostics.Process]::new(); $process.StartInfo = $start
+    try { [void]$process.Start() } catch { throw 'PSQL_INVOCATION_FAILED' }
     $stdoutTask = $process.StandardOutput.ReadToEndAsync(); $stderrTask = $process.StandardError.ReadToEndAsync()
     if (-not $process.WaitForExit(60000)) { try { $process.Kill() } catch {}; throw 'READONLY_PSQL_TIMEOUT' }
-    [Threading.Tasks.Task]::WaitAll(@($stdoutTask, $stderrTask)); if ($process.ExitCode -ne 0) { throw 'READONLY_PSQL_FAILED' }
+    [Threading.Tasks.Task]::WaitAll(@($stdoutTask, $stderrTask)); $stderrText = $stderrTask.Result
+    if ($process.ExitCode -ne 0) {
+      if ($stderrText -match '(?im)\bERROR:') { throw 'READONLY_SQL_FAILED' }
+      if ($stderrText -match '(?im)\bFATAL:' -or $stderrText -match '(?im)^\s*psql:') { throw 'PSQL_INVOCATION_FAILED' }
+      throw 'PSQL_EXIT_NONZERO'
+    }
     return @($stdoutTask.Result -split "`r?`n" | Where-Object { $_ -match '^CONTROL\|' })
   } finally {
     if ($bstr -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }; $plainPassword = $null
@@ -299,7 +315,7 @@ try {
   }
   $chain = $control['CHAIN_STATE'].Category
   $failures = @($control.GetEnumerator() | Where-Object { $_.Value.State -eq 'FAIL' } | ForEach-Object { $_.Key })
-  $absenceCompatibleFailures = @('RPC_SECURITY', 'RPC_GRANTS', 'RLS', 'SERVICE_ROLE_GRANTS')
+  $absenceCompatibleFailures = @('MIGRATION_HISTORY', 'RPC_SECURITY', 'RPC_GRANTS', 'RLS', 'SERVICE_ROLE_GRANTS')
   $effectiveFailures = if ($chain -eq 'CHAIN_ABSENT') { @($failures | Where-Object { $_ -notin $absenceCompatibleFailures }) } else { $failures }
   if ($control['PROJECT_REF'].Category -eq 'BLOCKED_PROJECT_REF_UNPROVEN') { Write-Evidence BLOCKED DECISION BLOCKED_PROJECT_REF_UNPROVEN; exit 1 }
   if ($chain -eq 'CHAIN_PARTIAL') { Write-Evidence BLOCKED DECISION BLOCKED_PARTIAL_CHAIN; exit 1 }
@@ -317,6 +333,10 @@ try {
 } catch {
   if ($_.Exception.Message -eq 'PSQL_NOT_FOUND') { Write-Evidence BLOCKED PSQL not_found }
   elseif ($_.Exception.Message -eq 'LOCAL_DATABASE_RESERVED_ENVIRONMENT_TOKEN') { Write-Evidence BLOCKED LOCAL_DATABASE reserved_environment_token }
+  elseif ($_.Exception.Message -eq 'READONLY_PSQL_TIMEOUT') { Write-Evidence BLOCKED PREFLIGHT psql_timeout }
+  elseif ($_.Exception.Message -eq 'PSQL_INVOCATION_FAILED') { Write-Evidence BLOCKED PREFLIGHT psql_invocation_failed }
+  elseif ($_.Exception.Message -eq 'READONLY_SQL_FAILED') { Write-Evidence BLOCKED PREFLIGHT readonly_sql_failed }
+  elseif ($_.Exception.Message -eq 'PSQL_EXIT_NONZERO') { Write-Evidence BLOCKED PREFLIGHT psql_exit_nonzero }
   else { Write-Evidence BLOCKED PREFLIGHT $_.Exception.Message }
   exit 1
 }
