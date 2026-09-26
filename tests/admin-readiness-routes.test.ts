@@ -17,6 +17,7 @@ type Scenario = {
   csrfIssueCalls: number;
   snapshotCalls: number;
   csrfEvidence: string | null | undefined;
+  securityConstructionThrows: boolean;
 };
 
 const routeFiles = [
@@ -83,6 +84,7 @@ function scenario(): Scenario {
     csrfIssueCalls: 0,
     snapshotCalls: 0,
     csrfEvidence: undefined,
+    securityConstructionThrows: false,
   };
 }
 
@@ -105,6 +107,7 @@ function installRoute(require: NodeRequire, routePath: string, state: Scenario):
   const securityPath = require.resolve("../src/lib/compliance/server/admin-readiness-route-security-composition");
   require.cache[securityPath] = moduleShim(securityPath, {
     createAdminReadinessRouteSecurityComposition() {
+      if (state.securityConstructionThrows) throw new Error("downstream security configuration must not be evaluated");
       return {
         checkOrigin() { return { ok: true }; },
         async validateCsrf(input: { csrfEvidence: string | null }) { state.trace.push("csrf"); state.csrfEvidence = input.csrfEvidence; return state.csrf; },
@@ -180,20 +183,36 @@ async function run() {
       }
     }
 
-    // A disabled feature gate prevents service construction even when every pre-service control allows.
-    delete process.env.DERALEDGER_ADMIN_READINESS_ROUTES_ENABLED;
-    let state = scenario();
-    let route = installRoute(require, issuePath, state);
-    let received = await result(route, JSON.stringify({ profileId: id, targetComplianceStatus: "lite_verified", policyVersion: "policy-v1" }));
-    assert.deepEqual(received, { status: 500, body: { kind: "unavailable", code: "internal_unavailable" } });
-    assert.equal(state.factoryCalls, 0);
-    assert.deepEqual(state.trace, []);
+    // Unset and literal-false gates conceal both routes as missing before body,
+    // security configuration, storage, issuer, or readiness-service work.
+    for (const disabledValue of [undefined, "false"]) {
+      if (disabledValue === undefined) delete process.env.DERALEDGER_ADMIN_READINESS_ROUTES_ENABLED;
+      else process.env.DERALEDGER_ADMIN_READINESS_ROUTES_ENABLED = disabledValue;
+
+      let disabledState = scenario();
+      disabledState.securityConstructionThrows = true;
+      let disabledRoute = installRoute(require, issuePath, disabledState);
+      let disabledResponse = await result(disabledRoute, JSON.stringify({ profileId: id, targetComplianceStatus: "lite_verified", policyVersion: "policy-v1" }));
+      assert.deepEqual(disabledResponse, { status: 404, body: { kind: "missing", code: "not_found" } });
+      assert.equal(disabledState.factoryCalls, 0);
+      assert.equal(disabledState.csrfIssueCalls, 0);
+      assert.deepEqual(disabledState.trace, []);
+
+      disabledState = scenario();
+      disabledState.securityConstructionThrows = true;
+      disabledRoute = installRoute(require, snapshotPath, disabledState);
+      disabledResponse = await result(disabledRoute, "not-json", false);
+      assert.deepEqual(disabledResponse, { status: 404, body: { kind: "missing", code: "not_found" } });
+      assert.equal(disabledState.factoryCalls, 0);
+      assert.equal(disabledState.snapshotCalls, 0);
+      assert.deepEqual(disabledState.trace, []);
+    }
 
     // The issuance endpoint requires no body or incoming CSRF token; only its
     // server-only composition decides origin, authority, context, throttle, and issuer access.
     process.env.DERALEDGER_ADMIN_READINESS_ROUTES_ENABLED = "true";
-    state = scenario(); route = installRoute(require, issuePath, state);
-    received = await result(route, "", false);
+    let state = scenario(); let route = installRoute(require, issuePath, state);
+    let received = await result(route, "", false);
     assert.deepEqual(received, { status: 201, body: { kind: "issued", code: "csrf_issued", csrfToken: "x".repeat(43), expiresAt: "2026-08-31T12:00:00.000Z" } });
     assert.deepEqual(state.trace, ["csrf_issue"]); assert.equal(state.factoryCalls, 0); assert.equal(state.csrfIssueCalls, 1);
     assert.equal((state.events[0] as Record<string, unknown>).operation, "issue");

@@ -36,7 +36,7 @@ export async function POST(request: Request): Promise<Response> {
   const correlationId = createAdminReadinessCorrelationId();
   // This is deliberately the first operational gate: disabled routes never
   // construct security/service dependencies or read request-derived evidence.
-  if (!routeEnabled()) return responseFor(correlationId, { kind: "unavailable" });
+  if (!routeEnabled()) return responseFor(correlationId, { kind: "missing" });
   const security = createAdminReadinessRouteSecurityComposition();
   const requestOrigin = request.headers.get("origin");
   const issuance = await security.issueCsrfToken({
