@@ -106,6 +106,32 @@ function run() {
   assert.equal(graceReadOnly.canCreateCollectionInvoice, false);
   assert.equal(graceReadOnly.canCreateRecordInvoice, true);
 
+  const inactiveSubscription = assertHasReason(
+    { ...approvedInput("solo_lite"), commercialEntitlementState: "inactive" },
+    "commercial_entitlement_inactive",
+  );
+  assert.equal(inactiveSubscription.canCreateCollectionInvoice, false);
+  assert.equal(inactiveSubscription.canUseCheckout, false);
+  assert.equal(inactiveSubscription.canUseLiveStorefront, false);
+
+  const unknownPlan = assertHasReason(
+    { ...approvedInput("solo_lite"), commercialPlan: "unrecognized_plan" },
+    "unknown_plan",
+  );
+  assert.equal(unknownPlan.isKnownPlan, false);
+  assert.equal(unknownPlan.canCreateCollectionInvoice, false);
+  assert.equal(unknownPlan.canUseCheckout, false);
+  assert.equal(unknownPlan.canUseLiveStorefront, false);
+
+  const missingPlan = assertHasReason(
+    { ...approvedInput("solo_lite"), commercialPlan: undefined },
+    "unknown_plan",
+  );
+  assert.equal(missingPlan.isKnownPlan, false);
+  assert.equal(missingPlan.canCreateCollectionInvoice, false);
+  assert.equal(missingPlan.canUseCheckout, false);
+  assert.equal(missingPlan.canUseLiveStorefront, false);
+
   const soloLitePaidSetup = resolveMerchantCapabilities({
     ...approvedInput("solo_lite"),
     complianceStatus: "lite_pending",
@@ -161,6 +187,14 @@ function run() {
   assert.equal(soloPlusPaidUnapproved.canUseReceivableSale, false);
   assert.equal(soloPlusPaidUnapproved.canUseDepositBalance, false);
   assert.equal(soloPlusPaidUnapproved.requiresVerification, true);
+
+  const rejectedCompliance = assertHasReason(
+    { ...approvedInput("solo_plus"), complianceStatus: "rejected" },
+    "enhanced_verification_required",
+  );
+  assert.equal(rejectedCompliance.canCreateCollectionInvoice, false);
+  assert.equal(rejectedCompliance.canUseCheckout, false);
+  assert.equal(rejectedCompliance.canUseLiveStorefront, false);
 
   const soloPlusApproved = resolveMerchantCapabilities(approvedInput("solo_plus"));
   assert.equal(soloPlusApproved.canCreateCollectionInvoice, true);
@@ -318,6 +352,13 @@ function run() {
     "collection_limit_reached",
   );
   assert.equal(reachedLimit.canUseCheckout, false);
+
+  const deterministicInput = approvedInput("business");
+  const deterministicBefore = JSON.parse(JSON.stringify(deterministicInput));
+  const firstResolution = resolveMerchantCapabilities(deterministicInput);
+  const secondResolution = resolveMerchantCapabilities(deterministicInput);
+  assert.deepEqual(firstResolution, secondResolution);
+  assert.deepEqual(deterministicInput, deterministicBefore);
 
   console.log("merchant-capabilities.test.ts passed");
 }
