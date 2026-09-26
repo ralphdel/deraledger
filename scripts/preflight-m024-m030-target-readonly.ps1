@@ -1,12 +1,12 @@
 [CmdletBinding()]
 param(
-  [Parameter(Mandatory = $true)]
   [ValidateSet('local', 'staging', 'production')]
   [string]$Target,
   [string]$ExpectedProjectRef,
   [string]$ExpectedDatabaseName,
   [string]$ExpectedConnectedRole,
   [switch]$RunReadOnlyChecks,
+  [switch]$RunOfflineParserSelfTests,
   [string]$PsqlPath
 )
 
@@ -26,6 +26,7 @@ $RequiredMigrations = @(
   '20260827_00_m028_m029_readiness_integration'
 )
 $PgEnvironmentNames = @('PGHOST', 'PGHOSTADDR', 'PGPORT', 'PGDATABASE', 'PGUSER', 'PGPASSWORD', 'PGSERVICE', 'PGSERVICEFILE', 'PGPASSFILE', 'PGOPTIONS', 'PGSSLMODE')
+$RequiredControlKeys = @('DATABASE_IDENTITY', 'ROLE_IDENTITY', 'SERVER_SESSION', 'PROJECT_REF', 'MIGRATION_HISTORY', 'CHAIN_STATE', 'TABLES', 'RPC_SIGNATURES', 'RPC_SECURITY', 'ROLE_BASELINE', 'RPC_GRANTS', 'M027_CLEANUP', 'RLS', 'BROWSER_POLICIES', 'BROWSER_GRANTS', 'DELETE_GRANTS', 'SERVICE_ROLE_GRANTS')
 
 function Write-Evidence {
   param([ValidateSet('PASS', 'FAIL', 'BLOCKED')] [string]$State, [string]$Check, [string]$Category)
@@ -55,6 +56,7 @@ function Assert-TargetGuards {
   param($Config)
   if ($Target -eq 'local') {
     if ($Config.Host -cne '127.0.0.1') { throw 'LOCAL_HOST_MUST_BE_127_0_0_1' }
+    Write-Evidence PASS LOCAL_TARGET loopback
     $exactBlockedLocalDatabaseNames = @('postgres', 'template0', 'template1', 'production', 'staging')
     $reservedLocalDatabaseTokenPattern = '(?i)(production|prod|staging|stage|preview|live|main|primary|shared|default|template|postgres|supabase)'
     if ($Config.Database -in $exactBlockedLocalDatabaseNames -or $Config.Database -match $reservedLocalDatabaseTokenPattern) {
@@ -63,8 +65,11 @@ function Assert-TargetGuards {
     if ($Config.Database -notmatch '(?i)^(?:deraledger_[a-z0-9_]*rehearsal[a-z0-9_]*|deraledger_[a-z0-9_]*(?:local|test|disposable)[a-z0-9_]*)$') {
       throw 'LOCAL_DISPOSABLE_DATABASE_NAME_REQUIRED'
     }
+    Write-Evidence PASS LOCAL_DATABASE disposable
     if ($Config.Port -ne '55432') { throw 'LOCAL_PORT_MUST_BE_55432' }
+    Write-Evidence PASS LOCAL_PORT 55432
     if ($Config.User -ine 'postgres') { throw 'LOCAL_USER_MUST_BE_POSTGRES' }
+    Write-Evidence PASS LOCAL_USER postgres
     if ((Read-Host 'Type LOCAL READONLY M024-M030 to continue').Trim() -cne 'LOCAL READONLY M024-M030') { throw 'LOCAL_CONFIRMATION_REQUIRED' }
     return
   }
@@ -110,6 +115,123 @@ function ConvertTo-WindowsCommandLineArgument {
   $escaped = [regex]::Replace($Argument, '(\\*)"', '$1$1\\"')
   $escaped = [regex]::Replace($escaped, '(\\+)$', '$1$1')
   return '"' + $escaped + '"'
+}
+
+function Convert-ControlRows {
+  param([Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Lines)
+  $control = @{}
+  $sawControl = $false
+
+  foreach ($line in @($Lines)) {
+    $normalized = $line.Trim().TrimStart([char]0xFEFF)
+    if ([string]::IsNullOrWhiteSpace($normalized)) { continue }
+    if ($normalized -notmatch '^CONTROL\|') { continue }
+    $sawControl = $true
+    $parts = $normalized -split '\|', 4
+    if ($parts.Count -ne 4 -or $parts[0] -ne 'CONTROL' -or $parts[1] -notin $RequiredControlKeys -or $parts[2] -notin @('PASS', 'FAIL') -or [string]::IsNullOrWhiteSpace($parts[3])) {
+      throw 'CONTROL_ROW_MALFORMED'
+    }
+    if ($control.ContainsKey($parts[1])) { throw 'CONTROL_ROW_DUPLICATE' }
+    $control[$parts[1]] = [pscustomobject]@{ State = $parts[2]; Category = $parts[3] }
+  }
+
+  if (-not $sawControl) { throw 'CONTROL_ROW_MISSING' }
+  foreach ($key in $RequiredControlKeys) {
+    if (-not $control.ContainsKey($key)) { throw 'CONTROL_ROW_MISSING' }
+  }
+  return $control
+}
+
+function Get-ControlRowFailureCategory {
+  param([Parameter(Mandatory = $true)][string]$Reason)
+  switch ($Reason) {
+    'CONTROL_ROW_MISSING' { return 'control_row_missing' }
+    'CONTROL_ROW_DUPLICATE' { return 'control_row_duplicate' }
+    'CONTROL_ROW_MALFORMED' { return 'control_row_malformed' }
+    default { throw 'UNKNOWN_CONTROL_ROW_FAILURE' }
+  }
+}
+
+function Get-PreflightAssessment {
+  param(
+    [Parameter(Mandatory = $true)][hashtable]$Control,
+    [string]$TargetLabel = $Target
+  )
+  $chain = $Control['CHAIN_STATE'].Category
+  $failures = @($Control.GetEnumerator() | Where-Object { $_.Value.State -eq 'FAIL' } | ForEach-Object { $_.Key })
+  $absenceCompatibleFailures = @('MIGRATION_HISTORY', 'RPC_SECURITY', 'RPC_GRANTS', 'RLS', 'SERVICE_ROLE_GRANTS')
+  $effectiveFailures = @()
+  if ($chain -eq 'CHAIN_ABSENT') {
+    $effectiveFailures = @($failures | Where-Object { $_ -notin $absenceCompatibleFailures })
+  } else {
+    $effectiveFailures = @($failures)
+  }
+
+  if ($Control['PROJECT_REF'].Category -eq 'BLOCKED_PROJECT_REF_UNPROVEN') { return [pscustomobject]@{ Chain = $chain; Decision = 'BLOCKED_PROJECT_REF_UNPROVEN'; Blocked = $true; CleanLocalAbsent = $false } }
+  if ($chain -eq 'CHAIN_PARTIAL') { return [pscustomobject]@{ Chain = $chain; Decision = 'BLOCKED_PARTIAL_CHAIN'; Blocked = $true; CleanLocalAbsent = $false } }
+  if ($effectiveFailures.Count -gt 0) {
+    $securityChecks = @('ROLE_BASELINE', 'RPC_SECURITY', 'RPC_GRANTS', 'M027_CLEANUP', 'RLS', 'BROWSER_POLICIES', 'BROWSER_GRANTS', 'DELETE_GRANTS', 'SERVICE_ROLE_GRANTS')
+    $decision = if (@($effectiveFailures | Where-Object { $_ -in $securityChecks }).Count -gt 0) { 'BLOCKED_SECURITY_MISMATCH' } else { 'BLOCKED_DRIFT' }
+    return [pscustomobject]@{ Chain = $chain; Decision = $decision; Blocked = $true; CleanLocalAbsent = $false }
+  }
+  if ($chain -eq 'CHAIN_FULL_RECORDED') { return [pscustomobject]@{ Chain = $chain; Decision = 'NO_APPLY_NEEDED_TARGET_ALREADY_MATCHES'; Blocked = $false; CleanLocalAbsent = $false } }
+  if ($chain -eq 'CHAIN_ABSENT') {
+    $decision = switch ($TargetLabel) { 'local' { 'READY_FOR_LOCAL_REHEARSAL' }; 'staging' { 'READY_FOR_STAGING_APPLY_REVIEW' }; 'production' { 'READY_FOR_PRODUCTION_APPLY_REVIEW' } }
+    return [pscustomobject]@{ Chain = $chain; Decision = $decision; Blocked = $false; CleanLocalAbsent = ($TargetLabel -eq 'local') }
+  }
+  return [pscustomobject]@{ Chain = $chain; Decision = 'BLOCKED_DRIFT'; Blocked = $true; CleanLocalAbsent = $false }
+}
+
+function Write-ControlEvidence {
+  param([Parameter(Mandatory = $true)][hashtable]$Control, [Parameter(Mandatory = $true)]$Assessment)
+  if ($Assessment.CleanLocalAbsent) {
+    Write-Evidence $Control['ROLE_BASELINE'].State ROLE_BASELINE $Control['ROLE_BASELINE'].Category
+    Write-Evidence PASS MIGRATION_HISTORY chain_absent
+    Write-Evidence PASS OBJECT_STATE protected_objects_absent
+    Write-Evidence PASS SECURITY_BASELINE clean_local_absent
+    return
+  }
+  foreach ($key in $RequiredControlKeys) {
+    Write-Evidence $Control[$key].State $key $Control[$key].Category
+  }
+}
+
+function Invoke-OfflineParserSelfTests {
+  $cleanLocalRows = @(
+    'CONTROL|DATABASE_IDENTITY|PASS|expected_observed_match', 'CONTROL|ROLE_IDENTITY|PASS|expected_observed_match', 'CONTROL|SERVER_SESSION|PASS|address_port_schema_available', 'CONTROL|PROJECT_REF|PASS|not_required_local',
+    'CONTROL|MIGRATION_HISTORY|FAIL|history_table_missing', 'CONTROL|CHAIN_STATE|PASS|CHAIN_ABSENT', 'CONTROL|TABLES|PASS|absent_consistent', 'CONTROL|RPC_SIGNATURES|PASS|absent_consistent',
+    'CONTROL|ROLE_BASELINE|PASS|supabase_roles_absent_clean_local',
+    'CONTROL|RPC_SECURITY|FAIL|security_or_search_path_mismatch', 'CONTROL|RPC_GRANTS|FAIL|function_grant_mismatch', 'CONTROL|M027_CLEANUP|PASS|absent_consistent', 'CONTROL|RLS|FAIL|disabled_missing_or_forced',
+    'CONTROL|BROWSER_POLICIES|PASS|zero', 'CONTROL|BROWSER_GRANTS|PASS|revoked', 'CONTROL|DELETE_GRANTS|PASS|absent', 'CONTROL|SERVICE_ROLE_GRANTS|FAIL|table_grant_mismatch'
+  )
+  $control = Convert-ControlRows -Lines $cleanLocalRows
+  $assessment = Get-PreflightAssessment -Control $control -TargetLabel 'local'
+  if ($assessment.Decision -ne 'READY_FOR_LOCAL_REHEARSAL') { throw 'OFFLINE_CLEAN_LOCAL_DECISION_FAILED' }
+  $evidence = @(Write-ControlEvidence -Control $control -Assessment $assessment)
+  foreach ($expectedEvidence in @('PASS|ROLE_BASELINE|supabase_roles_absent_clean_local', 'PASS|MIGRATION_HISTORY|chain_absent', 'PASS|OBJECT_STATE|protected_objects_absent', 'PASS|SECURITY_BASELINE|clean_local_absent')) {
+    if ($evidence -notcontains $expectedEvidence) { throw 'OFFLINE_EVIDENCE_ORDER_OR_CONTENT_FAILED' }
+  }
+  $bomAndCrLfRows = @($cleanLocalRows | ForEach-Object { $_ + "`r" })
+  $bomAndCrLfRows[0] = [string][char]0xFEFF + $bomAndCrLfRows[0]
+  if ((Convert-ControlRows -Lines $bomAndCrLfRows)['CHAIN_STATE'].Category -ne 'CHAIN_ABSENT') { throw 'OFFLINE_BOM_OR_CRLF_NORMALIZATION_FAILED' }
+  $nonCleanRoleMissingRows = @($cleanLocalRows | ForEach-Object {
+    $_.Replace('CONTROL|MIGRATION_HISTORY|FAIL|history_table_missing', 'CONTROL|MIGRATION_HISTORY|PASS|history_table_present').Replace('CONTROL|CHAIN_STATE|PASS|CHAIN_ABSENT', 'CONTROL|CHAIN_STATE|PASS|CHAIN_FULL_RECORDED').Replace('CONTROL|TABLES|PASS|absent_consistent', 'CONTROL|TABLES|PASS|required_tables_present').Replace('CONTROL|RPC_SIGNATURES|PASS|absent_consistent', 'CONTROL|RPC_SIGNATURES|PASS|expected_signatures_present').Replace('CONTROL|ROLE_BASELINE|PASS|supabase_roles_absent_clean_local', 'CONTROL|ROLE_BASELINE|FAIL|required_role_missing').Replace('CONTROL|RPC_SECURITY|FAIL|security_or_search_path_mismatch', 'CONTROL|RPC_SECURITY|PASS|invoker_and_search_path_hardened').Replace('CONTROL|RPC_GRANTS|FAIL|function_grant_mismatch', 'CONTROL|RPC_GRANTS|FAIL|required_role_missing_or_function_grant_mismatch').Replace('CONTROL|M027_CLEANUP|PASS|absent_consistent', 'CONTROL|M027_CLEANUP|PASS|hardened_cleanup_state').Replace('CONTROL|RLS|FAIL|disabled_missing_or_forced', 'CONTROL|RLS|PASS|enabled_not_forced').Replace('CONTROL|SERVICE_ROLE_GRANTS|FAIL|table_grant_mismatch', 'CONTROL|SERVICE_ROLE_GRANTS|PASS|exact_manifest_privileges')
+  })
+  $nonCleanRoleMissingAssessment = Get-PreflightAssessment -Control (Convert-ControlRows -Lines $nonCleanRoleMissingRows) -TargetLabel 'local'
+  if (-not $nonCleanRoleMissingAssessment.Blocked -or $nonCleanRoleMissingAssessment.Decision -ne 'BLOCKED_SECURITY_MISMATCH') { throw 'OFFLINE_REQUIRED_ROLE_MISSING_NOT_BLOCKED' }
+  $cases = @(
+    @{ Lines = @(); Expected = 'CONTROL_ROW_MISSING'; Evidence = 'BLOCKED|PREFLIGHT|control_row_missing' },
+    @{ Lines = @($cleanLocalRows + 'CONTROL|CHAIN_STATE|PASS|CHAIN_ABSENT'); Expected = 'CONTROL_ROW_DUPLICATE'; Evidence = 'BLOCKED|PREFLIGHT|control_row_duplicate' },
+    @{ Lines = @('CONTROL|CHAIN_STATE|PASS'); Expected = 'CONTROL_ROW_MALFORMED'; Evidence = 'BLOCKED|PREFLIGHT|control_row_malformed' }
+  )
+  foreach ($case in $cases) {
+    try { Convert-ControlRows -Lines $case.Lines | Out-Null; throw 'OFFLINE_PARSER_EXPECTED_FAILURE_MISSING' }
+    catch {
+      if ($_.Exception.Message -ne $case.Expected) { throw }
+      if (('BLOCKED|PREFLIGHT|' + (Get-ControlRowFailureCategory -Reason $_.Exception.Message)) -ne $case.Evidence) { throw 'OFFLINE_CONTROL_FAILURE_EVIDENCE_FAILED' }
+    }
+  }
+  Write-Evidence PASS OFFLINE_PARSER clean_local_and_control_failures_mapped
 }
 
 function Get-ReadOnlySql {
@@ -190,6 +312,16 @@ WITH expected(signature) AS (VALUES
   SELECT p.oid, p.prosecdef, p.proconfig FROM expected e JOIN pg_proc p ON p.oid = to_regprocedure(e.signature)
 )
 SELECT 'CONTROL|RPC_SECURITY|' || CASE WHEN count(*) = 7 AND bool_and(NOT prosecdef AND COALESCE(proconfig @> ARRAY['search_path=pg_catalog, public'], false)) THEN 'PASS|invoker_and_search_path_hardened' ELSE 'FAIL|security_or_search_path_mismatch' END FROM facts;
+WITH required_roles(role_name) AS (VALUES ('service_role'), ('anon'), ('authenticated')),
+observed_roles AS (
+  SELECT required_roles.role_name, pg_roles.oid
+  FROM required_roles LEFT JOIN pg_roles ON pg_roles.rolname = required_roles.role_name
+)
+SELECT 'CONTROL|ROLE_BASELINE|' || CASE
+  WHEN count(*) FILTER (WHERE oid IS NOT NULL) = 3 THEN 'PASS|required_roles_present'
+  WHEN :'target_label' = 'local' AND (:'history_recorded_count')::integer = 0 AND count(*) FILTER (WHERE oid IS NOT NULL) = 0 THEN 'PASS|supabase_roles_absent_clean_local'
+  ELSE 'FAIL|required_role_missing'
+END FROM observed_roles;
 WITH expected(signature) AS (VALUES
   ('public.bootstrap_reviewed_profile_v1(uuid,uuid,text,text,text,text,text,uuid,uuid,timestamptz)'),
   ('public.review_compliance_profile_decision_v1(uuid,uuid,text,text,uuid,bigint,text,bigint,uuid,text,text,timestamptz,text)'),
@@ -198,20 +330,46 @@ WITH expected(signature) AS (VALUES
   ('public.reconcile_canonical_merchant_workspace_link_v1(uuid,uuid,text)'),
   ('public.issue_canonical_approval_decision_request_v2(uuid,uuid,text,text,text)'),
   ('public.read_canonical_approval_snapshot_v2(uuid)')
+), role_oids AS (
+  SELECT
+    max(oid) FILTER (WHERE rolname = 'service_role') AS service_role_oid,
+    max(oid) FILTER (WHERE rolname = 'anon') AS anon_oid,
+    max(oid) FILTER (WHERE rolname = 'authenticated') AS authenticated_oid
+  FROM pg_roles
+  WHERE rolname IN ('service_role', 'anon', 'authenticated')
+), function_acl AS (
+  SELECT function_state.oid,
+    EXISTS (
+      SELECT 1 FROM aclexplode(COALESCE(function_state.proacl, acldefault('f', function_state.proowner))) privilege_state
+      WHERE privilege_state.grantee = role_oids.service_role_oid AND privilege_state.privilege_type = 'EXECUTE'
+    ) AS service_role_execute,
+    NOT EXISTS (
+      SELECT 1 FROM aclexplode(COALESCE(function_state.proacl, acldefault('f', function_state.proowner))) privilege_state
+      WHERE privilege_state.grantee = role_oids.anon_oid AND privilege_state.privilege_type = 'EXECUTE'
+    ) AS anon_execute_revoked,
+    NOT EXISTS (
+      SELECT 1 FROM aclexplode(COALESCE(function_state.proacl, acldefault('f', function_state.proowner))) privilege_state
+      WHERE privilege_state.grantee = role_oids.authenticated_oid AND privilege_state.privilege_type = 'EXECUTE'
+    ) AS authenticated_execute_revoked,
+    NOT EXISTS (
+      SELECT 1 FROM aclexplode(COALESCE(function_state.proacl, acldefault('f', function_state.proowner))) privilege_state
+      WHERE privilege_state.grantee = 0 AND privilege_state.privilege_type = 'EXECUTE'
+    ) AS public_execute_revoked
+  FROM expected
+  JOIN pg_proc function_state ON function_state.oid = to_regprocedure(expected.signature)
+  CROSS JOIN role_oids
 )
-SELECT 'CONTROL|RPC_GRANTS|' || CASE WHEN count(*) = 7 AND bool_and(
-  has_function_privilege('service_role', to_regprocedure(signature), 'EXECUTE')
-  AND NOT has_function_privilege('anon', to_regprocedure(signature), 'EXECUTE')
-  AND NOT has_function_privilege('authenticated', to_regprocedure(signature), 'EXECUTE')
-  AND NOT EXISTS (
-    SELECT 1
-    FROM pg_proc function_state
-    CROSS JOIN LATERAL aclexplode(COALESCE(function_state.proacl, acldefault('f', function_state.proowner))) privilege_state
-    WHERE function_state.oid = to_regprocedure(signature)
-      AND privilege_state.grantee = 0
-      AND privilege_state.privilege_type = 'EXECUTE'
-  )
-) THEN 'PASS|service_role_only' ELSE 'FAIL|function_grant_mismatch' END FROM expected;
+SELECT 'CONTROL|RPC_GRANTS|' || CASE
+  WHEN :'target_label' = 'local' AND (:'history_recorded_count')::integer = 0
+    AND (SELECT count(*) FROM function_acl) = 0
+    AND (SELECT service_role_oid IS NULL AND anon_oid IS NULL AND authenticated_oid IS NULL FROM role_oids)
+    THEN 'PASS|supabase_roles_absent_clean_local'
+  WHEN (SELECT service_role_oid IS NOT NULL AND anon_oid IS NOT NULL AND authenticated_oid IS NOT NULL FROM role_oids)
+    AND (SELECT count(*) FROM function_acl) = 7
+    AND COALESCE((SELECT bool_and(service_role_execute AND anon_execute_revoked AND authenticated_execute_revoked AND public_execute_revoked) FROM function_acl), false)
+    THEN 'PASS|service_role_only'
+  ELSE 'FAIL|required_role_missing_or_function_grant_mismatch'
+END;
 SELECT 'CONTROL|M027_CLEANUP|' || CASE
   WHEN to_regprocedure('public.review_compliance_profile_decision_v1(uuid,uuid,text,text,uuid,bigint,text,bigint,uuid,text,text,timestamptz,text)') IS NULL
     AND (:'history_recorded_count')::integer = 0 THEN 'PASS|absent_consistent'
@@ -265,9 +423,8 @@ ROLLBACK;
 }
 
 function Invoke-ReadOnlyPsql {
-  param($Config)
-  $psql = Resolve-PsqlExecutable
-  Write-Evidence PASS PSQL resolved
+  param($Config, [Parameter(Mandatory = $true)][string]$PsqlExecutable)
+  $psql = $PsqlExecutable
   $sqlPath = Join-Path ([System.IO.Path]::GetTempPath()) ('deraledger-m024-m030-readonly-{0}.sql' -f [guid]::NewGuid().ToString('N'))
   $saved = @{}; foreach ($name in $PgEnvironmentNames) { $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process'); [Environment]::SetEnvironmentVariable($name, $null, 'Process') }
   $bstr = [IntPtr]::Zero; $plainPassword = $null; $process = $null; $stderrText = ''
@@ -298,45 +455,36 @@ function Invoke-ReadOnlyPsql {
   }
 }
 
+if ($RunOfflineParserSelfTests) {
+  try { Invoke-OfflineParserSelfTests; exit 0 }
+  catch { Write-Evidence BLOCKED PREFLIGHT offline_parser_self_test_failed; Write-Evidence BLOCKED DECISION BLOCKED_CONTROL_ROWS; exit 1 }
+}
+
 try {
-  $config = Read-TargetConfiguration; Assert-TargetGuards -Config $config
+  if ([string]::IsNullOrWhiteSpace($Target)) { throw 'TARGET_LABEL_REQUIRED' }
   Write-Evidence PASS TARGET_LABEL accepted
+  $config = Read-TargetConfiguration
+  Assert-TargetGuards -Config $config
   if ($Target -ne 'local') { Write-Evidence PASS PROJECT_REF expected_ref_supplied_pending_independent_proof }
-  if (-not $RunReadOnlyChecks) { Write-Evidence BLOCKED EXECUTION read_only_checks_require_explicit_RunReadOnlyChecks; exit 0 }
-  $lines = Invoke-ReadOnlyPsql -Config $config
-  if ($lines.Count -ne 16) { throw 'CONTROL_ROW_COUNT_INVALID' }
-  $control = @{}
-  foreach ($line in $lines) {
-    $parts = $line -split '\|', 4
-    if ($parts.Count -ne 4 -or $parts[0] -ne 'CONTROL' -or $parts[2] -notin @('PASS','FAIL')) { throw 'CONTROL_ROW_MALFORMED' }
-    if ($control.ContainsKey($parts[1])) { throw 'CONTROL_ROW_DUPLICATE' }
-    $control[$parts[1]] = [pscustomobject]@{ State = $parts[2]; Category = $parts[3] }
-    Write-Evidence $parts[2] $parts[1] $parts[3]
-  }
-  $chain = $control['CHAIN_STATE'].Category
-  $failures = @($control.GetEnumerator() | Where-Object { $_.Value.State -eq 'FAIL' } | ForEach-Object { $_.Key })
-  $absenceCompatibleFailures = @('MIGRATION_HISTORY', 'RPC_SECURITY', 'RPC_GRANTS', 'RLS', 'SERVICE_ROLE_GRANTS')
-  $effectiveFailures = if ($chain -eq 'CHAIN_ABSENT') { @($failures | Where-Object { $_ -notin $absenceCompatibleFailures }) } else { $failures }
-  if ($control['PROJECT_REF'].Category -eq 'BLOCKED_PROJECT_REF_UNPROVEN') { Write-Evidence BLOCKED DECISION BLOCKED_PROJECT_REF_UNPROVEN; exit 1 }
-  if ($chain -eq 'CHAIN_PARTIAL') { Write-Evidence BLOCKED DECISION BLOCKED_PARTIAL_CHAIN; exit 1 }
-  if ($effectiveFailures.Count -gt 0) {
-    $securityChecks = @('RPC_SECURITY', 'RPC_GRANTS', 'M027_CLEANUP', 'RLS', 'BROWSER_POLICIES', 'BROWSER_GRANTS', 'DELETE_GRANTS', 'SERVICE_ROLE_GRANTS')
-    $decision = if (@($effectiveFailures | Where-Object { $_ -in $securityChecks }).Count -gt 0) { 'BLOCKED_SECURITY_MISMATCH' } else { 'BLOCKED_DRIFT' }
-    Write-Evidence BLOCKED DECISION $decision; exit 1
-  }
-  if ($chain -eq 'CHAIN_FULL_RECORDED') { Write-Evidence PASS DECISION NO_APPLY_NEEDED_TARGET_ALREADY_MATCHES; exit 0 }
-  if ($chain -eq 'CHAIN_ABSENT') {
-    $decision = switch ($Target) { 'local' { 'READY_FOR_LOCAL_REHEARSAL' }; 'staging' { 'READY_FOR_STAGING_APPLY_REVIEW' }; 'production' { 'READY_FOR_PRODUCTION_APPLY_REVIEW' } }
-    Write-Evidence PASS DECISION $decision; exit 0
-  }
-  Write-Evidence BLOCKED DECISION BLOCKED_DRIFT; exit 1
+  if (-not $RunReadOnlyChecks) { Write-Evidence BLOCKED EXECUTION read_only_checks_require_explicit_RunReadOnlyChecks; Write-Evidence BLOCKED DECISION BLOCKED_PREFLIGHT; exit 1 }
+  $psql = Resolve-PsqlExecutable
+  Write-Evidence PASS PSQL resolved
+  $lines = Invoke-ReadOnlyPsql -Config $config -PsqlExecutable $psql
+  $control = Convert-ControlRows -Lines $lines
+  $assessment = Get-PreflightAssessment -Control $control
+  Write-ControlEvidence -Control $control -Assessment $assessment
+  if ($assessment.Blocked) { Write-Evidence BLOCKED DECISION $assessment.Decision; exit 1 }
+  Write-Evidence PASS DECISION $assessment.Decision; exit 0
 } catch {
-  if ($_.Exception.Message -eq 'PSQL_NOT_FOUND') { Write-Evidence BLOCKED PSQL not_found }
-  elseif ($_.Exception.Message -eq 'LOCAL_DATABASE_RESERVED_ENVIRONMENT_TOKEN') { Write-Evidence BLOCKED LOCAL_DATABASE reserved_environment_token }
-  elseif ($_.Exception.Message -eq 'READONLY_PSQL_TIMEOUT') { Write-Evidence BLOCKED PREFLIGHT psql_timeout }
-  elseif ($_.Exception.Message -eq 'PSQL_INVOCATION_FAILED') { Write-Evidence BLOCKED PREFLIGHT psql_invocation_failed }
-  elseif ($_.Exception.Message -eq 'READONLY_SQL_FAILED') { Write-Evidence BLOCKED PREFLIGHT readonly_sql_failed }
-  elseif ($_.Exception.Message -eq 'PSQL_EXIT_NONZERO') { Write-Evidence BLOCKED PREFLIGHT psql_exit_nonzero }
-  else { Write-Evidence BLOCKED PREFLIGHT $_.Exception.Message }
+  $message = $_.Exception.Message
+  if ($message -eq 'PSQL_NOT_FOUND') { Write-Evidence BLOCKED PSQL not_found; Write-Evidence BLOCKED DECISION BLOCKED_PSQL }
+  elseif ($message -eq 'LOCAL_DATABASE_RESERVED_ENVIRONMENT_TOKEN') { Write-Evidence BLOCKED LOCAL_DATABASE reserved_environment_token; Write-Evidence BLOCKED DECISION BLOCKED_TARGET_MISMATCH }
+  elseif ($message -in @('CONTROL_ROW_MISSING', 'CONTROL_ROW_DUPLICATE', 'CONTROL_ROW_MALFORMED')) { Write-Evidence BLOCKED PREFLIGHT (Get-ControlRowFailureCategory -Reason $message); Write-Evidence BLOCKED DECISION BLOCKED_CONTROL_ROWS }
+  elseif ($message -eq 'READONLY_PSQL_TIMEOUT') { Write-Evidence BLOCKED PREFLIGHT psql_timeout; Write-Evidence BLOCKED DECISION BLOCKED_PSQL }
+  elseif ($message -eq 'PSQL_INVOCATION_FAILED') { Write-Evidence BLOCKED PREFLIGHT psql_invocation_failed; Write-Evidence BLOCKED DECISION BLOCKED_PSQL }
+  elseif ($message -eq 'READONLY_SQL_FAILED') { Write-Evidence BLOCKED PREFLIGHT readonly_sql_failed; Write-Evidence BLOCKED DECISION BLOCKED_PREFLIGHT }
+  elseif ($message -eq 'PSQL_EXIT_NONZERO') { Write-Evidence BLOCKED PREFLIGHT psql_exit_nonzero; Write-Evidence BLOCKED DECISION BLOCKED_PSQL }
+  elseif ($message -match '^LOCAL_|^INVALID_|^TARGET_') { Write-Evidence BLOCKED PREFLIGHT target_guard_failed; Write-Evidence BLOCKED DECISION BLOCKED_TARGET_MISMATCH }
+  else { Write-Evidence BLOCKED PREFLIGHT unexpected_preflight_failure; Write-Evidence BLOCKED DECISION BLOCKED_PREFLIGHT }
   exit 1
 }
