@@ -7,7 +7,7 @@ param(
   [string]$ExpectedDatabaseName,
   [string]$ExpectedConnectedRole,
   [switch]$RunReadOnlyChecks,
-  [string]$PsqlPath = 'psql'
+  [string]$PsqlPath
 )
 
 Set-StrictMode -Version Latest
@@ -41,9 +41,11 @@ function Assert-PlainField {
 
 function Read-TargetConfiguration {
   $hostName = (Read-Host 'Database host').Trim().ToLowerInvariant()
-  $port = (Read-Host 'Database port').Trim()
+  $port = (Read-Host 'Database port (press Enter for 55432)').Trim()
   $database = (Read-Host 'Database name').Trim()
-  $userName = (Read-Host 'Database user').Trim()
+  $userName = (Read-Host 'Database user (press Enter for postgres)').Trim()
+  if ([string]::IsNullOrWhiteSpace($port)) { $port = '55432' }
+  if ([string]::IsNullOrWhiteSpace($userName)) { $userName = 'postgres' }
   foreach ($item in @(@($hostName, 'HOST'), @($port, 'PORT'), @($database, 'DATABASE'), @($userName, 'USER'))) { Assert-PlainField -Value $item[0] -Field $item[1] }
   if ($port -notmatch '^[0-9]{1,5}$' -or [int]$port -lt 1 -or [int]$port -gt 65535) { throw 'INVALID_PORT_INPUT' }
   return [pscustomobject]@{ Host = $hostName; Port = $port; Database = $database; User = $userName }
@@ -53,8 +55,16 @@ function Assert-TargetGuards {
   param($Config)
   if ($Target -eq 'local') {
     if ($Config.Host -cne '127.0.0.1') { throw 'LOCAL_HOST_MUST_BE_127_0_0_1' }
-    if ($Config.Database -notmatch '^(?i)(?:postgres|[a-z0-9_]*(?:local|test|rehearsal|disposable)[a-z0-9_]*)$') { throw 'LOCAL_DISPOSABLE_DATABASE_NAME_REQUIRED' }
-    if ($Config.Database -ieq 'postgres' -and ($Config.Port -ne '55432' -or $Config.User -ine 'postgres')) { throw 'LOCAL_POSTGRES_TARGET_MUST_USE_55432_AND_POSTGRES' }
+    $exactBlockedLocalDatabaseNames = @('postgres', 'template0', 'template1', 'production', 'staging')
+    $reservedLocalDatabaseTokenPattern = '(?i)(production|prod|staging|stage|preview|live|main|primary|shared|default|template|postgres|supabase)'
+    if ($Config.Database -in $exactBlockedLocalDatabaseNames -or $Config.Database -match $reservedLocalDatabaseTokenPattern) {
+      throw 'LOCAL_DATABASE_RESERVED_ENVIRONMENT_TOKEN'
+    }
+    if ($Config.Database -notmatch '(?i)^(?:deraledger_[a-z0-9_]*rehearsal[a-z0-9_]*|deraledger_[a-z0-9_]*(?:local|test|disposable)[a-z0-9_]*)$') {
+      throw 'LOCAL_DISPOSABLE_DATABASE_NAME_REQUIRED'
+    }
+    if ($Config.Port -ne '55432') { throw 'LOCAL_PORT_MUST_BE_55432' }
+    if ($Config.User -ine 'postgres') { throw 'LOCAL_USER_MUST_BE_POSTGRES' }
     if ((Read-Host 'Type LOCAL READONLY M024-M030 to continue').Trim() -cne 'LOCAL READONLY M024-M030') { throw 'LOCAL_CONFIRMATION_REQUIRED' }
     return
   }
@@ -64,6 +74,42 @@ function Assert-TargetGuards {
   Assert-PlainField -Value $ExpectedConnectedRole -Field 'EXPECTED_CONNECTED_ROLE'
   $phrase = if ($Target -eq 'staging') { 'STAGING READONLY M024-M030' } else { 'PRODUCTION READONLY M024-M030' }
   if ((Read-Host "Type $phrase to continue").Trim() -cne $phrase) { throw 'TARGET_CONFIRMATION_REQUIRED' }
+}
+
+function Resolve-PsqlExecutable {
+  $knownPaths = @(
+    'C:\Program Files\PostgreSQL\15\bin\psql.exe',
+    'C:\Program Files\PostgreSQL\17\bin\psql.exe'
+  )
+
+  if (-not [string]::IsNullOrWhiteSpace($PsqlPath)) {
+    Assert-PlainField -Value $PsqlPath -Field 'PSQL_PATH'
+    if (Test-Path -LiteralPath $PsqlPath -PathType Leaf) {
+      return (Resolve-Path -LiteralPath $PsqlPath).Path
+    }
+  }
+
+  $command = Get-Command -Name 'psql' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($null -ne $command -and -not [string]::IsNullOrWhiteSpace($command.Source)) {
+    return $command.Source
+  }
+
+  foreach ($knownPath in $knownPaths) {
+    if (Test-Path -LiteralPath $knownPath -PathType Leaf) {
+      return $knownPath
+    }
+  }
+
+  throw 'PSQL_NOT_FOUND'
+}
+
+function ConvertTo-WindowsCommandLineArgument {
+  param([Parameter(Mandatory = $true)][string]$Argument)
+  if ($Argument.Length -eq 0) { return '""' }
+  if ($Argument -notmatch '[\s"]') { return $Argument }
+  $escaped = [regex]::Replace($Argument, '(\\*)"', '$1$1\\"')
+  $escaped = [regex]::Replace($escaped, '(\\+)$', '$1$1')
+  return '"' + $escaped + '"'
 }
 
 function Get-ReadOnlySql {
@@ -210,7 +256,8 @@ ROLLBACK;
 
 function Invoke-ReadOnlyPsql {
   param($Config)
-  $psql = (Get-Command $PsqlPath -ErrorAction Stop).Source
+  $psql = Resolve-PsqlExecutable
+  Write-Evidence PASS PSQL resolved
   $sqlPath = Join-Path ([System.IO.Path]::GetTempPath()) ('deraledger-m024-m030-readonly-{0}.sql' -f [guid]::NewGuid().ToString('N'))
   $saved = @{}; foreach ($name in $PgEnvironmentNames) { $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process'); [Environment]::SetEnvironmentVariable($name, $null, 'Process') }
   $bstr = [IntPtr]::Zero; $plainPassword = $null; $process = $null
@@ -220,11 +267,11 @@ function Invoke-ReadOnlyPsql {
     $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)
     $plainPassword = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
     [Environment]::SetEnvironmentVariable('PGPASSWORD', $plainPassword, 'Process')
-    $start = [Diagnostics.ProcessStartInfo]::new(); $start.FileName = $psql; $start.UseShellExecute = $false; $start.RedirectStandardOutput = $true; $start.RedirectStandardError = $true; $start.CreateNoWindow = $true
-    foreach ($arg in @('-X','-w','-q','-A','-t','-v','ON_ERROR_STOP=1','-v',("target_label={0}" -f $Target),'-v',("expected_database={0}" -f $(if ($Target -eq 'local') { $Config.Database } else { $ExpectedDatabaseName })),'-v',("expected_role={0}" -f $(if ($Target -eq 'local') { $Config.User } else { $ExpectedConnectedRole })),'-h',$Config.Host,'-p',$Config.Port,'-U',$Config.User,'-d',$Config.Database,'-f',$sqlPath)) { [void]$start.ArgumentList.Add($arg) }
+    $arguments = @('-X','-w','-q','-A','-t','-v','ON_ERROR_STOP=1','-v',("target_label={0}" -f $Target),'-v',("expected_database={0}" -f $(if ($Target -eq 'local') { $Config.Database } else { $ExpectedDatabaseName })),'-v',("expected_role={0}" -f $(if ($Target -eq 'local') { $Config.User } else { $ExpectedConnectedRole })),'-h',$Config.Host,'-p',$Config.Port,'-U',$Config.User,'-d',$Config.Database,'-f',$sqlPath)
+    $start = [Diagnostics.ProcessStartInfo]::new(); $start.FileName = $psql; $start.Arguments = (($arguments | ForEach-Object { ConvertTo-WindowsCommandLineArgument -Argument $_ }) -join ' '); $start.UseShellExecute = $false; $start.RedirectStandardOutput = $true; $start.RedirectStandardError = $true; $start.CreateNoWindow = $true
     $process = [Diagnostics.Process]::new(); $process.StartInfo = $start; [void]$process.Start()
     $stdoutTask = $process.StandardOutput.ReadToEndAsync(); $stderrTask = $process.StandardError.ReadToEndAsync()
-    if (-not $process.WaitForExit(60000)) { try { $process.Kill($true) } catch {}; throw 'READONLY_PSQL_TIMEOUT' }
+    if (-not $process.WaitForExit(60000)) { try { $process.Kill() } catch {}; throw 'READONLY_PSQL_TIMEOUT' }
     [Threading.Tasks.Task]::WaitAll(@($stdoutTask, $stderrTask)); if ($process.ExitCode -ne 0) { throw 'READONLY_PSQL_FAILED' }
     return @($stdoutTask.Result -split "`r?`n" | Where-Object { $_ -match '^CONTROL\|' })
   } finally {
@@ -267,4 +314,9 @@ try {
     Write-Evidence PASS DECISION $decision; exit 0
   }
   Write-Evidence BLOCKED DECISION BLOCKED_DRIFT; exit 1
-} catch { Write-Evidence BLOCKED PREFLIGHT $_.Exception.Message; exit 1 }
+} catch {
+  if ($_.Exception.Message -eq 'PSQL_NOT_FOUND') { Write-Evidence BLOCKED PSQL not_found }
+  elseif ($_.Exception.Message -eq 'LOCAL_DATABASE_RESERVED_ENVIRONMENT_TOKEN') { Write-Evidence BLOCKED LOCAL_DATABASE reserved_environment_token }
+  else { Write-Evidence BLOCKED PREFLIGHT $_.Exception.Message }
+  exit 1
+}
