@@ -8,7 +8,9 @@
 
 This package defines the evidence and classifications for a future read-only target preflight. Its only purpose is to establish the actual M024-M030 migration, object, and security state of a specifically approved local disposable, staging, or production target before any rehearsal or apply decision.
 
-It contains no executable database command or credentialed helper. The user must explicitly approve each future target-specific read-only preflight before any database connection is made. A clean preflight is review evidence only; a separately approved apply gate is still required.
+It includes `scripts/preflight-m024-m030-target-readonly.ps1`, an opt-in user-run read-only helper. This task did not execute it. The user must explicitly approve each future target-specific use before any database connection is made. A clean preflight is review evidence only; a separately approved apply gate is still required.
+
+The helper now classifies `CHAIN_ABSENT`, `CHAIN_PARTIAL`, and `CHAIN_FULL_RECORDED` separately. A disposable local target whose whole chain and related objects are absent may produce `READY_FOR_LOCAL_REHEARSAL`; absent objects are not mislabeled as drift in that narrow case. A fully recorded, matching target produces `NO_APPLY_NEEDED_TARGET_ALREADY_MATCHES`, rather than an apply-review result. Partial, history/object-conflicting, drifted, or security-mismatched chains remain blocked.
 
 The source dependency chain is strict:
 
@@ -33,6 +35,8 @@ For each separately approved target, future read-only evidence must establish:
 | Readiness safety | Redacted independent evidence that the route flag remains `false`, if available without exposing values | Route flag cannot be confirmed false or runtime adoption is detected. |
 
 Database name and connected role are insufficient by themselves to prove a target. Project-ref proof is mandatory for staging and production; local target identity must meet the explicit loopback/disposable constraint.
+
+The helper compares observed `current_database()`, `current_user`, `session_user`, and server/session metadata against expected values. The repository does not currently define an approved, source-backed, target-bound Supabase project-ref metadata contract. Therefore staging and production always return `BLOCKED_PROJECT_REF_UNPROVEN`; typed values and custom database/session settings are not accepted as project proof. Local rehearsal preflight remains available under its loopback/disposable safeguards.
 
 No evidence may include a password, connection string, full URL, service-role key, token, JWT, cookie, header, or raw environment value.
 
@@ -70,13 +74,16 @@ For each expected RPC/function, the future preflight must compare function name,
 
 The future read-only preflight must verify the exact manifest expectations, including:
 
-- RLS enabled on the M024 base tables and later target tables where required;
-- zero browser policies where the manifests require no browser policy;
+- RLS enabled and `NO FORCE ROW LEVEL SECURITY` retained on the M024/M028/M029 protected tables covered by the manifests;
+- zero browser policies and browser/public grants across M024 base tables plus M028 request/policy and M029 linkage tables where the manifests require no browser access;
 - no `PUBLIC`, `anon`, or `authenticated` privilege on service-only tables/functions;
-- only reviewed least-privilege `service_role` grants;
+- exact reviewed least-privilege `service_role` grant arrays: M024 profile/review/window/reservation write shapes, append-only event/usage/junction shapes, M028 policy/request (`approval_decision_requests` includes `INSERT`), and M029 linkage (`INSERT`, `SELECT`);
 - no `DELETE` grant where the manifest prohibits it;
-- no broad `authenticated` grant, permissive policy, unsafe default privilege, or browser/public function execution; and
+- no broad `authenticated` grant, permissive policy, unsafe default privilege, or browser/public function execution;
+- M027 cleanup evidence: the legacy local approval-diagnostic implementation must be absent from the M026 approval RPC; and
 - no object/security condition that lets merchant-controlled or browser-visible data unlock capability.
+
+Function PUBLIC execute checks use the same ACL-backed posture as the reviewed migrations: `pg_proc.proacl` is expanded with `aclexplode(...)`, and `grantee = 0` with `EXECUTE` is rejected. The helper never treats `PUBLIC` as a normal role for `has_function_privilege`.
 
 Any policy, grant, default-privilege, function-security, RLS, or browser-access mismatch is `BLOCKED_SECURITY_MISMATCH`; it must not be repaired during preflight.
 
@@ -131,7 +138,9 @@ Hard-stop conditions are: unknown target label; invalid local host; project-ref 
 
 - This package does **not** approve running a preflight. Explicit user approval is required before each local, staging, or production read-only database command.
 - A future apply, rehearsal, postflight, rollback, runtime adoption, or route/UI change always requires a separate approval after evidence review.
-- This package creates no PowerShell helper because a future credentialed script must be separately designed under the migration-safety runbooks and approved before use.
+- The helper accepts only `local`, `staging`, or `production`; it rejects unknown labels. Its database work is disabled unless the user explicitly supplies `-RunReadOnlyChecks` after the target-specific approval.
+- The helper uses a local secure password prompt only at the opt-in execution boundary, invokes `psql` with `BEGIN READ ONLY` and `ROLLBACK`, explicitly disposes its native process, and emits only compact categorized evidence. It never prints its prompts, target fields, password, connection string, full URL, or raw catalog output.
+- For local use it requires `127.0.0.1`, a disposable-name pattern, and an explicit typed confirmation. For staging/production it requires matching expected/observed project refs and an environment-specific typed confirmation before it can prompt for a password.
 - No migration is applied and no data/schema/security state is mutated by this package.
 - No M030/live readiness, approval execution, merchant activation, collection unlock, payment/provider/checkout/subscription/invoice/storefront behavior, or other commercial behavior is authorized.
 
