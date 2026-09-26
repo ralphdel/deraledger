@@ -2,13 +2,12 @@
 
 ## Status and scope
 
-This is a temporary, source-only production diagnostic for the admin
-readiness CSRF-issuance route. Production smoke from
-`https://admin.deraledger.com` returned `400 origin_denied` twice even though
-the browser origin was the reviewed production admin origin. The production
-route flag was rolled back to `false` after the failed smoke and must remain
-false while this diagnostic is reviewed and deployed through a separate
-approved action.
+The temporary production response diagnostic is closed and removed. It was
+introduced after production smoke from `https://admin.deraledger.com` returned
+`400 origin_denied` despite the browser using the reviewed production admin
+origin. The diagnostic and retained local audit identified configuration
+errors, the environment was corrected externally, and the production
+route-security smoke then passed.
 
 The source task changed no environment value, touched no database, performed
 no deployment, and ran no production smoke. It authorizes no M030/live
@@ -70,7 +69,7 @@ does not weaken that value-level rejection. A later production smoke decision
 remains separate and explicitly gated.
 
 Production continued to report browser-visible secret exposure after the
-names-only audit. The next diagnostic step is therefore a local-only value-shape
+names-only audit. The next diagnostic step was therefore a local-only value-shape
 audit using `scripts/audit-readiness-public-env.ts`. The script and runtime
 policy share the same classifier. It inspects only `NEXT_PUBLIC_*` variables
 and prints only `PASS|<key-name>|<fixed-reason>` or
@@ -102,74 +101,48 @@ exit code `1` means at least one variable was blocked or the requested file
 could not be read. A missing optional file emits only
 `WARN|LOCAL_ENV_FILE|file_missing` and audits the current process environment.
 
-## Narrow production gate
+## Final root cause
 
-The `/api/internal/admin/compliance/readiness/issue` response includes a
-temporary `productionDiagnostic` object only when all of these conditions hold:
+The production environment contained two incorrect Supabase credentials:
 
-1. the issuance outcome is exactly `origin_denied`;
-2. the request URL origin is exactly `https://admin.deraledger.com`;
-3. the request pathname is exactly
-   `/api/internal/admin/compliance/readiness/issue`; and
-4. `NODE_ENV` is exactly `production`.
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY` contained a `service_role` key instead of the
+  browser-safe anonymous key. The local audit correctly reported
+  `BLOCKED|NEXT_PUBLIC_SUPABASE_ANON_KEY|sensitive_value_pattern`.
+- `SUPABASE_SERVICE_ROLE_KEY` contained the wrong secret API key instead of the
+  production service-role credential expected by the server-only client.
 
-Successful issuance, other denial outcomes, other request origins, other
-paths, staging, preview, development, and snapshot responses remain unchanged.
-No diagnostic route or server-log diagnostic was added.
+The values were corrected externally without recording them in source,
+evidence, or chat. The retained local audit then reported `PASS` for all five
+reviewed public variables.
 
-## Redacted fields
+## Production smoke evidence
 
-The response diagnostic contains only booleans and one fixed category label:
+After the environment correction, the production route-security smoke passed:
 
-- `request_origin_present`
-- `request_origin_matches_admin_origin`
-- `admin_origin_present`
-- `admin_origin_parse_valid`
-- `allowed_origins_key_present`
-- `allowed_origins_empty_string`
-- `allowed_origins_duplicates_admin_origin`
-- `allowed_origins_all_valid`
-- `deployment_environment_present`
-- `supabase_environment_present`
-- `deployment_and_supabase_environment_equal`
-- `deployment_environment_literal_valid`
-- `supabase_environment_literal_valid`
-- `deployment_environment_is_production`
-- `supabase_environment_is_production`
-- `production_pair_allowed`
-- `environment_pair_allowed`
-- `browser_environment_secret_exposure_detected`
-- `origin_policy_created`
-- `supabase_url_present`
-- `service_role_key_present`
-- `csrf_hmac_key_present`
-- `throttle_hmac_key_present`
-- `hmac_keys_distinct`
-- `throttle_issue_limit_valid`
-- `throttle_snapshot_limit_valid`
-- `throttle_window_seconds_valid`
-- `security_configuration_created`
-- `final_failure_category`
+- `/issue` returned `201 csrf_issued` with the synchronizer token present and
+  no `productionDiagnostic` field.
+- `/snapshot` without CSRF returned `400 csrf_denied`.
+- `/snapshot` with valid CSRF and a random UUID returned
+  `404 canonical_snapshot_v2_request_missing`.
 
-Allowed failure categories are closed source constants. The object never
-contains raw environment values, origins, Supabase URLs, service-role values,
-HMAC values, cookies, JWTs, headers, connection strings, CSRF tokens, UUIDs,
-or database diagnostics.
+These checks exercised route security only. They did not issue M030/live
+readiness, execute approval, activate a merchant, unlock collection, or invoke
+payment/provider/checkout/subscription/invoice/storefront behavior.
 
-Environment-policy failure categories distinguish unsupported deployment and
-Supabase labels, a valid-label pair mismatch, invalid or environment-conflicting
-admin origins, invalid or duplicate additional origins, browser-visible secret
-exposure, and an unknown fail-closed fallback. Configuration categories for
-Supabase presence, HMAC validity/distinctness, throttle validity, and final
-configuration construction remain separate.
+## Diagnostic removal and retained safeguards
 
-## Removal requirement
+The temporary `productionDiagnostic` response construction, production-only
+request gate, and diagnostic-only route tests have been removed. Normal
+`origin_denied` responses are again only the stable `400` denied envelope.
 
-This response-visible diagnostic must be removed immediately after the
-production failure category is captured and the resulting configuration issue
-is resolved. The cleanup requires source review before normal production
-route-security smoke resumes. Production readiness route enablement remains a
-separate, explicit gate.
+The following permanent safeguards remain:
+
+- the shared browser public-environment classifier;
+- the local-only `scripts/audit-readiness-public-env.ts` safety tool;
+- permanent browser-secret exposure policy and regression tests;
+- disabled-by-default route-flag enforcement;
+- origin, authority, session-binding, throttle, and durable CSRF protections;
+- opaque client failures and redacted operational logging.
 
 ## Safe state
 
@@ -179,5 +152,5 @@ separate, explicit gate.
 - `ENV_CHANGED=NO`
 - `ROUTE_FLAG_CHANGED=NO`
 - `PRODUCTION_RELEASE=NO`
-- The production readiness route flag remains `false` pending a separate
-  reviewed diagnostic deployment and smoke decision.
+- No database, environment, route-flag, deployment, or business action was
+  performed by this source cleanup task.

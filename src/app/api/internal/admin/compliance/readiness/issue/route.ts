@@ -1,46 +1,15 @@
 import "server-only";
 
 import { createAdminReadinessCorrelationId, createAdminReadinessOperationalEvent } from "@/lib/compliance/server/admin-readiness-route-logging";
-import {
-  createAdminReadinessRedactedRuntimeDiagnostic,
-  type AdminReadinessRedactedRuntimeDiagnostic,
-} from "@/lib/compliance/server/admin-readiness-route-security-config";
 import { createAdminReadinessRouteSecurityComposition } from "@/lib/compliance/server/admin-readiness-route-security-composition";
 import { mapAdminReadinessRouteOutcome } from "@/lib/compliance/server/admin-readiness-route-response";
 
 const ROUTE_GATE_ENV = "DERALEDGER_ADMIN_READINESS_ROUTES_ENABLED";
-const PRODUCTION_DIAGNOSTIC_ORIGIN = "https://admin.deraledger.com";
-const ISSUE_PATH = "/api/internal/admin/compliance/readiness/issue";
 function routeEnabled(): boolean {
   return process.env[ROUTE_GATE_ENV] === "true";
 }
 
-function productionOriginDiagnostic(
-  request: Request,
-  requestOrigin: string | null,
-): AdminReadinessRedactedRuntimeDiagnostic | null {
-  // Temporary smoke diagnostic: both runtime mode and the non-secret request
-  // URL must prove this is the exact production admin endpoint.
-  if (process.env.NODE_ENV !== "production") return null;
-  try {
-    const url = new URL(request.url);
-    if (url.origin !== PRODUCTION_DIAGNOSTIC_ORIGIN || url.pathname !== ISSUE_PATH) return null;
-  } catch {
-    return null;
-  }
-  try {
-    return createAdminReadinessRedactedRuntimeDiagnostic(requestOrigin);
-  } catch {
-    // Diagnostic failure must preserve the normal origin_denied response.
-    return null;
-  }
-}
-
-function responseFor(
-  correlationId: string,
-  outcome: unknown,
-  productionDiagnostic: AdminReadinessRedactedRuntimeDiagnostic | null = null,
-): Response {
+function responseFor(correlationId: string, outcome: unknown): Response {
   const envelope = mapAdminReadinessRouteOutcome(outcome);
   const event = createAdminReadinessOperationalEvent({
     operation: "issue",
@@ -57,10 +26,7 @@ function responseFor(
     }
   }
 
-  // Remove this temporary field as soon as the production smoke failure is
-  // classified. No successful or non-production response receives it.
-  const body = productionDiagnostic ? { ...envelope.body, productionDiagnostic } : envelope.body;
-  return Response.json(body, {
+  return Response.json(envelope.body, {
     status: envelope.status,
     headers: { "Cache-Control": "no-store" },
   });
@@ -79,8 +45,5 @@ export async function POST(request: Request): Promise<Response> {
     // request; this endpoint never issues a readiness approval command.
     operation: "snapshot",
   });
-  const productionDiagnostic = issuance.kind === "deny" && issuance.code === "origin_denied"
-    ? productionOriginDiagnostic(request, requestOrigin)
-    : null;
-  return responseFor(correlationId, issuance, productionDiagnostic);
+  return responseFor(correlationId, issuance);
 }
