@@ -38,13 +38,13 @@ The following manifest is intentionally initialized with non-hash placeholders. 
 
 | Step | Migration | Reviewed expected SHA-256 |
 | --- | --- | --- |
-| M024 | `20260820_00_prd_phase_2_compliance_schema_substrate.sql` | `REVIEWED_SHA256_M024_REQUIRED` |
-| M025 | `20260824_00_reviewed_profile_bootstrap_rpc.sql` | `REVIEWED_SHA256_M025_REQUIRED` |
-| M026 | `20260825_00_reviewed_profile_approval_rpc.sql` | `REVIEWED_SHA256_M026_REQUIRED` |
-| M027 | `20260825_01_cleanup_approval_rpc_diagnostics.sql` | `REVIEWED_SHA256_M027_REQUIRED` |
-| M028 | `20260825_02_canonical_approval_snapshot_idempotency.sql` | `REVIEWED_SHA256_M028_REQUIRED` |
-| M029 | `20260826_00_canonical_workspace_linkage.sql` | `REVIEWED_SHA256_M029_REQUIRED` |
-| M030 | `20260827_00_m028_m029_readiness_integration.sql` | `REVIEWED_SHA256_M030_REQUIRED` |
+| M024 | `20260820_00_prd_phase_2_compliance_schema_substrate.sql` | `8a42669b40ae29d1170dd09831f0b79e795052614fd874432e6077d1072816cf` |
+| M025 | `20260824_00_reviewed_profile_bootstrap_rpc.sql` | `e607cb2f1ef95feae26dffa153d8206e2d63efcccf039026df9cb48f2862d948` |
+| M026 | `20260825_00_reviewed_profile_approval_rpc.sql` | `c2c27e0f457add4eebc90f2e839367e80c875825ede8e4124667eea8d910d76c` |
+| M027 | `20260825_01_cleanup_approval_rpc_diagnostics.sql` | `ac7334c3c080dc4d6d7a68dd005ff1b3e2f16f082972fe8335764ea1a722376e` |
+| M028 | `20260825_02_canonical_approval_snapshot_idempotency.sql` | `89ddba1421c1d796ee8c9e84f5d0c608d5c83ac538e4ee881cf2cc50f3d4ef28` |
+| M029 | `20260826_00_canonical_workspace_linkage.sql` | `3ec3dfa172f5ebc1c34903853fb9746efb012731ded2ce3b344c7533951a34f9` |
+| M030 | `20260827_00_m028_m029_readiness_integration.sql` | `8759bed04e9f019762b69fdf25c155f9deaaff691d844dfcbbe69663f604d49b` |
 
 The evidence format is fixed: `PASS|HASH|M024|matched`, `BLOCKED|HASH|M024|missing_expected_hash`, or `BLOCKED|HASH|M024|mismatch`. A blocked hash is a hard stop; it is never an apply warning.
 
@@ -57,13 +57,13 @@ $psql = @('C:\Program Files\PostgreSQL\15\bin\psql.exe', (Get-Command psql -Comm
 if (-not $psql) { throw 'BLOCKED|PSQL|not_found' }
 $hostName = '127.0.0.1'; $port = '55432'; $userName = 'postgres'; $database = 'deraledger_m024_m030_rehearsal'
 $migrations = @(
-  [pscustomobject]@{ Step = 'M024'; Path = 'supabase/migrations/20260820_00_prd_phase_2_compliance_schema_substrate.sql'; ExpectedSha256 = 'REVIEWED_SHA256_M024_REQUIRED' },
-  [pscustomobject]@{ Step = 'M025'; Path = 'supabase/migrations/20260824_00_reviewed_profile_bootstrap_rpc.sql'; ExpectedSha256 = 'REVIEWED_SHA256_M025_REQUIRED' },
-  [pscustomobject]@{ Step = 'M026'; Path = 'supabase/migrations/20260825_00_reviewed_profile_approval_rpc.sql'; ExpectedSha256 = 'REVIEWED_SHA256_M026_REQUIRED' },
-  [pscustomobject]@{ Step = 'M027'; Path = 'supabase/migrations/20260825_01_cleanup_approval_rpc_diagnostics.sql'; ExpectedSha256 = 'REVIEWED_SHA256_M027_REQUIRED' },
-  [pscustomobject]@{ Step = 'M028'; Path = 'supabase/migrations/20260825_02_canonical_approval_snapshot_idempotency.sql'; ExpectedSha256 = 'REVIEWED_SHA256_M028_REQUIRED' },
-  [pscustomobject]@{ Step = 'M029'; Path = 'supabase/migrations/20260826_00_canonical_workspace_linkage.sql'; ExpectedSha256 = 'REVIEWED_SHA256_M029_REQUIRED' },
-  [pscustomobject]@{ Step = 'M030'; Path = 'supabase/migrations/20260827_00_m028_m029_readiness_integration.sql'; ExpectedSha256 = 'REVIEWED_SHA256_M030_REQUIRED' }
+  [pscustomobject]@{ Step = 'M024'; Path = 'supabase/migrations/20260820_00_prd_phase_2_compliance_schema_substrate.sql'; ExpectedSha256 = '8a42669b40ae29d1170dd09831f0b79e795052614fd874432e6077d1072816cf' },
+  [pscustomobject]@{ Step = 'M025'; Path = 'supabase/migrations/20260824_00_reviewed_profile_bootstrap_rpc.sql'; ExpectedSha256 = 'e607cb2f1ef95feae26dffa153d8206e2d63efcccf039026df9cb48f2862d948' },
+  [pscustomobject]@{ Step = 'M026'; Path = 'supabase/migrations/20260825_00_reviewed_profile_approval_rpc.sql'; ExpectedSha256 = 'c2c27e0f457add4eebc90f2e839367e80c875825ede8e4124667eea8d910d76c' },
+  [pscustomobject]@{ Step = 'M027'; Path = 'supabase/migrations/20260825_01_cleanup_approval_rpc_diagnostics.sql'; ExpectedSha256 = 'ac7334c3c080dc4d6d7a68dd005ff1b3e2f16f082972fe8335764ea1a722376e' },
+  [pscustomobject]@{ Step = 'M028'; Path = 'supabase/migrations/20260825_02_canonical_approval_snapshot_idempotency.sql'; ExpectedSha256 = '89ddba1421c1d796ee8c9e84f5d0c608d5c83ac538e4ee881cf2cc50f3d4ef28' },
+  [pscustomobject]@{ Step = 'M029'; Path = 'supabase/migrations/20260826_00_canonical_workspace_linkage.sql'; ExpectedSha256 = '3ec3dfa172f5ebc1c34903853fb9746efb012731ded2ce3b344c7533951a34f9' },
+  [pscustomobject]@{ Step = 'M030'; Path = 'supabase/migrations/20260827_00_m028_m029_readiness_integration.sql'; ExpectedSha256 = '8759bed04e9f019762b69fdf25c155f9deaaff691d844dfcbbe69663f604d49b' }
 )
 foreach ($migration in $migrations) {
   if (-not (Test-Path -LiteralPath $migration.Path -PathType Leaf)) { throw ('BLOCKED|HASH|' + $migration.Step + '|migration_file_missing') }
