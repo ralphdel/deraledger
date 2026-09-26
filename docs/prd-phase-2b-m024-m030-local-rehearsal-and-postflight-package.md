@@ -77,11 +77,43 @@ if ((Read-Host 'Type LOCAL APPLY M024-M030').Trim() -cne 'LOCAL APPLY M024-M030'
 $secure = Read-Host 'Local PostgreSQL password' -AsSecureString
 $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
 $previousPassword = [Environment]::GetEnvironmentVariable('PGPASSWORD', 'Process')
+function ConvertTo-SafeApplyDiagnostic([object] $entry) {
+  $line = ([string] $entry).Trim()
+  if ([string]::IsNullOrWhiteSpace($line)) { return $null }
+  if ($line -notmatch '(?i)(psql:|\bERROR:|\bFATAL:|\bDETAIL:|\bHINT:)') { return $null }
+  $jwtShape = '(?i)(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?![A-Za-z0-9_-])'
+  $opaqueTokenShape = '(?i)(?<!\S)[A-Za-z0-9._+\/=:-]{24,}(?!\S)'
+  $secretAssignment = '(?i)(?<![A-Za-z0-9_-])[A-Za-z0-9_-]*(password|passwd|pwd|token|secret|key|apikey|api_key|jwt|bearer|authorization|service[ _-]?role|pgpassword|supabase|anon|auth|session|cookie|credential)[A-Za-z0-9_-]*\s*[:=]\s*\S+'
+  $connectionString = '(?i)(https?://|postgres(?:ql)?://|\b[^\s:@]+:[^\s@]+@[^\s]+\b|\b[^\s/]+/[^\s?]+\?[^\s]*\b(key|token|secret|password|auth)[^\s=]*=)'
+  if ($line -match ($jwtShape + '|' + $opaqueTokenShape + '|' + $secretAssignment + '|' + $connectionString + '|bearer\s+\S+|\bjwt\b')) {
+    return '[REDACTED]'
+  }
+  $normalized = $line.ToLowerInvariant()
+  if ($normalized -match 'relation .* does not exist') { return 'relation does not exist' }
+  if ($normalized -match 'schema .* does not exist') { return 'schema does not exist' }
+  if ($normalized -match 'permission denied') { return 'permission denied' }
+  if ($normalized -match 'syntax error') { return 'syntax error' }
+  if ($normalized -match 'duplicate key') { return 'duplicate key' }
+  if ($normalized -match 'already exists') { return 'already exists' }
+  if ($normalized -match 'violates .* constraint') { return 'violates check constraint' }
+  if ($normalized -match 'column .* does not exist') { return 'column does not exist' }
+  if ($normalized -match 'function .* does not exist') { return 'function does not exist' }
+  if ($normalized -match 'type .* does not exist') { return 'type does not exist' }
+  if ($normalized -match 'current transaction is aborted') { return 'current transaction is aborted' }
+  return '[REDACTED_DIAGNOSTIC]'
+}
 try {
   $env:PGPASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
   foreach ($migration in $migrations) {
-    $null = & $psql -X -w -q -v ON_ERROR_STOP=1 -h $hostName -p $port -U $userName -d $database -f $migration.Path 2>&1
-    if ($LASTEXITCODE -ne 0) { throw 'BLOCKED|APPLY|psql_exit_nonzero' }
+    $applyOutput = @(& $psql -X -w -q -v ON_ERROR_STOP=1 -h $hostName -p $port -U $userName -d $database -f $migration.Path 2>&1)
+    $psqlExitCode = $LASTEXITCODE
+    if ($psqlExitCode -ne 0) {
+      Write-Output ('BLOCKED|APPLY|' + $migration.Step + '|psql_exit_nonzero')
+      $diagnostics = @($applyOutput | ForEach-Object { ConvertTo-SafeApplyDiagnostic $_ } | Where-Object { $_ } | Select-Object -Unique -First 5)
+      if ($diagnostics.Count -eq 0) { $diagnostics = @('psql_reported_no_sanitized_diagnostic') }
+      foreach ($diagnostic in $diagnostics) { Write-Output ('BLOCKED|APPLY_DIAGNOSTIC|' + $migration.Step + '|' + $diagnostic) }
+      throw 'BLOCKED|APPLY|psql_exit_nonzero'
+    }
     Write-Output ('PASS|APPLY|' + $migration.Step)
   }
 } finally {
@@ -90,7 +122,11 @@ try {
 }
 ```
 
-This is fail-fast. It must not continue after a partial apply and is not an automatic rollback mechanism.
+This is fail-fast. It must not continue after a partial apply and is not an automatic rollback mechanism. On a `psql` failure it emits the fixed failure category plus at most five sanitized diagnostic lines; it never prints raw `psql` output, migration contents, passwords, URLs, tokens, connection strings, service-role identifiers, or environment assignments. The sanitizer redacts token-shaped values even when they are unlabeled. These diagnostics are for local troubleshooting only and must not be expanded without separate security review.
+
+Sanitizer self-test cases that must produce `[REDACTED]` include an unlabeled JWT-shaped value, a Base64URL token, a standard Base64 token containing `+`, `/`, and `=`, a hex token, secret-like assignments (including mixed-case names), URLs, connection strings, bearer tokens, cookie/session/auth tokens, and `user:password@host` values. Only the fixed safe PostgreSQL categories above may remain visible; empty or otherwise uncertain content produces `[REDACTED_DIAGNOSTIC]`.
+
+If apply fails, first review the compact sanitized evidence and then run the separately approved read-only preflight. A rerun is permitted only when that post-failure preflight again proves `chain_absent` and `protected_objects_absent`; any partial history or object state is a stop condition requiring separately approved discard/recreate or rollback planning.
 
 ## Postflight, stop, and rollback posture
 
