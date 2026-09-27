@@ -12,7 +12,7 @@ The expected Supabase CLI-compatible table shape is `version text PRIMARY KEY`, 
 
 - `scripts/bootstrap-staging-migration-ledger.ps1` requires `-RunBootstrap` and the exact typed confirmation `STAGING BOOTSTRAP MIGRATION LEDGER`.
 - `scripts/postflight-staging-migration-ledger.ps1` requires `-RunPostflight` and the exact typed confirmation `STAGING POSTFLIGHT MIGRATION LEDGER`.
-- Both require the reviewed staging project ref, pooler host, port `5432`, database `postgres`, and reviewed pooler user. They reject the known production ref and production indicators, use `PGSSLMODE=require`, prompt for the password only locally, restore PostgreSQL process environment in `finally`, and print compact evidence only.
+- Both require the reviewed staging project ref, pooler host, port `5432`, database `postgres`, and a pooler username containing the reviewed project ref. They reject the known production ref and production indicators. Supabase pooler authentication may report PostgreSQL `current_user` as `postgres` (or the approved `service_role`), so session validation accepts only those internal roles and does not confuse them with the external pooler login. Both use `PGSSLMODE=require`, prompt for the password only locally, restore PostgreSQL process environment in `finally`, and print compact evidence only.
 
 Before mutation, bootstrap verifies the target session, a missing ledger, and the absence of every M024-M030 protected table/RPC, including `public.canonical_approval_snapshots`. A protected object without history emits `BLOCKED|DRIFT|protected_objects_without_history`. It creates only the two ledger containers with `IF NOT EXISTS`; there is no `INSERT`, `UPDATE`, `DELETE`, migration file invocation, public-table change, grant, or seed data.
 

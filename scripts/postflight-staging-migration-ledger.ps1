@@ -32,8 +32,11 @@ SELECT 'CONTROL|schema=' || EXISTS (SELECT 1 FROM pg_namespace WHERE nspname='su
 '@
   $sql += "`nSELECT 'CONTROL|pk=' || EXISTS (SELECT 1 FROM pg_constraint con JOIN pg_class rel ON rel.oid=con.conrelid JOIN pg_namespace ns ON ns.oid=rel.relnamespace JOIN pg_attribute att ON att.attrelid=rel.oid AND att.attnum=con.conkey[1] WHERE ns.nspname='supabase_migrations' AND rel.relname='schema_migrations' AND con.contype='p' AND array_length(con.conkey,1)=1 AND att.attname='version');"
   $sql += "`nSELECT 'CONTROL|protected_inventory=' || ((SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname IN ($tableList)) + (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.proname IN ($functionList)))::text;"
+  $sql += "`nSELECT 'CONTROL|session_db=' || current_database() || '|session_role=' || current_user;"
   $controlRows=@(Invoke-Psql -PsqlExe $psql -Sql $sql)
   $control=$controlRows[0]
+  $sessionControl=@($controlRows | Where-Object { $_ -match '^CONTROL\|session_db=' })[0]
+  if($sessionControl -notmatch '^CONTROL\|session_db=postgres\|session_role=(postgres|service_role)$'){Stop-Blocked 'BLOCKED|POSTFLIGHT|target_session_unconfirmed'}
   if($controlRows -notcontains 'CONTROL|pk=true'){Stop-Blocked 'BLOCKED|LEDGER_SHAPE|version_primary_key_missing'}
   $protectedInventory=@($controlRows | Where-Object { $_ -match '^CONTROL\|protected_inventory=' })[0]
   if($control -notmatch '^CONTROL\|schema=true\|table=true\|shape=true\|rows=0\|protected=0$' -or $protectedInventory -cne 'CONTROL|protected_inventory=0'){Stop-Blocked 'BLOCKED|POSTFLIGHT|ledger_or_drift_mismatch'}

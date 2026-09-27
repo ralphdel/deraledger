@@ -60,10 +60,10 @@ try {
   $functionList = ($ProtectedFunctions | ForEach-Object { "'$_'" }) -join ','
   $precheckSql = "SELECT 'CONTROL|db=' || current_database() || '|role=' || current_user || '|ledger=' || CASE WHEN to_regclass('supabase_migrations.schema_migrations') IS NULL THEN 'missing' ELSE 'present' END || '|protected=' || ((SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname IN ($tableList)) + (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.proname IN ($functionList)))::text;"
   $control = @(Invoke-Psql -PsqlExe $psql -Sql $precheckSql)[0]
-  if ($control -notmatch '^CONTROL\|db=postgres\|role=postgres\.fsjljliiyfchkwbjifzw\|ledger=(missing|present)\|protected=[0-9]+$') { Stop-Blocked 'BLOCKED|BOOTSTRAP|target_session_unconfirmed' }
+  if ($control -notmatch '^CONTROL\|db=postgres\|role=(postgres|service_role)\|ledger=(missing|present)\|protected=[0-9]+$') { Stop-Blocked 'BLOCKED|BOOTSTRAP|target_session_unconfirmed' }
   if ($control -match '\|protected=(?!0$)') { Stop-Blocked 'BLOCKED|DRIFT|protected_objects_without_history' }
   if ($control -match '\|ledger=present') { Stop-Blocked 'BLOCKED|LEDGER|already_present_requires_reconciliation' }
-  Write-Evidence 'PASS|PROTECTED_OBJECTS|absent'; Write-Evidence 'PASS|MIGRATION_HISTORY_TABLE|missing'
+  Write-Evidence 'PASS|SESSION|database|postgres'; Write-Evidence ("PASS|SESSION|role|{0}" -f ($control -replace '^.*\|role=([^|]+)\|.*$','$1')); Write-Evidence 'PASS|PROTECTED_OBJECTS|absent'; Write-Evidence 'PASS|MIGRATION_HISTORY_TABLE|missing'
   $bootstrapSql = @'
 CREATE SCHEMA IF NOT EXISTS supabase_migrations;
 CREATE TABLE IF NOT EXISTS supabase_migrations.schema_migrations (
