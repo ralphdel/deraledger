@@ -8,6 +8,8 @@ This package prepares only the minimum source-derived baseline needed to retry M
 
 The only permitted target is database host `127.0.0.1`, port `55432`, user `postgres`, and database `deraledger_m024_m030_rehearsal` (or an approved disposable rehearsal name accepted by the scripts). The scripts reject reserved environment tokens anywhere in the database name and use a `$DbHost` parameter to avoid PowerShell's read-only automatic `$Host` variable.
 
+**Never run either local bootstrap script against staging or production.** They are intentionally limited to disposable loopback targets and are not a substitute for the separately gated managed-target process in [the staging execution gate](prd-phase-2b-m024-m030-staging-execution-gate.md).
+
 ## Source-derived inventory
 
 | Prerequisite | M024 source basis | Package behavior |
