@@ -4,6 +4,8 @@
 
 ## Boundary
 
+**Current evidence state:** User-run target proof and connection evidence identified the approved staging target without exposing credentials. The subsequent read-only preflight reported `BLOCKED|MIGRATION_HISTORY_TABLE|missing`. Target proof does not make an absent migration ledger safe to bypass: M024-M030 apply remains blocked pending the separate [staging migration-ledger bootstrap decision gate](prd-phase-2b-staging-migration-ledger-bootstrap-gate.md).
+
 This is the staging path for the ordered M024-M030 package when a managed Supabase staging baseline is available. It replaces neither target reconciliation nor project identity proof. It is explicitly separate from the plain-local bootstrap path:
 
 - Never run `scripts/bootstrap-m024-prereqs-local.ps1` against staging or production.
@@ -24,13 +26,13 @@ Before any future staging read-only command, the user must separately approve th
 | Staging/not-production posture | The approved environment context is explicitly staging and its project ref is distinct from production. |
 | Route/runtime safety | Deployment evidence records `DERALEDGER_ADMIN_READINESS_ROUTES_ENABLED=false`; source/release evidence confirms no runtime adoption, M030 live-readiness activation, Admin UI release, approval execution, activation, collection unlock, or commercial behavior. |
 
-The current repository has no approved target-bound project-ref evidence mechanism. Until one is added and independently reviewed, every staging attempt ends here:
+If approved target-bound project-ref evidence is unavailable or no longer matches the expected staging environment, every staging attempt ends here:
 
 ```text
 BLOCKED|DECISION|BLOCKED_PROJECT_REF_UNPROVEN
 ```
 
-This is a hard stop, including for otherwise read-only preflight. No script is created by this gate because an executable staging helper could not establish the missing proof safely.
+This is a hard stop, including for otherwise read-only preflight. No script is created by this gate because an executable staging helper must not establish missing proof itself.
 
 ## Gate 1: future user-run read-only preflight
 
@@ -40,7 +42,7 @@ The preflight must verify:
 
 1. Proven staging target identity, expected/observed project ref match, observed database name, connected role, server/session classification, and staging/not-production context.
 2. `DERALEDGER_ADMIN_READINESS_ROUTES_ENABLED=false` evidence and absence of runtime adoption/M030 readiness activation.
-3. Ordered M024-M030 history: absent chain, exact full chain, or blocked partial/out-of-order/history-object conflict.
+3. The `supabase_migrations.schema_migrations` ledger exists and its ordered M024-M030 history is classified as absent chain, exact full chain, or blocked partial/out-of-order/history-object conflict. A missing ledger table is not an absent chain: it emits `BLOCKED|MIGRATION_HISTORY_TABLE|missing` and `BLOCKED|DECISION|STAGING_PREFLIGHT_BLOCKED`.
 4. Existing prerequisite base tables, `public` schema, `anon`/`authenticated`/`service_role`, and `gen_random_uuid()` availability.
 5. Protected M024-M030 tables and RPCs: consistently absent for an apply candidate, or fully present and manifest-matching for a no-apply result.
 6. Function signatures/overloads, SECURITY DEFINER/INVOKER posture, hardened search paths, and M027 cleanup marker state.
@@ -55,6 +57,7 @@ BLOCKED|DECISION|BLOCKED_PARTIAL_CHAIN
 BLOCKED|DECISION|BLOCKED_DRIFT
 BLOCKED|DECISION|BLOCKED_SECURITY_MISMATCH
 BLOCKED|DECISION|BLOCKED_RUNTIME_ADOPTION_DETECTED
+BLOCKED|DECISION|STAGING_PREFLIGHT_BLOCKED
 PASS|DECISION|NO_APPLY_NEEDED_TARGET_ALREADY_MATCHES
 PASS|DECISION|READY_FOR_STAGING_APPLY_REVIEW
 ```
@@ -63,7 +66,7 @@ PASS|DECISION|READY_FOR_STAGING_APPLY_REVIEW
 
 ## Gate 2: conditional staging apply review
 
-Apply is possible only when Gate 1 returns `PASS|DECISION|READY_FOR_STAGING_APPLY_REVIEW`, all results are independently reviewed, and the user gives a new explicit staging-apply approval. The migration order is fixed:
+Apply is possible only when Gate 1 returns `PASS|DECISION|READY_FOR_STAGING_APPLY_REVIEW`, including proof that `supabase_migrations.schema_migrations` exists and records a clean absent M024-M030 chain, all results are independently reviewed, and the user gives a new explicit staging-apply approval. The M024-M030 apply package must never create the schema, table, or ledger rows. The migration order is fixed:
 
 ```text
 M024 → M025 → M026 → M027 → M028 → M029 → M030
@@ -100,15 +103,29 @@ Any mismatch is `FAIL` or `BLOCKED`, never warning-only. A postflight pass does 
 
 ## Hard stop conditions
 
-Stop without continuation on project-ref proof unavailable/mismatch, target mismatch, production indicator, route flag not proven false, runtime-adoption evidence, hash mismatch, drift, partial chain, protected-object collision, postflight mismatch, missing security manifest, unsafe grant/policy, or any evidence that cannot remain redacted.
+Stop without continuation on project-ref proof unavailable/mismatch, target mismatch, production indicator, route flag not proven false, runtime-adoption evidence, a missing migration-history table, hash mismatch, drift, partial chain, protected-object collision, postflight mismatch, missing security manifest, unsafe grant/policy, or any evidence that cannot remain redacted.
+
+## PowerShell phase-output pattern for future user-run tooling
+
+Future staging tooling must not put an evidence-writing phase directly inside a boolean condition such as `if (-not (Invoke-Phase))`. In Windows PowerShell, success-stream evidence can be captured by that expression and disappear from the user-visible record.
+
+Each phase must print compact evidence outside the success stream (for example, with `Write-Host`) and return an explicit Boolean status separately. The caller must store and test that status:
+
+```powershell
+$preflightOk = Invoke-StagingPreflight
+if ($preflightOk -ne $true) { exit 1 }
+```
+
+No phase may hide a `PASS`, `FAIL`, or `BLOCKED` line merely because its result is tested. The phase output must remain redacted and compact; this pattern does not authorize a staging script or any database action.
 
 ## Next authority sequence
 
-1. Establish and independently review a repository-approved, target-bound staging project-ref proof mechanism.
-2. Obtain explicit user approval for a staging read-only preflight.
-3. Review compact preflight evidence.
-4. Obtain separate explicit approval for staging apply, only if the preflight returns `READY_FOR_STAGING_APPLY_REVIEW`.
-5. Obtain separate explicit approval for staging postflight.
-6. Choose any later non-DB PRD gate separately.
+1. Keep the established target proof current and independently review it before each user-run staging operation.
+2. Resolve the missing ledger only through the separate staging migration-ledger bootstrap decision gate; M024-M030 apply is blocked until that gate has separately approved and completed a ledger action, if one is source-backed and necessary.
+3. Obtain explicit user approval for a staging read-only preflight.
+4. Review compact preflight evidence.
+5. Obtain separate explicit approval for staging apply, only if the preflight returns `READY_FOR_STAGING_APPLY_REVIEW`.
+6. Obtain separate explicit approval for staging postflight.
+7. Choose any later non-DB PRD gate separately.
 
 No step authorizes production, local bootstrap on managed targets, runtime adoption, Admin UI release, M030/live readiness, approval execution, merchant activation, collection unlock, or payment/provider/checkout/subscription/invoice/storefront behavior.
