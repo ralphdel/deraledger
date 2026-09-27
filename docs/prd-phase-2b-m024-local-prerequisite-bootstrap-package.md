@@ -6,7 +6,7 @@
 
 This package prepares only the minimum source-derived baseline needed to retry Migration 024 on the disposable local rehearsal target. It is not a Supabase baseline emulator and does not claim M025–M030 readiness.
 
-The only permitted target is `127.0.0.1:55432`, user `postgres`, database `deraledger_m024_m030_rehearsal` (or an approved disposable rehearsal name accepted by the scripts). The scripts reject reserved environment tokens anywhere in the database name.
+The only permitted target is database host `127.0.0.1`, port `55432`, user `postgres`, and database `deraledger_m024_m030_rehearsal` (or an approved disposable rehearsal name accepted by the scripts). The scripts reject reserved environment tokens anywhere in the database name and use a `$DbHost` parameter to avoid PowerShell's read-only automatic `$Host` variable.
 
 ## Source-derived inventory
 

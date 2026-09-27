@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-  [string]$Host = '127.0.0.1',
+  [string]$DbHost = '127.0.0.1',
   [string]$Port = '55432',
   [string]$User = 'postgres',
   [string]$Database = 'deraledger_m024_m030_rehearsal',
@@ -18,7 +18,7 @@ function Write-Evidence {
 }
 
 function Assert-LocalTarget {
-  if ($Host -cne '127.0.0.1') { throw 'LOCAL_HOST_MUST_BE_127_0_0_1' }
+  if ($DbHost -cne '127.0.0.1') { throw 'LOCAL_HOST_MUST_BE_127_0_0_1' }
   if ($Port -ne '55432') { throw 'LOCAL_PORT_MUST_BE_55432' }
   if ($User -ine 'postgres') { throw 'LOCAL_USER_MUST_BE_POSTGRES' }
   $reserved = '(?i)(production|prod|staging|stage|preview|live|main|primary|shared|default|template|postgres|supabase)'
@@ -126,7 +126,7 @@ try {
   $plainPassword = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
   foreach ($name in $PgEnvironmentNames) { $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
   [Environment]::SetEnvironmentVariable('PGPASSWORD', $plainPassword, 'Process')
-  $arguments = @('-X', '-w', '-q', '-A', '-t', '-v', 'ON_ERROR_STOP=1', '-v', ("expected_database={0}" -f $Database), '-v', ("expected_user={0}" -f $User), '-h', $Host, '-p', $Port, '-U', $User, '-d', $Database, '-f', $sqlPath)
+  $arguments = @('-X', '-w', '-q', '-A', '-t', '-v', 'ON_ERROR_STOP=1', '-v', ("expected_database={0}" -f $Database), '-v', ("expected_user={0}" -f $User), '-h', $DbHost, '-p', $Port, '-U', $User, '-d', $Database, '-f', $sqlPath)
   $output = @(& $psql @arguments 2>&1)
   if ($LASTEXITCODE -ne 0) { Write-Evidence BLOCKED POSTBOOTSTRAP psql_exit_nonzero; exit 1 }
   $evidence = @($output | Where-Object { [string]$_ -match '^(PASS|FAIL|BLOCKED)\|' })

@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-  [string]$Host = '127.0.0.1',
+  [string]$DbHost = '127.0.0.1',
   [string]$Port = '55432',
   [string]$User = 'postgres',
   [string]$Database = 'deraledger_m024_m030_rehearsal',
@@ -38,7 +38,7 @@ function Write-Evidence {
 }
 
 function Assert-LocalTarget {
-  if ($Host -cne '127.0.0.1') { throw 'LOCAL_HOST_MUST_BE_127_0_0_1' }
+  if ($DbHost -cne '127.0.0.1') { throw 'LOCAL_HOST_MUST_BE_127_0_0_1' }
   if ($Port -ne '55432') { throw 'LOCAL_PORT_MUST_BE_55432' }
   if ($User -ine 'postgres') { throw 'LOCAL_USER_MUST_BE_POSTGRES' }
   $reserved = '(?i)(production|prod|staging|stage|preview|live|main|primary|shared|default|template|postgres|supabase)'
@@ -182,7 +182,7 @@ try {
 
   $schemaPrecheckPath = Join-Path ([IO.Path]::GetTempPath()) ('deraledger-m024-schema-precheck-{0}.sql' -f [guid]::NewGuid().ToString('N'))
   [IO.File]::WriteAllText($schemaPrecheckPath, (Get-PublicSchemaPrecheckSql), [Text.UTF8Encoding]::new($false))
-  $precheckArguments = @('-X', '-w', '-q', '-A', '-t', '-v', 'ON_ERROR_STOP=1', '-h', $Host, '-p', $Port, '-U', $User, '-d', $Database, '-f', $schemaPrecheckPath)
+  $precheckArguments = @('-X', '-w', '-q', '-A', '-t', '-v', 'ON_ERROR_STOP=1', '-h', $DbHost, '-p', $Port, '-U', $User, '-d', $Database, '-f', $schemaPrecheckPath)
   $precheckOutput = @(& $psql @precheckArguments 2>&1)
   if ($LASTEXITCODE -ne 0) { Write-Evidence BLOCKED BOOTSTRAP schema_precheck_failed; Write-Evidence BLOCKED DECISION BLOCKED_BOOTSTRAP; exit 1 }
   $schemaEvidence = @($precheckOutput | Where-Object { [string]$_ -match '^(PASS|BLOCKED)\|SCHEMA\|public\|' })
@@ -197,7 +197,7 @@ try {
 
   $sqlPath = Join-Path ([IO.Path]::GetTempPath()) ('deraledger-m024-bootstrap-{0}.sql' -f [guid]::NewGuid().ToString('N'))
   [IO.File]::WriteAllText($sqlPath, (Get-BootstrapSql), [Text.UTF8Encoding]::new($false))
-  $arguments = @('-X', '-w', '-q', '-A', '-t', '-v', 'ON_ERROR_STOP=1', '-v', ("expected_database={0}" -f $Database), '-v', ("expected_user={0}" -f $User), '-h', $Host, '-p', $Port, '-U', $User, '-d', $Database, '-f', $sqlPath)
+  $arguments = @('-X', '-w', '-q', '-A', '-t', '-v', 'ON_ERROR_STOP=1', '-v', ("expected_database={0}" -f $Database), '-v', ("expected_user={0}" -f $User), '-h', $DbHost, '-p', $Port, '-U', $User, '-d', $Database, '-f', $sqlPath)
   $output = @(& $psql @arguments 2>&1)
   if ($LASTEXITCODE -ne 0) { Write-Evidence BLOCKED BOOTSTRAP psql_exit_nonzero; exit 1 }
   foreach ($line in $output) { if ([string]$line -match '^(PASS|FAIL|BLOCKED)\|') { Write-Output $line } }
