@@ -16,6 +16,17 @@ The accepted target is `127.0.0.1:55432`, user `postgres`, database `deraledger_
 
 The database must remain disposable and must not contain `production`, `prod`, `staging`, `stage`, `preview`, `live`, `main`, `primary`, `shared`, `default`, `template`, `postgres`, or `supabase`.
 
+## M024 source-derived local prerequisite guidance — no bootstrap authorized
+
+**Classification:** `REQUIRES_LOCAL_PREREQ_BOOTSTRAP`. M024 is transaction-compatible (it supplies its own `BEGIN`/`COMMIT` and has no concurrent index or extension-creation statement), but it is not intended for a plain empty PostgreSQL database. Before it creates its seven compliance tables, its source requires all of the following:
+
+- ordinary `public.merchants`, `public.invoices`, and `public.payment_records` tables;
+- an `id uuid NOT NULL` column and a valid non-partial unique key on each prerequisite table;
+- database roles `anon`, `authenticated`, and `service_role`, because M024 revokes and grants their table privileges; and
+- an already available `gen_random_uuid()` function. M024 does not create an extension itself.
+
+The source has no `auth` or `storage` schema dependency and defines no `SECURITY DEFINER`/`SECURITY INVOKER` function. It emits `NOTIFY pgrst, 'reload schema'`, which is a notification rather than a schema prerequisite. Do not create any missing table, role, extension, or baseline in this package. A local prerequisite-bootstrap design, or discard/recreate decision after a failed apply, is a separate approval gate.
+
 Apply exactly this order:
 
 ```text
@@ -88,17 +99,31 @@ function ConvertTo-SafeApplyDiagnostic([object] $entry) {
   if ($line -match ($jwtShape + '|' + $opaqueTokenShape + '|' + $secretAssignment + '|' + $connectionString + '|bearer\s+\S+|\bjwt\b')) {
     return '[REDACTED]'
   }
-  $normalized = $line.ToLowerInvariant()
+  # Strip the psql file/line location before classification; never emit it.
+  $classificationLine = $line -replace '(?i)^psql:.*?:\d+:\s*', ''
+  $classificationLine = $classificationLine -replace '(?i)^(ERROR|FATAL|DETAIL|HINT):\s*', ''
+  $normalized = $classificationLine.ToLowerInvariant()
+  if ($normalized -match 'migration 024 prerequisite missing') { return 'M024 prerequisite missing' }
+  if ($normalized -match 'migration 024 prerequisite incompatible') { return 'M024 prerequisite incompatible' }
+  if ($normalized -match 'role .* does not exist|prerequisite missing: database role') { return 'role does not exist' }
+  if ($normalized -match 'permission denied to create extension') { return 'permission denied to create extension' }
+  if ($normalized -match 'extension .* does not exist') { return 'extension does not exist' }
   if ($normalized -match 'relation .* does not exist') { return 'relation does not exist' }
   if ($normalized -match 'schema .* does not exist') { return 'schema does not exist' }
   if ($normalized -match 'permission denied') { return 'permission denied' }
   if ($normalized -match 'syntax error') { return 'syntax error' }
   if ($normalized -match 'duplicate key') { return 'duplicate key' }
   if ($normalized -match 'already exists') { return 'already exists' }
-  if ($normalized -match 'violates .* constraint') { return 'violates check constraint' }
+  if ($normalized -match 'violates .* constraint') { return 'violates constraint' }
   if ($normalized -match 'column .* does not exist') { return 'column does not exist' }
   if ($normalized -match 'function .* does not exist') { return 'function does not exist' }
   if ($normalized -match 'type .* does not exist') { return 'type does not exist' }
+  if ($normalized -match 'cannot run inside a transaction block') { return 'cannot run inside transaction block' }
+  if ($normalized -match 'must be owner') { return 'must be owner' }
+  if ($normalized -match 'database .* does not exist') { return 'database does not exist' }
+  if ($normalized -match 'invalid privilege type') { return 'invalid privilege type' }
+  if ($normalized -match 'unrecognized configuration parameter') { return 'unrecognized configuration parameter' }
+  if ($normalized -match 'no schema has been selected') { return 'no schema has been selected' }
   if ($normalized -match 'current transaction is aborted') { return 'current transaction is aborted' }
   return '[REDACTED_DIAGNOSTIC]'
 }
@@ -124,7 +149,7 @@ try {
 
 This is fail-fast. It must not continue after a partial apply and is not an automatic rollback mechanism. On a `psql` failure it emits the fixed failure category plus at most five sanitized diagnostic lines; it never prints raw `psql` output, migration contents, passwords, URLs, tokens, connection strings, service-role identifiers, or environment assignments. The sanitizer redacts token-shaped values even when they are unlabeled. These diagnostics are for local troubleshooting only and must not be expanded without separate security review.
 
-Sanitizer self-test cases that must produce `[REDACTED]` include an unlabeled JWT-shaped value, a Base64URL token, a standard Base64 token containing `+`, `/`, and `=`, a hex token, secret-like assignments (including mixed-case names), URLs, connection strings, bearer tokens, cookie/session/auth tokens, and `user:password@host` values. Only the fixed safe PostgreSQL categories above may remain visible; empty or otherwise uncertain content produces `[REDACTED_DIAGNOSTIC]`.
+Sanitizer self-test cases that must produce `[REDACTED]` include an unlabeled JWT-shaped value, a Base64URL token, a standard Base64 token containing `+`, `/`, and `=`, a hex token, secret-like assignments (including mixed-case names), URLs, connection strings, bearer tokens, cookie/session/auth tokens, and `user:password@host` values. The template strips local `psql` file/line prefixes before classification and emits only normalized categories, including M024 prerequisite missing/incompatible, role/schema/relation/extension/type/function/column missing, permission or owner failures, transaction-block errors, privilege/configuration/schema-selection errors, constraint errors, and transaction-aborted state. Empty or otherwise uncertain content produces `[REDACTED_DIAGNOSTIC]`.
 
 If apply fails, first review the compact sanitized evidence and then run the separately approved read-only preflight. A rerun is permitted only when that post-failure preflight again proves `chain_absent` and `protected_objects_absent`; any partial history or object state is a stop condition requiring separately approved discard/recreate or rollback planning.
 
