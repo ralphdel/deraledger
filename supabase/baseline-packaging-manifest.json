@@ -1,0 +1,116 @@
+{
+  "schemaVersion": 3,
+  "stagingProjectRef": "fsjljliiyfchkwbjifzw",
+  "productionProjectRef": "gznwibespgkwknnvbrlv",
+  "officialMigrationDirectory": "supabase/migrations",
+  "allowedAlterBeforeCreate": {
+    "20260707010000_breet_payment_substrate_reconciliation.sql": [
+      "payment_events"
+    ]
+  },
+  "rootSqlOrder": [
+    "schema.sql",
+    "setup_trigger.sql",
+    "rls-policies.sql",
+    "20260514_phase2_migration.sql",
+    "20260514_kyc_references_collections.sql",
+    "20260514_breet_scaffold.sql",
+    "20260519_crypto_treasury_infra.sql",
+    "20260520_add_business_type.sql",
+    "kyc_compliance_migration.sql",
+    "20260527_onboarding_verification_upgrade_flow.sql",
+    "20260527_payment_checkout_provider_routing.sql",
+    "20260528_payment_events_timestamps.sql",
+    "20260528_platform_update_controls.sql",
+    "20260528_reconcile_monnify_settlement_amounts.sql",
+    "20260528_provider_neutral_settlement_architecture.sql",
+    "20260528_superadmin_sandbox_merchant_flag.sql",
+    "20260529_provider_reported_settlement_sources.sql",
+    "20260529_settlement_operations_fields.sql",
+    "20260529_provider_settlement_batches.sql",
+    "20260529_repair_provider_reported_settlement_records.sql",
+    "20260601_breet_crypto_settlement_mode_and_sessions.sql",
+    "20260602_breet_auto_settlement_alignment.sql",
+    "20260604_breet_min_auto_settlement_threshold.sql",
+    "20260605_breet_api_environment_default.sql",
+    "20260605_breet_development_checkout_enabled.sql",
+    "20260605_plan_payment_recovery_and_webhook_audit.sql",
+    "20260606_allow_premerchant_payment_events.sql",
+    "20260607_allow_onboarding_session_processing_status.sql",
+    "20260607_breet_pending_dev_flag.sql",
+    "20260607_fix_settlement_records_alignment.sql",
+    "20260607_breet_settlement_account_visibility.sql",
+    "20260608_allow_plan_renewal_crypto_sessions.sql",
+    "20260608_breet_quote_fallback_buffer.sql",
+    "20260608_add_verification_step_state.sql",
+    "verification_subject_migration.sql",
+    "20260616_merchant_settlement_access_and_breet_completion.sql",
+    "20260617_expand_provider_settlement_account_status_check.sql"
+  ],
+  "packagePending": [],
+  "requiredCanonicalMigrations": {
+    "privateEvidenceStorage": "supabase/migrations/20260729010000_private_evidence_storage_baseline.sql"
+  },
+  "partialExtractions": {
+    "setup_trigger.sql": [
+      "supabase/migrations/20260425000000_merchant_registration_columns_baseline.sql"
+    ],
+    "20260514_phase2_migration.sql": [
+      "supabase/migrations/20260514000000_platform_acknowledgement_column_baseline.sql",
+      "supabase/migrations/20260729010000_private_evidence_storage_baseline.sql"
+    ],
+    "20260528_platform_update_controls.sql": [
+      "supabase/migrations/20260528000000_platform_update_column_baseline.sql"
+    ],
+    "kyc_compliance_migration.sql": [
+      "supabase/migrations/20260729000000_kyc_evidence_security_baseline.sql"
+    ],
+    "verification_subject_migration.sql": [
+      "supabase/migrations/20260424000000_core_schema_baseline.sql",
+      "supabase/migrations/20260729000000_kyc_evidence_security_baseline.sql"
+    ]
+  },
+  "packagedSources": {
+    "schema.sql": "supabase/migrations/20260424000000_core_schema_baseline.sql",
+    "20260527_onboarding_verification_upgrade_flow.sql": "supabase/migrations/20260527000000_onboarding_workspace_baseline.sql"
+  },
+  "mustNotPackageAsWritten": [
+    "rls-policies.sql"
+  ],
+  "supersededOrReconciledByOfficialMigrations": [
+    "setup_trigger.sql",
+    "20260514_phase2_migration.sql",
+    "kyc_compliance_migration.sql",
+    "verification_subject_migration.sql",
+    "20260528_platform_update_controls.sql",
+    "20260514_kyc_references_collections.sql",
+    "20260514_breet_scaffold.sql",
+    "20260519_crypto_treasury_infra.sql",
+    "20260520_add_business_type.sql",
+    "20260527_payment_checkout_provider_routing.sql",
+    "20260528_payment_events_timestamps.sql",
+    "20260528_reconcile_monnify_settlement_amounts.sql",
+    "20260528_provider_neutral_settlement_architecture.sql",
+    "20260528_superadmin_sandbox_merchant_flag.sql",
+    "20260529_provider_reported_settlement_sources.sql",
+    "20260529_settlement_operations_fields.sql",
+    "20260529_provider_settlement_batches.sql",
+    "20260529_repair_provider_reported_settlement_records.sql",
+    "20260601_breet_crypto_settlement_mode_and_sessions.sql",
+    "20260602_breet_auto_settlement_alignment.sql",
+    "20260604_breet_min_auto_settlement_threshold.sql",
+    "20260605_breet_api_environment_default.sql",
+    "20260605_breet_development_checkout_enabled.sql",
+    "20260605_plan_payment_recovery_and_webhook_audit.sql",
+    "20260606_allow_premerchant_payment_events.sql",
+    "20260607_allow_onboarding_session_processing_status.sql",
+    "20260607_breet_pending_dev_flag.sql",
+    "20260607_fix_settlement_records_alignment.sql",
+    "20260607_breet_settlement_account_visibility.sql",
+    "20260608_allow_plan_renewal_crypto_sessions.sql",
+    "20260608_breet_quote_fallback_buffer.sql",
+    "20260608_add_verification_step_state.sql",
+    "20260616_merchant_settlement_access_and_breet_completion.sql",
+    "20260617_expand_provider_settlement_account_status_check.sql"
+  ]
+}

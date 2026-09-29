@@ -368,7 +368,7 @@ export default function SettingsPage() {
       const supabase = createClient();
       const { data, error } = await supabase
         .from("business_director_verifications")
-        .select("*")
+        .select("id, director_name, director_role, verification_status")
         .eq("merchant_id", merchantId)
         .order("created_at", { ascending: false });
 

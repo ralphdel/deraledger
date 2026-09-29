@@ -30,7 +30,7 @@ const FALLBACK_DETAIL_DISPUTES: Record<string, any> = {
     payment_reference: "REF-BKTRF-90281-NGA",
     tx_hash: null,
     created_at: "2026-05-20T10:30:00Z",
-    evidence: "https://purpledger.vercel.app/demo-receipt-screenshot.jpg",
+    evidence: null,
     timeline: [
       { event: "Dispute Opened", actor: "Customer", date: "2026-05-20T10:30:00Z", note: "Customer submitted failed bank transfer complaint." },
       { event: "Auto Acknowledged", actor: "System", date: "2026-05-20T10:30:05Z", note: "Auto-notification emailed to customer & merchant." },
@@ -52,7 +52,7 @@ const FALLBACK_DETAIL_DISPUTES: Record<string, any> = {
     payment_reference: "CRYPTO-TX-90281048",
     tx_hash: "0x8fae3256fb7d102e3b6a9a0e817cfa29a1b802611e9a26374a8109d9e6e8e811",
     created_at: "2026-05-20T14:45:00Z",
-    evidence: "https://purpledger.vercel.app/demo-crypto-evidence.png",
+    evidence: null,
     timeline: [
       { event: "Dispute Opened", actor: "Customer", date: "2026-05-20T14:45:00Z", note: "Stablecoin payment verification failure logged." },
       { event: "Verification Started", actor: "Crypto Engine", date: "2026-05-20T14:46:10Z", note: "Blockchain payment verification query initiated." },
@@ -85,49 +85,28 @@ export default function MerchantDisputeDetails({ params }: { params: Promise<{ i
     setUploadError("");
 
     try {
-      const sb = createClient();
-      
-      const fileExt = selectedFile.name.split(".").pop();
-      const fileName = `rebuttal_${dispute.reference || "dsp"}_${Date.now()}.${fileExt}`;
-      const filePath = `dispute-rebuttals/${fileName}`;
-
-      // Upload file to Supabase storage bucket 'kyc-documents'
-      const { data: uploadData, error: uploadErr } = await sb.storage
-        .from("kyc-documents")
-        .upload(filePath, selectedFile, { cacheControl: "3600", upsert: true });
-
-      if (uploadErr) {
-        console.error("Storage upload error:", uploadErr);
-        setUploadError(`Storage upload failed: ${uploadErr.message}`);
-        setUploading(false);
+      const formData = new FormData();
+      formData.set("file", selectedFile);
+      const response = await fetch(`/api/merchant/disputes/${encodeURIComponent(dispute.id)}/evidence`, {
+        method: "POST",
+        body: formData,
+      });
+      const payload = await response.json() as {
+        error?: string;
+        evidence?: { signedUrl: string; fileName: string };
+      };
+      if (!response.ok || !payload.evidence?.signedUrl) {
+        setUploadError(payload.error || "Private dispute evidence upload failed.");
         return;
       }
-
-      // Get public URL
-      const { data: { publicUrl } } = sb.storage
-        .from("kyc-documents")
-        .getPublicUrl(filePath);
-
-      const customerEvidence = dispute.evidence || "";
-      const mergedUrl = `${customerEvidence}|${publicUrl}`;
-      
-      const { error: dbErr } = await sb.from("payment_disputes")
-        .update({ evidence_url: mergedUrl, updated_at: new Date().toISOString() })
-        .eq("id", dispute.id);
-
-      if (!dbErr) {
-        setDispute((prev: any) => ({
-          ...prev,
-          rebuttal: publicUrl,
-          rebuttal_name: selectedFile.name
-        }));
-        setEvidenceSubmitted(true);
-      } else {
-        setUploadError(`Failed to save record to ledger: ${dbErr.message}`);
-      }
-    } catch (err: any) {
-      console.error("Failed to upload rebuttal:", err);
-      setUploadError(err.message || "An unexpected error occurred during upload.");
+      setDispute((prev: Record<string, unknown>) => ({
+        ...prev,
+        rebuttal: payload.evidence?.signedUrl,
+        rebuttal_name: payload.evidence?.fileName,
+      }));
+      setEvidenceSubmitted(true);
+    } catch {
+      setUploadError("Private dispute evidence upload failed.");
     } finally {
       setUploading(false);
     }
@@ -150,7 +129,6 @@ export default function MerchantDisputeDetails({ params }: { params: Promise<{ i
             if (data.evidence_url.includes("|")) {
               const parts = data.evidence_url.split("|");
               customerEvidence = parts[0] || null;
-              merchantRebuttal = parts[1] || null;
             } else {
               customerEvidence = data.evidence_url;
             }
@@ -182,6 +160,22 @@ export default function MerchantDisputeDetails({ params }: { params: Promise<{ i
           setDispute(mapped);
           setStatus(mapped.status);
           setTimeline(mapped.timeline);
+          const evidenceResponse = await fetch(`/api/merchant/disputes/${encodeURIComponent(id)}/evidence`, {
+            cache: "no-store",
+          });
+          if (evidenceResponse.ok) {
+            const evidencePayload = await evidenceResponse.json() as {
+              evidence?: { signedUrl: string; fileName: string } | null;
+            };
+            if (evidencePayload.evidence?.signedUrl) {
+              setDispute((current: Record<string, unknown>) => ({
+                ...current,
+                rebuttal: evidencePayload.evidence?.signedUrl,
+                rebuttal_name: evidencePayload.evidence?.fileName,
+              }));
+              merchantRebuttal = evidencePayload.evidence.signedUrl;
+            }
+          }
           if (merchantRebuttal) {
             setEvidenceSubmitted(true);
           }
@@ -369,6 +363,7 @@ export default function MerchantDisputeDetails({ params }: { params: Promise<{ i
                     <div className="flex flex-col sm:flex-row gap-2">
                       <Input 
                         type="file" 
+                        accept="application/pdf,image/jpeg,image/png,image/webp"
                         onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
                         disabled={uploading}
                         className="bg-neutral-50 dark:bg-white/5 border-purp-200 dark:border-white/10 text-xs" 

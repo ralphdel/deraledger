@@ -34,6 +34,9 @@ export default function AdminDisputeDetails({ params }: { params: Promise<{ id: 
           .maybeSingle();
 
         if (data) {
+          const customerEvidence = typeof data.evidence_url === "string"
+            ? data.evidence_url.split("|", 1)[0] || null
+            : null;
           const mapped = {
             id: data.id,
             reference: data.case_id,
@@ -50,7 +53,9 @@ export default function AdminDisputeDetails({ params }: { params: Promise<{ id: 
             description: data.description,
             payment_reference: data.payment_reference || data.invoice_number,
             tx_hash: data.tx_hash || null,
-            evidence: data.evidence_url || null,
+            evidence: customerEvidence,
+            merchant_evidence: null,
+            merchant_evidence_name: null,
             created_at: data.created_at,
           };
           setDispute(mapped);
@@ -59,6 +64,22 @@ export default function AdminDisputeDetails({ params }: { params: Promise<{ id: 
             { event: "Dispute Opened", actor: "Customer", date: data.created_at, note: "Customer submitted payment dispute." },
             { event: "Auto Acknowledged", actor: "System", date: data.created_at, note: "Auto-notification sent to customer and merchant." }
           ]);
+
+          const evidenceResponse = await fetch(`/api/merchant/disputes/${encodeURIComponent(id)}/evidence`, {
+            cache: "no-store",
+          });
+          if (evidenceResponse.ok) {
+            const evidencePayload = await evidenceResponse.json() as {
+              evidence?: { signedUrl: string; fileName: string } | null;
+            };
+            if (evidencePayload.evidence?.signedUrl) {
+              setDispute((current: Record<string, unknown>) => ({
+                ...current,
+                merchant_evidence: evidencePayload.evidence?.signedUrl,
+                merchant_evidence_name: evidencePayload.evidence?.fileName,
+              }));
+            }
+          }
         } else {
           setNotFound(true);
         }
@@ -228,6 +249,18 @@ export default function AdminDisputeDetails({ params }: { params: Promise<{ id: 
                   <FileText className="w-8 h-8 text-neutral-400 mx-auto" />
                   <p className="text-xs font-bold text-neutral-500">No attachment uploaded</p>
                   <p className="text-[11px] text-neutral-400">The customer did not upload any payment confirmation with this dispute.</p>
+                </div>
+              )}
+              {dispute.merchant_evidence && (
+                <div className="mt-4 border border-dashed border-neutral-200 rounded-2xl p-6 text-center space-y-3 bg-neutral-50/50">
+                  <FileText className="w-8 h-8 text-[#A78BFA] mx-auto" />
+                  <div>
+                    <p className="font-bold text-sm text-neutral-900">Private Merchant Rebuttal</p>
+                    <p className="text-xs text-neutral-400 mt-0.5">Access is authorized and time-limited.</p>
+                  </div>
+                  <a href={dispute.merchant_evidence} target="_blank" rel="noopener noreferrer" className="inline-block text-xs font-semibold text-[#7B2FF7] hover:underline">
+                    {dispute.merchant_evidence_name || "View private attachment"} â†—
+                  </a>
                 </div>
               )}
             </CardContent>

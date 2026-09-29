@@ -1,2 +1,2 @@
 -- Solo Plus payment lifecycle (staging bootstrap)
-\i ../migrations/20260707_02_solo_plus_payment_lifecycle.sql
+\i ../migrations/20260707020000_solo_plus_payment_lifecycle.sql
