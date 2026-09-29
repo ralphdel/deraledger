@@ -71,6 +71,17 @@ workspace browser policy: migration 019 remains the canonical owner of its
 optional authenticated read policy and validates any pre-existing policy shape.
 The offline validator and unit test require this ordering.
 
+`20260818025000_paid_subscription_tables_prerequisite.sql` now closes the
+next fresh-replay baseline gap. Migration 020 already creates and secures the
+`subscription_payments` ledger; the new intermediate migration creates only
+`public.subscriptions` before migration 021 requires it. Its text `plan_type`,
+payment dates/amount, notification fields, and unique `merchant_id` contract
+are the exact fields consumed by migration 021 and the current paid-flow
+services. RLS is enabled with one owner-scoped authenticated `SELECT` policy;
+browser writes remain prohibited and service-role receives only the required
+read/write privileges. No subscription row, provider setting, repair, or
+backfill is included.
+
 ## Resolved storage decision
 
 1. `20260514_phase2_migration.sql` is fully reconciled. Its historical browser

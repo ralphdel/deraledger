@@ -49,7 +49,8 @@
   ],
   "packagePending": [],
   "requiredCanonicalMigrations": {
-    "privateEvidenceStorage": "supabase/migrations/20260729010000_private_evidence_storage_baseline.sql"
+    "privateEvidenceStorage": "supabase/migrations/20260729010000_private_evidence_storage_baseline.sql",
+    "paidSubscriptionTablesPrerequisite": "supabase/migrations/20260818025000_paid_subscription_tables_prerequisite.sql"
   },
   "workspaceRlsBaseline": "supabase/migrations/20260527000000_onboarding_workspace_baseline.sql",
   "partialExtractions": {

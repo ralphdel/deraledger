@@ -94,6 +94,28 @@ assert(incompleteWorkspaceRls.blockers.includes(
   "WORKSPACE_RLS_BASELINE_CONTRACT_MISSING|supabase/migrations/20260827_workspace_baseline.sql",
 ));
 
+writeFileSync(
+  join(root, "supabase", "migrations", "20260818020000_paid_flow_subscription_payments_compatibility.sql"),
+  "CREATE TABLE IF NOT EXISTS public.subscription_payments (id uuid);\nCONSTRAINT subscription_payments_paystack_ref_key UNIQUE (paystack_ref)\n",
+);
+writeFileSync(
+  join(root, "supabase", "migrations", "20260818030000_paid_upgrade_atomic_confirmation.sql"),
+  "'subscriptions', 'subscription_payments'\nsubscriptions.merchant_id must be unique\nsubscription_payments.paystack_ref must be unique\n",
+);
+writeFileSync(
+  join(root, "supabase", "migrations", "20260818025000_paid_subscription_tables_prerequisite.sql"),
+  "CREATE TABLE IF NOT EXISTS public.subscriptions (merchant_id UUID NOT NULL, plan_type TEXT NOT NULL);\n",
+);
+const incompletePaidSubscriptionPrerequisite = auditRepository(root, {
+  ...readyManifest,
+  requiredCanonicalMigrations: {
+    paidSubscriptionTablesPrerequisite: "supabase/migrations/20260818025000_paid_subscription_tables_prerequisite.sql",
+  },
+}, { backupPath: "backup.sql" });
+assert(incompletePaidSubscriptionPrerequisite.blockers.includes(
+  "PAID_SUBSCRIPTION_PREREQUISITE_CONTRACT_MISSING|CONSTRAINT subscriptions_merchant_id_key UNIQUE (merchant_id)",
+));
+
 const missingCanonical = auditRepository(root, {
   ...readyManifest,
   requiredCanonicalMigrations: { storage: "supabase/migrations/missing.sql" },
@@ -157,6 +179,10 @@ assert.equal(
   "supabase/migrations/20260729010000_private_evidence_storage_baseline.sql",
 );
 assert.equal(
+  repositoryManifest.requiredCanonicalMigrations?.paidSubscriptionTablesPrerequisite,
+  "supabase/migrations/20260818025000_paid_subscription_tables_prerequisite.sql",
+);
+assert.equal(
   repositoryManifest.workspaceRlsBaseline,
   "supabase/migrations/20260527000000_onboarding_workspace_baseline.sql",
 );
@@ -211,6 +237,43 @@ const migration019 = readFileSync(
   "utf8",
 );
 assert.match(migration019, /public\.workspaces RLS must already be enabled/);
+const paidSubscriptionPrerequisite = readFileSync(
+  join(repositoryRoot, "supabase", "migrations", "20260818025000_paid_subscription_tables_prerequisite.sql"),
+  "utf8",
+);
+const paidSubscriptionLedger = readFileSync(
+  join(repositoryRoot, "supabase", "migrations", "20260818020000_paid_flow_subscription_payments_compatibility.sql"),
+  "utf8",
+);
+const migration021SubscriptionContract = readFileSync(
+  join(repositoryRoot, "supabase", "migrations", "20260818030000_paid_upgrade_atomic_confirmation.sql"),
+  "utf8",
+);
+for (const fragment of [
+  "CREATE TABLE IF NOT EXISTS public.subscriptions",
+  "merchant_id UUID NOT NULL",
+  "plan_type TEXT NOT NULL",
+  "amount_paid NUMERIC(10,2) NOT NULL",
+  "start_date TIMESTAMPTZ NOT NULL",
+  "expiry_date TIMESTAMPTZ NOT NULL",
+  "status TEXT NOT NULL DEFAULT 'active'",
+  "last_notified_at TIMESTAMPTZ",
+  "is_banner_dismissed BOOLEAN NOT NULL DEFAULT false",
+  "updated_at TIMESTAMPTZ NOT NULL DEFAULT now()",
+  "CONSTRAINT subscriptions_merchant_id_key UNIQUE (merchant_id)",
+  "ALTER TABLE public.subscriptions ENABLE ROW LEVEL SECURITY",
+]) {
+  assert(paidSubscriptionPrerequisite.includes(fragment), `paid subscription prerequisite must contain ${fragment}`);
+}
+assert.match(paidSubscriptionPrerequisite, /CREATE POLICY subscriptions_merchant[\s\S]*FOR SELECT[\s\S]*TO authenticated/);
+assert.match(paidSubscriptionPrerequisite, /REVOKE ALL ON TABLE public\.subscriptions FROM PUBLIC/);
+assert.match(paidSubscriptionPrerequisite, /GRANT SELECT, INSERT, UPDATE ON TABLE public\.subscriptions TO service_role/);
+assert.doesNotMatch(paidSubscriptionPrerequisite, /\b(?:INSERT\s+INTO|UPDATE\s+public\.|DELETE\s+FROM|TRUNCATE|DROP)\b/i);
+assert.match(paidSubscriptionLedger, /CREATE TABLE IF NOT EXISTS public\.subscription_payments/);
+assert.match(paidSubscriptionLedger, /CONSTRAINT subscription_payments_paystack_ref_key UNIQUE \(paystack_ref\)/);
+assert.match(migration021SubscriptionContract, /'subscriptions', 'subscription_payments'/);
+assert.match(migration021SubscriptionContract, /subscriptions\.merchant_id must be unique/);
+assert.match(migration021SubscriptionContract, /subscription_payments\.paystack_ref must be unique/);
 for (const verificationType of [
   "bvn_selfie",
   "business",

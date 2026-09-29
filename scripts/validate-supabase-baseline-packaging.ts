@@ -150,6 +150,10 @@ export function auditRepository(
     }
   }
 
+  const migrationFiles = readdirSync(migrationRoot)
+    .filter((entry) => entry.toLowerCase().endsWith(".sql"))
+    .sort();
+
   const storageMigration = manifest.requiredCanonicalMigrations?.privateEvidenceStorage;
   if (storageMigration && existsSync(join(repoRoot, storageMigration))) {
     const storageSql = readFileSync(join(repoRoot, storageMigration), "utf8");
@@ -196,13 +200,57 @@ export function auditRepository(
       }
     }
   }
+
+  const paidSubscriptionMigration = manifest.requiredCanonicalMigrations?.paidSubscriptionTablesPrerequisite;
+  if (paidSubscriptionMigration && existsSync(join(repoRoot, paidSubscriptionMigration))) {
+    const paidSubscriptionSql = readFileSync(join(repoRoot, paidSubscriptionMigration), "utf8");
+    const requiredSubscriptionFragments = [
+      "CREATE TABLE IF NOT EXISTS public.subscriptions",
+      "merchant_id UUID NOT NULL",
+      "plan_type TEXT NOT NULL",
+      "amount_paid NUMERIC(10,2) NOT NULL",
+      "start_date TIMESTAMPTZ NOT NULL",
+      "expiry_date TIMESTAMPTZ NOT NULL",
+      "status TEXT NOT NULL DEFAULT 'active'",
+      "last_notified_at TIMESTAMPTZ",
+      "is_banner_dismissed BOOLEAN NOT NULL DEFAULT false",
+      "updated_at TIMESTAMPTZ NOT NULL DEFAULT now()",
+      "CONSTRAINT subscriptions_merchant_id_key UNIQUE (merchant_id)",
+      "ALTER TABLE public.subscriptions ENABLE ROW LEVEL SECURITY",
+    ];
+    for (const fragment of requiredSubscriptionFragments) {
+      if (!paidSubscriptionSql.includes(fragment)) {
+        blockers.push(`PAID_SUBSCRIPTION_PREREQUISITE_CONTRACT_MISSING|${fragment}`);
+      }
+    }
+    if (/\b(?:INSERT\s+INTO|UPDATE\s+public\.|DELETE\s+FROM|TRUNCATE|DROP)\b/i.test(paidSubscriptionSql)) {
+      blockers.push("PAID_SUBSCRIPTION_PREREQUISITE_MUTATION_PRESENT");
+    }
+
+    const migration020 = "20260818020000_paid_flow_subscription_payments_compatibility.sql";
+    const migration021 = "20260818030000_paid_upgrade_atomic_confirmation.sql";
+    const prerequisiteFile = basename(paidSubscriptionMigration);
+    const orderedIndices = [migration020, prerequisiteFile, migration021].map((file) => migrationFiles.indexOf(file));
+    if (orderedIndices.some((index) => index < 0) || !(orderedIndices[0] < orderedIndices[1] && orderedIndices[1] < orderedIndices[2])) {
+      blockers.push("PAID_SUBSCRIPTION_PREREQUISITE_ORDER_INVALID");
+    } else {
+      const paymentLedgerSql = readFileSync(join(migrationRoot, migration020), "utf8");
+      const confirmationSql = readFileSync(join(migrationRoot, migration021), "utf8");
+      if (!paymentLedgerSql.includes("CREATE TABLE IF NOT EXISTS public.subscription_payments")
+        || !paymentLedgerSql.includes("CONSTRAINT subscription_payments_paystack_ref_key UNIQUE (paystack_ref)")) {
+        blockers.push("PAID_SUBSCRIPTION_PAYMENT_LEDGER_CONTRACT_MISSING");
+      }
+      if (!confirmationSql.includes("'subscriptions', 'subscription_payments'")
+        || !confirmationSql.includes("subscriptions.merchant_id must be unique")
+        || !confirmationSql.includes("subscription_payments.paystack_ref must be unique")) {
+        blockers.push("MIGRATION_021_SUBSCRIPTION_PREREQUISITE_CONTRACT_MISSING");
+      }
+    }
+  }
   for (const file of manifest.mustNotPackageAsWritten) {
     warnings.push(`MUST_NOT_PACKAGE_AS_WRITTEN|${file}`);
   }
 
-  const migrationFiles = readdirSync(migrationRoot)
-    .filter((entry) => entry.toLowerCase().endsWith(".sql"))
-    .sort();
   const duplicateVersions = findDuplicateVersions(migrationFiles);
   for (const [version, files] of duplicateVersions) {
     blockers.push(`DUPLICATE_MIGRATION_VERSION|${version}|${files.join(",")}`);

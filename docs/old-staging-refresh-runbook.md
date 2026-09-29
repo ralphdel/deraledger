@@ -78,6 +78,13 @@ RLS on `public.workspaces` before migration 019. It deliberately does not add
 an early browser policy; migration 019 owns and validates the canonical
 workspace policy contract.
 
+It also verifies the ordered paid-subscription prerequisite: migration 020
+creates the `subscription_payments` ledger and its unique provider reference,
+`20260818025000_paid_subscription_tables_prerequisite.sql` creates the unique
+per-merchant `subscriptions` contract, and migration 021 follows both. A
+missing table, missing uniqueness constraint, or wrong ordering is a static
+blocker.
+
 ## Stop conditions
 
 Stop for a missing/empty backup, any target-ref ambiguity, production ref or
