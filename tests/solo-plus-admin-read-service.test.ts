@@ -338,6 +338,11 @@ async function run() {
         createSoloPlusAdminReadService({
           authClient: authClient as never,
           repository,
+          resolveAdminAuthority: async () => ({
+            ok: false,
+            status: 403,
+            error: "SuperAdmin access required",
+          }),
           env: {
             NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
             NEXT_PUBLIC_SUPABASE_ANON_KEY: "anon-key",
@@ -366,6 +371,7 @@ async function run() {
     const service = await createSoloPlusAdminReadService({
       authClient: authClient as never,
       repository,
+      resolveAdminAuthority: async () => ({ ok: true, userId: "admin-user-id" }),
       env: {
         NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
         NEXT_PUBLIC_SUPABASE_ANON_KEY: "anon-key",
@@ -407,7 +413,14 @@ async function run() {
     assert.equal(repository.eventInput?.limit, 25);
     assert.equal(detail?.case.reviewState, "rejected");
     assert.equal(detail?.case.activationState, "inactive");
-    assert.equal(detail?.payment?.providerReference, "solo-plus-payment-ref");
+    assert.equal(
+      "providerReference" in ((detail?.payment as Record<string, unknown>) || {}),
+      false,
+    );
+    assert.equal(
+      "paymentReference" in ((detail?.payment as Record<string, unknown>) || {}),
+      false,
+    );
     assert.equal(detail?.refund?.status, "review_required");
     assert.equal(detail?.reviewHistory.length, 2);
     assert.equal(detail?.reviewHistory[1].reason, "alert(1) KYC mismatch");
@@ -421,6 +434,10 @@ async function run() {
       "providerReference" in ((detail?.requirements[0] as Record<string, unknown>) || {}),
       false,
     );
+    const serializedDetail = JSON.stringify(detail);
+    assert.doesNotMatch(serializedDetail, /solo-plus-payment-ref/);
+    assert.doesNotMatch(serializedDetail, /provider-ref-hidden/);
+    assert.doesNotMatch(serializedDetail, /kyc-documents\/id\.pdf/);
   }
 
   console.log("solo-plus-admin-read-service.test.ts passed");

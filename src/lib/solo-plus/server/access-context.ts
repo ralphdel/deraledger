@@ -282,9 +282,10 @@ export async function resolveSoloPlusAuthenticatedUser(
   return {
     id: user.id,
     email: normalizeOptionalEmail(user.email),
-    isSuperAdmin:
-      user.app_metadata?.is_super_admin === true ||
-      user.user_metadata?.is_super_admin === true,
+    // Legacy internal-test classification may read server-managed app metadata,
+    // but mutable user metadata is never authority. Phase 2B admin routes use
+    // the DB-backed resolver in src/lib/admin-rbac.ts instead.
+    isSuperAdmin: user.app_metadata?.is_super_admin === true,
     hasVerifiedEmail: hasVerifiedEmail(user),
   };
 }

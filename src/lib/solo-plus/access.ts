@@ -13,6 +13,10 @@ export type SoloPlusAccessContext =
       authenticatedUserId: string;
     }
   | {
+      mode: "admin_review";
+      authenticatedAdminId: string;
+    }
+  | {
       mode: "internal_test";
       authenticatedAdminId?: string;
       sandboxMerchantId?: string;
@@ -47,6 +51,10 @@ export function isSoloPlusAccessContext(value: unknown): value is SoloPlusAccess
 
   if (candidate.mode === "public") {
     return hasNonEmptyString(candidate.authenticatedUserId);
+  }
+
+  if (candidate.mode === "admin_review") {
+    return hasNonEmptyString(candidate.authenticatedAdminId);
   }
 
   if (candidate.mode !== "internal_test") {
@@ -114,6 +122,14 @@ export function resolveSoloPlusEventActor(
     return {
       actorType: "merchant",
       actorId: accessContext.authenticatedUserId.trim(),
+      accessMode: accessContext.mode,
+    };
+  }
+
+  if (accessContext.mode === "admin_review") {
+    return {
+      actorType: "admin",
+      actorId: accessContext.authenticatedAdminId.trim(),
       accessMode: accessContext.mode,
     };
   }

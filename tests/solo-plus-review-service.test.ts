@@ -21,11 +21,9 @@ import type {
 } from "../src/lib/solo-plus/repository";
 
 type ReviewServiceModule = typeof import("../src/lib/solo-plus/server/review-service");
-type AccessContextModule = typeof import("../src/lib/solo-plus/server/access-context");
 
 let createSoloPlusReviewerService: ReviewServiceModule["createSoloPlusReviewerService"];
 let SoloPlusReviewerServiceError: ReviewServiceModule["SoloPlusReviewerServiceError"];
-let SoloPlusServerAccessError: AccessContextModule["SoloPlusServerAccessError"];
 
 type FakeUser = {
   id: string;
@@ -258,7 +256,6 @@ async function loadModules() {
     createSoloPlusReviewerService,
     SoloPlusReviewerServiceError,
   } = await import(new URL("../src/lib/solo-plus/server/review-service.ts", import.meta.url).href));
-  ({ SoloPlusServerAccessError } = await import(new URL("../src/lib/solo-plus/server/access-context.ts", import.meta.url).href));
 }
 
 async function run() {
@@ -278,11 +275,12 @@ async function run() {
       createSoloPlusReviewerService({
         authClient: unauthorizedAuthClient as never,
         repository: new FakeSoloPlusRepository(),
+        resolveAdminAuthority: async () => ({ ok: false, status: 401, error: "Unauthorized" }),
         env: createEnv(),
         generateId: () => "event-review-1",
       }),
     (error: unknown) => {
-      assert.ok(error instanceof SoloPlusServerAccessError);
+      assert.ok(error instanceof SoloPlusReviewerServiceError);
       assert.equal(error.code, "SOLO_PLUS_SERVER_UNAUTHORIZED");
       return true;
     },
@@ -300,6 +298,11 @@ async function run() {
       createSoloPlusReviewerService({
         authClient: nonAdminAuthClient as never,
         repository: new FakeSoloPlusRepository(),
+        resolveAdminAuthority: async () => ({
+          ok: false,
+          status: 403,
+          error: "SuperAdmin access required",
+        }),
         env: createEnv(),
         generateId: () => "event-review-2",
       }),
@@ -323,6 +326,7 @@ async function run() {
   const service = await createSoloPlusReviewerService({
     authClient: adminAuthClient as never,
     repository,
+    resolveAdminAuthority: async () => ({ ok: true, userId: "admin-reviewer" }),
     env: createEnv(),
     now: () => new Date("2026-07-10T00:00:00.000Z"),
     generateId: () => "event-review-3",

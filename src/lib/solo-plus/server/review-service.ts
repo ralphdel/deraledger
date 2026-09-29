@@ -13,8 +13,11 @@ import type {
   SoloPlusCaseRepository,
 } from "../repository";
 import {
+  resolveDbBackedSuperAdminSession,
+  type DbBackedSuperAdminSession,
+} from "@/lib/admin-rbac";
+import {
   assertSoloPlusServerEnvironment,
-  resolveSoloPlusAuthenticatedUser,
   type ResolveSoloPlusServerAccessOptions,
 } from "./access-context";
 import {
@@ -45,6 +48,11 @@ export type CreateSoloPlusReviewerServiceOptions = Pick<
   repositoryFactory?: (client: SoloPlusSupabaseClientLike) => SoloPlusCaseRepository;
   now?: SoloPlusOrchestrationDependencies["now"];
   generateId?: SoloPlusOrchestrationDependencies["generateId"];
+  resolveAdminAuthority?: (options: {
+    authClient?: ResolveSoloPlusServerAccessOptions["authClient"];
+    authorityClient?: SoloPlusSupabaseClientLike;
+    env?: NodeJS.ProcessEnv;
+  }) => Promise<DbBackedSuperAdminSession>;
 };
 
 export type SoloPlusReviewerService = {
@@ -56,10 +64,14 @@ export type SoloPlusReviewerService = {
 export class SoloPlusReviewerServiceError extends Error {
   readonly code:
     | "SOLO_PLUS_SERVER_CONFIG_ERROR"
+    | "SOLO_PLUS_SERVER_UNAUTHORIZED"
     | "SOLO_PLUS_SERVER_FORBIDDEN";
 
   constructor(
-    code: "SOLO_PLUS_SERVER_CONFIG_ERROR" | "SOLO_PLUS_SERVER_FORBIDDEN",
+    code:
+      | "SOLO_PLUS_SERVER_CONFIG_ERROR"
+      | "SOLO_PLUS_SERVER_UNAUTHORIZED"
+      | "SOLO_PLUS_SERVER_FORBIDDEN",
     message: string,
   ) {
     super(message);
@@ -70,10 +82,8 @@ export class SoloPlusReviewerServiceError extends Error {
 
 function buildReviewerAccessContext(reviewerId: string) {
   return {
-    mode: "internal_test" as const,
+    mode: "admin_review" as const,
     authenticatedAdminId: reviewerId,
-    isAuthorizedAdmin: true,
-    isSandboxMerchant: false,
   };
 }
 
@@ -82,14 +92,20 @@ export async function createSoloPlusReviewerService(
 ): Promise<SoloPlusReviewerService> {
   assertSoloPlusServerEnvironment(options.env ?? process.env);
 
-  const authenticatedUser = await resolveSoloPlusAuthenticatedUser({
+  const authority = await (options.resolveAdminAuthority ?? resolveDbBackedSuperAdminSession)({
     authClient: options.authClient,
+    authorityClient: options.serviceClient,
     env: options.env,
   });
 
-  if (authenticatedUser.isSuperAdmin !== true) {
+  if (!authority.ok) {
+    const code = authority.status === 401
+      ? "SOLO_PLUS_SERVER_UNAUTHORIZED"
+      : authority.status === 503
+      ? "SOLO_PLUS_SERVER_CONFIG_ERROR"
+      : "SOLO_PLUS_SERVER_FORBIDDEN";
     throw new SoloPlusReviewerServiceError(
-      "SOLO_PLUS_SERVER_FORBIDDEN",
+      code,
       "Solo Plus reviewer decisions require an authenticated super-admin reviewer.",
     );
   }
@@ -109,11 +125,11 @@ export async function createSoloPlusReviewerService(
     now: options.now,
     generateId: options.generateId,
   });
-  const accessContext = buildReviewerAccessContext(authenticatedUser.id);
+  const accessContext = buildReviewerAccessContext(authority.userId);
 
   return {
     repository,
-    reviewerId: authenticatedUser.id,
+    reviewerId: authority.userId,
     async reviewCase(input) {
       const baseInput = {
         caseId: input.caseId,

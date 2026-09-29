@@ -232,10 +232,6 @@ export function AdminCaseDetail({ caseId }: AdminCaseDetailProps) {
                         {detail.payment.amount || "Not recorded"} {detail.payment.currency || ""}
                       </dd>
                     </div>
-                    <div>
-                      <dt className="text-xs uppercase tracking-wide text-muted-foreground">Provider reference</dt>
-                      <dd>{detail.payment.providerReference || "Not recorded"}</dd>
-                    </div>
                   </dl>
                 ) : (
                   <p className="mt-3">No payment summary is available yet.</p>

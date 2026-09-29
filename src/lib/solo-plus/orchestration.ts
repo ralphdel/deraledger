@@ -30,11 +30,8 @@ import {
 } from "./state";
 
 type SoloPlusReviewerAccessContext = {
-  mode: "internal_test";
+  mode: "admin_review";
   authenticatedAdminId: string;
-  isAuthorizedAdmin: true;
-  isSandboxMerchant: false;
-  sandboxMerchantId?: string;
 };
 
 export type SoloPlusOrchestrationErrorCode =
@@ -577,8 +574,7 @@ function assertReviewerAccessContext(accessContext: unknown): SoloPlusReviewerAc
   }
 
   if (
-    accessContext.mode !== "internal_test" ||
-    accessContext.isAuthorizedAdmin !== true ||
+    accessContext.mode !== "admin_review" ||
     !hasNonEmptyString(accessContext.authenticatedAdminId)
   ) {
     throw new SoloPlusOrchestrationError(

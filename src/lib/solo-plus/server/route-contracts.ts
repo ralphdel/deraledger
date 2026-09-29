@@ -150,7 +150,6 @@ export type SoloPlusAdminPaymentSummaryDto = {
   amount: string;
   currency: SoloPlusCaseRecord["paymentCurrency"];
   status: SoloPlusCaseRecord["paymentStatus"];
-  providerReference: string | null;
   confirmedAt: string | null;
 };
 

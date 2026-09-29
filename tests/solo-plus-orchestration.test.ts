@@ -388,6 +388,13 @@ function buildInternalSandboxContext() {
   };
 }
 
+function buildAdminReviewContext() {
+  return {
+    mode: "admin_review" as const,
+    authenticatedAdminId: "admin-1",
+  };
+}
+
 function buildRequirementsSnapshot(): SoloPlusSafeJsonObject {
   return {
     requirements: {
@@ -944,7 +951,7 @@ async function run() {
     expectedRowVersion: 5,
     requestIdempotencyKey: "review-more-info-1",
     reason: "Please clarify settlement behaviour.",
-    accessContext: buildInternalAdminContext(),
+    accessContext: buildAdminReviewContext(),
   });
   assert.equal(moreInfo.outcome, "updated");
   assert.equal(moreInfo.caseRecord.caseStatus, "verification_pending");
@@ -969,7 +976,7 @@ async function run() {
     expectedRowVersion: 2,
     requestIdempotencyKey: "approve-1",
     reason: "Evidence reviewed.",
-    accessContext: buildInternalAdminContext(),
+    accessContext: buildAdminReviewContext(),
   });
   assert.equal(approved.caseRecord.caseStatus, "approved");
   assert.equal(approved.caseRecord.approvedByAdminId, "admin-1");
@@ -994,7 +1001,7 @@ async function run() {
     expectedRowVersion: 3,
     requestIdempotencyKey: "reject-1",
     reason: "Identity mismatch requires rejection.",
-    accessContext: buildInternalAdminContext(),
+    accessContext: buildAdminReviewContext(),
   });
   assert.equal(rejected.caseRecord.caseStatus, "rejected");
   assert.equal(rejected.caseRecord.refundStatus, "review_required");
@@ -1005,7 +1012,7 @@ async function run() {
     expectedRowVersion: 3,
     requestIdempotencyKey: "reject-1",
     reason: "Identity mismatch requires rejection.",
-    accessContext: buildInternalAdminContext(),
+    accessContext: buildAdminReviewContext(),
   });
   assert.equal(rejectReplay.outcome, "idempotent_replay");
 
@@ -1016,7 +1023,7 @@ async function run() {
         expectedRowVersion: 4,
         requestIdempotencyKey: "reject-1",
         reason: "conflict",
-        accessContext: buildInternalAdminContext(),
+        accessContext: buildAdminReviewContext(),
       }),
     "SOLO_PLUS_IDEMPOTENCY_CONFLICT",
   );
@@ -1042,7 +1049,7 @@ async function run() {
     expectedRowVersion: 1,
     requestIdempotencyKey: "reject-unpaid-1",
     reason: "Manual review failed.",
-    accessContext: buildInternalAdminContext(),
+    accessContext: buildAdminReviewContext(),
   });
   assert.equal(unpaidRejected.caseRecord.refundStatus, "none");
 
@@ -1070,7 +1077,7 @@ async function run() {
     expectedRowVersion: 2,
     requestIdempotencyKey: "reopen-1",
     reason: "Reopened for updated evidence.",
-    accessContext: buildInternalAdminContext(),
+    accessContext: buildAdminReviewContext(),
   });
   assert.equal(reopened.caseRecord.caseStatus, "verification_pending");
   assert.equal(reopened.caseRecord.reopenedByAdminId, "admin-1");
@@ -1084,7 +1091,7 @@ async function run() {
         expectedRowVersion: 3,
         requestIdempotencyKey: "reject-empty",
         reason: "   ",
-        accessContext: buildInternalAdminContext(),
+        accessContext: buildAdminReviewContext(),
       }),
     "SOLO_PLUS_INVALID_REVIEW_INPUT",
   );
@@ -1097,6 +1104,18 @@ async function run() {
         requestIdempotencyKey: "review-public",
         reason: "more info",
         accessContext: buildPublicContext() as never,
+      }),
+    "SOLO_PLUS_ACCESS_DENIED",
+  );
+
+  await expectCode(
+    async () =>
+      reviewService.requestMoreInformationForSoloPlusCase({
+        caseId: "approve-case",
+        expectedRowVersion: 3,
+        requestIdempotencyKey: "review-internal-test",
+        reason: "more info",
+        accessContext: buildInternalAdminContext(),
       }),
     "SOLO_PLUS_ACCESS_DENIED",
   );

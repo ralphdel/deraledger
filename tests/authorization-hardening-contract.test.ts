@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 
 async function run() {
-  const migrationPath = "supabase/migrations/20260728_00_authorization_hardening.sql";
+  const migrationPath = "supabase/migrations/20260728000000_authorization_hardening.sql";
   const wrapperPath = "supabase/staging/014_authorization_hardening.sql";
   const preflightPath = "supabase/staging/preflight/014_authorization_hardening_snapshot.sql";
   const postflightPath = "supabase/staging/postflight/014_authorization_hardening_verify.sql";
@@ -24,7 +24,7 @@ async function run() {
 
   assert.match(
     wrapper,
-    /\\ir \.\.\/migrations\/20260728_00_authorization_hardening\.sql/,
+    /\\ir \.\.\/migrations\/20260728000000_authorization_hardening\.sql/,
     "The 014 staging wrapper should include the canonical authorization migration.",
   );
   assert.match(

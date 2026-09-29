@@ -76,7 +76,6 @@ function createHandler(options: {
               amount: "13000.00",
               currency: "NGN",
               status: "paid",
-              providerReference: "solo-plus-payment-ref",
               confirmedAt: null,
             },
             refund: null,
@@ -127,6 +126,7 @@ async function run() {
     });
     assert.equal((body.case as Record<string, unknown>).activationState, "approved_pending_activation");
     assert.equal("paymentReference" in (body.case as Record<string, unknown>), false);
+    assert.equal("providerReference" in (body.payment as Record<string, unknown>), false);
     assert.equal(
       "storageKey" in (((body.requirements as Array<Record<string, unknown>>)[0].evidenceReferenceSummary as Record<string, unknown>) || {}),
       false,

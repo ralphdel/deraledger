@@ -9,6 +9,10 @@ import type {
   SoloPlusCaseRepository,
   SoloPlusCaseRequirementRecord,
 } from "../repository";
+import {
+  resolveDbBackedSuperAdminSession,
+  type DbBackedSuperAdminSession,
+} from "@/lib/admin-rbac";
 import { createSoloPlusSupabaseRepository, createSoloPlusServiceRoleClient, type SoloPlusSupabaseClientLike } from "./supabase-repository";
 import {
   buildSoloPlusBrowserCaseSummaryDto,
@@ -20,10 +24,7 @@ import {
   type SoloPlusAdminReviewHistoryEventDto,
   type SoloPlusAdminRefundSummaryDto,
 } from "./route-contracts";
-import {
-  resolveSoloPlusAuthenticatedUser,
-  type ResolveSoloPlusServerAccessOptions,
-} from "./access-context";
+import type { ResolveSoloPlusServerAccessOptions } from "./access-context";
 import { isSatisfiedSoloPlusRequirementState } from "../state";
 
 export type CreateSoloPlusAdminReadServiceOptions = Pick<
@@ -32,6 +33,11 @@ export type CreateSoloPlusAdminReadServiceOptions = Pick<
 > & {
   repository?: SoloPlusCaseRepository;
   repositoryFactory?: (client: SoloPlusSupabaseClientLike) => SoloPlusCaseRepository;
+  resolveAdminAuthority?: (options: {
+    authClient?: ResolveSoloPlusServerAccessOptions["authClient"];
+    authorityClient?: SoloPlusSupabaseClientLike;
+    env?: NodeJS.ProcessEnv;
+  }) => Promise<DbBackedSuperAdminSession>;
 };
 
 export type SoloPlusAdminReadService = {
@@ -166,7 +172,6 @@ function buildPaymentSummary(
   const caseRecord = detail.caseRecord;
   if (
     caseRecord.paymentProvider == null &&
-    caseRecord.paymentReference == null &&
     caseRecord.paymentStatus === "pending"
   ) {
     return null;
@@ -182,7 +187,6 @@ function buildPaymentSummary(
     amount: caseRecord.expectedAmount,
     currency: caseRecord.paymentCurrency,
     status: caseRecord.paymentStatus,
-    providerReference: caseRecord.paymentReference,
     confirmedAt: confirmedEvent?.createdAt ?? null,
   };
 }
@@ -249,14 +253,20 @@ function buildReviewHistoryEvent(
 export async function createSoloPlusAdminReadService(
   options: CreateSoloPlusAdminReadServiceOptions = {},
 ): Promise<SoloPlusAdminReadService> {
-  const authenticatedUser = await resolveSoloPlusAuthenticatedUser({
+  const authority = await (options.resolveAdminAuthority ?? resolveDbBackedSuperAdminSession)({
     authClient: options.authClient,
+    authorityClient: options.serviceClient,
     env: options.env,
   });
 
-  if (authenticatedUser.isSuperAdmin !== true) {
+  if (!authority.ok) {
+    const code = authority.status === 401
+      ? "SOLO_PLUS_SERVER_UNAUTHORIZED"
+      : authority.status === 503
+      ? "SOLO_PLUS_SERVER_CONFIG_ERROR"
+      : "SOLO_PLUS_SERVER_FORBIDDEN";
     throw new SoloPlusAdminReadServiceError(
-      "SOLO_PLUS_SERVER_FORBIDDEN",
+      code,
       "Solo Plus admin reads require an authenticated super-admin reviewer.",
     );
   }
@@ -265,7 +275,7 @@ export async function createSoloPlusAdminReadService(
 
   return {
     repository,
-    adminUserId: authenticatedUser.id,
+    adminUserId: authority.userId,
     async listCases(input) {
       const result = await repository.listAdminCases(input);
       return {

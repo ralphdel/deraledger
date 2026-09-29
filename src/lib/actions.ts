@@ -22,6 +22,7 @@ import { ensureMerchantSettlementAccountDetailed } from "@/lib/services/settleme
 import { getPaymentEnvironmentForMerchantEmail } from "@/lib/services/payment-routing.service";
 import { refreshAllPayoutMethodSetup } from "@/lib/services/payout-setup-refresh.service";
 import { observeCollectionInvoiceAccess } from "@/lib/compliance/collection-invoice-shadow-observation";
+import { resolveDbBackedSuperAdminSession } from "@/lib/admin-rbac";
 
 // Service role client for admin-level operations
 function getServiceClient() {
@@ -50,16 +51,22 @@ function roleNameFromTeamRow(row: TeamRowWithRole) {
  * Must be called at the start of every admin server action.
  * Throws an error object (not an exception) if auth fails.
  */
-async function requireSuperAdmin(): Promise<{ error?: { success: false; error: string } }> {
-  const supabase = await createClient();
-  const { data: { user }, error } = await supabase.auth.getUser();
-  if (error || !user) return { error: { success: false, error: "Unauthorized: not authenticated." } };
-  // Check is_super_admin flag in user metadata (set during admin account provisioning)
-  const isSuperAdmin =
-    user.user_metadata?.is_super_admin === true ||
-    user.app_metadata?.is_super_admin === true;
-  if (!isSuperAdmin) return { error: { success: false, error: "Unauthorized: SuperAdmin access required." } };
-  return {};
+async function requireSuperAdmin(): Promise<{
+  userId?: string;
+  error?: { success: false; error: string };
+}> {
+  const authority = await resolveDbBackedSuperAdminSession();
+  if (!authority.ok) {
+    return {
+      error: {
+        success: false,
+        error: authority.status === 401
+          ? "Unauthorized: not authenticated."
+          : "Unauthorized: SuperAdmin access required.",
+      },
+    };
+  }
+  return { userId: authority.userId };
 }
 
 async function requireMerchantOwner(merchantId: string): Promise<{ permitted: boolean; userId?: string; error?: string }> {
@@ -4026,19 +4033,16 @@ export async function adminManualReviewDirectorAction(params: {
   status: "verified" | "failed";
   adminNotes: string;
 }) {
-  const supabase = await createClient();
-  const { data: { user }, error: userError } = await supabase.auth.getUser();
-  if (userError || !user) return { success: false, error: "Unauthorized: not authenticated." };
-
-  const isSuperAdmin =
-    user.user_metadata?.is_super_admin === true ||
-    user.app_metadata?.is_super_admin === true;
-  if (!isSuperAdmin) return { success: false, error: "Unauthorized: SuperAdmin access required." };
+  const guard = await requireSuperAdmin();
+  if (guard.error) return guard.error;
+  if (!guard.userId) {
+    return { success: false, error: "Unauthorized: SuperAdmin access required." };
+  }
 
   const { updateDirectorManualStatus } = await import("@/lib/services/director-verification.service");
   const result = await updateDirectorManualStatus({
     ...params,
-    adminId: user.id,
+    adminId: guard.userId,
   });
   if (result.success) {
     revalidatePath("/settings");

@@ -2,9 +2,22 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { resolveOperationalPortalRouting } from "@/lib/server/admin-domain-routing";
+import { shouldBlockExcludedLegacyAdminApi } from "@/lib/server/legacy-admin-api-release";
 
 export async function proxy(request: NextRequest) {
   const url = request.nextUrl.clone();
+  if (shouldBlockExcludedLegacyAdminApi(url.pathname, process.env)) {
+    return NextResponse.json(
+      { error: "Not found" },
+      {
+        status: 404,
+        headers: {
+          "Cache-Control": "private, no-store, max-age=0",
+        },
+      },
+    );
+  }
+
   const operationalRouting = resolveOperationalPortalRouting(request.nextUrl.hostname, url.pathname);
   if (operationalRouting === "redirect_to_admin") {
     url.pathname = "/admin";
@@ -76,20 +89,10 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // Handle superadmin isolation logic
+  // Metadata is navigation context only. Admin authority is resolved by the
+  // server page/API guard from public.merchants.is_super_admin.
   if (user) {
-    const isSuperAdmin = user.app_metadata?.is_super_admin === true;
-
-    // Merchants locked out of Admin UI
-    if (isAdminRoute && !isSuperAdmin) {
-      const url = request.nextUrl.clone();
-      url.pathname = '/dashboard';
-      return NextResponse.redirect(url);
-    }
-
-    // Allow SuperAdmins to access both Admin and Dashboard for testing/dummy data purposes.
-    
-    if (!isSuperAdmin && (isDashboardRoute || isAuthRoute)) {
+    if (isDashboardRoute || isAuthRoute) {
       // Look up current merchant status to check for suspension
       const merchantId = request.cookies.get("purpledger_workspace_id")?.value;
       
@@ -131,8 +134,7 @@ export async function proxy(request: NextRequest) {
     // Redirect authenticated users away from login/register screens
     if (isAuthRoute) {
       const url = request.nextUrl.clone();
-      // Send SuperAdmin to admin, standard users to dashboard
-      url.pathname = isSuperAdmin ? '/admin' : '/dashboard';
+      url.pathname = '/dashboard';
       return NextResponse.redirect(url);
     }
   }
