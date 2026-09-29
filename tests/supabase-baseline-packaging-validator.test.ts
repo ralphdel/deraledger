@@ -74,6 +74,26 @@ const readyManifest = { ...manifest, packagePending: [], supersededOrReconciledB
 const ready = auditRepository(root, readyManifest, { backupPath: "backup.sql" });
 assert.equal(ready.blockers.length, 0);
 
+const missingWorkspaceRls = auditRepository(root, {
+  ...readyManifest,
+  workspaceRlsBaseline: "supabase/migrations/20260827_workspace_baseline.sql",
+}, { backupPath: "backup.sql" });
+assert(missingWorkspaceRls.blockers.includes(
+  "WORKSPACE_RLS_BASELINE_MISSING|supabase/migrations/20260827_workspace_baseline.sql",
+));
+
+writeFileSync(
+  join(root, "supabase", "migrations", "20260827_workspace_baseline.sql"),
+  "CREATE TABLE IF NOT EXISTS workspaces (id uuid);\n",
+);
+const incompleteWorkspaceRls = auditRepository(root, {
+  ...readyManifest,
+  workspaceRlsBaseline: "supabase/migrations/20260827_workspace_baseline.sql",
+}, { backupPath: "backup.sql" });
+assert(incompleteWorkspaceRls.blockers.includes(
+  "WORKSPACE_RLS_BASELINE_CONTRACT_MISSING|supabase/migrations/20260827_workspace_baseline.sql",
+));
+
 const missingCanonical = auditRepository(root, {
   ...readyManifest,
   requiredCanonicalMigrations: { storage: "supabase/migrations/missing.sql" },
@@ -136,6 +156,10 @@ assert.equal(
   repositoryManifest.requiredCanonicalMigrations?.privateEvidenceStorage,
   "supabase/migrations/20260729010000_private_evidence_storage_baseline.sql",
 );
+assert.equal(
+  repositoryManifest.workspaceRlsBaseline,
+  "supabase/migrations/20260527000000_onboarding_workspace_baseline.sql",
+);
 assert(repositoryManifest.supersededOrReconciledByOfficialMigrations.includes("20260514_phase2_migration.sql"));
 assert(repositoryManifest.supersededOrReconciledByOfficialMigrations.includes("setup_trigger.sql"));
 assert(repositoryManifest.supersededOrReconciledByOfficialMigrations.includes("kyc_compliance_migration.sql"));
@@ -173,6 +197,20 @@ const coreBaseline = readFileSync(
   join(repositoryRoot, "supabase", "migrations", "20260424000000_core_schema_baseline.sql"),
   "utf8",
 );
+const onboardingWorkspaceBaseline = readFileSync(
+  join(repositoryRoot, "supabase", "migrations", "20260527000000_onboarding_workspace_baseline.sql"),
+  "utf8",
+);
+assert.match(
+  onboardingWorkspaceBaseline,
+  /CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+workspaces\b[\s\S]*?ALTER\s+TABLE\s+public\.workspaces\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY\s*;/i,
+);
+assert.doesNotMatch(onboardingWorkspaceBaseline, /CREATE\s+POLICY[\s\S]*?ON\s+public\.workspaces/i);
+const migration019 = readFileSync(
+  join(repositoryRoot, "supabase", "migrations", "20260818010000_core_merchant_app_contract_compatibility.sql"),
+  "utf8",
+);
+assert.match(migration019, /public\.workspaces RLS must already be enabled/);
 for (const verificationType of [
   "bvn_selfie",
   "business",

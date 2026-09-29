@@ -9,6 +9,7 @@ export type PackagingManifest = {
   officialMigrationDirectory: string;
   allowedAlterBeforeCreate?: Record<string, string[]>;
   requiredCanonicalMigrations?: Record<string, string>;
+  workspaceRlsBaseline?: string;
   rootSqlOrder: string[];
   packagePending: string[];
   partialExtractions?: Record<string, string[]>;
@@ -128,6 +129,24 @@ export function auditRepository(
       blockers.push(`CANONICAL_MIGRATION_PATH_INVALID|${contract}|${migration}`);
     } else if (!existsSync(join(repoRoot, migration))) {
       blockers.push(`CANONICAL_MIGRATION_MISSING|${contract}|${migration}`);
+    }
+  }
+
+  const workspaceRlsBaseline = manifest.workspaceRlsBaseline;
+  if (workspaceRlsBaseline) {
+    const workspaceRlsBaselinePath = join(repoRoot, workspaceRlsBaseline);
+    if (!existsSync(workspaceRlsBaselinePath)) {
+      blockers.push(`WORKSPACE_RLS_BASELINE_MISSING|${workspaceRlsBaseline}`);
+    } else {
+      const workspaceRlsBaselineSql = readFileSync(workspaceRlsBaselinePath, "utf8");
+      const workspaceCreate = /CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+(?:public\.)?workspaces\b/i.exec(workspaceRlsBaselineSql);
+      const workspaceRlsEnable = /ALTER\s+TABLE\s+public\.workspaces\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY\s*;/i.exec(workspaceRlsBaselineSql);
+      const createsBeforeEnablingRls = Boolean(
+        workspaceCreate && workspaceRlsEnable && workspaceRlsEnable.index > workspaceCreate.index,
+      );
+      if (!createsBeforeEnablingRls) {
+        blockers.push(`WORKSPACE_RLS_BASELINE_CONTRACT_MISSING|${workspaceRlsBaseline}`);
+      }
     }
   }
 

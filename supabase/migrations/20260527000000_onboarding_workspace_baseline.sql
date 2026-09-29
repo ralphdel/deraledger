@@ -73,6 +73,11 @@ CREATE TABLE IF NOT EXISTS workspaces (
   UNIQUE (merchant_id)
 );
 
+-- Migration 019 requires this baseline relation to be protected before it
+-- evaluates any optional/canonical workspace policy. Policy ownership remains
+-- with migration 019; this baseline deliberately creates no browser policy.
+ALTER TABLE public.workspaces ENABLE ROW LEVEL SECURITY;
+
 CREATE TABLE IF NOT EXISTS workspace_subscriptions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -224,4 +229,3 @@ COMMENT ON TABLE business_registry_snapshots IS 'Saved RC/CAC/KYB provider outpu
 COMMENT ON TABLE business_affiliations IS 'Relationship match between verified user identity and business registry records.';
 COMMENT ON TABLE director_invitations IS 'Single-use director approval invitations for representatives and no-match owner claims.';
 COMMENT ON TABLE verification_costs IS 'Cost ledger for all verification attempts, including failures and sandbox zero-cost attempts.';
-

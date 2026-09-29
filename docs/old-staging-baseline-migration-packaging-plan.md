@@ -63,6 +63,14 @@ section-level decisions are recorded in
 dependency evidence for the originally unresolved sources is recorded in
 `docs/old-staging-blocker-app-dependency-audit.md`.
 
+The onboarding/workspace baseline also enables RLS on `public.workspaces`
+immediately after creating that table. This is a narrow prerequisite for
+`20260818010000_core_merchant_app_contract_compatibility.sql` (migration 019),
+which fails closed unless workspace RLS already exists. The baseline creates no
+workspace browser policy: migration 019 remains the canonical owner of its
+optional authenticated read policy and validates any pre-existing policy shape.
+The offline validator and unit test require this ordering.
+
 ## Resolved storage decision
 
 1. `20260514_phase2_migration.sql` is fully reconciled. Its historical browser

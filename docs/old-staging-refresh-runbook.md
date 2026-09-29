@@ -73,6 +73,11 @@ M024-M030 chain. It must finish with `ROLLBACK` and one final
 line. Raw catalog rows, credentials, URLs, and environment values are
 forbidden.
 
+The pre-refresh source gate also verifies that the onboarding baseline enables
+RLS on `public.workspaces` before migration 019. It deliberately does not add
+an early browser policy; migration 019 owns and validates the canonical
+workspace policy contract.
+
 ## Stop conditions
 
 Stop for a missing/empty backup, any target-ref ambiguity, production ref or

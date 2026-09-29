@@ -51,6 +51,7 @@
   "requiredCanonicalMigrations": {
     "privateEvidenceStorage": "supabase/migrations/20260729010000_private_evidence_storage_baseline.sql"
   },
+  "workspaceRlsBaseline": "supabase/migrations/20260527000000_onboarding_workspace_baseline.sql",
   "partialExtractions": {
     "setup_trigger.sql": [
       "supabase/migrations/20260425000000_merchant_registration_columns_baseline.sql"
