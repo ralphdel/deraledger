@@ -13,6 +13,7 @@ import { AdminReviewForm } from "./admin-review-form";
 
 type AdminCaseDetailProps = {
   caseId: string;
+  reviewActionsEnabled: boolean;
 };
 
 function mapDetailError(code: string | null) {
@@ -30,7 +31,7 @@ function mapDetailError(code: string | null) {
   }
 }
 
-export function AdminCaseDetail({ caseId }: AdminCaseDetailProps) {
+export function AdminCaseDetail({ caseId, reviewActionsEnabled }: AdminCaseDetailProps) {
   const [detail, setDetail] = useState<SoloPlusAdminCaseDetailDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -267,7 +268,12 @@ export function AdminCaseDetail({ caseId }: AdminCaseDetailProps) {
               <CardTitle>Review decision</CardTitle>
             </CardHeader>
             <CardContent>
-              <AdminReviewForm caseId={caseId} rowVersion={detail.case.rowVersion} onSuccess={loadDetail} />
+              <AdminReviewForm
+                actionsEnabled={reviewActionsEnabled}
+                caseId={caseId}
+                rowVersion={detail.case.rowVersion}
+                onSuccess={loadDetail}
+              />
             </CardContent>
           </Card>
         </div>

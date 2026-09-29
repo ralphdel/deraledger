@@ -231,6 +231,7 @@ async function run() {
 
   const reviewFormMarkup = renderToStaticMarkup(
     <AdminReviewForm
+      actionsEnabled={true}
       caseId="11111111-1111-4111-8111-111111111111"
       rowVersion={4}
       onSuccess={() => undefined}
@@ -238,6 +239,18 @@ async function run() {
   );
   assert.equal(reviewFormMarkup.includes("Activate"), false);
   assert.equal(reviewFormMarkup.includes("Approve"), true);
+
+  const disabledReviewFormMarkup = renderToStaticMarkup(
+    <AdminReviewForm
+      actionsEnabled={false}
+      caseId="11111111-1111-4111-8111-111111111111"
+      rowVersion={4}
+      onSuccess={() => undefined}
+    />,
+  );
+  assert.equal(disabledReviewFormMarkup.includes("Review actions are disabled"), true);
+  assert.equal(disabledReviewFormMarkup.includes("<select"), false);
+  assert.equal(disabledReviewFormMarkup.includes("<button"), false);
 
   const confirmation = getSoloPlusDecisionConfirmationCopy("approve");
   assert.equal(confirmation.description.includes("does not activate"), true);

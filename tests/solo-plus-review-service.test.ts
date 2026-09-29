@@ -248,6 +248,8 @@ function createEnv() {
     NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
     NEXT_PUBLIC_SUPABASE_ANON_KEY: "anon-key",
     SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
+    DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTIONS_ENABLED: "true",
+    VERCEL_ENV: "preview",
   } as unknown as NodeJS.ProcessEnv;
 }
 
@@ -320,6 +322,30 @@ async function run() {
     email_confirmed_at: "2026-07-09T00:00:00.000Z",
     app_metadata: { is_super_admin: true },
   };
+
+  const disabledEnv = createEnv();
+  delete disabledEnv.DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTIONS_ENABLED;
+  let disabledAuthorityCalls = 0;
+  await assert.rejects(
+    () =>
+      createSoloPlusReviewerService({
+        authClient: adminAuthClient as never,
+        repository: new FakeSoloPlusRepository(),
+        resolveAdminAuthority: async () => {
+          disabledAuthorityCalls += 1;
+          return { ok: true, userId: "admin-reviewer" };
+        },
+        env: disabledEnv,
+        generateId: () => "event-review-disabled",
+      }),
+    (error: unknown) => {
+      assert.ok(error instanceof SoloPlusReviewerServiceError);
+      assert.equal(error.code, "SOLO_PLUS_SERVER_FORBIDDEN");
+      assert.match(error.message, /disabled/i);
+      return true;
+    },
+  );
+  assert.equal(disabledAuthorityCalls, 0);
 
   const repository = new FakeSoloPlusRepository();
   repository.seedCase(buildCaseRecord({ id: "approve-case", rowVersion: 4 }));

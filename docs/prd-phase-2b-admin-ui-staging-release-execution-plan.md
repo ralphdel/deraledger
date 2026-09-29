@@ -13,6 +13,10 @@ for this plan:
   migration ledger matches local through `20260831`;
 - the staging Vercel deployment, ordinary signup/login, and starter workspace
   provisioning work; and
+- the legacy-admin boundary has returned the expected private/no-store `404`
+  for an excluded legacy endpoint, and the repaired `/admin/solo-plus/cases`
+  route has rendered its safe empty state without treating `cases` as a case
+  identifier; and
 - Solo Plus is available in staging after the separately controlled staging
   settings `solo_plus_enabled=true` and `solo_plus_kyc_enabled=true`; and
 - the designated staging support account has been restored through the
@@ -33,8 +37,9 @@ behaviour. Production remains blocked and out of scope.
   before accessing the Solo Plus read service.
 - The detail UI shows a requirement-level summary and case-event history, not
   direct table access or a document-storage browser.
-- The review form has row-version and idempotency inputs, requires a reason for
-  rejection and request-more-information, and contains no activation control.
+- The reviewed action form implementation retains row-version/idempotency and
+  reason requirements, but the current release gate withholds the form and
+  shows a read-only disabled-actions notice. No activation control exists.
 - The existing Solo Plus state model distinguishes `approved_pending_activation`
   from `activated`; its separate activation RPC is not part of this plan.
 
@@ -61,6 +66,15 @@ The Phase 2B source package now resolves the two code-level blockers:
 - The Phase 2B admin payment summary no longer returns or renders the internal
   payment/provider reference. The DTO retains only the provider classification,
   amount, currency, status, and confirmation time needed for review.
+- Solo Plus review mutations are now controlled by the server-only
+  `DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTIONS_ENABLED` release gate. Unset,
+  blank, and false values return a private/no-store `404` before authorization
+  or service construction. `VERCEL_ENV=production` always disables actions,
+  even if the flag is true. The reviewer service independently enforces the
+  same gate. Queue/detail GET routes are not gated and remain read-only.
+- The case-detail page computes the gate on the server. While disabled it
+  renders a read-only release notice and no approve, reject, request-more-
+  information, or reopen controls.
 
 Document bytes are **deferred** from this release. The case-detail UI is
 intentionally metadata/status-only and exposes no document action or broken
@@ -69,19 +83,21 @@ future gate if product review later requires document viewing.
 
 ## Remaining staging blockers
 
-1. The DB-backed RBAC, `admin_review`, legacy API boundary, and redacted payment
-   summary changes require independent source review before deployment.
-2. There is no approved staging fixture/seed package for a complete admin
-   review case. Do not create test rows through direct SQL for this gate.
-3. The M024-M030 approval-request/readiness RPCs remain separate from this
+1. The isolated queue/detail fixture is governed by
+   `docs/prd-phase-2b-admin-ui-staging-detail-fixture-plan.md`. It creates no
+   seed or migration data and requires separate fixture-write and cleanup
+   approvals. Do not create any other test rows through direct SQL for this
+   gate.
+2. The M024-M030 approval-request/readiness RPCs remain separate from this
    older Solo Plus review UI. M030/live readiness, merchant activation, and
    collection unlock remain disabled.
 
 Queue/detail route smoke becomes allowed only after this source package is
 independently approved and deployed to staging. Approve, reject,
-request-more-information, and reopen remain blocked until that review and
-deployment are complete and an approved isolated fixture exists. No decision
-request is authorized by this document.
+request-more-information, and reopen remain technically blocked by default;
+an approved fixture does not enable them. Enabling the action flag requires a
+separate source/security review, staging action plan, and explicit approval.
+No decision request is authorized by this document.
 
 Legacy admin endpoints are not made release-ready by this package. They are
 server-blocked by default even if the caller holds the historical
@@ -92,21 +108,32 @@ cannot enable the legacy surface through this flag.
 
 ## Required staging test data
 
-Use only an independently approved, non-production staging fixture created by
-the normal product flow. It must contain:
+Use only the independently approved, non-production staging fixture plan in
+`docs/prd-phase-2b-admin-ui-staging-detail-fixture-plan.md`. Its initial
+identity and draft case are created by the normal product flow; the narrowly
+scoped manual transition exists only to exercise the queue/detail read path.
+It must contain:
 
 - one ordinary authenticated user (negative RBAC test);
 - the designated staging account whose authenticated user ID has a matching
   `public.merchants.is_super_admin = true` row (positive RBAC test);
 - one isolated merchant/workspace and one Solo Plus case in `manual_review`;
-- requirement rows covering satisfied, missing/actionable, and evidence-backed
-  states; and
-- at least one non-sensitive test document represented by metadata only.
+- exactly the six normal-flow canonical requirement rows, shown only as
+  non-sensitive code/state metadata, with every evidence/provider/completion/
+  reuse/review/failure field null and JSON metadata exactly empty; and
+- no document/evidence row, storage path, signed URL, or document payload.
 
-Do not put real KYC documents, provider credentials, production references, or
-payment instruments in the fixture. Fixture creation, any test upload, and any
-review decision are separate explicit staging approvals; they are not covered
-by this document.
+Do not put real or synthetic KYC documents, provider credentials, production
+references, or payment instruments in this fixture. Document/evidence viewing
+is deferred. Fixture creation and any future review decision are separate
+explicit staging approvals; neither is covered by this document.
+
+The approved fixture executor cleanup must lock the exact marked case before
+rechecking reverse payment linkage, and must prove that `DELETE ... RETURNING`
+removed exactly that one marked case. A missing target, concurrent payment
+link, or non-one-row result rolls the cleanup transaction back. Its offline
+unit-test mode stops before psql/password handling and exists only to exercise
+target and mutation gates without database access.
 
 ## Acceptance checklist
 
@@ -162,19 +189,21 @@ acceptance in staging. Stop if metadata-only authority succeeds or if an
 2. Open the approved fixture case. Check merchant summary, payment/refund
    summary, review state, activation state, requirement list, and history
    pagination.
-3. Confirm the case page shows `approved_pending_activation` distinctly from
-   `activated`; it must not present an activation control.
+3. Confirm this metadata-only fixture is not activated and the page presents
+   neither an activation control nor a review-action control. The broader
+   state model must continue to distinguish `approved_pending_activation`
+   from `activated`, but this fixture does not exercise either state.
 4. Inspect the case-detail response and rendered payment summary. Neither may
    contain `providerReference`, `paymentReference`, an internal transaction
    reference, or any equivalent provider identifier.
 
 ### 3. Requirement and evidence status
 
-For each fixture requirement, verify that the UI shows only requirement code,
-state, source type, capture time, and safe file metadata. It must not render a
-provider reference, internal payment reference, storage key, evidence or bucket
-path, raw provider payload, checksum, signed URL, document URL, or document
-bytes.
+For each fixture requirement, verify that the UI shows only its canonical code
+and non-sensitive state. This fixture intentionally has no evidence source,
+capture time, file metadata, or document. It must not render a provider
+reference, internal payment reference, storage key, evidence or bucket path,
+raw provider payload, checksum, signed URL, document URL, or document bytes.
 
 The UI intentionally has no document-view action in this release. A later private-document gate
 must introduce a reviewed server endpoint that authorizes the super-admin on
@@ -184,9 +213,13 @@ bucket-wide browser policy.
 
 ### 4. Decision history and action readiness
 
-Observe the review form only until the remaining staging blockers are closed.
-When a separately reviewed mutation gate exists, test in this order on independent
-fixtures:
+The current release must show the read-only disabled-actions notice and no
+action controls. A direct POST to `/api/admin/solo-plus/review` must return a
+private/no-store `404` while the gate is off. Do not set the action flag for
+this queue/detail smoke.
+
+Only after a separate review explicitly enables the mutation gate may a future
+plan test, on independent fixtures:
 
 1. request more information (reason required);
 2. reject (reason required; confirm any refund review state is only recorded,
@@ -218,7 +251,9 @@ WITH target AS (
   SELECT c.case_status, c.row_version,
          c.activation_idempotency_key IS NOT NULL AS activated,
          count(r.id) AS requirement_count,
-         count(r.id) FILTER (WHERE r.requirement_state = 'satisfied') AS satisfied_count
+         count(r.id) FILTER (
+           WHERE r.requirement_state IN ('passed', 'reused', 'waived')
+         ) AS satisfied_count
   FROM public.solo_plus_cases c
   JOIN target t ON t.case_id = c.id
   LEFT JOIN public.solo_plus_case_requirements r ON r.case_id = c.id
@@ -342,10 +377,11 @@ Stop immediately and do not retry an action if any of the following occurs:
 1. Independently review the DB-backed authority and `admin_review` source
    package.
 2. Deploy the approved source to staging; document viewing remains deferred.
-3. Separately approve staging fixture preparation by normal product flow.
+3. Separately approve and execute the isolated staging queue/detail fixture
+   plan; it does not authorize a review action.
 4. Run staging read-only admin route/RBAC/queue/detail acceptance.
-5. Separately approve each staged review action and its post-action
-   read-only evidence.
+5. Keep the review-action flag disabled. Any later flag change and staged
+   action test requires a new source/security review and explicit approval.
 6. Separate release decision for any runtime adoption, M030/live readiness,
    activation, collection unlock, payment/refund operation, or production.
 

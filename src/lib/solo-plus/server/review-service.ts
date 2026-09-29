@@ -25,6 +25,7 @@ import {
   createSoloPlusSupabaseRepository,
   type SoloPlusSupabaseClientLike,
 } from "./supabase-repository";
+import { areSoloPlusReviewActionsEnabled } from "@/lib/server/solo-plus-review-action-release";
 
 export type SoloPlusReviewerDecision =
   | "request_more_information"
@@ -91,6 +92,13 @@ export async function createSoloPlusReviewerService(
   options: CreateSoloPlusReviewerServiceOptions = {},
 ): Promise<SoloPlusReviewerService> {
   assertSoloPlusServerEnvironment(options.env ?? process.env);
+
+  if (!areSoloPlusReviewActionsEnabled(options.env ?? process.env)) {
+    throw new SoloPlusReviewerServiceError(
+      "SOLO_PLUS_SERVER_FORBIDDEN",
+      "Solo Plus review actions are disabled for this release gate.",
+    );
+  }
 
   const authority = await (options.resolveAdminAuthority ?? resolveDbBackedSuperAdminSession)({
     authClient: options.authClient,

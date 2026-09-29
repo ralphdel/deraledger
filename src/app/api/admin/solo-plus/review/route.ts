@@ -6,6 +6,7 @@ import type {
   SoloPlusReviewerDecision,
 } from "@/lib/solo-plus/server/review-service";
 import { assertSameOriginBrowserMutationRequest } from "@/lib/server/browser-origin";
+import { areSoloPlusReviewActionsEnabled } from "@/lib/server/solo-plus-review-action-release";
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -46,6 +47,7 @@ type CreateSoloPlusReviewerServiceFn =
   typeof import("@/lib/solo-plus/server/review-service").createSoloPlusReviewerService;
 
 type SoloPlusReviewRouteDependencies = {
+  reviewActionsEnabled: () => boolean;
   requireSuperAdminSession: RequireSuperAdminSessionFn;
   createReviewerService: CreateSoloPlusReviewerServiceFn;
   assertBrowserMutationOriginRequest?: typeof assertSameOriginBrowserMutationRequest;
@@ -82,6 +84,18 @@ function buildErrorResponse(
   code: ReviewRouteErrorCode,
 ): NextResponse {
   return NextResponse.json({ error, code }, { status });
+}
+
+function buildReleaseBlockedResponse(): NextResponse {
+  return NextResponse.json(
+    { error: "Not found.", code: "NOT_FOUND" },
+    {
+      status: 404,
+      headers: {
+        "Cache-Control": "private, no-store, max-age=0",
+      },
+    },
+  );
 }
 
 function mapCaseRecord(caseRecord: SoloPlusCaseRecord) {
@@ -244,6 +258,10 @@ export function createSoloPlusReviewRouteHandler(
   dependencies: SoloPlusReviewRouteDependencies,
 ) {
   return async function POST(request: Request): Promise<NextResponse> {
+    if (!dependencies.reviewActionsEnabled()) {
+      return buildReleaseBlockedResponse();
+    }
+
     const guard = await dependencies.requireSuperAdminSession();
     if (!guard.ok) {
       return buildErrorResponse(
@@ -299,6 +317,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     ]);
 
   const handler = createSoloPlusReviewRouteHandler({
+    reviewActionsEnabled: () => areSoloPlusReviewActionsEnabled(process.env),
     requireSuperAdminSession,
     createReviewerService: createSoloPlusReviewerService,
     assertBrowserMutationOriginRequest: (req) =>

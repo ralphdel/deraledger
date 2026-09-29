@@ -16,6 +16,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { getSoloPlusDecisionConfirmationCopy } from "@/lib/solo-plus/ui";
 
 type AdminReviewFormProps = {
+  actionsEnabled: boolean;
   caseId: string;
   rowVersion: number;
   onSuccess: () => Promise<void> | void;
@@ -49,6 +50,7 @@ function mapDecisionError(code: string | null): string {
 }
 
 export function AdminReviewForm({
+  actionsEnabled,
   caseId,
   rowVersion,
   onSuccess,
@@ -136,6 +138,18 @@ export function AdminReviewForm({
     : decision === "reject"
     ? "Reject"
     : "Request more information";
+
+  if (!actionsEnabled) {
+    return (
+      <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+        <p className="font-medium">Review actions are disabled for this release gate.</p>
+        <p className="mt-1">
+          Queue and case details remain read-only. Approve, reject, request-more-information,
+          and reopen require a separately reviewed staging action gate.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4 rounded-2xl border border-border bg-background p-4">

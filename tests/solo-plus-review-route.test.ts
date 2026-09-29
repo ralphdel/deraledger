@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
+import { createRequire, Module } from "node:module";
 
-import { createSoloPlusReviewRouteHandler } from "../src/app/api/admin/solo-plus/review/route";
 import { assertSameOriginBrowserMutationRequest } from "../src/lib/server/browser-origin";
 import type {
   SoloPlusCaseEventRecord,
   SoloPlusCaseMutationResult,
   SoloPlusCaseRecord,
 } from "../src/lib/solo-plus/repository";
+
+type ReviewRouteModule = typeof import("../src/app/api/admin/solo-plus/review/route");
+let createSoloPlusReviewRouteHandler: ReviewRouteModule["createSoloPlusReviewRouteHandler"];
 
 type GuardResult =
   | { ok: true; userId: string }
@@ -107,6 +110,7 @@ function createJsonOnlyRequest(payload: unknown): Request {
 }
 
 function createHandler(options: {
+  reviewActionsEnabled?: boolean;
   guardResult?: GuardResult;
   serviceResult?: SoloPlusCaseMutationResult;
   serviceError?: unknown;
@@ -125,6 +129,7 @@ function createHandler(options: {
   };
 
   const handler = createSoloPlusReviewRouteHandler({
+    reviewActionsEnabled: () => options.reviewActionsEnabled ?? true,
     requireSuperAdminSession: async () =>
       options.guardResult || { ok: true as const, userId: "admin-user-id" },
     createReviewerService: async () => {
@@ -166,6 +171,36 @@ function createHandler(options: {
 }
 
 async function run() {
+  const require = createRequire(import.meta.url);
+  const serverOnlyShimPath = require.resolve("server-only");
+  const serverOnlyShimModule = new Module(serverOnlyShimPath);
+  serverOnlyShimModule.filename = serverOnlyShimPath;
+  serverOnlyShimModule.loaded = true;
+  serverOnlyShimModule.exports = {};
+  require.cache[serverOnlyShimPath] = serverOnlyShimModule as never;
+
+  ({ createSoloPlusReviewRouteHandler } = await import(
+    new URL("../src/app/api/admin/solo-plus/review/route.ts", import.meta.url).href
+  ));
+
+  {
+    const { handler, calls } = createHandler({ reviewActionsEnabled: false });
+    const response = await handler(
+      createJsonOnlyRequest({
+        caseId: "11111111-1111-4111-8111-111111111111",
+        expectedRowVersion: 4,
+        requestIdempotencyKey: "review-disabled-1",
+        decision: "approve",
+      }),
+    );
+    const body = (await readJson(response)) as Record<string, unknown>;
+    assert.equal(response.status, 404);
+    assert.equal(body.code, "NOT_FOUND");
+    assert.equal(response.headers.get("cache-control"), "private, no-store, max-age=0");
+    assert.equal(calls.serviceFactory, 0);
+    assert.equal(calls.reviewCase, 0);
+  }
+
   {
     const { handler, calls } = createHandler({
       serviceResult: buildMutationResult({
