@@ -26,8 +26,9 @@ behaviour. Production remains blocked and out of scope.
 
 ## What is complete
 
-- `/admin/solo-plus` and `/admin/solo-plus/[caseId]` have server-side
-  super-admin guards and use private/no-store admin API responses.
+- `/admin/solo-plus/cases` and `/admin/solo-plus/cases/[caseId]` have
+  server-side super-admin guards and use private/no-store admin API responses.
+  The older root paths redirect to these canonical paths after the same guard.
 - The queue and detail APIs reject unauthenticated and non-super-admin callers
   before accessing the Solo Plus read service.
 - The detail UI shows a requirement-level summary and case-event history, not
@@ -134,12 +135,18 @@ without exposing sensitive values.
 
 ### 1. Portal route and RBAC
 
-1. Open `/admin/solo-plus` unauthenticated: it must redirect to `/admin-login`
-   or return the approved unauthorized result, without queue data.
+1. Open `/admin/solo-plus/cases` unauthenticated: it must redirect to
+   `/admin-login` or return the approved unauthorized result, without queue
+   data. `/admin/solo-plus` must redirect to this canonical queue path for an
+   authorized user.
 2. Sign in as the ordinary fixture user: the page/API must deny with `403` and
    show no case data.
-3. Sign in as the designated super-admin fixture user: the queue page must
-   load, and `GET /api/admin/solo-plus/cases` must be private/no-store.
+3. Sign in as the designated super-admin fixture user: `/admin/solo-plus/cases`
+   must render the queue page and call `GET /api/admin/solo-plus/cases` only;
+   it must never call `/api/admin/solo-plus/cases/cases`. Case links must open
+   `/admin/solo-plus/cases/<caseId>`, whose detail request is
+   `GET /api/admin/solo-plus/cases/<caseId>`. Both responses must be
+   private/no-store.
 4. Refresh and use browser back/forward. No response may be served from a
    shared cache and no failed API call or browser-console warning is allowed.
 

@@ -246,7 +246,7 @@ export function AdminReviewQueue() {
                   {items.map((item) => (
                     <TableRow key={item.caseId}>
                       <TableCell>
-                        <Link href={`/admin/solo-plus/${item.caseId}`} className="font-medium text-foreground underline">
+                        <Link href={`/admin/solo-plus/cases/${item.caseId}`} className="font-medium text-foreground underline">
                           {item.merchantDisplayName || "Solo Plus case"}
                         </Link>
                         <p className="text-xs text-muted-foreground">{item.ownerEmail || "No owner email"}</p>
