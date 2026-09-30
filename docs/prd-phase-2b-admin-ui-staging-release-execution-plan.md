@@ -22,7 +22,11 @@ for this plan:
 - the designated staging support account has been restored through the
   DB-backed authority contract: its authenticated user ID owns a
   `public.merchants` row with `is_super_admin = true`. Auth metadata is not the
-  evidence of authority.
+  evidence of authority; and
+- the read-only queue/detail fixture smoke and its guarded cleanup both passed.
+  The fixture case was removed with `PASS|FIXTURE|admin_read_case_removed` and
+  `PASS|FIXTURE_CLEANUP|case_descendants_absent`. See
+  `docs/prd-phase-2b-admin-ui-read-only-staging-closeout.md`.
 
 This is not evidence that an admin UI may perform decisions, activate a
 merchant, issue M030 readiness, unlock collection, or change commercial
@@ -83,12 +87,14 @@ future gate if product review later requires document viewing.
 
 ## Remaining staging blockers
 
-1. The isolated queue/detail fixture is governed by
-   `docs/prd-phase-2b-admin-ui-staging-detail-fixture-plan.md`. It creates no
-   seed or migration data and requires separate fixture-write and cleanup
-   approvals. Do not create any other test rows through direct SQL for this
-   gate.
-2. The M024-M030 approval-request/readiness RPCs remain separate from this
+1. The read-only fixture is cleaned up and cannot be reused. Any future
+   review-action testing requires a new isolated fixture plus separate
+   creation, action, and cleanup approvals. Do not create test rows through
+   direct SQL outside an approved guarded fixture package.
+2. Review actions remain technically blocked. Enabling the action gate requires
+   a new source/security review and a controlled staging action-acceptance
+   plan; approval must remain separate from activation.
+3. The M024-M030 approval-request/readiness RPCs remain separate from this
    older Solo Plus review UI. M030/live readiness, merchant activation, and
    collection unlock remain disabled.
 
