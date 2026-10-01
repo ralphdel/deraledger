@@ -1,10 +1,14 @@
 # Phase 2B Admin UI controlled staging review-action acceptance plan
 
-**Plan status:** source hardening is implemented and ready for independent
-review. Staging review-action execution remains blocked until the forward
-migration and application patch are independently approved, applied/deployed
-to staging under separate gates, and a fresh fixture receives explicit
-execution approval.
+**Plan status:** source hardening, the staging migration/postflight, staging
+application deployment, and safe default-block smoke are complete. Staging
+review-action execution remains blocked until a fresh fixture and an exact
+single-action window receive their separate approvals.
+
+The first action now has a narrower operator package:
+`docs/prd-phase-2b-admin-ui-staging-request-more-information-acceptance-runbook.md`.
+That package permits only one exact fixture/run/case and
+`request_more_information`; this broader plan does not widen that gate.
 
 **Completed prerequisite:** the read-only queue/detail staging gate and its
 fixture cleanup are complete. No prior fixture may be reused.
