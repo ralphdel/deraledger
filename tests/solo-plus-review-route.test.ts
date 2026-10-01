@@ -111,7 +111,10 @@ function createJsonOnlyRequest(payload: unknown): Request {
 
 function createHandler(options: {
   reviewActionsEnabled?: boolean;
+  scopedCaseId?: string;
+  scopedDecision?: "request_more_information" | "approve" | "reject" | "reopen";
   guardResult?: GuardResult;
+  guardError?: unknown;
   serviceResult?: SoloPlusCaseMutationResult;
   serviceError?: unknown;
   serviceFactoryError?: unknown;
@@ -129,9 +132,19 @@ function createHandler(options: {
   };
 
   const handler = createSoloPlusReviewRouteHandler({
-    reviewActionsEnabled: () => options.reviewActionsEnabled ?? true,
-    requireSuperAdminSession: async () =>
-      options.guardResult || { ok: true as const, userId: "admin-user-id" },
+    resolveReviewActionScope: () => options.reviewActionsEnabled === false
+      ? null
+      : {
+          caseId: options.scopedCaseId ?? "11111111-1111-4111-8111-111111111111",
+          decision: options.scopedDecision ?? "approve",
+          runId: "phase2b-review-route-test",
+        },
+    requireSuperAdminSession: async () => {
+      if (options.guardError) {
+        throw options.guardError;
+      }
+      return options.guardResult || { ok: true as const, userId: "admin-user-id" };
+    },
     createReviewerService: async () => {
       calls.serviceFactory += 1;
       if (options.serviceFactoryError) {
@@ -202,7 +215,35 @@ async function run() {
   }
 
   {
+    const guardError = new Error("sensitive auth backend detail");
+    let capturedError: unknown = null;
     const { handler, calls } = createHandler({
+      guardError,
+      onUnexpectedError: (error) => {
+        capturedError = error;
+      },
+    });
+    const response = await handler(
+      createJsonOnlyRequest({
+        caseId: "11111111-1111-4111-8111-111111111111",
+        expectedRowVersion: 4,
+        requestIdempotencyKey: "review-auth-throw-1",
+        decision: "approve",
+      }),
+    );
+    const body = (await readJson(response)) as Record<string, unknown>;
+    assert.equal(response.status, 500);
+    assert.equal(body.code, "INTERNAL_ERROR");
+    assert.equal(String(body.error).includes("sensitive auth backend detail"), false);
+    assert.equal(response.headers.get("cache-control"), "private, no-store, max-age=0");
+    assert.equal(capturedError, guardError);
+    assert.equal(calls.serviceFactory, 0);
+    assert.equal(calls.reviewCase, 0);
+  }
+
+  {
+    const { handler, calls } = createHandler({
+      scopedDecision: "request_more_information",
       serviceResult: buildMutationResult({
         caseRecord: {
           caseStatus: "verification_pending",
@@ -230,12 +271,38 @@ async function run() {
     assert.equal(response.status, 200);
     assert.equal(body.kind, "updated");
     assert.equal((body.case as Record<string, unknown>).caseStatus, "verification_pending");
+    assert.equal(response.headers.get("cache-control"), "private, no-store, max-age=0");
+    assert.deepEqual(Object.keys(body.case as Record<string, unknown>).sort(), [
+      "caseStatus",
+      "id",
+      "paymentStatus",
+      "refundStatus",
+      "rowVersion",
+      "updatedAt",
+    ]);
+    for (const forbiddenField of [
+      "approvedByAdminId",
+      "rejectedByAdminId",
+      "reopenedByAdminId",
+      "rejectionReason",
+      "paymentReference",
+      "providerReference",
+      "storageKey",
+      "documentUrl",
+    ]) {
+      assert.equal(forbiddenField in (body.case as Record<string, unknown>), false);
+    }
+    assert.deepEqual(Object.keys(body.event as Record<string, unknown>).sort(), ["createdAt", "eventType"]);
+    assert.equal("reason" in (body.event as Record<string, unknown>), false);
+    assert.equal("actorId" in (body.event as Record<string, unknown>), false);
+    assert.equal("requestIdempotencyKey" in (body.event as Record<string, unknown>), false);
     assert.equal(calls.serviceFactory, 1);
     assert.equal(calls.reviewCase, 1);
   }
 
   {
     const { handler } = createHandler({
+      scopedDecision: "approve",
       serviceResult: buildMutationResult({
         caseRecord: {
           caseStatus: "approved",
@@ -267,6 +334,7 @@ async function run() {
 
   {
     const { handler } = createHandler({
+      scopedDecision: "reject",
       serviceResult: buildMutationResult({
         caseRecord: {
           caseStatus: "rejected",
@@ -301,6 +369,7 @@ async function run() {
 
   {
     const { handler } = createHandler({
+      scopedDecision: "reopen",
       serviceResult: buildMutationResult({
         caseRecord: {
           caseStatus: "verification_pending",
@@ -441,6 +510,28 @@ async function run() {
   }
 
   {
+    const { handler, calls } = createHandler({
+      scopedDecision: "request_more_information",
+    });
+    const response = await handler(
+      createJsonOnlyRequest({
+        caseId: "11111111-1111-4111-8111-111111111111",
+        expectedRowVersion: 4,
+        requestIdempotencyKey: "review-reason-too-long-1",
+        decision: "request_more_information",
+        reason: "x".repeat(1001),
+      }),
+    );
+    const body = (await readJson(response)) as Record<string, unknown>;
+    assert.equal(response.status, 400);
+    assert.equal(body.code, "INVALID_REQUEST");
+    assert.match(String(body.error), /at most 1000 characters/i);
+    assert.equal(response.headers.get("cache-control"), "private, no-store, max-age=0");
+    assert.equal(calls.serviceFactory, 0);
+    assert.equal(calls.reviewCase, 0);
+  }
+
+  {
     const { handler } = createHandler({});
     const response = await handler(
       new Request("http://localhost/api/admin/solo-plus/review", {
@@ -491,6 +582,7 @@ async function run() {
 
   {
     const { handler } = createHandler({
+      scopedDecision: "reject",
       serviceError: createCodeError(
         "SOLO_PLUS_IDEMPOTENCY_CONFLICT",
         "The idempotency key is already bound to a different Solo Plus intent.",
@@ -511,6 +603,39 @@ async function run() {
     const body = (await readJson(response)) as Record<string, unknown>;
     assert.equal(response.status, 409);
     assert.equal(body.code, "IDEMPOTENCY_CONFLICT");
+  }
+
+  {
+    const { handler, calls } = createHandler({ scopedDecision: "request_more_information" });
+    const response = await handler(
+      createJsonOnlyRequest({
+        caseId: "22222222-2222-4222-8222-222222222222",
+        expectedRowVersion: 4,
+        requestIdempotencyKey: "review-wrong-case-1",
+        decision: "request_more_information",
+        reason: "Scoped test reason.",
+      }),
+    );
+    assert.equal(response.status, 404);
+    assert.equal(response.headers.get("cache-control"), "private, no-store, max-age=0");
+    assert.equal(calls.serviceFactory, 0);
+    assert.equal(calls.reviewCase, 0);
+  }
+
+  {
+    const { handler, calls } = createHandler({ scopedDecision: "request_more_information" });
+    const response = await handler(
+      createJsonOnlyRequest({
+        caseId: "11111111-1111-4111-8111-111111111111",
+        expectedRowVersion: 4,
+        requestIdempotencyKey: "review-wrong-decision-1",
+        decision: "reject",
+        reason: "Scoped test reason.",
+      }),
+    );
+    assert.equal(response.status, 404);
+    assert.equal(calls.serviceFactory, 0);
+    assert.equal(calls.reviewCase, 0);
   }
 
   {

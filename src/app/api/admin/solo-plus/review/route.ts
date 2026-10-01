@@ -1,12 +1,16 @@
 import { NextResponse } from "next/server";
 
-import type { SoloPlusCaseEventRecord, SoloPlusCaseMutationResult, SoloPlusCaseRecord } from "@/lib/solo-plus/repository";
-import type {
-  ReviewSoloPlusCaseInput,
-  SoloPlusReviewerDecision,
-} from "@/lib/solo-plus/server/review-service";
+import type { SoloPlusCaseMutationResult } from "@/lib/solo-plus/repository";
+import {
+  SOLO_PLUS_REVIEW_REASON_MAX_LENGTH,
+  type SoloPlusReviewerDecision,
+} from "@/lib/solo-plus/review-action-contract";
+import type { ReviewSoloPlusCaseInput } from "@/lib/solo-plus/server/review-service";
 import { assertSameOriginBrowserMutationRequest } from "@/lib/server/browser-origin";
-import { areSoloPlusReviewActionsEnabled } from "@/lib/server/solo-plus-review-action-release";
+import {
+  isSoloPlusReviewActionWithinScope,
+  resolveSoloPlusReviewActionScope,
+} from "@/lib/server/solo-plus-review-action-release";
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -47,7 +51,11 @@ type CreateSoloPlusReviewerServiceFn =
   typeof import("@/lib/solo-plus/server/review-service").createSoloPlusReviewerService;
 
 type SoloPlusReviewRouteDependencies = {
-  reviewActionsEnabled: () => boolean;
+  resolveReviewActionScope: () => Readonly<{
+    caseId: string;
+    decision: SoloPlusReviewerDecision;
+    runId: string;
+  }> | null;
   requireSuperAdminSession: RequireSuperAdminSessionFn;
   createReviewerService: CreateSoloPlusReviewerServiceFn;
   assertBrowserMutationOriginRequest?: typeof assertSameOriginBrowserMutationRequest;
@@ -75,15 +83,37 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function normalizeOptionalReason(value: unknown): string | null {
-  return hasNonEmptyString(value) ? value.trim() : null;
+  if (value == null) {
+    return null;
+  }
+
+  if (typeof value !== "string") {
+    throw new Error("reason must be a string.");
+  }
+
+  const normalized = value.trim();
+  if (normalized.length > SOLO_PLUS_REVIEW_REASON_MAX_LENGTH) {
+    throw new Error(
+      `reason must be at most ${SOLO_PLUS_REVIEW_REASON_MAX_LENGTH} characters.`,
+    );
+  }
+
+  return normalized === "" ? null : normalized;
 }
+
+const PRIVATE_NO_STORE_HEADERS = {
+  "Cache-Control": "private, no-store, max-age=0",
+} as const;
 
 function buildErrorResponse(
   status: number,
   error: string,
   code: ReviewRouteErrorCode,
 ): NextResponse {
-  return NextResponse.json({ error, code }, { status });
+  return NextResponse.json(
+    { error, code },
+    { status, headers: PRIVATE_NO_STORE_HEADERS },
+  );
 }
 
 function buildReleaseBlockedResponse(): NextResponse {
@@ -91,56 +121,31 @@ function buildReleaseBlockedResponse(): NextResponse {
     { error: "Not found.", code: "NOT_FOUND" },
     {
       status: 404,
-      headers: {
-        "Cache-Control": "private, no-store, max-age=0",
-      },
+      headers: PRIVATE_NO_STORE_HEADERS,
     },
   );
-}
-
-function mapCaseRecord(caseRecord: SoloPlusCaseRecord) {
-  return {
-    id: caseRecord.id,
-    caseStatus: caseRecord.caseStatus,
-    paymentStatus: caseRecord.paymentStatus,
-    refundStatus: caseRecord.refundStatus,
-    rowVersion: caseRecord.rowVersion,
-    approvedAt: caseRecord.approvedAt,
-    approvedByAdminId: caseRecord.approvedByAdminId,
-    rejectedAt: caseRecord.rejectedAt,
-    rejectedByAdminId: caseRecord.rejectedByAdminId,
-    rejectionReason: caseRecord.rejectionReason,
-    reopenedAt: caseRecord.reopenedAt,
-    reopenedByAdminId: caseRecord.reopenedByAdminId,
-    updatedAt: caseRecord.updatedAt,
-  };
-}
-
-function mapEventRecord(event: SoloPlusCaseEventRecord | null) {
-  if (!event) {
-    return null;
-  }
-
-  return {
-    id: event.id,
-    eventType: event.eventType,
-    actorType: event.actorType,
-    actorId: event.actorId,
-    requestIdempotencyKey: event.requestIdempotencyKey,
-    reason: event.reason,
-    policyVersion: event.policyVersion,
-    createdAt: event.createdAt,
-  };
 }
 
 function mapSuccessResponse(result: SoloPlusCaseMutationResult): NextResponse {
   return NextResponse.json(
     {
       kind: result.outcome,
-      case: mapCaseRecord(result.caseRecord),
-      event: mapEventRecord(result.event),
+      case: {
+        id: result.caseRecord.id,
+        caseStatus: result.caseRecord.caseStatus,
+        paymentStatus: result.caseRecord.paymentStatus,
+        refundStatus: result.caseRecord.refundStatus,
+        rowVersion: result.caseRecord.rowVersion,
+        updatedAt: result.caseRecord.updatedAt,
+      },
+      event: result.event
+        ? {
+            eventType: result.event.eventType,
+            createdAt: result.event.createdAt,
+          }
+        : null,
     },
-    { status: 200 },
+    { status: 200, headers: PRIVATE_NO_STORE_HEADERS },
   );
 }
 
@@ -258,11 +263,23 @@ export function createSoloPlusReviewRouteHandler(
   dependencies: SoloPlusReviewRouteDependencies,
 ) {
   return async function POST(request: Request): Promise<NextResponse> {
-    if (!dependencies.reviewActionsEnabled()) {
+    const reviewActionScope = dependencies.resolveReviewActionScope();
+    if (!reviewActionScope) {
       return buildReleaseBlockedResponse();
     }
 
-    const guard = await dependencies.requireSuperAdminSession();
+    let guard: Awaited<ReturnType<RequireSuperAdminSessionFn>>;
+    try {
+      guard = await dependencies.requireSuperAdminSession();
+    } catch (error) {
+      dependencies.onUnexpectedError?.(error);
+      return buildErrorResponse(
+        500,
+        "Admin authorization failed unexpectedly.",
+        "INTERNAL_ERROR",
+      );
+    }
+
     if (!guard.ok) {
       return buildErrorResponse(
         guard.status,
@@ -287,6 +304,10 @@ export function createSoloPlusReviewRouteHandler(
         getErrorMessage(error, "Invalid request body."),
         "INVALID_REQUEST",
       );
+    }
+
+    if (!isSoloPlusReviewActionWithinScope(reviewActionScope, input)) {
+      return buildReleaseBlockedResponse();
     }
 
     try {
@@ -317,7 +338,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     ]);
 
   const handler = createSoloPlusReviewRouteHandler({
-    reviewActionsEnabled: () => areSoloPlusReviewActionsEnabled(process.env),
+    resolveReviewActionScope: () => resolveSoloPlusReviewActionScope(process.env),
     requireSuperAdminSession,
     createReviewerService: createSoloPlusReviewerService,
     assertBrowserMutationOriginRequest: (req) =>

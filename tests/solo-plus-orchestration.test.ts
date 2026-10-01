@@ -225,11 +225,25 @@ class FakeSoloPlusRepository implements SoloPlusCaseRepository {
       return { kind: "not_found" };
     }
 
-    const existingEvent = (this.events.get(input.caseId) || []).find(
-      (event) => event.requestIdempotencyKey === input.requestIdempotencyKey,
-    );
+    let existingEvent: SoloPlusCaseEventRecord | undefined;
+    for (const events of this.events.values()) {
+      existingEvent = events.find(
+        (event) => event.requestIdempotencyKey === input.requestIdempotencyKey,
+      );
+      if (existingEvent) {
+        break;
+      }
+    }
     if (existingEvent) {
-      if (existingEvent.eventType === input.event.eventType && current.caseStatus === input.targetStatus) {
+      if (
+        existingEvent.caseId === input.caseId
+        && existingEvent.eventType === input.event.eventType
+        && existingEvent.reason === input.event.reason
+        && existingEvent.actorId === input.event.actorId
+        && existingEvent.policyVersion === input.event.policyVersion
+        && existingEvent.previousState.rowVersion === input.expectedRowVersion
+        && current.caseStatus === input.targetStatus
+      ) {
         return { kind: "idempotent_replay", caseRecord: this.cloneCase(current)!, event: this.cloneEvent(existingEvent) };
       }
 
@@ -450,7 +464,7 @@ function createHistoricalCase(
     caseStatus: overrides.caseStatus ?? "approved",
     paymentStatus: overrides.paymentStatus ?? "paid",
     refundStatus: overrides.refundStatus ?? "none",
-    paymentRecordId: null,
+    paymentRecordId: overrides.paymentRecordId ?? null,
     paymentProvider: null,
     paymentReference: null,
     expectedAmount: "13000.00",
@@ -473,6 +487,32 @@ function createHistoricalCase(
     createdAt: "2026-07-01T00:00:00.000Z",
     updatedAt: "2026-07-01T00:00:00.000Z",
   };
+}
+
+function createSatisfiedRequirements(caseId: string): SoloPlusCaseRequirementRecord[] {
+  return SOLO_PLUS_REQUIRED_REQUIREMENTS.map((requirementCode, index) => ({
+    id: `requirement-${caseId}-${index}`,
+    caseId,
+    requirementCode,
+    requirementState: "passed",
+    verificationLogId: null,
+    evidenceSourceType: "manual_submission",
+    evidenceSourceId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+    evidenceReference: null,
+    originalCompletedAt: null,
+    reuseDecisionAt: null,
+    reuseReason: null,
+    policyRuleApplied: null,
+    reviewedByAdminId: "admin-1",
+    reviewNote: "Synthetic satisfied requirement.",
+    providerName: null,
+    providerReference: null,
+    failureReason: null,
+    completedAt: "2026-07-03T00:00:00.000Z",
+    metadata: {},
+    createdAt: "2026-07-03T00:00:00.000Z",
+    updatedAt: "2026-07-03T00:00:00.000Z",
+  }));
 }
 
 async function run() {
@@ -968,8 +1008,10 @@ async function run() {
       sourcePlan: "solo_lite",
       activePlanSnapshot: "solo_lite",
       idempotencyKey: "idem-approve",
+      paymentRecordId: "payment-approve-1",
       rowVersion: 2,
     }),
+    createSatisfiedRequirements("approve-case"),
   );
   const approved = await reviewService.approveSoloPlusCase({
     caseId: "approve-case",
@@ -981,6 +1023,33 @@ async function run() {
   assert.equal(approved.caseRecord.caseStatus, "approved");
   assert.equal(approved.caseRecord.approvedByAdminId, "admin-1");
   assert.equal(approved.caseRecord.refundStatus, "none");
+
+  reviewRepo.seedCase(
+    createHistoricalCase({
+      id: "ineligible-approve-case",
+      merchantId: "merchant-ineligible-approve",
+      caseStatus: "manual_review",
+      paymentStatus: "pending",
+      refundStatus: "none",
+      paymentRecordId: null,
+      approvedAt: null,
+      sourcePlan: "solo_lite",
+      activePlanSnapshot: "solo_lite",
+      idempotencyKey: "idem-ineligible-approve",
+      rowVersion: 1,
+    }),
+  );
+  await expectCode(
+    () =>
+      reviewService.approveSoloPlusCase({
+        caseId: "ineligible-approve-case",
+        expectedRowVersion: 1,
+        requestIdempotencyKey: "approve-ineligible-1",
+        reason: "Must not approve an unpaid metadata-only fixture.",
+        accessContext: buildAdminReviewContext(),
+      }),
+    "SOLO_PLUS_CASE_STATE_CONFLICT",
+  );
 
   reviewRepo.seedCase(
     createHistoricalCase({
@@ -1017,6 +1086,64 @@ async function run() {
   assert.equal(rejectReplay.outcome, "idempotent_replay");
 
   await expectCode(
+    () =>
+      reviewService.rejectSoloPlusCase({
+        caseId: "reject-case",
+        expectedRowVersion: 3,
+        requestIdempotencyKey: "reject-1",
+        reason: "Changed reason must not replay.",
+        accessContext: buildAdminReviewContext(),
+      }),
+    "SOLO_PLUS_IDEMPOTENCY_CONFLICT",
+  );
+
+  reviewRepo.seedCase(
+    createHistoricalCase({
+      id: "reject-case-different-case",
+      merchantId: "merchant-reject-different-case",
+      caseStatus: "manual_review",
+      paymentStatus: "pending",
+      refundStatus: "none",
+      rowVersion: 1,
+    }),
+  );
+  await expectCode(
+    () =>
+      reviewService.rejectSoloPlusCase({
+        caseId: "reject-case-different-case",
+        expectedRowVersion: 1,
+        requestIdempotencyKey: "reject-1",
+        reason: "Identity mismatch requires rejection.",
+        accessContext: buildAdminReviewContext(),
+      }),
+    "SOLO_PLUS_IDEMPOTENCY_CONFLICT",
+  );
+
+  await expectCode(
+    () =>
+      reviewService.rejectSoloPlusCase({
+        caseId: "reject-case",
+        expectedRowVersion: 4,
+        requestIdempotencyKey: "reject-1",
+        reason: "Identity mismatch requires rejection.",
+        accessContext: buildAdminReviewContext(),
+      }),
+    "SOLO_PLUS_IDEMPOTENCY_CONFLICT",
+  );
+
+  await expectCode(
+    () =>
+      reviewService.requestMoreInformationForSoloPlusCase({
+        caseId: "reject-case",
+        expectedRowVersion: 3,
+        requestIdempotencyKey: "reject-1",
+        reason: "Changed decision must not replay.",
+        accessContext: buildAdminReviewContext(),
+      }),
+    "SOLO_PLUS_IDEMPOTENCY_CONFLICT",
+  );
+
+  await expectCode(
     async () =>
       reviewService.approveSoloPlusCase({
         caseId: "reject-case",
@@ -1025,7 +1152,7 @@ async function run() {
         reason: "conflict",
         accessContext: buildAdminReviewContext(),
       }),
-    "SOLO_PLUS_IDEMPOTENCY_CONFLICT",
+    "SOLO_PLUS_CASE_STATE_CONFLICT",
   );
 
   const unpaidRejectRepo = new FakeSoloPlusRepository();

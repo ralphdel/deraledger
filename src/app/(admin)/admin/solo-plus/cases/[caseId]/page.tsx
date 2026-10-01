@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 
 import { AdminCaseDetail } from "@/components/solo-plus/admin-case-detail";
 import { requireSuperAdminSession } from "@/lib/admin-auth";
-import { areSoloPlusReviewActionsEnabled } from "@/lib/server/solo-plus-review-action-release";
+import { resolveSoloPlusReviewActionScope } from "@/lib/server/solo-plus-review-action-release";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +19,10 @@ export default async function SoloPlusAdminCaseDetailPage({
   }
 
   const { caseId } = await params;
+  const reviewActionScope = resolveSoloPlusReviewActionScope(process.env);
+  const allowedReviewDecision = reviewActionScope?.caseId === caseId.toLowerCase()
+    ? reviewActionScope.decision
+    : null;
 
   return (
     <div className="space-y-6">
@@ -30,7 +34,7 @@ export default async function SoloPlusAdminCaseDetailPage({
       </div>
       <AdminCaseDetail
         caseId={caseId}
-        reviewActionsEnabled={areSoloPlusReviewActionsEnabled(process.env)}
+        allowedReviewDecision={allowedReviewDecision}
       />
     </div>
   );

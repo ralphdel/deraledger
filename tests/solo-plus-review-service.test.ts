@@ -51,6 +51,7 @@ class FakeAuthClient {
 class FakeSoloPlusRepository implements SoloPlusCaseRepository {
   readonly cases = new Map<string, SoloPlusCaseRecord>();
   readonly events = new Map<string, SoloPlusCaseEventRecord[]>();
+  transitionCallCount = 0;
 
   seedCase(caseRecord: SoloPlusCaseRecord) {
     this.cases.set(caseRecord.id, JSON.parse(JSON.stringify(caseRecord)) as SoloPlusCaseRecord);
@@ -119,6 +120,7 @@ class FakeSoloPlusRepository implements SoloPlusCaseRepository {
   async transitionCaseStatus(
     input: SoloPlusCaseTransitionAtomicParams,
   ): Promise<SoloPlusCaseTransitionAtomicResult> {
+    this.transitionCallCount += 1;
     const current = this.cases.get(input.caseId);
     if (!current) {
       return { kind: "not_found" };
@@ -128,7 +130,14 @@ class FakeSoloPlusRepository implements SoloPlusCaseRepository {
       (event) => event.requestIdempotencyKey === input.requestIdempotencyKey,
     );
     if (existingEvent) {
-      if (existingEvent.eventType === input.event.eventType && current.caseStatus === input.targetStatus) {
+      if (
+        existingEvent.eventType === input.event.eventType
+        && existingEvent.reason === input.event.reason
+        && existingEvent.actorId === input.event.actorId
+        && existingEvent.policyVersion === input.event.policyVersion
+        && existingEvent.previousState.rowVersion === input.expectedRowVersion
+        && current.caseStatus === input.targetStatus
+      ) {
         return {
           kind: "idempotent_replay",
           caseRecord: this.cloneCase(current)!,
@@ -237,18 +246,28 @@ function buildCaseRecord(overrides: Partial<SoloPlusCaseRecord> = {}): SoloPlusC
     activationIdempotencyKey: null,
     refundIdempotencyKey: overrides.refundIdempotencyKey ?? null,
     rowVersion: overrides.rowVersion ?? 0,
-    auditMetadata: {},
+    auditMetadata: overrides.auditMetadata ?? {
+      fixture_scope: "phase2b_admin_detail_smoke",
+      fixture_run_id: "phase2b-review-service-test",
+    },
     createdAt: "2026-07-09T00:00:00.000Z",
     updatedAt: "2026-07-09T00:00:00.000Z",
   };
 }
 
-function createEnv() {
+function createEnv(
+  caseId = "11111111-1111-4111-8111-111111111111",
+  decision: "request_more_information" | "reject" = "request_more_information",
+) {
   return {
     NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
     NEXT_PUBLIC_SUPABASE_ANON_KEY: "anon-key",
     SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
     DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTIONS_ENABLED: "true",
+    DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_CASE_ID: caseId,
+    DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_DECISION: decision,
+    DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_RUN_ID:
+      "phase2b-review-service-test",
     VERCEL_ENV: "preview",
   } as unknown as NodeJS.ProcessEnv;
 }
@@ -347,68 +366,153 @@ async function run() {
   );
   assert.equal(disabledAuthorityCalls, 0);
 
+  const wrongRunRepository = new FakeSoloPlusRepository();
+  const wrongRunCaseId = "33333333-3333-4333-8333-333333333333";
+  wrongRunRepository.seedCase(buildCaseRecord({
+    id: wrongRunCaseId,
+    auditMetadata: {
+      fixture_scope: "phase2b_admin_detail_smoke",
+      fixture_run_id: "different-valid-fixture-run",
+    },
+  }));
+  const wrongRunService = await createSoloPlusReviewerService({
+    authClient: adminAuthClient as never,
+    repository: wrongRunRepository,
+    resolveAdminAuthority: async () => ({ ok: true, userId: "admin-reviewer" }),
+    env: createEnv(wrongRunCaseId, "request_more_information"),
+    generateId: () => "event-review-wrong-run",
+  });
+  await assert.rejects(
+    () =>
+      wrongRunService.reviewCase({
+        caseId: wrongRunCaseId,
+        expectedRowVersion: 0,
+        requestIdempotencyKey: "wrong-fixture-run-1",
+        decision: "request_more_information",
+        reason: "This must stop before transition.",
+      }),
+    /fixture marker does not match/i,
+  );
+  assert.equal(wrongRunRepository.transitionCallCount, 0);
+
   const repository = new FakeSoloPlusRepository();
-  repository.seedCase(buildCaseRecord({ id: "approve-case", rowVersion: 4 }));
+  const moreInfoCaseId = "11111111-1111-4111-8111-111111111111";
+  repository.seedCase(buildCaseRecord({ id: moreInfoCaseId, rowVersion: 4 }));
   const service = await createSoloPlusReviewerService({
     authClient: adminAuthClient as never,
     repository,
     resolveAdminAuthority: async () => ({ ok: true, userId: "admin-reviewer" }),
-    env: createEnv(),
+    env: createEnv(moreInfoCaseId, "request_more_information"),
     now: () => new Date("2026-07-10T00:00:00.000Z"),
     generateId: () => "event-review-3",
   });
 
-  const approved = await service.reviewCase({
-    caseId: "approve-case",
+  const requestedMoreInformation = await service.reviewCase({
+    caseId: moreInfoCaseId,
     expectedRowVersion: 4,
-    requestIdempotencyKey: "approve-review-1",
-    decision: "approve",
-    reason: "Approved after manual review.",
+    requestIdempotencyKey: "more-info-review-1",
+    decision: "request_more_information",
+    reason: "Please provide a clearer synthetic fixture response.",
   });
-  assert.equal(approved.caseRecord.caseStatus, "approved");
-  assert.equal(approved.caseRecord.approvedByAdminId, "admin-reviewer");
-  assert.equal(approved.caseRecord.refundStatus, "none");
-  assert.equal(approved.event?.actorType, "admin");
-  assert.equal(approved.event?.actorId, "admin-reviewer");
+  assert.equal(requestedMoreInformation.caseRecord.caseStatus, "verification_pending");
+  assert.equal(requestedMoreInformation.event?.actorType, "admin");
+  assert.equal(requestedMoreInformation.event?.actorId, "admin-reviewer");
 
-  const approvedReplay = await service.reviewCase({
-    caseId: "approve-case",
+  const exactReplay = await service.reviewCase({
+    caseId: moreInfoCaseId,
     expectedRowVersion: 4,
-    requestIdempotencyKey: "approve-review-1",
-    decision: "approve",
-    reason: "Approved after manual review.",
+    requestIdempotencyKey: "more-info-review-1",
+    decision: "request_more_information",
+    reason: "Please provide a clearer synthetic fixture response.",
   });
-  assert.equal(approvedReplay.outcome, "idempotent_replay");
+  assert.equal(exactReplay.outcome, "idempotent_replay");
 
+  await assert.rejects(
+    () =>
+      service.reviewCase({
+        caseId: moreInfoCaseId,
+        expectedRowVersion: 4,
+        requestIdempotencyKey: "more-info-review-1",
+        decision: "request_more_information",
+        reason: "Changed reason must conflict.",
+      }),
+    /SOLO_PLUS_IDEMPOTENCY_CONFLICT|idempotency/i,
+  );
+
+  await assert.rejects(
+    () =>
+      service.reviewCase({
+        caseId: moreInfoCaseId,
+        expectedRowVersion: 4,
+        requestIdempotencyKey: "more-info-review-too-long",
+        decision: "request_more_information",
+        reason: "x".repeat(1001),
+      }),
+    /at most 1000 characters/i,
+  );
+
+  await assert.rejects(
+    () =>
+      service.reviewCase({
+        caseId: moreInfoCaseId,
+        expectedRowVersion: 5,
+        requestIdempotencyKey: "scope-decision-mismatch",
+        decision: "reject",
+        reason: "This decision is outside the exact scope.",
+      }),
+    /outside the approved staging scope/i,
+  );
+
+  await assert.rejects(
+    () =>
+      service.reviewCase({
+        caseId: "22222222-2222-4222-8222-222222222222",
+        expectedRowVersion: 1,
+        requestIdempotencyKey: "scope-case-mismatch",
+        decision: "request_more_information",
+        reason: "This case is outside the exact scope.",
+      }),
+    /outside the approved staging scope/i,
+  );
+
+  const rejectCaseId = "22222222-2222-4222-8222-222222222222";
   repository.seedCase(
     buildCaseRecord({
-      id: "reject-case",
+      id: rejectCaseId,
       rowVersion: 1,
-      paymentStatus: "paid",
+      paymentStatus: "pending",
       refundStatus: "none",
     }),
   );
-  const rejected = await service.reviewCase({
-    caseId: "reject-case",
+  const rejectService = await createSoloPlusReviewerService({
+    authClient: adminAuthClient as never,
+    repository,
+    resolveAdminAuthority: async () => ({ ok: true, userId: "admin-reviewer" }),
+    env: createEnv(rejectCaseId, "reject"),
+    now: () => new Date("2026-07-10T00:00:00.000Z"),
+    generateId: () => "event-review-reject",
+  });
+  const rejected = await rejectService.reviewCase({
+    caseId: rejectCaseId,
     expectedRowVersion: 1,
     requestIdempotencyKey: "reject-review-1",
     decision: "reject",
     reason: "Rejected for mismatch.",
   });
   assert.equal(rejected.caseRecord.caseStatus, "rejected");
-  assert.equal(rejected.caseRecord.refundStatus, "review_required");
+  assert.equal(rejected.caseRecord.refundStatus, "none");
   assert.equal(rejected.caseRecord.rejectedByAdminId, "admin-reviewer");
 
   await assert.rejects(
     () =>
-      service.reviewCase({
-        caseId: "reject-case",
+      rejectService.reviewCase({
+        caseId: rejectCaseId,
         expectedRowVersion: 2,
         requestIdempotencyKey: "reject-review-1",
-        decision: "approve",
-        reason: "conflict",
+        decision: "request_more_information",
+        reason: "This decision is outside the configured scope.",
       }),
-    /SOLO_PLUS_IDEMPOTENCY_CONFLICT|idempotency/i,
+    /outside the approved staging scope/i,
   );
 
   console.log("solo-plus-review-service.test.ts passed");

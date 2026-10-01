@@ -13,16 +13,18 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  SOLO_PLUS_REVIEW_REASON_MAX_LENGTH,
+  type SoloPlusStagingAcceptanceDecision,
+} from "@/lib/solo-plus/review-action-contract";
 import { getSoloPlusDecisionConfirmationCopy } from "@/lib/solo-plus/ui";
 
 type AdminReviewFormProps = {
-  actionsEnabled: boolean;
+  allowedDecision: SoloPlusStagingAcceptanceDecision | null;
   caseId: string;
   rowVersion: number;
   onSuccess: () => Promise<void> | void;
 };
-
-type ReviewDecision = "" | "request_more_information" | "approve" | "reject";
 
 function createIdempotencyKey() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -50,32 +52,37 @@ function mapDecisionError(code: string | null): string {
 }
 
 export function AdminReviewForm({
-  actionsEnabled,
+  allowedDecision,
   caseId,
   rowVersion,
   onSuccess,
 }: AdminReviewFormProps) {
-  const [decision, setDecision] = useState<ReviewDecision>("");
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [attemptKey, setAttemptKey] = useState<string | null>(null);
 
-  const reasonRequired = decision === "request_more_information" || decision === "reject";
+  const decision = allowedDecision;
+  const reasonRequired = decision !== null;
   const confirmationCopy = useMemo(
-    () => getSoloPlusDecisionConfirmationCopy(decision),
+    () => getSoloPlusDecisionConfirmationCopy(decision ?? ""),
     [decision],
   );
 
   async function submitDecision() {
-    if (!decision) {
+    if (decision == null) {
       setError("Choose a review decision.");
       return;
     }
 
     if (reasonRequired && reason.trim() === "") {
       setError("Add a reason before submitting this review decision.");
+      return;
+    }
+
+    if (reason.trim().length > SOLO_PLUS_REVIEW_REASON_MAX_LENGTH) {
+      setError(`Reason must be at most ${SOLO_PLUS_REVIEW_REASON_MAX_LENGTH} characters.`);
       return;
     }
 
@@ -109,7 +116,6 @@ export function AdminReviewForm({
         return;
       }
 
-      setDecision("");
       setReason("");
       setAttemptKey(null);
       setConfirmOpen(false);
@@ -121,25 +127,17 @@ export function AdminReviewForm({
     }
   }
 
-  function handleDecisionChange(nextDecision: ReviewDecision) {
-    setDecision(nextDecision);
-    setAttemptKey(null);
-    setError(null);
-  }
-
   function handleReasonChange(nextReason: string) {
     setReason(nextReason);
     setAttemptKey(null);
     setError(null);
   }
 
-  const primaryLabel = decision === "approve"
-    ? "Approve"
-    : decision === "reject"
+  const primaryLabel = decision === "reject"
     ? "Reject"
     : "Request more information";
 
-  if (!actionsEnabled) {
+  if (allowedDecision == null) {
     return (
       <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
         <p className="font-medium">Review actions are disabled for this release gate.</p>
@@ -154,18 +152,10 @@ export function AdminReviewForm({
   return (
     <div className="space-y-4 rounded-2xl border border-border bg-background p-4">
       <div className="space-y-2">
-        <Label htmlFor="solo-plus-review-decision">Review decision</Label>
-        <select
-          id="solo-plus-review-decision"
-          value={decision}
-          onChange={(event) => handleDecisionChange(event.target.value as ReviewDecision)}
-          className="h-11 w-full rounded-lg border border-input bg-background px-3 text-sm"
-        >
-          <option value="">Select a decision</option>
-          <option value="request_more_information">Request more information</option>
-          <option value="approve">Approve</option>
-          <option value="reject">Reject</option>
-        </select>
+        <p className="text-sm font-medium text-foreground">Scoped review decision</p>
+        <p className="rounded-lg border border-input bg-muted/40 px-3 py-2 text-sm">
+          {allowedDecision === "reject" ? "Reject" : "Request more information"}
+        </p>
       </div>
 
       <div className="space-y-2">
@@ -176,10 +166,9 @@ export function AdminReviewForm({
           id="solo-plus-review-reason"
           value={reason}
           onChange={(event) => handleReasonChange(event.target.value)}
+          maxLength={SOLO_PLUS_REVIEW_REASON_MAX_LENGTH}
           placeholder={
-            decision === "approve"
-              ? "Optional approval note for the case history."
-              : "Add the merchant-facing reason for this decision."
+            "Add the merchant-facing reason for this decision."
           }
         />
       </div>
@@ -192,9 +181,9 @@ export function AdminReviewForm({
 
       <div className="flex flex-wrap items-center gap-3">
         <Button
-          disabled={submitting || !decision}
+          disabled={submitting}
           onClick={() => {
-            if (decision === "approve" || decision === "reject") {
+            if (decision === "reject") {
               setConfirmOpen(true);
               return;
             }

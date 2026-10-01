@@ -231,18 +231,33 @@ async function run() {
 
   const reviewFormMarkup = renderToStaticMarkup(
     <AdminReviewForm
-      actionsEnabled={true}
+      allowedDecision="request_more_information"
       caseId="11111111-1111-4111-8111-111111111111"
       rowVersion={4}
       onSuccess={() => undefined}
     />,
   );
   assert.equal(reviewFormMarkup.includes("Activate"), false);
-  assert.equal(reviewFormMarkup.includes("Approve"), true);
+  assert.equal(reviewFormMarkup.includes("Request more information"), true);
+  assert.equal(reviewFormMarkup.includes("Approve"), false);
+  assert.equal(reviewFormMarkup.includes("Reopen"), false);
+  assert.equal(reviewFormMarkup.includes('maxLength="1000"'), true);
+
+  const rejectReviewFormMarkup = renderToStaticMarkup(
+    <AdminReviewForm
+      allowedDecision="reject"
+      caseId="11111111-1111-4111-8111-111111111111"
+      rowVersion={4}
+      onSuccess={() => undefined}
+    />,
+  );
+  assert.equal(rejectReviewFormMarkup.includes("Reject"), true);
+  assert.equal(rejectReviewFormMarkup.includes("Approve"), false);
+  assert.equal(rejectReviewFormMarkup.includes("Reopen"), false);
 
   const disabledReviewFormMarkup = renderToStaticMarkup(
     <AdminReviewForm
-      actionsEnabled={false}
+      allowedDecision={null}
       caseId="11111111-1111-4111-8111-111111111111"
       rowVersion={4}
       onSuccess={() => undefined}

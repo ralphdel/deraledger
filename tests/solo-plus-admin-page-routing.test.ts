@@ -24,7 +24,9 @@ function run() {
   assert.match(queuePageSource, /requireSuperAdminSession/);
   assert.match(queuePageSource, /<AdminReviewQueue\s*\/>/);
   assert.match(detailPageSource, /requireSuperAdminSession/);
-  assert.match(detailPageSource, /<AdminCaseDetail caseId=\{caseId\}\s*\/>/);
+  assert.match(detailPageSource, /resolveSoloPlusReviewActionScope\(process\.env\)/);
+  assert.match(detailPageSource, /reviewActionScope\?\.caseId === caseId\.toLowerCase\(\)/);
+  assert.match(detailPageSource, /allowedReviewDecision=\{allowedReviewDecision\}/);
 
   assert.match(indexPageSource, /redirect\("\/admin\/solo-plus\/cases"\)/);
   assert.match(
@@ -36,6 +38,7 @@ function run() {
   assert.match(queueSource, /href=\{`\/admin\/solo-plus\/cases\/\$\{item\.caseId\}`\}/);
   assert.doesNotMatch(queueSource, /href=\{`\/admin\/solo-plus\/\$\{item\.caseId\}`\}/);
   assert.match(detailSource, /fetch\(`\/api\/admin\/solo-plus\/cases\/\$\{caseId\}`/);
+  assert.match(detailSource, /allowedDecision=\{allowedReviewDecision\}/);
 
   console.log("solo-plus-admin-page-routing.test.ts passed");
 }

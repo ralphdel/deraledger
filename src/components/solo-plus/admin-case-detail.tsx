@@ -6,6 +6,7 @@ import { Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import type { SoloPlusAdminCaseDetailDto } from "@/lib/solo-plus/server/route-contracts";
+import type { SoloPlusStagingAcceptanceDecision } from "@/lib/solo-plus/review-action-contract";
 import {
   getSoloPlusReviewHistoryLabel,
 } from "@/lib/solo-plus/ui";
@@ -13,7 +14,7 @@ import { AdminReviewForm } from "./admin-review-form";
 
 type AdminCaseDetailProps = {
   caseId: string;
-  reviewActionsEnabled: boolean;
+  allowedReviewDecision: SoloPlusStagingAcceptanceDecision | null;
 };
 
 function mapDetailError(code: string | null) {
@@ -31,7 +32,7 @@ function mapDetailError(code: string | null) {
   }
 }
 
-export function AdminCaseDetail({ caseId, reviewActionsEnabled }: AdminCaseDetailProps) {
+export function AdminCaseDetail({ caseId, allowedReviewDecision }: AdminCaseDetailProps) {
   const [detail, setDetail] = useState<SoloPlusAdminCaseDetailDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -269,7 +270,7 @@ export function AdminCaseDetail({ caseId, reviewActionsEnabled }: AdminCaseDetai
             </CardHeader>
             <CardContent>
               <AdminReviewForm
-                actionsEnabled={reviewActionsEnabled}
+                allowedDecision={allowedReviewDecision}
                 caseId={caseId}
                 rowVersion={detail.case.rowVersion}
                 onSuccess={loadDetail}

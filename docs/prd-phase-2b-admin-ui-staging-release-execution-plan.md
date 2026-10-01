@@ -224,13 +224,25 @@ action controls. A direct POST to `/api/admin/solo-plus/review` must return a
 private/no-store `404` while the gate is off. Do not set the action flag for
 this queue/detail smoke.
 
+The controlled follow-on design is recorded in
+`docs/prd-phase-2b-admin-ui-staging-review-action-acceptance-plan.md`. It does
+not authorize flag enablement or an action. Source hardening now limits a
+window to one exact marked fixture and one decision, bounds reasons, minimizes
+no-store responses, and adds a forward exact-intent/approval-eligibility RPC
+migration. Request-more-information remains the first proposed action,
+followed by unpaid reject on a separate fresh fixture. Approval and reopen are
+not accepted scope decisions and remain separate gates.
+
 Only after a separate review explicitly enables the mutation gate may a future
 plan test, on independent fixtures:
 
 1. request more information (reason required);
 2. reject (reason required; confirm any refund review state is only recorded,
-   not executed); and
-3. approve (optional note; assert approval leaves activation pending).
+   not executed).
+
+Approve requires a separate paid/evidence-eligible fixture and is not an
+allowed decision in the first scoped action gate. Reopen is likewise excluded
+until its Admin UI and refund/rejection-state contract are reviewed.
 
 Use a fresh row version and a unique idempotency key for each test. Repeat the
 same request once only to verify idempotent replay, then issue a stale

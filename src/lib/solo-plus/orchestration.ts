@@ -25,9 +25,11 @@ import {
 } from "./repository";
 import {
   SOLO_PLUS_REQUIRED_REQUIREMENTS,
+  areAllSoloPlusRequirementsSatisfied,
   assertSoloPlusCaseTransition,
   isTerminalSoloPlusCaseStatus,
 } from "./state";
+import { SOLO_PLUS_REVIEW_REASON_MAX_LENGTH } from "./review-action-contract";
 
 type SoloPlusReviewerAccessContext = {
   mode: "admin_review";
@@ -255,7 +257,16 @@ function assertReviewReason(
     );
   }
 
-  return value.trim();
+  const normalized = value.trim();
+  if (normalized.length > SOLO_PLUS_REVIEW_REASON_MAX_LENGTH) {
+    throw createIssuesError(
+      "SOLO_PLUS_INVALID_REVIEW_INPUT",
+      `${field} must be at most ${SOLO_PLUS_REVIEW_REASON_MAX_LENGTH} characters.`,
+      field,
+    );
+  }
+
+  return normalized;
 }
 
 function assertExpectedRowVersion(value: unknown): number {
@@ -1293,6 +1304,23 @@ export function createSoloPlusOrchestration(
         throw new SoloPlusOrchestrationError(
           "SOLO_PLUS_CASE_NOT_FOUND",
           "Solo Plus case not found.",
+        );
+      }
+
+      const requirements = await repository.listRequirements(caseId);
+      if (
+        currentCase.paymentStatus !== "paid"
+        || currentCase.paymentRecordId == null
+        || !areAllSoloPlusRequirementsSatisfied(
+          requirements.map((requirement) => ({
+            code: requirement.requirementCode,
+            state: requirement.requirementState,
+          })),
+        )
+      ) {
+        throw new SoloPlusOrchestrationError(
+          "SOLO_PLUS_CASE_STATE_CONFLICT",
+          "Solo Plus case is not eligible for approval.",
         );
       }
 

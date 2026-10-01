@@ -8,6 +8,7 @@ import {
   type RequestMoreInformationSoloPlusCaseInput,
   type SoloPlusOrchestrationDependencies,
 } from "../orchestration";
+import type { SoloPlusReviewerDecision } from "../review-action-contract";
 import type {
   SoloPlusCaseMutationResult,
   SoloPlusCaseRepository,
@@ -25,13 +26,12 @@ import {
   createSoloPlusSupabaseRepository,
   type SoloPlusSupabaseClientLike,
 } from "./supabase-repository";
-import { areSoloPlusReviewActionsEnabled } from "@/lib/server/solo-plus-review-action-release";
+import {
+  isSoloPlusReviewActionWithinScope,
+  resolveSoloPlusReviewActionScope,
+} from "@/lib/server/solo-plus-review-action-release";
 
-export type SoloPlusReviewerDecision =
-  | "request_more_information"
-  | "approve"
-  | "reject"
-  | "reopen";
+export type { SoloPlusReviewerDecision } from "../review-action-contract";
 
 export type ReviewSoloPlusCaseInput = {
   caseId: string;
@@ -91,14 +91,16 @@ function buildReviewerAccessContext(reviewerId: string) {
 export async function createSoloPlusReviewerService(
   options: CreateSoloPlusReviewerServiceOptions = {},
 ): Promise<SoloPlusReviewerService> {
-  assertSoloPlusServerEnvironment(options.env ?? process.env);
-
-  if (!areSoloPlusReviewActionsEnabled(options.env ?? process.env)) {
+  const env = options.env ?? process.env;
+  const reviewActionScope = resolveSoloPlusReviewActionScope(env);
+  if (!reviewActionScope) {
     throw new SoloPlusReviewerServiceError(
       "SOLO_PLUS_SERVER_FORBIDDEN",
       "Solo Plus review actions are disabled for this release gate.",
     );
   }
+
+  assertSoloPlusServerEnvironment(env);
 
   const authority = await (options.resolveAdminAuthority ?? resolveDbBackedSuperAdminSession)({
     authClient: options.authClient,
@@ -139,6 +141,25 @@ export async function createSoloPlusReviewerService(
     repository,
     reviewerId: authority.userId,
     async reviewCase(input) {
+      if (!isSoloPlusReviewActionWithinScope(reviewActionScope, input)) {
+        throw new SoloPlusReviewerServiceError(
+          "SOLO_PLUS_SERVER_FORBIDDEN",
+          "Solo Plus review action is outside the approved staging scope.",
+        );
+      }
+
+      const scopedCase = await repository.findCaseById(input.caseId);
+      if (
+        !scopedCase
+        || scopedCase.auditMetadata.fixture_scope !== "phase2b_admin_detail_smoke"
+        || scopedCase.auditMetadata.fixture_run_id !== reviewActionScope.runId
+      ) {
+        throw new SoloPlusReviewerServiceError(
+          "SOLO_PLUS_SERVER_FORBIDDEN",
+          "Solo Plus review fixture marker does not match the approved staging scope.",
+        );
+      }
+
       const baseInput = {
         caseId: input.caseId,
         expectedRowVersion: input.expectedRowVersion,

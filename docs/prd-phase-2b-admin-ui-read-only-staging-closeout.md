@@ -52,6 +52,14 @@ isolated fixture, retain a default-disabled action gate until explicit staging
 approval, and test one action at a time with read-only evidence after each
 operation. It must keep approval separate from merchant activation.
 
+That gate is now specified in
+`docs/prd-phase-2b-admin-ui-staging-review-action-acceptance-plan.md`. The plan
+and its source hardening patch are ready for independent review. Execution
+remains blocked pending the forward staging migration gate, staging-only
+deployment, a fresh fixture approval, and final action approval. The existing
+metadata-only unpaid fixture is not valid for approval, and reopen has no
+accepted Admin UI control.
+
 M030/live readiness, activation, collection unlock, payment/refund execution,
 document viewing, broader legacy-admin release, runtime adoption, and all
 production activity are separate gates and must not be bundled into that
