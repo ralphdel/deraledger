@@ -120,6 +120,108 @@ async function run() {
     null,
   );
   assert.equal(
+    resolveSoloPlusReviewActionScope({
+      ...enabledEnv,
+      DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_DECISION: "reject",
+    }),
+    null,
+  );
+
+  const dedicatedStagingProductionEnv = {
+    ...enabledEnv,
+    DERALEDGER_DEPLOYMENT_TARGET: "staging",
+    NEXT_PUBLIC_SUPABASE_URL: "https://fsjljliiyfchkwbjifzw.supabase.co",
+    VERCEL_ENV: "production",
+    VERCEL_PROJECT_PRODUCTION_URL: "deraledger-staging.vercel.app",
+  };
+  assert.deepEqual(
+    resolveSoloPlusReviewActionScope(dedicatedStagingProductionEnv),
+    enabledScope,
+  );
+
+  for (const missingStagingIdentity of [
+    { DERALEDGER_DEPLOYMENT_TARGET: "" },
+    { NEXT_PUBLIC_SUPABASE_URL: "" },
+    { VERCEL_PROJECT_PRODUCTION_URL: "" },
+    { NEXT_PUBLIC_SUPABASE_URL: "https://another-project.supabase.co" },
+    { VERCEL_PROJECT_PRODUCTION_URL: "another-staging.vercel.app" },
+  ]) {
+    assert.equal(
+      resolveSoloPlusReviewActionScope({
+        ...dedicatedStagingProductionEnv,
+        ...missingStagingIdentity,
+      }),
+      null,
+    );
+  }
+
+  assert.equal(
+    resolveSoloPlusReviewActionScope({
+      ...dedicatedStagingProductionEnv,
+      DERALEDGER_DEPLOYMENT_TARGET: "all",
+    }),
+    null,
+  );
+  assert.equal(
+    resolveSoloPlusReviewActionScope({
+      ...dedicatedStagingProductionEnv,
+      NEXT_PUBLIC_SUPABASE_URL: "https://gznwibespgkwknnvbrlv.supabase.co",
+    }),
+    null,
+  );
+  assert.equal(
+    resolveSoloPlusReviewActionScope({
+      ...dedicatedStagingProductionEnv,
+      NEXT_PUBLIC_APP_URL: "https://www.deraledger.com",
+    }),
+    null,
+  );
+  assert.equal(
+    resolveSoloPlusReviewActionScope({
+      ...dedicatedStagingProductionEnv,
+      SUPABASE_URL: "https://another-project.supabase.co",
+    }),
+    null,
+  );
+  assert.equal(
+    resolveSoloPlusReviewActionScope({
+      ...dedicatedStagingProductionEnv,
+      NEXT_PUBLIC_APP_URL: "https://another-staging.vercel.app",
+    }),
+    null,
+  );
+  assert.equal(
+    resolveSoloPlusReviewActionScope({
+      ...enabledEnv,
+      NEXT_PUBLIC_SUPABASE_URL: "https://gznwibespgkwknnvbrlv.supabase.co",
+    }),
+    null,
+  );
+  assert.equal(
+    resolveSoloPlusReviewActionScope({
+      ...dedicatedStagingProductionEnv,
+      DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_CASE_ID:
+        "22222222-2222-4222-8222-222222222222,33333333-3333-4333-8333-333333333333",
+    }),
+    null,
+  );
+  for (const broadRunId of ["all", "any", "*"]) {
+    assert.equal(
+      resolveSoloPlusReviewActionScope({
+        ...dedicatedStagingProductionEnv,
+        DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_RUN_ID: broadRunId,
+      }),
+      null,
+    );
+  }
+  assert.equal(
+    resolveSoloPlusReviewActionScope({
+      ...dedicatedStagingProductionEnv,
+      DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_DECISION: "reject",
+    }),
+    null,
+  );
+  assert.equal(
     resolveSoloPlusReviewActionScope({ ...enabledEnv, VERCEL_ENV: "production" }),
     null,
   );

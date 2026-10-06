@@ -274,13 +274,24 @@ paste raw rows or commercial values.
 
 No environment change is authorized by this document alone. After preflight
 evidence receives separate approval, use the Vercel project dashboard and
-select only the non-production staging environment for the staging app.
-Do not use team-wide/shared scope. If that deployment reports
-`VERCEL_ENV=production`, stop; the source gate intentionally rejects it.
+select only the dedicated staging project. Do not use team-wide/shared scope.
 
-Set exactly these four values for one short acceptance window:
+Vercel may report `VERCEL_ENV=production` for the production slot of this
+separate staging project. That classification alone is not deployment
+identity. In that case the source gate requires all three positive staging
+identity checks: `DERALEDGER_DEPLOYMENT_TARGET=staging`, the existing
+`NEXT_PUBLIC_SUPABASE_URL` host must identify the approved staging Supabase
+project, and an existing Vercel/app-origin value must resolve exactly to
+`deraledger-staging.vercel.app`. The explicit label cannot enable the gate by
+itself. A missing or ambiguous identity, the real production Supabase ref, or
+the production app origin fails closed. Do not copy, print, or change any
+Supabase credential while checking the public project URL.
+
+For the dedicated staging project, set exactly these five scoped values for
+one short acceptance window:
 
 ```text
+DERALEDGER_DEPLOYMENT_TARGET=staging
 DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTIONS_ENABLED=true
 DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_CASE_ID=<fresh exact fixture case UUID>
 DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_DECISION=request_more_information
@@ -289,7 +300,11 @@ DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_RUN_ID=<fresh exact fixture run ID>
 
 Do not add another case, decision, or run value. Redeploy only the staging app
 after a separate staging deployment approval. The route and service must both
-remain blocked unless all four values and the database fixture marker agree.
+remain blocked unless all five values, the positive staging project/origin
+identity, and the database fixture marker agree. Preview deployments continue
+to require the four action-scope values; the explicit deployment-target value
+exists only to distinguish the dedicated staging project's Vercel production
+slot from the real production deployment.
 
 After redeployment:
 
@@ -470,7 +485,8 @@ review event exists.
 
 Immediately after postflight evidence:
 
-1. Remove all four review-action environment values from the staging scope.
+1. Remove all five review-action/deployment-target environment values from the
+   staging scope.
 2. Redeploy only staging under separate approval.
 3. Require the review POST to return private/no-store `404` again.
 4. Require the exact detail page to show the read-only notice and no controls.
@@ -532,7 +548,9 @@ Stop and remove the staging action values, if already present, when:
 - preflight or postflight emits anything except its exact PASS line;
 - the case/run/decision environment scope is missing, shared, broadened, or
   mismatched;
-- the deployment is classified as production;
+- a Vercel production-classified deployment lacks the exact staging target,
+  staging Supabase project identity, or staging app-origin identity;
+- a real production project/ref/origin indicator is detected;
 - any action other than request-more-information is exposed or requested;
 - a real case, merchant, payment, document, provider record, or customer datum
   would be touched;

@@ -476,7 +476,8 @@ async function run() {
   );
 
   const rejectCaseId = "22222222-2222-4222-8222-222222222222";
-  repository.seedCase(
+  const rejectRepository = new FakeSoloPlusRepository();
+  rejectRepository.seedCase(
     buildCaseRecord({
       id: rejectCaseId,
       rowVersion: 1,
@@ -484,36 +485,29 @@ async function run() {
       refundStatus: "none",
     }),
   );
-  const rejectService = await createSoloPlusReviewerService({
-    authClient: adminAuthClient as never,
-    repository,
-    resolveAdminAuthority: async () => ({ ok: true, userId: "admin-reviewer" }),
-    env: createEnv(rejectCaseId, "reject"),
-    now: () => new Date("2026-07-10T00:00:00.000Z"),
-    generateId: () => "event-review-reject",
-  });
-  const rejected = await rejectService.reviewCase({
-    caseId: rejectCaseId,
-    expectedRowVersion: 1,
-    requestIdempotencyKey: "reject-review-1",
-    decision: "reject",
-    reason: "Rejected for mismatch.",
-  });
-  assert.equal(rejected.caseRecord.caseStatus, "rejected");
-  assert.equal(rejected.caseRecord.refundStatus, "none");
-  assert.equal(rejected.caseRecord.rejectedByAdminId, "admin-reviewer");
-
+  let rejectAuthorityCalls = 0;
   await assert.rejects(
     () =>
-      rejectService.reviewCase({
-        caseId: rejectCaseId,
-        expectedRowVersion: 2,
-        requestIdempotencyKey: "reject-review-1",
-        decision: "request_more_information",
-        reason: "This decision is outside the configured scope.",
+      createSoloPlusReviewerService({
+        authClient: adminAuthClient as never,
+        repository: rejectRepository,
+        resolveAdminAuthority: async () => {
+          rejectAuthorityCalls += 1;
+          return { ok: true, userId: "admin-reviewer" };
+        },
+        env: createEnv(rejectCaseId, "reject"),
+        now: () => new Date("2026-07-10T00:00:00.000Z"),
+        generateId: () => "event-review-reject",
       }),
-    /outside the approved staging scope/i,
+    (error: unknown) => {
+      assert.ok(error instanceof SoloPlusReviewerServiceError);
+      assert.equal(error.code, "SOLO_PLUS_SERVER_FORBIDDEN");
+      assert.match(error.message, /disabled/i);
+      return true;
+    },
   );
+  assert.equal(rejectAuthorityCalls, 0);
+  assert.equal(rejectRepository.transitionCallCount, 0);
 
   console.log("solo-plus-review-service.test.ts passed");
 }

@@ -32,7 +32,12 @@ The current source establishes these controls:
 - `src/lib/server/solo-plus-review-action-release.ts` enables actions only
   when `DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTIONS_ENABLED` is exactly `true`
   after trimming and case normalization. Unset, blank, or false is disabled.
-- `VERCEL_ENV=production` disables actions even when the action flag is true.
+- A preview/development deployment can resolve an exact action scope. A
+  `VERCEL_ENV=production` deployment can do so only when it is the dedicated
+  staging project and has the explicit `DERALEDGER_DEPLOYMENT_TARGET=staging`
+  discriminator plus positive staging Supabase-project and app-origin
+  identity. Any real production project/ref/origin remains an unconditional
+  block.
 - The review route checks the release gate before authentication, service
   construction, or mutation and returns a private/no-store `404` while
   disabled.
@@ -40,16 +45,16 @@ The current source establishes these controls:
   the DB-backed super-admin context.
 - The Admin UI supplies `caseId`, `expectedRowVersion`, a generated
   idempotency key, the one exactly scoped decision, and its required reason.
-  The staging gate can expose only request-more-information or reject;
-  approve and reopen remain excluded.
+  The current staging gate can expose only request-more-information; reject,
+  approve, and reopen remain excluded.
 - `review_solo_plus_case_v1` locks the case, checks idempotency before row
   version, checks row version before state, updates the case, and inserts one
   admin audit event atomically.
 - Approval is separate from the activation RPC and does not itself unlock
   collection.
 - The staging action scope now also requires an exact case UUID, one allowed
-  decision (`request_more_information` or `reject`), and an exact fixture run
-  ID. The service verifies the case's fixture markers before orchestration.
+  decision (`request_more_information`), and an exact fixture run ID. The
+  service verifies the case's fixture markers before orchestration.
 - All mutation responses are explicitly private/no-store and contain only the
   minimal case status/version and event type/time needed by the UI.
 
@@ -68,8 +73,9 @@ be enabled:
    `DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_CASE_ID` and
    `DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_DECISION`, plus
    `DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_RUN_ID`. Missing, malformed,
-   non-UUID, unsupported, blank, non-preview/development, or production values
-   keep mutation disabled.
+   non-UUID, unsupported, or blank values keep mutation disabled. A Vercel
+   production-classified deployment additionally requires the exact staging
+   discriminator and positive staging project/origin identity.
 2. **Bounded review text.** `SOLO_PLUS_REVIEW_REASON_MAX_LENGTH` is the shared
    1,000-character TypeScript contract. The UI, API route, and orchestration
    layer enforce it. The forward RPC migration enforces the same bound at the
@@ -123,12 +129,13 @@ Each fixture must:
   audit marker; and
 - have no other active case for the fixture merchant.
 
-Use separate fixtures and separate flag windows for request-more-information
-and reject. Do not chain those two acceptance actions on one case. A future
-reopen gate must use a third fixture dedicated to the reject-then-reopen
-sequence. A future approval gate requires a different, separately designed
-paid and evidence-eligible synthetic fixture; do not manufacture a paid state
-or fake evidence with ad hoc SQL.
+The current source gate supports only the request-more-information fixture.
+Reject would require a separate source change, independent review, deployment,
+fresh fixture, and action window; do not chain actions on one case. A future
+reopen gate must use a dedicated reject-then-reopen fixture. A future approval
+gate requires a different, separately designed paid and evidence-eligible
+synthetic fixture; do not manufacture a paid state or fake evidence with ad
+hoc SQL.
 
 Capture post-action evidence before cleanup. Cleanup is a separately approved
 mutation using the guarded fixture executor; it must not run automatically and
@@ -140,10 +147,11 @@ payment data.
 1. **Request more information first.** It is the least terminal decision,
    requires a reason, does not approve, reject, activate, or create a refund
    review, and moves `manual_review` to `verification_pending`.
-2. **Reject second, on a fresh unpaid fixture.** It proves the confirmation,
-   required reason, rejection audit, and unpaid refund boundary. Expected
-   refund state is `none`; paid-rejection/refund behavior remains outside this
-   gate.
+2. **End this current gate after request-more-information.** Reject is not a
+   second action in this package. It remains blocked until a separate source
+   change, migration/fixture design where needed, independent review, exact
+   environment scope, deployment approval, and execution approval are all
+   complete.
 3. **Approve later, under a separate gate.** It remains blocked until payment
    and requirement eligibility are source-enforced and the synthetic paid
    fixture design is independently approved.
@@ -157,17 +165,20 @@ instruction to change an environment in this task.
 
 1. Prove the deployment belongs only to the staging application/project and
    record its immutable deployment identifier.
-2. Prove its runtime classification is not `VERCEL_ENV=production`. If the
-   staging project uses Vercel's production environment classification, stop:
-   the current hard block intentionally prevents enablement and must not be
-   bypassed.
+2. Record its `VERCEL_ENV` runtime classification. A preview/development build
+   follows the existing path. If the dedicated staging project reports
+   `VERCEL_ENV=production`, require `DERALEDGER_DEPLOYMENT_TARGET=staging`, an
+   exact approved staging Supabase public project URL, and the exact staging
+   app origin. The discriminator alone is insufficient. Any real production
+   ref/origin or ambiguous identity is a hard stop.
 3. Prove the production project/environment has no pending flag change. Do
    not inspect or modify production credentials.
 4. With separate approval, set
    `DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTIONS_ENABLED=true` only in the
-   non-production staging environment, set the independently reviewed exact
-   fixture-case, allowed-decision, and run-ID scope values, and redeploy only
-   staging.
+   dedicated staging project, set the independently reviewed exact fixture
+   case, `request_more_information` decision, and run-ID scope values, and—if
+   its Vercel classification is production—set
+   `DERALEDGER_DEPLOYMENT_TARGET=staging`. Redeploy only staging.
    If either scope value is missing or differs from the approved fixture/action,
    the route and service must remain blocked.
 5. Confirm an unauthenticated caller and an ordinary merchant cannot mutate,
@@ -177,9 +188,10 @@ instruction to change an environment in this task.
 8. Confirm the POST route again returns private/no-store `404`, the detail page
    returns to the read-only notice, and no action controls remain.
 
-Do not leave the action flag enabled between fixtures. Do not set the flag in
-a shared scope. `VERCEL_ENV=production` must remain an unconditional block
-even if the action flag is accidentally true.
+Do not leave the action flag or staging discriminator enabled between
+fixtures. Do not set either in a shared scope. Real production identity must
+remain an unconditional block even if every action value and the staging
+discriminator are accidentally present.
 
 ## Required pre-action UI/API state
 
@@ -195,7 +207,7 @@ Before every action window, all of the following must pass:
   URL, or document data;
 - case state is `manual_review` with the captured current row version;
 - payment is pending, refund state is none, and direct and reverse payment
-  links are absent for request-more-information/reject fixtures;
+  links are absent for the current request-more-information fixture;
 - activation idempotency is absent and no activation/collection readiness is
   present;
 - all six requirement rows are pristine metadata-only rows; and
@@ -282,9 +294,10 @@ END AS evidence;
 ROLLBACK;
 ```
 
-The preflight is valid for the request-more-information and unpaid-reject
-fixtures only. It intentionally blocks an approval attempt because the fixture
-is unpaid and evidence-free.
+This preflight is valid only for the current request-more-information fixture.
+It intentionally blocks reject and approval attempts because they require
+separate source-backed gates and because this fixture is unpaid and
+evidence-free.
 
 ## Action-level acceptance checks
 
@@ -321,7 +334,17 @@ submit a new-key request using the old row version. It must return HTTP `409`,
 `code=VERSION_CONFLICT`, with no state/event change. Stop if it returns a
 success, a generic 500, or mutates a second time.
 
-### Reject
+## Future reject gate (non-authorizing; not part of this package)
+
+The following is design guidance only. It does not authorize a reject action,
+fixture creation, environment change, deployment, cleanup, or execution under
+the current package. Reject requires a separate source change, any required
+migration and fixture plan, independent review, a separate exact environment
+scope, separate staging deployment approval, and separate final execution
+approval. Until those gates pass, reject must remain disabled and absent from
+the UI.
+
+### Reject design requirements
 
 Use a fresh, unpaid, pristine fixture. Test blank/whitespace reason locally
 before the accepted action; it must make no POST. Approval confirmation copy
@@ -383,12 +406,12 @@ A future reopen gate needs:
 
 Use this future user-run template only after the action and query are
 separately approved. Supply the privately retained request key and reviewer
-UUID locally, but do not paste either back. For the two actions in this plan,
-use these tuples:
+UUID locally, but do not paste either back. For this package, use only the
+request-more-information tuple below. A future reject package must define its
+own separately reviewed tuple and query; it is not actionable here.
 
 - request-more-information: `verification_pending`,
   `case_review_requested_more_information`, `none`;
-- reject: `rejected`, `case_rejected`, `none`.
 
 ```sql
 BEGIN READ ONLY;
@@ -475,8 +498,10 @@ remains a separate decision; it must not be inferred from case cleanup.
 
 Stop without retry and disable the staging flag if any of these occurs:
 
-- target/deployment/environment proof is incomplete, `VERCEL_ENV` is
-  production, or any production context is implicated;
+- target/deployment/environment proof is incomplete, a Vercel
+  production-classified staging build lacks the exact staging discriminator
+  and positive staging identities, or any real production context is
+  implicated;
 - the action flag is present in a shared or production scope;
 - the server-side configured case/decision scope is absent, malformed, or
   differs from the exact approved fixture/action;
@@ -506,7 +531,7 @@ Use only this redacted structure:
 ```text
 ACTION_GATE_SOURCE_TESTS=PASS|BLOCKED
 STAGING_BUILD_CLASSIFICATION=NON_PRODUCTION_CONFIRMED|BLOCKED
-ACTION=request_more_information|reject
+ACTION=request_more_information
 FIXTURE_MARKER=REDACTED_DATE_MARKER
 ACTION_PREFLIGHT=PASS|ACTION_PREFLIGHT|manual_review_ready|row_version=<n>
 REQUIRED_REASON_VALIDATION=PASS|BLOCKED
@@ -529,9 +554,10 @@ connection details, raw SQL rows, provider data, or document/storage data.
 
 ## What remains blocked after this gate
 
-Even after request-more-information and unpaid-reject acceptance pass, the
-following remain blocked:
+After request-more-information acceptance, the following remain blocked:
 
+- reject until its future source, migration/fixture, review, environment,
+  deployment, and execution gates pass;
 - approve until eligibility and paid-fixture prerequisites pass;
 - reopen until its UI and refund/rejection-state contract pass;
 - paid rejection/refund review and every refund execution path;
