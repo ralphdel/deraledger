@@ -227,9 +227,11 @@ function buildCaseRecord(overrides: Partial<SoloPlusCaseRecord> = {}): SoloPlusC
     caseStatus: overrides.caseStatus ?? "manual_review",
     paymentStatus: overrides.paymentStatus ?? "paid",
     refundStatus: overrides.refundStatus ?? "none",
-    paymentRecordId: null,
-    paymentProvider: null,
-    paymentReference: "SPL-REVIEW-1",
+    paymentRecordId: overrides.paymentRecordId ?? null,
+    paymentProvider: overrides.paymentProvider ?? null,
+    paymentReference: overrides.paymentReference === undefined
+      ? "SPL-REVIEW-1"
+      : overrides.paymentReference,
     expectedAmount: "13000.00",
     paymentCurrency: "NGN",
     requirementsPolicyVersion: "solo-plus-policy-v1",
@@ -509,6 +511,119 @@ async function run() {
   );
   assert.equal(rejectAuthorityCalls, 0);
   assert.equal(rejectRepository.transitionCallCount, 0);
+
+  const freshRejectCaseId = "55555555-5555-4555-8555-555555555555";
+  const freshRejectRunId = "phase2b-reject-20261013-a1b2";
+  const freshRejectEnv = createEnv(freshRejectCaseId, "reject");
+  freshRejectEnv.DERALEDGER_PHASE2B_SOLO_PLUS_REJECT_ACCEPTANCE_ENABLED = "true";
+  freshRejectEnv.DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_RUN_ID = freshRejectRunId;
+  freshRejectEnv.DERALEDGER_DEPLOYMENT_TARGET = "staging";
+  freshRejectEnv.NEXT_PUBLIC_SUPABASE_URL = "https://fsjljliiyfchkwbjifzw.supabase.co";
+  freshRejectEnv.VERCEL_PROJECT_PRODUCTION_URL = "deraledger-staging.vercel.app";
+  const freshRejectCase = buildCaseRecord({
+    id: freshRejectCaseId,
+    rowVersion: 1,
+    paymentStatus: "pending",
+    paymentReference: null,
+    auditMetadata: {
+      fixture_scope: "phase2b_admin_detail_smoke",
+      fixture_run_id: freshRejectRunId,
+      synthetic_read_only_admin_smoke: true,
+    },
+  });
+  const freshRejectRepository = new FakeSoloPlusRepository();
+  freshRejectRepository.seedCase(freshRejectCase);
+  const freshRejectService = await createSoloPlusReviewerService({
+    repository: freshRejectRepository,
+    resolveAdminAuthority: async () => ({ ok: true, userId: "admin-reviewer" }),
+    env: freshRejectEnv,
+    now: () => new Date("2026-10-13T00:00:00.000Z"),
+    generateId: () => "synthetic-reject-event",
+  });
+  const rejectInput = {
+    caseId: freshRejectCaseId,
+    expectedRowVersion: 1,
+    requestIdempotencyKey: "synthetic-reject-service-test",
+    decision: "reject" as const,
+    reason: "Please revise the synthetic details.",
+  };
+  for (const blockedDecision of ["request_more_information", "approve", "reopen"] as const) {
+    await assert.rejects(
+      () => freshRejectService.reviewCase({ ...rejectInput, decision: blockedDecision }),
+      /outside the approved staging scope/i,
+    );
+  }
+  assert.equal(freshRejectRepository.transitionCallCount, 0);
+
+  for (const unsafeCase of [
+    buildCaseRecord({ ...freshRejectCase, paymentStatus: "paid" }),
+    buildCaseRecord({ ...freshRejectCase, paymentRecordId: "66666666-6666-4666-8666-666666666666" }),
+    buildCaseRecord({ ...freshRejectCase, paymentProvider: "paystack" }),
+    buildCaseRecord({ ...freshRejectCase, paymentReference: "synthetic-payment-reference" }),
+    buildCaseRecord({ ...freshRejectCase, rowVersion: 2 }),
+    buildCaseRecord({ ...freshRejectCase, auditMetadata: {
+      fixture_scope: "phase2b_admin_detail_smoke",
+      fixture_run_id: freshRejectRunId,
+    } }),
+    buildCaseRecord({ ...freshRejectCase, auditMetadata: {
+      fixture_scope: "phase2b_admin_detail_smoke",
+      fixture_run_id: "phase2b-rmi-20261001-002",
+      synthetic_read_only_admin_smoke: true,
+    } }),
+  ]) {
+    const unsafeRepository = new FakeSoloPlusRepository();
+    unsafeRepository.seedCase(unsafeCase);
+    const unsafeService = await createSoloPlusReviewerService({
+      repository: unsafeRepository,
+      resolveAdminAuthority: async () => ({ ok: true, userId: "admin-reviewer" }),
+      env: freshRejectEnv,
+      generateId: () => "unused-synthetic-event",
+    });
+    await assert.rejects(
+      () => unsafeService.reviewCase(rejectInput),
+      /fresh unpaid staging fixture|fixture marker does not match/i,
+    );
+    assert.equal(unsafeRepository.transitionCallCount, 0);
+  }
+
+  const previouslyReviewedRepository = new FakeSoloPlusRepository();
+  previouslyReviewedRepository.seedCase(freshRejectCase);
+  previouslyReviewedRepository.events.set(freshRejectCaseId, [{
+    id: "66666666-6666-4666-8666-666666666666",
+    caseId: freshRejectCaseId,
+    eventType: "case_review_requested_more_information",
+    previousState: {},
+    newState: {},
+    actorType: "admin",
+    actorId: "admin-reviewer",
+    requestIdempotencyKey: "synthetic-prior-review",
+    reason: "Synthetic prior review.",
+    policyVersion: "solo-plus-policy-v1",
+    createdAt: "2026-10-12T00:00:00.000Z",
+  }]);
+  const previouslyReviewedService = await createSoloPlusReviewerService({
+    repository: previouslyReviewedRepository,
+    resolveAdminAuthority: async () => ({ ok: true, userId: "admin-reviewer" }),
+    env: freshRejectEnv,
+  });
+  await assert.rejects(
+    () => previouslyReviewedService.reviewCase(rejectInput),
+    /fresh unpaid staging fixture/i,
+  );
+  assert.equal(previouslyReviewedRepository.transitionCallCount, 0);
+
+  const syntheticReject = await freshRejectService.reviewCase(rejectInput);
+  assert.equal(syntheticReject.caseRecord.caseStatus, "rejected");
+  assert.equal(syntheticReject.caseRecord.rowVersion, 2);
+  assert.equal(syntheticReject.caseRecord.refundStatus, "none");
+  assert.equal(syntheticReject.event?.id, "synthetic-reject-event");
+  assert.equal(syntheticReject.event?.eventType, "case_rejected");
+  assert.equal(freshRejectRepository.transitionCallCount, 1);
+  await assert.rejects(
+    () => freshRejectService.reviewCase(rejectInput),
+    /fresh unpaid staging fixture/i,
+  );
+  assert.equal(freshRejectRepository.transitionCallCount, 1);
 
   // The route constructs the service without generateId. Keep the production
   // default covered through the real service/orchestration with an in-memory

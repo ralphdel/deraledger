@@ -1,6 +1,9 @@
 # Phase 2B Admin UI staging release execution plan
 
-**Status:** staging-only acceptance plan. It authorizes no database action,
+**Status:** historical staging-only release plan. RMI acceptance completed and
+staging returned to default-blocked. The next proposed reject gate is documented
+in `docs/prd-phase-2b-admin-ui-staging-reject-acceptance-runbook.md`. This plan
+authorizes no database action,
 runtime change, route-flag change, decision execution, activation, collection
 unlock, payment behaviour, or production activity by itself.
 
@@ -42,7 +45,7 @@ behaviour. Production remains blocked and out of scope.
 - The detail UI shows a requirement-level summary and case-event history, not
   direct table access or a document-storage browser.
 - The reviewed action form implementation retains row-version/idempotency and
-  reason requirements, but the current release gate withholds the form and
+  reason requirements, but the default-blocked release gate withholds the form and
   shows a read-only disabled-actions notice. No activation control exists.
 - The existing Solo Plus state model distinguishes `approved_pending_activation`
   from `activated`; its separate activation RPC is not part of this plan.
@@ -70,12 +73,14 @@ The Phase 2B source package now resolves the two code-level blockers:
 - The Phase 2B admin payment summary no longer returns or renders the internal
   payment/provider reference. The DTO retains only the provider classification,
   amount, currency, status, and confirmation time needed for review.
-- Solo Plus review mutations are now controlled by the server-only
+- Solo Plus review mutations are controlled by the server-only
   `DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTIONS_ENABLED` release gate. Unset,
   blank, and false values return a private/no-store `404` before authorization
-  or service construction. `VERCEL_ENV=production` always disables actions,
-  even if the flag is true. The reviewer service independently enforces the
-  same gate. Queue/detail GET routes are not gated and remain read-only.
+  or service construction. A production-classified deployment can resolve a
+  scope only when the separate dedicated staging target, public Supabase project,
+  and app origin all match; real production identity always blocks actions.
+  The reviewer service independently enforces the same gate. Queue/detail GET
+  routes are not gated and remain read-only.
 - The case-detail page computes the gate on the server. While disabled it
   renders a read-only release notice and no approve, reject, request-more-
   information, or reopen controls.

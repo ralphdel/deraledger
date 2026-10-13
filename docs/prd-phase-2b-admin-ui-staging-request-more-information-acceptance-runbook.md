@@ -1,9 +1,10 @@
 # Phase 2B staging request-more-information acceptance runbook
 
-**Status:** source-only controlled package. It authorizes creation of one fresh
-synthetic staging fixture only after independent review. It does not authorize
-an environment change, deployment, review mutation, cleanup, or production
-activity. Each later mutation remains a separate approval.
+**Status:** historical RMI acceptance package. The exact RMI action completed;
+the action environment values were removed and staging returned to the
+default-blocked deployment. This document authorizes no new fixture, environment
+change, deployment, review mutation, cleanup, or production activity. The new
+unpaid reject gate has its own separate source package and approvals.
 
 ## Fixed boundary
 

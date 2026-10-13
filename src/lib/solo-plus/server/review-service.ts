@@ -162,6 +162,30 @@ export async function createSoloPlusReviewerService(
         );
       }
 
+      if (input.decision === "reject") {
+        const isFreshUnpaidFixture =
+          scopedCase.auditMetadata.synthetic_read_only_admin_smoke === true
+          && scopedCase.caseStatus === "manual_review"
+          && scopedCase.rowVersion === 1
+          && scopedCase.paymentStatus === "pending"
+          && scopedCase.refundStatus === "none"
+          && scopedCase.paymentRecordId === null
+          && scopedCase.paymentProvider === null
+          && scopedCase.paymentReference === null
+          && scopedCase.activationIdempotencyKey === null
+          && scopedCase.refundIdempotencyKey === null
+          && scopedCase.approvedAt === null
+          && scopedCase.rejectedAt === null
+          && scopedCase.reopenedAt === null
+          && scopedCase.rejectionReason === null;
+        if (!isFreshUnpaidFixture || await repository.findLatestReviewDecisionEvent(input.caseId)) {
+          throw new SoloPlusReviewerServiceError(
+            "SOLO_PLUS_SERVER_FORBIDDEN",
+            "Solo Plus reject acceptance requires a fresh unpaid staging fixture.",
+          );
+        }
+      }
+
       const baseInput = {
         caseId: input.caseId,
         expectedRowVersion: input.expectedRowVersion,

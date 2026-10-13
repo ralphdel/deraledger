@@ -214,13 +214,75 @@ async function run() {
       null,
     );
   }
-  assert.equal(
-    resolveSoloPlusReviewActionScope({
-      ...dedicatedStagingProductionEnv,
-      DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_DECISION: "reject",
-    }),
-    null,
-  );
+  const rejectEnv = {
+    ...dedicatedStagingProductionEnv,
+    DERALEDGER_PHASE2B_SOLO_PLUS_REJECT_ACCEPTANCE_ENABLED: "true",
+    DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_DECISION: "reject",
+    DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_RUN_ID: "phase2b-reject-20261013-a1b2",
+  };
+  const rejectScope = resolveSoloPlusReviewActionScope(rejectEnv);
+  assert.deepEqual(rejectScope, {
+    caseId: "11111111-1111-4111-8111-111111111111",
+    decision: "reject",
+    runId: "phase2b-reject-20261013-a1b2",
+  });
+  assert.equal(areSoloPlusReviewActionsEnabled(rejectEnv), true);
+  assert.deepEqual(resolveSoloPlusReviewActionScope({ ...rejectEnv, VERCEL_ENV: "preview" }), rejectScope);
+  assert.equal(resolveSoloPlusReviewActionScope({
+    ...enabledEnv,
+    DERALEDGER_PHASE2B_SOLO_PLUS_REJECT_ACCEPTANCE_ENABLED: "true",
+  }), null);
+  assert.equal(resolveSoloPlusReviewActionScope({
+    ...enabledEnv,
+    DERALEDGER_PHASE2B_SOLO_PLUS_REJECT_ACCEPTANCE_ENABLED: "false",
+  }), null);
+  assert.equal(isSoloPlusReviewActionWithinScope(rejectScope!, {
+    caseId: rejectScope!.caseId,
+    decision: "reject",
+  }), true);
+  for (const blockedDecision of ["request_more_information", "approve", "reopen"]) {
+    assert.equal(isSoloPlusReviewActionWithinScope(rejectScope!, {
+      caseId: rejectScope!.caseId,
+      decision: blockedDecision,
+    }), false);
+    assert.equal(resolveSoloPlusReviewActionScope({
+      ...rejectEnv,
+      DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_DECISION: blockedDecision,
+    }), null);
+  }
+  assert.equal(isSoloPlusReviewActionWithinScope(rejectScope!, {
+    caseId: "22222222-2222-4222-8222-222222222222",
+    decision: "reject",
+  }), false);
+
+  for (const wrongRejectScope of [
+    { DERALEDGER_PHASE2B_SOLO_PLUS_REJECT_ACCEPTANCE_ENABLED: "" },
+    { DERALEDGER_PHASE2B_SOLO_PLUS_REJECT_ACCEPTANCE_ENABLED: "false" },
+    { DERALEDGER_PHASE2B_SOLO_PLUS_REJECT_ACCEPTANCE_ENABLED: "all" },
+    { DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTIONS_ENABLED: "" },
+    { DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_CASE_ID: "*" },
+    { DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_CASE_ID: "11111111-1111-4111-8111-111111111111,22222222-2222-4222-8222-222222222222" },
+    { DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_RUN_ID: "all" },
+    { DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_RUN_ID: "phase2b-rmi-20261001-002" },
+    { DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_RUN_ID: "phase2b-reject-20261013-" },
+    { DERALEDGER_DEPLOYMENT_TARGET: "" },
+    { NEXT_PUBLIC_SUPABASE_URL: "https://another-project.supabase.co" },
+    { VERCEL_PROJECT_PRODUCTION_URL: "another-staging.vercel.app" },
+    { NEXT_PUBLIC_SUPABASE_URL: "https://gznwibespgkwknnvbrlv.supabase.co" },
+    { NEXT_PUBLIC_APP_URL: "https://www.deraledger.com" },
+    { VERCEL_ENV: "" },
+  ]) {
+    assert.equal(resolveSoloPlusReviewActionScope({ ...rejectEnv, ...wrongRejectScope }), null);
+  }
+  assert.equal(resolveSoloPlusReviewActionScope({
+    ...rejectEnv,
+    VERCEL_ENV: "preview",
+    DERALEDGER_DEPLOYMENT_TARGET: "",
+  }), null);
+  assert.equal(resolveSoloPlusReviewActionScope({
+    ...dedicatedStagingProductionEnv,
+    DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_RUN_ID: "phase2b-reject-20261013-a1b2",
+  }), null);
   assert.equal(
     resolveSoloPlusReviewActionScope({ ...enabledEnv, VERCEL_ENV: "production" }),
     null,

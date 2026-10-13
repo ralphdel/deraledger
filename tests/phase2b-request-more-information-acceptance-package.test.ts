@@ -68,7 +68,7 @@ assert.match(runbook, /deraledger-staging\.vercel\.app/);
 assert.match(runbook, /explicit label cannot enable the gate by\s+itself/i);
 assert.match(runbook, /real production Supabase ref/i);
 
-const futureRejectMarker = "## Future reject gate (non-authorizing; not part of this package)";
+const futureRejectMarker = "## Reject design archive (non-authorizing; not part of this package)";
 const futureRejectStart = acceptancePlan.indexOf(futureRejectMarker);
 assert.ok(futureRejectStart >= 0, "reject guidance must be explicitly future-gated");
 const currentAcceptancePlan = acceptancePlan.slice(0, futureRejectStart);
@@ -84,7 +84,7 @@ assert.match(futureRejectPlan, /separate source change/i);
 assert.match(futureRejectPlan, /separate exact environment\s+scope/i);
 assert.match(futureRejectPlan, /separate staging deployment approval/i);
 assert.match(futureRejectPlan, /separate final execution\s+approval/i);
-assert.match(acceptancePlan, /End this current gate after request-more-information/i);
+assert.match(acceptancePlan, /The RMI gate ended after request-more-information/i);
 assert.doesNotMatch(currentAcceptancePlan, /two actions in this plan/i);
 assert.doesNotMatch(currentAcceptancePlan, /- reject:\s+`rejected`/i);
 
@@ -94,7 +94,7 @@ assert.match(releaseGate, /runId,/);
 assert.match(releaseGate, /scope\.caseId === input\.caseId\.trim\(\)\.toLowerCase\(\)/);
 assert.match(releaseGate, /scope\.decision === input\.decision\.trim\(\)\.toLowerCase\(\)/);
 assert.match(releaseGate, /DERALEDGER_DEPLOYMENT_TARGET/);
-assert.match(releaseGate, /CURRENT_STAGING_ACCEPTANCE_DECISION = "request_more_information"/);
+assert.match(releaseGate, /HISTORICAL_RMI_ACCEPTANCE_DECISION = "request_more_information"/);
 assert.match(releaseGate, /hasProductionIdentity\(env\)/);
 assert.match(releaseGate, /isExplicitDedicatedStagingDeployment\(env\)/);
 assert.match(detailPage, /reviewActionScope\?\.caseId === caseId\.toLowerCase\(\)/);

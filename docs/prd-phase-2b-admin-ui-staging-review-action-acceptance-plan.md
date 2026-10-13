@@ -1,14 +1,17 @@
 # Phase 2B Admin UI controlled staging review-action acceptance plan
 
-**Plan status:** source hardening, the staging migration/postflight, staging
-application deployment, and safe default-block smoke are complete. Staging
-review-action execution remains blocked until a fresh fixture and an exact
-single-action window receive their separate approvals.
+**Plan status:** historical RMI design and general review-action reference.
+The RMI action completed, its environment values were removed, and staging was
+redeployed default-blocked. The next proposed action is a separately reviewed
+unpaid reject gate in
+`docs/prd-phase-2b-admin-ui-staging-reject-acceptance-runbook.md`.
+No reject fixture, environment window, deployment, action, or cleanup is
+authorized by this general plan.
 
-The first action now has a narrower operator package:
+The completed first action used a narrower operator package:
 `docs/prd-phase-2b-admin-ui-staging-request-more-information-acceptance-runbook.md`.
 That package permits only one exact fixture/run/case and
-`request_more_information`; this broader plan does not widen that gate.
+`request_more_information`; this broader plan does not reopen that gate.
 
 **Completed prerequisite:** the read-only queue/detail staging gate and its
 fixture cleanup are complete. No prior fixture may be reused.
@@ -45,23 +48,25 @@ The current source establishes these controls:
   the DB-backed super-admin context.
 - The Admin UI supplies `caseId`, `expectedRowVersion`, a generated
   idempotency key, the one exactly scoped decision, and its required reason.
-  The current staging gate can expose only request-more-information; reject,
-  approve, and reopen remain excluded.
+  The completed RMI gate exposed only request-more-information. The proposed
+  reject gate requires a new explicit flag and fresh fixture; approve and
+  reopen remain excluded.
 - `review_solo_plus_case_v1` locks the case, checks idempotency before row
   version, checks row version before state, updates the case, and inserts one
   admin audit event atomically.
 - Approval is separate from the activation RPC and does not itself unlock
   collection.
-- The staging action scope now also requires an exact case UUID, one allowed
-  decision (`request_more_information`), and an exact fixture run ID. The
-  service verifies the case's fixture markers before orchestration.
+- Each staging action scope requires an exact case UUID, one allowed decision,
+  and an exact fixture run ID. The service verifies the case's fixture markers
+  before orchestration. The proposed reject gate adds a reject-specific flag,
+  fresh reject run ID, positive staging identity, and unpaid fixture check.
 - All mutation responses are explicitly private/no-store and contain only the
   minimal case status/version and event type/time needed by the UI.
 
 ## Implemented source controls requiring independent review
 
 The earlier global-only flag would have exposed every supported POST decision.
-The current patch replaces that behavior with exact case, decision, and run
+The earlier scoped patch replaced that behavior with exact case, decision, and run
 scope. The following work must be independently reviewed before any flag may
 be enabled:
 
@@ -129,9 +134,9 @@ Each fixture must:
   audit marker; and
 - have no other active case for the fixture merchant.
 
-The current source gate supports only the request-more-information fixture.
-Reject would require a separate source change, independent review, deployment,
-fresh fixture, and action window; do not chain actions on one case. A future
+The historical RMI gate supported only its request-more-information fixture.
+The proposed reject source package requires independent review, deployment,
+fresh fixture, and action approval; do not chain actions on one case. A future
 reopen gate must use a dedicated reject-then-reopen fixture. A future approval
 gate requires a different, separately designed paid and evidence-eligible
 synthetic fixture; do not manufacture a paid state or fake evidence with ad
@@ -147,8 +152,8 @@ payment data.
 1. **Request more information first.** It is the least terminal decision,
    requires a reason, does not approve, reject, activate, or create a refund
    review, and moves `manual_review` to `verification_pending`.
-2. **End this current gate after request-more-information.** Reject is not a
-   second action in this package. It remains blocked until a separate source
+2. **The RMI gate ended after request-more-information.** Reject is not a
+   second action on that fixture. It remains blocked until a separate source
    change, migration/fixture design where needed, independent review, exact
    environment scope, deployment approval, and execution approval are all
    complete.
@@ -207,7 +212,7 @@ Before every action window, all of the following must pass:
   URL, or document data;
 - case state is `manual_review` with the captured current row version;
 - payment is pending, refund state is none, and direct and reverse payment
-  links are absent for the current request-more-information fixture;
+  links were absent for the historical request-more-information fixture;
 - activation idempotency is absent and no activation/collection readiness is
   present;
 - all six requirement rows are pristine metadata-only rows; and
@@ -294,7 +299,7 @@ END AS evidence;
 ROLLBACK;
 ```
 
-This preflight is valid only for the current request-more-information fixture.
+This preflight is historical and valid only for its request-more-information fixture.
 It intentionally blocks reject and approval attempts because they require
 separate source-backed gates and because this fixture is unpaid and
 evidence-free.
@@ -334,11 +339,11 @@ submit a new-key request using the old row version. It must return HTTP `409`,
 `code=VERSION_CONFLICT`, with no state/event change. Stop if it returns a
 success, a generic 500, or mutates a second time.
 
-## Future reject gate (non-authorizing; not part of this package)
+## Reject design archive (non-authorizing; not part of this package)
 
 The following is design guidance only. It does not authorize a reject action,
 fixture creation, environment change, deployment, cleanup, or execution under
-the current package. Reject requires a separate source change, any required
+this historical package. Reject requires a separate source change, any required
 migration and fixture plan, independent review, a separate exact environment
 scope, separate staging deployment approval, and separate final execution
 approval. Until those gates pass, reject must remain disabled and absent from
@@ -407,7 +412,7 @@ A future reopen gate needs:
 Use this future user-run template only after the action and query are
 separately approved. Supply the privately retained request key and reviewer
 UUID locally, but do not paste either back. For this package, use only the
-request-more-information tuple below. A future reject package must define its
+request-more-information tuple below. The separate reject package defines its
 own separately reviewed tuple and query; it is not actionable here.
 
 - request-more-information: `verification_pending`,
@@ -556,7 +561,7 @@ connection details, raw SQL rows, provider data, or document/storage data.
 
 After request-more-information acceptance, the following remain blocked:
 
-- reject until its future source, migration/fixture, review, environment,
+- reject until its separate source, fixture, review, environment,
   deployment, and execution gates pass;
 - approve until eligibility and paid-fixture prerequisites pass;
 - reopen until its UI and refund/rejection-state contract pass;
@@ -570,8 +575,8 @@ After request-more-information acceptance, the following remain blocked:
 
 ## Gate verdict
 
-**READY_FOR_REVIEW for the source hardening patch; BLOCKED for staging
-review-action execution.** Action enablement is not approved until independent
-source/security review, the forward staging migration gate and postflight,
-staging-only deployment, a fresh fixture review, and separate final execution
-approval all pass. Production remains hard-blocked.
+**Historical RMI gate complete; proposed reject gate blocked pending separate
+approvals.** The new reject package is ready for independent source review only.
+Fresh fixture creation, read-only preflight, exact environment scope, staging
+deployment, reject execution, default-block restoration, and cleanup each
+require their own approval. Production remains hard-blocked.
