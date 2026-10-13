@@ -415,6 +415,7 @@ async function run() {
     reason: "Please provide a clearer synthetic fixture response.",
   });
   assert.equal(requestedMoreInformation.caseRecord.caseStatus, "verification_pending");
+  assert.equal(requestedMoreInformation.event?.id, "event-review-3");
   assert.equal(requestedMoreInformation.event?.actorType, "admin");
   assert.equal(requestedMoreInformation.event?.actorId, "admin-reviewer");
 
@@ -508,6 +509,58 @@ async function run() {
   );
   assert.equal(rejectAuthorityCalls, 0);
   assert.equal(rejectRepository.transitionCallCount, 0);
+
+  // The route constructs the service without generateId. Keep the production
+  // default covered through the real service/orchestration with an in-memory
+  // repository and injected authority; no database or network is involved.
+  const defaultIdCaseId = "44444444-4444-4444-8444-444444444444";
+  const defaultIdRepository = new FakeSoloPlusRepository();
+  defaultIdRepository.seedCase(buildCaseRecord({ id: defaultIdCaseId, rowVersion: 1 }));
+  const { createSoloPlusReviewRouteHandler } = await import(
+    new URL("../src/app/api/admin/solo-plus/review/route.ts", import.meta.url).href
+  );
+  const unexpectedErrors: unknown[] = [];
+  const defaultIdHandler = createSoloPlusReviewRouteHandler({
+    resolveReviewActionScope: () => ({
+      caseId: defaultIdCaseId,
+      decision: "request_more_information",
+      runId: "phase2b-review-service-test",
+    }),
+    requireSuperAdminSession: async () => ({ ok: true, userId: "admin-reviewer" }),
+    createReviewerService: () => createSoloPlusReviewerService({
+      repository: defaultIdRepository,
+      resolveAdminAuthority: async () => ({ ok: true, userId: "admin-reviewer" }),
+      env: createEnv(defaultIdCaseId),
+      // Intentionally omit generateId, just as the actual POST entry point does.
+    }),
+    onUnexpectedError: (error: unknown) => unexpectedErrors.push(error),
+  });
+  const defaultIdResponse = await defaultIdHandler(new Request(
+    "http://localhost/api/admin/solo-plus/review",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        caseId: defaultIdCaseId,
+        expectedRowVersion: 1,
+        requestIdempotencyKey: "default-id-synthetic-test",
+        decision: "request_more_information",
+        reason: "Please clarify the synthetic fixture response.",
+      }),
+    },
+  ));
+  assert.equal(defaultIdResponse.status, 200);
+  const defaultIdPayload = await defaultIdResponse.json();
+  assert.equal(defaultIdPayload.kind, "updated");
+  assert.equal(defaultIdPayload.case.caseStatus, "verification_pending");
+  assert.equal(defaultIdPayload.case.rowVersion, 2);
+  assert.deepEqual(unexpectedErrors, []);
+  assert.equal(defaultIdRepository.transitionCallCount, 1);
+  const defaultIdEvents = await defaultIdRepository.listSafeEvents(defaultIdCaseId);
+  assert.equal(defaultIdEvents.length, 1);
+  assert.match(defaultIdEvents[0].id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  assert.equal(defaultIdEvents[0].actorId, "admin-reviewer");
+  assert.equal(defaultIdEvents[0].reason, "Please clarify the synthetic fixture response.");
+  assert.equal(defaultIdEvents[0].previousState.rowVersion, 1);
 
   console.log("solo-plus-review-service.test.ts passed");
 }

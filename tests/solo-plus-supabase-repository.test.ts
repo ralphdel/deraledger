@@ -1647,6 +1647,61 @@ async function run() {
     assert.equal(result.kind, kind);
   }
 
+  // Match the reviewed seven-argument RPC for the only released decision.
+  // The fake client returns the same flat case/event envelope as the RPC.
+  client.rpcResponses.set(soloPlusSupabaseRpcNames.reviewCase, {
+    data: {
+      kind: "updated",
+      case: buildCaseRow({ case_status: "verification_pending", row_version: 2 }),
+      event: buildEventRow({
+        event_type: "case_review_requested_more_information",
+        actor_type: "admin",
+        actor_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        request_idempotency_key: "rmi-synthetic-rpc-test",
+        reason: "Please clarify the synthetic fixture response.",
+      }),
+    },
+    error: null,
+  });
+  const rmiResult = await repository.transitionCaseStatus({
+    caseId: "11111111-1111-4111-8111-111111111111",
+    expectedRowVersion: 1,
+    expectedCurrentStatus: "manual_review",
+    targetStatus: "verification_pending",
+    requestIdempotencyKey: "rmi-synthetic-rpc-test",
+    patch: { caseStatus: "verification_pending" },
+    event: {
+      id: "88888888-8888-4888-8888-888888888888",
+      caseId: "11111111-1111-4111-8111-111111111111",
+      eventType: "case_review_requested_more_information",
+      previousState: { caseStatus: "manual_review", rowVersion: 1 },
+      newState: { caseStatus: "verification_pending", rowVersion: 2 },
+      actorType: "admin",
+      actorId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      requestIdempotencyKey: "rmi-synthetic-rpc-test",
+      reason: "Please clarify the synthetic fixture response.",
+      policyVersion: "solo-plus-policy-v1",
+      createdAt: "2026-07-08T00:00:00.000Z",
+    },
+  });
+  assert.deepEqual(client.rpcCalls.at(-1), {
+    name: soloPlusSupabaseRpcNames.reviewCase,
+    args: {
+      p_case_id: "11111111-1111-4111-8111-111111111111",
+      p_expected_row_version: 1,
+      p_request_idempotency_key: "rmi-synthetic-rpc-test",
+      p_decision: "request_more_information",
+      p_reviewer_admin_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      p_reason: "Please clarify the synthetic fixture response.",
+      p_policy_version: "solo-plus-policy-v1",
+    },
+  });
+  assert.equal(rmiResult.kind, "updated");
+  assert.equal(rmiResult.caseRecord.caseStatus, "verification_pending");
+  assert.equal(rmiResult.caseRecord.rowVersion, 2);
+  assert.equal(rmiResult.event?.eventType, "case_review_requested_more_information");
+  assert.equal(rmiResult.event?.reason, "Please clarify the synthetic fixture response.");
+
   client.rpcResponses.set(soloPlusSupabaseRpcNames.reviewCase, {
     data: {
       kind: "updated",

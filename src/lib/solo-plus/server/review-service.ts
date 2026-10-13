@@ -1,5 +1,7 @@
 import "server-only";
 
+import { randomUUID } from "node:crypto";
+
 import {
   createSoloPlusOrchestration,
   type ApproveSoloPlusCaseInput,
@@ -133,7 +135,7 @@ export async function createSoloPlusReviewerService(
   const orchestration = createSoloPlusOrchestration({
     repository,
     now: options.now,
-    generateId: options.generateId,
+    generateId: options.generateId ?? randomUUID,
   });
   const accessContext = buildReviewerAccessContext(authority.userId);
 
