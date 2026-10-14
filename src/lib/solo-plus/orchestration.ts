@@ -121,6 +121,7 @@ export type RequestMoreInformationSoloPlusCaseInput = {
 export type ApproveSoloPlusCaseInput = {
   caseId: string;
   expectedRowVersion: number;
+  expectedFixtureRunId: string;
   requestIdempotencyKey: string;
   reason?: string | null;
   accessContext: SoloPlusAccessContext;
@@ -1329,6 +1330,7 @@ export function createSoloPlusOrchestration(
       const result = await repository.transitionCaseStatus({
         caseId,
         expectedRowVersion,
+        expectedFixtureRunId: input.expectedFixtureRunId,
         expectedCurrentStatus: "manual_review",
         targetStatus: "approved",
         requestIdempotencyKey,

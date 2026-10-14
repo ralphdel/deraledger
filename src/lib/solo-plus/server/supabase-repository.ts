@@ -45,6 +45,7 @@ const ATTACH_ONBOARDING_MERCHANT_RPC = "attach_solo_plus_onboarding_merchant_v1"
 const MARK_AWAITING_PAYMENT_RPC = "mark_solo_plus_case_awaiting_payment_v1";
 const CASE_BUNDLE_PAYLOAD_RPC = "solo_plus_case_bundle_payload_v1";
 const REVIEW_CASE_RPC = "review_solo_plus_case_v1";
+const REVIEW_APPROVE_ATOMIC_RPC = "review_solo_plus_case_approve_atomic_v1";
 const ACTIVATE_CASE_RPC = "activate_solo_plus_case_v1";
 const REVIEW_DECISION_EVENT_TYPES = [
   "case_review_requested_more_information",
@@ -1757,21 +1758,52 @@ export function createSoloPlusSupabaseRepository(
       }
 
       const reviewDecision = assertReviewTransitionInput(input);
-      const { data, error } = await client.rpc(REVIEW_CASE_RPC, {
-        p_case_id: input.caseId,
-        p_expected_row_version: input.expectedRowVersion,
-        p_request_idempotency_key: input.requestIdempotencyKey,
-        p_decision: reviewDecision,
-        p_reviewer_admin_id: input.event.actorId,
-        p_reason: input.event.reason,
-        p_policy_version: input.event.policyVersion,
-      });
+      if (
+        reviewDecision === "approve"
+        && !/^phase2b-approve-\d{8}-[a-z0-9]{3,16}$/.test(input.expectedFixtureRunId ?? "")
+      ) {
+        throw new SoloPlusSupabaseRepositoryError(
+          "SOLO_PLUS_ATOMIC_PERSISTENCE_UNAVAILABLE",
+          "Solo Plus approve transition requires an exact fixture run scope.",
+        );
+      }
+      if (reviewDecision !== "approve" && input.expectedFixtureRunId !== undefined) {
+        throw new SoloPlusSupabaseRepositoryError(
+          "SOLO_PLUS_ATOMIC_PERSISTENCE_UNAVAILABLE",
+          "Solo Plus repository rejected an unexpected fixture run scope.",
+        );
+      }
+      const { data, error } = await client.rpc(
+        reviewDecision === "approve" ? REVIEW_APPROVE_ATOMIC_RPC : REVIEW_CASE_RPC,
+        {
+          p_case_id: input.caseId,
+          p_expected_row_version: input.expectedRowVersion,
+          p_request_idempotency_key: input.requestIdempotencyKey,
+          p_decision: reviewDecision,
+          p_reviewer_admin_id: input.event.actorId,
+          p_reason: input.event.reason,
+          p_policy_version: input.event.policyVersion,
+          ...(reviewDecision === "approve"
+            ? { p_expected_fixture_run_id: input.expectedFixtureRunId }
+            : {}),
+        },
+      );
 
       if (error) {
         wrapSupabaseError(error);
       }
 
-      return mapTransitionResult(data);
+      const result = mapTransitionResult(data);
+      if (
+        reviewDecision === "approve"
+        && (result.kind === "updated" || result.kind === "idempotent_replay")
+      ) {
+        throw new SoloPlusSupabaseRepositoryError(
+          "SOLO_PLUS_ATOMIC_PERSISTENCE_UNAVAILABLE",
+          "Solo Plus approve writer protocol is not released.",
+        );
+      }
+      return result;
     },
 
     async activateSoloPlusCase(
@@ -1829,5 +1861,6 @@ export const soloPlusSupabaseRpcNames = {
   attachOnboardingMerchant: ATTACH_ONBOARDING_MERCHANT_RPC,
   markAwaitingPayment: MARK_AWAITING_PAYMENT_RPC,
   reviewCase: REVIEW_CASE_RPC,
+  reviewApproveAtomic: REVIEW_APPROVE_ATOMIC_RPC,
   activateCase: ACTIVATE_CASE_RPC,
 } as const;

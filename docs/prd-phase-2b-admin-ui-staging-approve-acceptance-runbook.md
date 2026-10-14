@@ -4,17 +4,19 @@
 planning and creation are blocked.** The separate
 [paid-fixture and atomicity design](prd-phase-2b-approve-paid-fixture-and-atomicity-design.md)
 defines a candidate synthetic boundary and required hardening; it provides no
-executable fixture or migration. This document authorizes no database
+executable fixture. A separate fail-closed migration remains unapplied and
+unproven. This document authorizes no database
 access, environment change, deployment, approval action, activation, cleanup,
 or production activity. Every mutation requires a separate explicit approval.
 The completed RMI and reject cases and run IDs were cleaned up and cannot be
 reused.
 
 The [forward-only atomicity source package](prd-phase-2b-approve-atomicity-hardening-source-package.md)
-specifies a new approve RPC and coordinated writer cutover. It is design-only:
-the current seven-argument RPC cannot check the exact fixture run ID inside
-its transaction. Approve fixture planning remains blocked until the hardening
-is implemented, independently reviewed, and proven by disposable-database
+contains a fail-closed RPC/source cutover: v1 approve returns a conflict, and
+the new approve RPC receives the exact run ID but always returns a conflict
+after its eligibility checks. Payment and requirement writer hardening remains
+unimplemented. Approve fixture planning remains blocked until hardening
+is completed, independently reviewed, and proven by disposable-database
 race tests, and a separate approve-only fixture procedure is reviewed.
 
 ## Decision boundary
@@ -31,22 +33,27 @@ marker, `synthetic_approve_acceptance=true`, a fresh paid manual-review case,
 and no earlier review decision or activation key. The RPC owns case-row
 locking, expected `row_version`, state, idempotency, and its eligibility check.
 
-The correct pre-action case is **paid**, with a linked successful payment record
-and exactly six canonical requirements, each in `passed`, `reused`, or `waived`
-state. Pending payment, an absent payment record, or pristine/not-started
-requirements cannot pass the orchestration or reviewed
-`review_solo_plus_case_v1(uuid,bigint,text,text,uuid,text,text)` RPC. A waiver
-must follow an independently reviewed synthetic policy; do not waive real
-verification or manufacture a paid state to make a fixture pass.
+The future synthetic pre-action case must be **paid**, with one linked
+successful payment record and exactly six canonical requirements, each
+`passed` with synthetic manual evidence. Pending payment, an absent payment
+record, or pristine requirements fail the orchestration eligibility check.
+Waived or reused requirements are outside this synthetic fixture design.
 
-The approve orchestration calls only the review transition. The review RPC
-updates the case to `approved`, sets the reviewer and timestamp, increments
-`row_version`, and writes one `case_approved` event. It does not invoke
-`activate_solo_plus_case_v1`. Activation is a separate, higher-impact RPC that
-can change workspace subscriptions, merchant plan/onboarding fields, and live
-features. No activation or subscription/collection change belongs to this
-acceptance gate. Confirm those boundaries again in a source review before any
-execution approval.
+## Current fail-closed cutover boundary
+
+The old seven-argument `review_solo_plus_case_v1` approve branch returns
+`state_conflict` before its historical update/event code. The new
+`review_solo_plus_case_approve_atomic_v1` receives the server-resolved run ID,
+locks and rechecks the case, pointed-to payment, and six requirements, then
+unconditionally returns `state_conflict`. It performs no approval update,
+writes no `case_approved` event, and calls no activation or other side-effect
+mutation. The source package has not been applied or validated in a database.
+The pointed-to payment must have `payment_records.payment_status=successful`;
+the RPC does not yet prove there is no second linked successful payment row.
+Approve execution remains blocked. Activation is a separate, higher-impact RPC
+that can change workspace subscriptions, merchant plan/onboarding fields, and
+live features; no activation or subscription/collection change belongs to a
+future approve acceptance gate.
 
 ## Blocker: fresh synthetic paid fixture
 
@@ -72,14 +79,12 @@ source assertion alone cannot establish staging data state.
 
 **Requirement-write race blocker:** the current requirements service can
 upsert `solo_plus_case_requirements` without locking or incrementing the parent
-case `row_version`. The review RPC locks the case and counts eligible
-requirements, but does not lock those requirement rows. A concurrent update
-could therefore change eligibility without a case-version conflict. Before
-approve execution planning, separately review and test an atomic eligibility
-boundary, such as parent-case locking/versioning on every requirement write or
-a reviewed RPC guard with a compatible write protocol. The source-only gate in
-this package does not resolve that race. Passing preflight or the
-orchestration's earlier requirement read is insufficient.
+case `row_version`. The historical v1 approve branch reads requirements without
+locking them; the new RPC locks the six existing rows but always rejects.
+Before any success path can be reviewed, every requirement writer must use a
+parent-case/version protocol, including insert/delete paths. Passing preflight
+or the orchestration's earlier requirement read is insufficient. The
+fail-closed source package does not resolve that race.
 
 ## Read-only preflight contract (not executable yet)
 
@@ -107,19 +112,19 @@ Stop unless all checks pass and the exact current row version is retained
 privately. Recheck the boundary immediately before any separately approved
 single action. The payment-confirmation application RPC increments case
 `row_version` when marking it paid, and recovery also increments it. The
-review RPC locks the case and checks the expected version and paid state. The
+new fail-closed RPC locks the case and checks the expected version and paid state. The
 known payment-confirmation path requires `awaiting_payment`, so it cannot turn
 an already manual-review fixture paid without a conflicting version/state
 change. Audit any new or direct payment write path before execution. The
 requirement-write race above remains a blocker; a stale preflight is
 insufficient.
-The RPC also reads linked `payment_records.payment_status=successful` without
-locking that payment row. The fixture and atomic-boundary review must prove a
-successful synthetic payment record cannot be changed concurrently outside
-the case-version protocol, or tighten the transactional guard. The linked
-design also identifies payment-first confirmation and recovery lock order, so a new
-blocking case-then-payment lock cannot be assumed safe. This source package
-makes no transactional guarantee.
+The historical v1 approve branch reads the linked payment without locking it.
+The new RPC locks the pointed-to payment row with `NOWAIT`, but neither that
+lock nor the current code proves there is no second linked successful payment
+record. Linked-payment writers still lack parent-case/version discipline.
+The linked design also identifies payment-first confirmation and recovery lock
+order. This source package makes no transactional guarantee for a successful
+approval.
 
 ## Proposed exact staging environment values (not current values)
 

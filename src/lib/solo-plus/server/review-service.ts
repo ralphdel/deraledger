@@ -225,7 +225,7 @@ export async function createSoloPlusReviewerService(
           );
         case "approve":
           return orchestration.approveSoloPlusCase(
-            baseInput as ApproveSoloPlusCaseInput,
+            { ...baseInput, expectedFixtureRunId: reviewActionScope.runId } as ApproveSoloPlusCaseInput,
           );
         case "reject":
           return orchestration.rejectSoloPlusCase(

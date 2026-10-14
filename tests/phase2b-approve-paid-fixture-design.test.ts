@@ -17,10 +17,10 @@ const orchestration = source("src/lib/solo-plus/orchestration.ts");
 const normalizedDesign = design.replace(/\s+/g, " ");
 
 for (const required of [
-  "No executable fixture or",
+  "no executable fixture or",
   "Approve fixture planning, creation,",
   "separate approve-only fixture procedure",
-  "Next package: forward-only RPC/source atomicity hardening first",
+  "Current cutover: fail-closed forward-only RPC/source atomicity package",
   "case, linked payment, then requirement rows",
   "payment confirmation and payment recovery",
   "phase2b-approve-YYYYMMDD-<random>",

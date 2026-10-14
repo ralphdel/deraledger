@@ -341,6 +341,7 @@ export type SoloPlusCaseTransitionPatch = Partial<
 export type SoloPlusCaseTransitionAtomicParams = {
   caseId: string;
   expectedRowVersion: number;
+  expectedFixtureRunId?: string;
   expectedCurrentStatus: SoloPlusCaseStatus;
   targetStatus: SoloPlusCaseStatus;
   requestIdempotencyKey: string;

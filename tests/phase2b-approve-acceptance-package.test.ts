@@ -30,6 +30,12 @@ for (const required of [
   "Activation is a separate",
   "Requirement-write race blocker",
   "does not resolve that race",
+  "Current fail-closed cutover boundary",
+  "old seven-argument",
+  "unconditionally returns `state_conflict`",
+  "writes no `case_approved` event",
+  "Approve execution remains blocked",
+  "no second linked successful payment",
   "payment_records.payment_status=successful",
   "Read-only preflight contract",
   "PASS|APPROVE_PREFLIGHT|ready|row_version=",
@@ -55,6 +61,16 @@ assert.match(runbook, /The reject flag must be absent/i);
 assert.match(runbook, /Keep `DERALEDGER_DEPLOYMENT_TARGET=staging`/i);
 assert.match(runbook, /unpaid RMI\/reject fixture cleanup\s+path must not be reused/i);
 assert.match(runbook, /No cleanup is authorized here/i);
+const currentBoundary = runbook.slice(
+  runbook.indexOf("## Current fail-closed cutover boundary"),
+  runbook.indexOf("## Blocker: fresh synthetic paid fixture"),
+);
+assert.match(currentBoundary, /old seven-argument[\s\S]*state_conflict/);
+assert.match(currentBoundary, /new[\s\S]*approve_atomic_v1[\s\S]*unconditionally returns `state_conflict`/);
+assert.match(currentBoundary, /no approval update[\s\S]*writes no `case_approved` event/);
+assert.match(currentBoundary, /Approve execution remains blocked/);
+assert.doesNotMatch(runbook, /(?:current|new|now|the) review RPC\s+(?:updates? (?:the )?case to `approved`|writes? (?:one|a) `case_approved` event|reads? (?:payment|requirements) without lock)/i);
+assert.doesNotMatch(currentBoundary, /(?:approval|approve) execution (?:is|can be) (?:allowed|authorized|ready)/i);
 
 assert.match(gate, /DERALEDGER_PHASE2B_SOLO_PLUS_APPROVE_ACCEPTANCE_ENABLED/);
 assert.match(gate, /APPROVE_RUN_ID_PATTERN/);

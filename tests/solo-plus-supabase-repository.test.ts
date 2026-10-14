@@ -1702,6 +1702,52 @@ async function run() {
   assert.equal(rmiResult.event?.eventType, "case_review_requested_more_information");
   assert.equal(rmiResult.event?.reason, "Please clarify the synthetic fixture response.");
 
+  const approveRunId = "phase2b-approve-20261014-test";
+  const approveInput: SoloPlusCaseTransitionAtomicParams = {
+    caseId: "11111111-1111-4111-8111-111111111111",
+    expectedRowVersion: 1,
+    expectedFixtureRunId: approveRunId,
+    expectedCurrentStatus: "manual_review",
+    targetStatus: "approved",
+    requestIdempotencyKey: "approve-synthetic-rpc-test",
+    patch: { caseStatus: "approved" },
+    event: {
+      ...rmiResult.event!,
+      id: "99999999-9999-4999-8999-999999999999",
+      eventType: "case_approved",
+      requestIdempotencyKey: "approve-synthetic-rpc-test",
+    },
+  };
+  client.rpcResponses.set(soloPlusSupabaseRpcNames.reviewApproveAtomic, {
+    data: { kind: "state_conflict", case: buildCaseRow({ case_status: "manual_review" }) },
+    error: null,
+  });
+  const approveBlocked = await repository.transitionCaseStatus(approveInput);
+  assert.equal(approveBlocked.kind, "state_conflict");
+  assert.equal(client.rpcCalls.at(-1)?.name, soloPlusSupabaseRpcNames.reviewApproveAtomic);
+  assert.equal(client.rpcCalls.at(-1)?.args.p_expected_fixture_run_id, approveRunId);
+  assert.equal(client.rpcCalls.at(-1)?.args.p_decision, "approve");
+  await assert.rejects(
+    () => repository.transitionCaseStatus({ ...approveInput, expectedFixtureRunId: "phase2b-approve-*" }),
+    /exact fixture run scope/,
+  );
+  await assert.rejects(
+    () => repository.transitionCaseStatus({ ...approveInput, expectedFixtureRunId: undefined }),
+    /exact fixture run scope/,
+  );
+  client.rpcResponses.set(soloPlusSupabaseRpcNames.reviewApproveAtomic, {
+    data: {
+      kind: "updated",
+      case: buildCaseRow({ case_status: "approved", row_version: 2 }),
+      event: buildEventRow({ event_type: "case_approved" }),
+    },
+    error: null,
+  });
+  await assert.rejects(
+    () => repository.transitionCaseStatus(approveInput),
+    /writer protocol is not released/,
+  );
+
   client.rpcResponses.set(soloPlusSupabaseRpcNames.reviewCase, {
     data: {
       kind: "updated",
@@ -1806,9 +1852,9 @@ async function run() {
   });
   assert.equal(rejectReplay.kind, "idempotent_replay");
 
-  client.rpcResponses.set(soloPlusSupabaseRpcNames.reviewCase, {
+  client.rpcResponses.set(soloPlusSupabaseRpcNames.reviewApproveAtomic, {
     data: {
-      kind: "idempotency_conflict",
+      kind: "state_conflict",
       case: buildCaseRow({
         case_status: "rejected",
         payment_status: "paid",
@@ -1821,6 +1867,7 @@ async function run() {
   const rejectConflict = await repository.transitionCaseStatus({
     caseId: "11111111-1111-4111-8111-111111111111",
     expectedRowVersion: 4,
+    expectedFixtureRunId: approveRunId,
     expectedCurrentStatus: "manual_review",
     targetStatus: "approved",
     requestIdempotencyKey: "reject-idem-1",
@@ -1844,7 +1891,7 @@ async function run() {
       createdAt: "2026-07-08T00:00:02.000Z",
     },
   });
-  assert.equal(rejectConflict.kind, "idempotency_conflict");
+  assert.equal(rejectConflict.kind, "state_conflict");
 
   client.rpcResponses.set(soloPlusSupabaseRpcNames.createCaseBundle, {
     data: null,

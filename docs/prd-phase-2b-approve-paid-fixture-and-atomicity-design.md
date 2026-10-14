@@ -1,7 +1,8 @@
 # Phase 2B approve paid-fixture and atomicity design
 
-**Status: source-only design for independent review. No executable fixture or
-atomicity migration exists in this package. Approve fixture planning, creation,
+**Status: source-only fixture design. A separate fail-closed atomicity migration
+has been prepared for review, but no executable fixture or successful atomic
+approve path exists. Approve fixture planning, creation,
 preflight execution, env changes, deployment, action, and cleanup remain blocked.**
 Each later mutation needs its own explicit approval. This design uses no prior
 RMI or reject case, run ID, payment, merchant, or workspace.
@@ -55,15 +56,18 @@ unpaid fixture cleanup.
 
 ## Atomicity hardening required before execution planning
 
-The current review RPC locks only `solo_plus_cases`, then counts requirements
-and checks a successful linked payment using ordinary reads. The requirements
+The historical seven-argument approve branch locks only `solo_plus_cases`,
+then counts requirements and checks a successful linked payment using ordinary
+reads. Its approve decision is closed by the proposed fail-closed cutover;
+the new approve RPC locks the pointed-to payment and six existing requirement
+rows but always returns a conflict. The requirements
 repository directly upserts child rows without locking or advancing the case
 version. Both Solo Plus payment confirmation and payment recovery lock a
 payment row before the case. Therefore a
 case `row_version` and a passing preflight do **not** stabilize child rows, and
 simply adding case-then-payment blocking locks to review risks deadlock.
 
-**Next package: forward-only RPC/source atomicity hardening first.** Defer the
+**Current cutover: fail-closed forward-only RPC/source atomicity package.** Defer the
 approve-only fixture procedure until that package has independent review and
 disposable-database concurrency evidence. Do not combine the fixture writer
 with the hardening migration: the writer must consume a proven boundary.

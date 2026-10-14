@@ -53,6 +53,7 @@ class FakeSoloPlusRepository implements SoloPlusCaseRepository {
   readonly events = new Map<string, SoloPlusCaseEventRecord[]>();
   readonly requirements = new Map<string, SoloPlusCaseRequirementRecord[]>();
   transitionCallCount = 0;
+  lastTransitionInput: SoloPlusCaseTransitionAtomicParams | null = null;
   activationCallCount = 0;
 
   seedCase(caseRecord: SoloPlusCaseRecord) {
@@ -123,6 +124,7 @@ class FakeSoloPlusRepository implements SoloPlusCaseRepository {
     input: SoloPlusCaseTransitionAtomicParams,
   ): Promise<SoloPlusCaseTransitionAtomicResult> {
     this.transitionCallCount += 1;
+    this.lastTransitionInput = input;
     const current = this.cases.get(input.caseId);
     if (!current) {
       return { kind: "not_found" };
@@ -772,6 +774,7 @@ async function run() {
   assert.equal(approved.caseRecord.activationIdempotencyKey, null);
   assert.equal(approved.event?.eventType, "case_approved");
   assert.equal(approveRepository.transitionCallCount, 1);
+  assert.equal(approveRepository.lastTransitionInput?.expectedFixtureRunId, approveRunId);
   assert.equal(approveRepository.activationCallCount, 0);
   await assert.rejects(() => approveService.reviewCase(approveInput), /fresh eligible synthetic staging fixture/i);
   assert.equal(approveRepository.transitionCallCount, 1);

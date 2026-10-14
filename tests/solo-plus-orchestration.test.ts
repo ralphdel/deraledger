@@ -1016,6 +1016,7 @@ async function run() {
   const approved = await reviewService.approveSoloPlusCase({
     caseId: "approve-case",
     expectedRowVersion: 2,
+    expectedFixtureRunId: "phase2b-approve-20261014-test",
     requestIdempotencyKey: "approve-1",
     reason: "Evidence reviewed.",
     accessContext: buildAdminReviewContext(),
@@ -1044,6 +1045,7 @@ async function run() {
       reviewService.approveSoloPlusCase({
         caseId: "ineligible-approve-case",
         expectedRowVersion: 1,
+        expectedFixtureRunId: "phase2b-approve-20261014-test",
         requestIdempotencyKey: "approve-ineligible-1",
         reason: "Must not approve an unpaid metadata-only fixture.",
         accessContext: buildAdminReviewContext(),
@@ -1148,6 +1150,7 @@ async function run() {
       reviewService.approveSoloPlusCase({
         caseId: "reject-case",
         expectedRowVersion: 4,
+        expectedFixtureRunId: "phase2b-approve-20261014-test",
         requestIdempotencyKey: "reject-1",
         reason: "conflict",
         accessContext: buildAdminReviewContext(),
