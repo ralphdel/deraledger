@@ -1,7 +1,10 @@
 # Phase 2B staging approve acceptance source package
 
 **Status: source-only proposal for independent review. Fresh approve fixture
-planning and creation are blocked.** This document authorizes no database
+planning and creation are blocked.** The separate
+[paid-fixture and atomicity design](prd-phase-2b-approve-paid-fixture-and-atomicity-design.md)
+defines a candidate synthetic boundary and required hardening; it provides no
+executable fixture or migration. This document authorizes no database
 access, environment change, deployment, approval action, activation, cleanup,
 or production activity. Every mutation requires a separate explicit approval.
 The completed RMI and reject cases and run IDs were cleaned up and cannot be
@@ -42,11 +45,13 @@ execution approval.
 
 The existing `phase2b-admin-detail-fixture-staging.ps1` creates only an unpaid
 manual-review case with six pristine requirements. It must not be reused or
-altered to spoof a paid case. No reviewed staging-only procedure currently
+altered for the paid approve case. A separate approve-only procedure is
+proposed in the design above, but no reviewed staging-only procedure currently
 establishes a successful **synthetic** payment record, six eligible synthetic
 requirements, and the new approve fixture markers without real customer,
-payment, provider, document, settlement, or production data. Until a separate
-fixture design demonstrates that path, **fresh approve fixture planning,
+payment, provider, document, settlement, or production data. Until the design,
+fixture procedure, and atomicity hardening pass independent review and
+disposable-database rehearsal, **fresh approve fixture planning,
 preflight execution, environment changes, deployment, and approve execution
 remain blocked**. Any fixture procedure, payment simulation, or requirement
 evidence writer needs its own source/security review and approval.
@@ -104,8 +109,10 @@ insufficient.
 The RPC also reads linked `payment_records.payment_status=successful` without
 locking that payment row. The fixture and atomic-boundary review must prove a
 successful synthetic payment record cannot be changed concurrently outside
-the case-version protocol, or tighten the transactional guard. This source
-package makes no such guarantee.
+the case-version protocol, or tighten the transactional guard. The linked
+design also identifies payment-first confirmation and recovery lock order, so a new
+blocking case-then-payment lock cannot be assumed safe. This source package
+makes no transactional guarantee.
 
 ## Proposed exact staging environment values (not current values)
 

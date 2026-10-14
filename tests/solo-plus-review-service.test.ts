@@ -749,6 +749,22 @@ async function run() {
   assert.equal(approveRepository.transitionCallCount, 0);
   approveRepository.requirements.set(approveCaseId, buildSatisfiedRequirements(approveCaseId));
 
+  const staleApproveRepository = new FakeSoloPlusRepository();
+  staleApproveRepository.seedCase(approveCase);
+  staleApproveRepository.requirements.set(approveCaseId, buildSatisfiedRequirements(approveCaseId));
+  const staleApproveService = await createSoloPlusReviewerService({
+    repository: staleApproveRepository,
+    resolveAdminAuthority: async () => ({ ok: true, userId: "admin-reviewer" }),
+    env: approveEnv,
+    generateId: () => "stale-approve-event",
+  });
+  await assert.rejects(
+    () => staleApproveService.reviewCase({ ...approveInput, expectedRowVersion: 2 }),
+    /version conflict|row version|changed since/i,
+  );
+  assert.equal(staleApproveRepository.transitionCallCount, 1);
+  assert.equal(staleApproveRepository.cases.get(approveCaseId)?.caseStatus, "manual_review");
+
   const approved = await approveService.reviewCase(approveInput);
   assert.equal(approved.caseRecord.caseStatus, "approved");
   assert.equal(approved.caseRecord.rowVersion, 4);
