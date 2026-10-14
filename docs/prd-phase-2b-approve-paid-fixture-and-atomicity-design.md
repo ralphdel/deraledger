@@ -84,10 +84,13 @@ this design package.
 
 A new, forward-only reviewed migration and matching repository changes must:
 
-1. Preserve the exact review RPC signature
-   `review_solo_plus_case_v1(uuid,bigint,text,text,uuid,text,text)` and the
-   existing case `FOR UPDATE`, state, idempotency, and expected-version checks.
-   In the approve branch, acquire stable locks on the linked successful payment
+1. Preserve the seven-argument review RPC for RMI/reject while making its old
+   approve branch fail closed. The exact fixture run ID is not among those
+   seven arguments, so a new approve-specific RPC must receive it from the
+   server-side gate and check it inside the transaction. See the
+   [forward-only atomicity package](prd-phase-2b-approve-atomicity-hardening-source-package.md).
+   Preserve case `FOR UPDATE`, state, idempotency, and expected-version checks.
+   In the new approve RPC, acquire stable locks on the linked successful payment
    row and all six canonical requirement rows before rechecking eligibility,
    ownership, amount/currency/purpose, count, states, `refund_status=none`,
    and no prior activation in the same transaction. The lock query must not

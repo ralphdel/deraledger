@@ -10,6 +10,13 @@ or production activity. Every mutation requires a separate explicit approval.
 The completed RMI and reject cases and run IDs were cleaned up and cannot be
 reused.
 
+The [forward-only atomicity source package](prd-phase-2b-approve-atomicity-hardening-source-package.md)
+specifies a new approve RPC and coordinated writer cutover. It is design-only:
+the current seven-argument RPC cannot check the exact fixture run ID inside
+its transaction. Approve fixture planning remains blocked until the hardening
+is implemented, independently reviewed, and proven by disposable-database
+race tests, and a separate approve-only fixture procedure is reviewed.
+
 ## Decision boundary
 
 This gate is designed for one new synthetic staging case, one exact case UUID,
