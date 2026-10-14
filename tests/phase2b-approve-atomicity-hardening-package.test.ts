@@ -1,0 +1,90 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+const read = (path: string) => readFileSync(resolve(path), "utf8");
+const plan = read("docs/prd-phase-2b-approve-atomicity-hardening-source-package.md");
+const design = read("docs/prd-phase-2b-approve-paid-fixture-and-atomicity-design.md");
+const runbook = read("docs/prd-phase-2b-admin-ui-staging-approve-acceptance-runbook.md");
+const reviewRpc = read("supabase/migrations/20260930000000_phase2b_review_action_intent_hardening.sql");
+const paymentConfirmation = read("supabase/migrations/20260707020000_solo_plus_payment_lifecycle.sql");
+const paymentRecovery = read("supabase/migrations/20260718_01_solo_plus_payment_recovery.sql");
+const requirementRepository = read("src/lib/solo-plus/server/supabase-repository.ts");
+const requirementService = read("src/lib/solo-plus/server/requirements.ts");
+const reviewerService = read("src/lib/solo-plus/server/review-service.ts");
+const orchestration = read("src/lib/solo-plus/orchestration.ts");
+const normalized = plan.replace(/\s+/g, " ");
+
+for (const required of [
+  "design-only source package",
+  "Approve fixture planning, fixture creation",
+  "no expected run ID",
+  "new, forward-only migration plus coordinated source changes",
+  "unguarded service-role call to v1 must not bypass",
+  "review_solo_plus_case_approve_atomic_v1",
+  "plus the exact expected fixture run ID",
+  "not a browser-supplied value",
+  "case → linked payment → requirements by canonical code",
+  "lock all six requirement rows in canonical code order",
+  "Lock the case's non-null `payment_record_id` row",
+  "`NOWAIT`/lock-conflict",
+  "never automatically retry an approve decision",
+  "expected case version",
+  "direct `.upsert` must be replaced",
+  "non-locking lookup, lock the case, then lock and re-read",
+  "shared `payment_records` table",
+  "could deadlock",
+  "No existing migration is edited",
+  "two controlled sessions",
+  "do **not** prove the future RPC",
+  "separate approve-only fixture procedure",
+]) {
+  assert.ok(normalized.toLowerCase().includes(required.toLowerCase()), `Missing atomicity design contract: ${required}`);
+}
+assert.match(design, /seven-argument review RPC for RMI\/reject while making its old\s+approve branch fail closed/);
+assert.match(design, /exact fixture run ID is not among those\s+seven arguments/);
+assert.match(runbook, /forward-only atomicity source package/);
+assert.match(runbook, /Approve fixture planning remains blocked/);
+assert.match(runbook, /disposable-database\s+race tests/);
+
+// These are current-source blocker assertions. They intentionally do not
+// mistake a proposed RPC or a simulated race test for deployed SQL safety.
+const signature = reviewRpc.slice(
+  reviewRpc.indexOf("CREATE OR REPLACE FUNCTION public.review_solo_plus_case_v1("),
+  reviewRpc.indexOf("RETURNS JSONB", reviewRpc.indexOf("CREATE OR REPLACE FUNCTION public.review_solo_plus_case_v1(")),
+);
+assert.doesNotMatch(signature, /run_id|fixture_scope/i);
+const approveBranch = reviewRpc.slice(
+  reviewRpc.indexOf("IF v_decision = 'approve' THEN", reviewRpc.indexOf("FOR UPDATE;")),
+  reviewRpc.indexOf("v_target_refund_status := CASE"),
+);
+assert.match(approveBranch, /v_case\.payment_status <> 'paid'/);
+assert.match(approveBranch, /v_case\.payment_record_id IS NULL/);
+assert.match(approveBranch, /v_requirement_count <> 6/);
+assert.match(approveBranch, /v_satisfied_requirement_count <> 6/);
+assert.match(approveBranch, /p\.payment_status = 'successful'/);
+assert.doesNotMatch(approveBranch, /FOR (?:UPDATE|SHARE|NO KEY UPDATE|KEY SHARE)/i);
+assert.match(reviewerService, /scopedCase\.auditMetadata\.fixture_run_id !== reviewActionScope\.runId/);
+assert.match(reviewerService, /scopedCase\.auditMetadata\.fixture_scope !== expectedFixtureScope/);
+assert.match(reviewerService, /scopedCase\.auditMetadata\.synthetic_approve_acceptance === true/);
+assert.match(requirementService, /repository\.upsertCaseRequirements\(/);
+const directWriter = requirementRepository.slice(requirementRepository.indexOf("async upsertCaseRequirements("));
+assert.match(directWriter, /\.from\("solo_plus_case_requirements"\)\s*\.upsert\(/);
+assert.doesNotMatch(directWriter, /expectedRowVersion|row_version/);
+for (const [paymentWriter, functionName] of [
+  [paymentConfirmation, "confirm_solo_plus_payment_v1"],
+  [paymentRecovery, "recover_solo_plus_payment_attempt_v1"],
+] as const) {
+  const paymentLock = paymentWriter.indexOf("FROM public.payment_records", paymentWriter.indexOf(`CREATE OR REPLACE FUNCTION public.${functionName}(`));
+  const caseLock = paymentWriter.indexOf("FROM public.solo_plus_cases", paymentLock);
+  assert.ok(paymentLock >= 0 && caseLock > paymentLock, "Payment writer is payment-first today");
+}
+const approveMethod = orchestration.slice(
+  orchestration.indexOf("async approveSoloPlusCase("),
+  orchestration.indexOf("async rejectSoloPlusCase("),
+);
+assert.match(approveMethod, /repository\.transitionCaseStatus\(/);
+assert.doesNotMatch(approveMethod, /activateSoloPlusCase|activate_solo_plus_case_v1|workspace_subscriptions|UPDATE public\.merchants/);
+assert.doesNotMatch(reviewRpc.slice(reviewRpc.indexOf("CREATE OR REPLACE FUNCTION public.review_solo_plus_case_v1(")), /activate_solo_plus_case_v1\(/);
+
+console.log("phase2b-approve-atomicity-hardening-package.test.ts passed (design-only; approve blocked)");
