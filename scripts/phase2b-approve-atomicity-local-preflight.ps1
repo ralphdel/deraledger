@@ -29,22 +29,33 @@ function Assert-LocalTarget {
   }
 }
 
-function Assert-LocalPostgresListener {
-  param([string]$TargetHost, [int]$TargetPort)
-  if ($null -eq (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue)) {
-    throw 'BLOCKED|APPROVE_ATOMICITY|local_listener_unverifiable'
+function Assert-LocalListenerEvidence {
+  param([string]$TargetHost, [bool]$TcpConnected, [object[]]$Listeners)
+  if ($TargetHost -cnotin @('127.0.0.1', '::1')) {
+    throw 'BLOCKED|APPROVE_ATOMICITY|nonlocal_host'
   }
-  $allowedAddresses = if ($TargetHost -ceq '::1') {
-    @('::1', '::')
-  } else {
-    @('127.0.0.1', '0.0.0.0')
-  }
-  $listeners = @(Get-NetTCPConnection -LocalPort $TargetPort -State Listen -ErrorAction SilentlyContinue |
-    Where-Object { $_.LocalAddress -cin $allowedAddresses })
-  if ($listeners.Count -lt 1) {
+  $allowedAddresses = @('127.0.0.1', '::1', '0.0.0.0', '::')
+  $localListeners = @($Listeners | Where-Object { $_.LocalAddress -cin $allowedAddresses })
+  if (-not $TcpConnected -or $localListeners.Count -lt 1) {
     throw 'BLOCKED|APPROVE_ATOMICITY|local_postgres_unavailable'
   }
-  foreach ($listener in $listeners) {
+  return $localListeners
+}
+
+function Assert-LocalPostgresListener {
+  param([string]$TargetHost, [int]$TargetPort)
+  if ($TargetHost -cnotin @('127.0.0.1', '::1')) {
+    throw 'BLOCKED|APPROVE_ATOMICITY|nonlocal_host'
+  }
+  if ($null -eq (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue) -or
+      $null -eq (Get-Command Test-NetConnection -ErrorAction SilentlyContinue)) {
+    throw 'BLOCKED|APPROVE_ATOMICITY|local_listener_unverifiable'
+  }
+  $tcpConnected = Test-NetConnection -ComputerName $TargetHost -Port $TargetPort `
+    -InformationLevel Quiet -WarningAction SilentlyContinue
+  $listeners = @(Get-NetTCPConnection -LocalPort $TargetPort -State Listen -ErrorAction SilentlyContinue)
+  $localListeners = @(Assert-LocalListenerEvidence $TargetHost $tcpConnected $listeners)
+  foreach ($listener in $localListeners) {
     $process = Get-Process -Id $listener.OwningProcess -ErrorAction SilentlyContinue
     if ($null -eq $process -or $process.ProcessName -cne 'postgres') {
       throw 'BLOCKED|APPROVE_ATOMICITY|local_listener_not_postgres'
@@ -100,6 +111,26 @@ function Parse-LocalIdentityControl {
 
 if ($SelfTest) {
   Assert-LocalTarget '127.0.0.1' 55432 'postgres' 'deraledger_phase2b_approve_atomicity_'
+  foreach ($address in @('127.0.0.1', '::1', '0.0.0.0', '::')) {
+    $candidate = [pscustomobject]@{ LocalAddress = $address }
+    foreach ($loopbackHost in @('127.0.0.1', '::1')) {
+      if (@(Assert-LocalListenerEvidence $loopbackHost $true @($candidate)).Count -ne 1) {
+        throw 'FAIL|APPROVE_ATOMICITY|self_test_listener_rejected'
+      }
+    }
+  }
+  foreach ($invalidEvidence in @(
+    @{ Host = '127.0.0.1'; Connected = $false; Listeners = @([pscustomobject]@{ LocalAddress = '0.0.0.0' }); Error = 'local_postgres_unavailable' },
+    @{ Host = '127.0.0.1'; Connected = $true; Listeners = @(); Error = 'local_postgres_unavailable' },
+    @{ Host = 'db.example.invalid'; Connected = $true; Listeners = @([pscustomobject]@{ LocalAddress = '0.0.0.0' }); Error = 'nonlocal_host' }
+  )) {
+    try {
+      $null = Assert-LocalListenerEvidence $invalidEvidence.Host $invalidEvidence.Connected $invalidEvidence.Listeners
+      throw 'FAIL|APPROVE_ATOMICITY|self_test_invalid_listener_accepted'
+    } catch {
+      if ($_.Exception.Message -cne ('BLOCKED|APPROVE_ATOMICITY|' + $invalidEvidence.Error)) { throw }
+    }
+  }
   foreach ($invalidHost in @('db.example.invalid', '10.0.0.1', '127.0.0.2', 'localhost')) {
     try {
       Assert-LocalTarget $invalidHost 55432 'postgres' 'deraledger_phase2b_approve_atomicity_'
@@ -145,7 +176,7 @@ try {
 
   $null = & $pgIsReady -h $PgHostName -p $PgPort -U $PgUser -d postgres -t 3 2>&1
   if ($LASTEXITCODE -ne 0) {
-    throw 'BLOCKED|APPROVE_ATOMICITY|local_postgres_unavailable'
+    throw 'BLOCKED|APPROVE_ATOMICITY|local_postgres_not_ready'
   }
 
   # Forced -W prompts at the console. No password or connection URL is read

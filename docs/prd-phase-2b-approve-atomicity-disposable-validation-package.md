@@ -24,8 +24,10 @@ port `55432` (or `5432` if verified locally), user `postgres`, and database
 prefix `deraledger_phase2b_approve_atomicity_`. Host, port, user, expected
 major, binary directory, and prefix are parameters. The host must be the
 literal loopback address `127.0.0.1` or `::1`; the preflight requires a local
-Windows `postgres.exe` listener on that port before making any connection,
-so an SSH tunnel or port proxy is blocked. Every generated database name ends
+Windows `postgres.exe` listener on that port before making any PostgreSQL connection.
+A listener bound to `127.0.0.1`, `::1`, `0.0.0.0`, or `::` is eligible only when
+`Test-NetConnection` succeeds to the requested loopback host and port. A
+remote host, SSH tunnel, or port proxy is blocked. Every generated database name ends
 in `_disposable`. PostgreSQL roles are **cluster-wide**: this package never
 creates or repairs `service_role`, `anon`, or `authenticated`. The preflight
 requires those three roles to pre-exist with the exact reviewed NOLOGIN,
@@ -59,7 +61,11 @@ Require `PASS|APPROVE_ATOMICITY|local_postgres_ready`. Missing tools, an
 unavailable local server, role drift, or an overlong database prefix returns
 a specific `BLOCKED` marker and nonzero exit. Stop there. Never switch to
 staging or production.
-An absent local listener emits `BLOCKED|APPROVE_ATOMICITY|local_postgres_unavailable`.
+An absent local listener or failed loopback TCP check emits
+`BLOCKED|APPROVE_ATOMICITY|local_postgres_unavailable`. A listener that passes
+those checks but fails `pg_isready` emits
+`BLOCKED|APPROVE_ATOMICITY|local_postgres_not_ready`; investigate that local
+condition before retrying, and never switch to staging.
 
 ## Initialization, first apply, rerun, and rollback-only behavior
 

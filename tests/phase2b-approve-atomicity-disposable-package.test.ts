@@ -154,6 +154,8 @@ assert.match(runbook, /Docker and WSL are not required/);
 assert.doesNotMatch(runbook, /must use Docker|Docker is required|WSL is required/i);
 assert.match(runbook, /Never switch to\s+staging or production/);
 assert.match(runbook, /BLOCKED\|APPROVE_ATOMICITY\|local_postgres_unavailable/);
+assert.match(runbook, /A listener bound to `127\.0\.0\.1`, `::1`, `0\.0\.0\.0`, or `::` is eligible only when\s+`Test-NetConnection` succeeds to the requested loopback host and port/);
+assert.match(runbook, /BLOCKED\|APPROVE_ATOMICITY\|local_postgres_not_ready/);
 assert.match(commands, /phase2b-approve-atomicity-local-preflight\.ps1/);
 assert.match(commands, /createdb\.exe/);
 assert.match(commands, /dropdb\.exe/);
@@ -184,10 +186,16 @@ const preflightContracts = [
   "[string]$PgBinDirectory = ''",
   "TargetHost -cnotin @('127.0.0.1', '::1')",
   "BLOCKED|APPROVE_ATOMICITY|nonlocal_host",
+  "@('127.0.0.1', '::1', '0.0.0.0', '::')",
+  "Test-NetConnection -ComputerName $TargetHost -Port $TargetPort",
+  "-InformationLevel Quiet",
+  "-not $TcpConnected -or $localListeners.Count -lt 1",
+  "Assert-LocalListenerEvidence $TargetHost $tcpConnected $listeners",
   "Get-NetTCPConnection -LocalPort $TargetPort -State Listen",
   "ProcessName -cne 'postgres'",
   "BLOCKED|APPROVE_ATOMICITY|local_listener_not_postgres",
   "BLOCKED|APPROVE_ATOMICITY|local_postgres_unavailable",
+  "BLOCKED|APPROVE_ATOMICITY|local_postgres_not_ready",
   "BLOCKED|APPROVE_ATOMICITY|local_identity_mismatch",
   "PGPASSWORD", "PGPASSFILE", "PGSERVICE", "DATABASE_URL",
   "pg_isready.exe", "psql.exe", "createdb.exe", "dropdb.exe",
@@ -198,6 +206,10 @@ const preflightContracts = [
   "-X -W -q -A -t -v ON_ERROR_STOP=1",
   "PASS|APPROVE_ATOMICITY|local_preflight_self_test",
   "PASS|APPROVE_ATOMICITY|local_postgres_ready",
+  "foreach ($address in @('127.0.0.1', '::1', '0.0.0.0', '::'))",
+  "Connected = $false",
+  "Listeners = @()",
+  "Host = 'db.example.invalid'",
 ] as const;
 function hasPreflightContract(source: string): boolean {
   return preflightContracts.every((clause) => source.includes(clause));
@@ -205,12 +217,16 @@ function hasPreflightContract(source: string): boolean {
 assert.ok(hasPreflightContract(preflight));
 for (const clause of [
   "TargetHost -cnotin @('127.0.0.1', '::1')",
+  "@('127.0.0.1', '::1', '0.0.0.0', '::')",
+  "Test-NetConnection -ComputerName $TargetHost -Port $TargetPort",
+  "-not $TcpConnected -or $localListeners.Count -lt 1",
+  "Assert-LocalListenerEvidence $TargetHost $tcpConnected $listeners",
   "Get-NetTCPConnection -LocalPort $TargetPort -State Listen",
   "ProcessName -cne 'postgres'",
   "PGPASSWORD", "PGPASSFILE", "pg_isready.exe", "host(inet_server_addr())",
   "-X -W -q -A -t -v ON_ERROR_STOP=1",
 ]) {
-  assert.equal(hasPreflightContract(preflight.replace(clause, "")), false, `Lost local guard: ${clause}`);
+  assert.equal(hasPreflightContract(preflight.replaceAll(clause, "")), false, `Lost local guard: ${clause}`);
 }
 assert.doesNotMatch(preflight, /\b(?:CREATE|ALTER|DROP)\s+ROLE\b/i);
 assert.match(migration, /RETURN jsonb_build_object\('kind', 'state_conflict', 'case', to_jsonb\(v_case\)\);\s*END;\s*\$\$;/);
