@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 
 const read = (name: string) => readFileSync(resolve(name), "utf8");
 const root = "tests/sql/phase2b-approve-atomicity/";
@@ -15,6 +15,66 @@ const raceB = read(`${root}race-session-b.sql`);
 const runbook = read("docs/prd-phase-2b-approve-atomicity-disposable-validation-package.md");
 const preflight = read("scripts/phase2b-approve-atomicity-local-preflight.ps1");
 const migration = read("supabase/migrations/20261014000000_phase2b_approve_atomicity_fail_closed.sql");
+
+// psql resolves \ir beside the containing file, but \i from the process
+// working directory. The runbook invokes psql from the repository root.
+const repoRoot = resolve(".");
+const bootstrapPath = resolve(root, "local-bootstrap.sql");
+function includeTargets(filePath: string, source: string): string[] {
+  return [...source.matchAll(/^[ \t]*\\(ir|i)[ \t]+([^ \t\r\n]+)[ \t]*$/gm)].map((match) => {
+    const target = resolve(match[1] === "ir" ? dirname(filePath) : repoRoot, match[2]);
+    const withinRepo = relative(repoRoot, target);
+    assert.ok(withinRepo !== ".." && !withinRepo.startsWith(`..\\`) &&
+      !withinRepo.startsWith("../") && !isAbsolute(withinRepo),
+    `psql include leaves repository: ${filePath} -> ${match[2]}`);
+    assert.ok(existsSync(target), `Missing psql include: ${filePath} -> ${match[2]}`);
+    return target;
+  });
+}
+function assertIncludeChain(entrySource: string): void {
+  const visited = new Set<string>();
+  function visit(filePath: string, source: string): void {
+    if (visited.has(filePath)) return;
+    visited.add(filePath);
+    for (const target of includeTargets(filePath, source)) {
+      visit(target, readFileSync(target, "utf8"));
+    }
+  }
+  visit(bootstrapPath, entrySource);
+}
+const expectedBaselineChain = [
+  "001_schema_only", "002_onboarding_verification_upgrade_flow", "003_rls_policies",
+  "004_phase1_plan_compatibility", "006_solo_plus_prerequisites",
+  "007_solo_plus_case_foundation", "008_solo_plus_transactional_repository_rpcs",
+  "009_breet_payment_substrate_reconciliation", "010_solo_plus_payment_lifecycle",
+  "011_solo_plus_review_decision_rpc", "012_solo_plus_activation_rpc",
+  "013_solo_plus_payment_recovery", "014_authorization_hardening",
+  "015_verification_disclosure_acknowledgement_rpc",
+  "016_verification_disclosure_identity_hardening",
+  "017_payment_events_legacy_merchant_compatibility",
+  "018_core_merchant_schema_compatibility",
+] as const;
+const expectedBaselineTargets = expectedBaselineChain.map((name, index) =>
+  index === 7 || index === 8
+    ? resolve(`supabase/migrations/${index === 7
+      ? "20260707010000_breet_payment_substrate_reconciliation"
+      : "20260707020000_solo_plus_payment_lifecycle"}.sql`)
+    : resolve(`supabase/staging/${name}.sql`));
+expectedBaselineTargets.push(resolve("supabase/migrations/20260930000000_phase2b_review_action_intent_hardening.sql"));
+assert.deepEqual(includeTargets(bootstrapPath, bootstrap), expectedBaselineTargets,
+  "Keep the complete canonical baseline chain in order");
+assertIncludeChain(bootstrap);
+for (const number of ["009", "010"]) {
+  const canonicalPath = number === "009"
+    ? "../../../supabase/migrations/20260707010000_breet_payment_substrate_reconciliation.sql"
+    : "../../../supabase/migrations/20260707020000_solo_plus_payment_lifecycle.sql";
+  const wrapperPath = number === "009"
+    ? "../../../supabase/staging/009_breet_payment_substrate_reconciliation.sql"
+    : "../../../supabase/staging/010_solo_plus_payment_lifecycle.sql";
+  assert.throws(() => assertIncludeChain(bootstrap.replace(canonicalPath, wrapperPath)),
+    /psql include leaves repository|Missing psql include/,
+    `Broken ${number} wrapper must fail the offline include audit`);
+}
 
 assert.match(bootstrap, /CREATE SCHEMA IF NOT EXISTS auth/);
 assert.doesNotMatch(bootstrap, /\b(?:CREATE|ALTER|DROP)\s+ROLE\b/i);
@@ -75,6 +135,9 @@ assert.match(hostileRollback, /to_regprocedure\('public\.review_solo_plus_case_v
 assert.match(hostileRollback, /PASS\|APPROVE_ATOMICITY\|hostile_guard_rolled_back/);
 assert.ok(/SELECT policy\s+with an ALL policy/.test(runbook));
 assert.ok(/Runtime rejection does not independently prove/.test(runbook));
+assert.match(runbook, /local bootstrap includes the canonical 009 and 010 migration files with\s+`\\ir`/);
+assert.match(runbook, /staging wrappers use working-directory-relative `\\i`/);
+assert.match(runbook, /Do not rerun\s+bootstrap or clone that database/);
 assert.match(runbook, /PostgreSQL roles are \*\*cluster-wide\*\*/);
 assert.match(runbook, /never\s+creates or repairs `service_role`, `anon`, or `authenticated`/);
 assert.match(runbook, /Database teardown does not remove or own\s+cluster-wide roles/);

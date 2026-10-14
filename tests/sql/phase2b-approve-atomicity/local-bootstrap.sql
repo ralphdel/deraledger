@@ -34,8 +34,10 @@ CREATE OR REPLACE FUNCTION auth.role() RETURNS text LANGUAGE sql STABLE AS $$ SE
 \ir ../../../supabase/staging/006_solo_plus_prerequisites.sql
 \ir ../../../supabase/staging/007_solo_plus_case_foundation.sql
 \ir ../../../supabase/staging/008_solo_plus_transactional_repository_rpcs.sql
-\ir ../../../supabase/staging/009_breet_payment_substrate_reconciliation.sql
-\ir ../../../supabase/staging/010_solo_plus_payment_lifecycle.sql
+-- These two staging wrappers use \i, which resolves from psql's working
+-- directory. Include their exact canonical migration targets with \ir here.
+\ir ../../../supabase/migrations/20260707010000_breet_payment_substrate_reconciliation.sql
+\ir ../../../supabase/migrations/20260707020000_solo_plus_payment_lifecycle.sql
 \ir ../../../supabase/staging/011_solo_plus_review_decision_rpc.sql
 \ir ../../../supabase/staging/012_solo_plus_activation_rpc.sql
 \ir ../../../supabase/staging/013_solo_plus_payment_recovery.sql

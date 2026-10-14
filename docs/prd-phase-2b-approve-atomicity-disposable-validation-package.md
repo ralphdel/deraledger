@@ -15,6 +15,11 @@ after loading the repository's canonical schema-only local chain. It omits
 hostile drift, and concurrency behavior have **not** been proven yet. Collect
 all local failures before changing catalog expectations. Do not use staging
 as a fallback if local PostgreSQL is unavailable.
+The local bootstrap includes the canonical 009 and 010 migration files with
+`\ir`: their staging wrappers use working-directory-relative `\i`, which does
+not resolve correctly when this runbook invokes psql from the repository root.
+The source test checks the complete ordered baseline and resolves nested psql
+includes before any local database run.
 
 ## Windows local identity gate
 
@@ -108,6 +113,12 @@ Write-Output 'PASS|APPROVE_ATOMICITY|rerun'
 & $psql @psqlOptions -d $cleanDb -f (Join-Path $sqlRoot 'verify-behavior.sql')
 if ($LASTEXITCODE -ne 0) { throw 'FAIL|APPROVE_ATOMICITY|behavior' }
 ```
+
+If bootstrap stops with `BLOCKED|APPROVE_ATOMICITY|baseline_bootstrap`, treat
+the disposable baseline database as partially initialized. Do not rerun
+bootstrap or clone that database. A separately authorized local database-only
+teardown and fresh disposable baseline are required before retrying; this
+source package does not authorize either operation.
 
 The SQL files emit `PASS|APPROVE_ATOMICITY|local_baseline_loaded`,
 `PASS|APPROVE_ATOMICITY|installed_functions_and_grants` twice, and
