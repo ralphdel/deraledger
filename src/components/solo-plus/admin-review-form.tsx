@@ -133,9 +133,11 @@ export function AdminReviewForm({
     setError(null);
   }
 
-  const primaryLabel = decision === "reject"
-    ? "Reject"
-    : "Request more information";
+  const primaryLabel = decision === "approve"
+    ? "Approve"
+    : decision === "reject"
+      ? "Reject"
+      : "Request more information";
 
   if (allowedDecision == null) {
     return (
@@ -154,7 +156,7 @@ export function AdminReviewForm({
       <div className="space-y-2">
         <p className="text-sm font-medium text-foreground">Scoped review decision</p>
         <p className="rounded-lg border border-input bg-muted/40 px-3 py-2 text-sm">
-          {allowedDecision === "reject" ? "Reject" : "Request more information"}
+          {primaryLabel}
         </p>
       </div>
 
@@ -183,7 +185,7 @@ export function AdminReviewForm({
         <Button
           disabled={submitting}
           onClick={() => {
-            if (decision === "reject") {
+            if (decision === "reject" || decision === "approve") {
               setConfirmOpen(true);
               return;
             }

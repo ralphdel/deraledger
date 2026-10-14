@@ -12,11 +12,14 @@ export const SOLO_PLUS_REVIEW_ACTION_DEPLOYMENT_TARGET_FLAG =
   "DERALEDGER_DEPLOYMENT_TARGET";
 export const SOLO_PLUS_REJECT_ACCEPTANCE_FLAG =
   "DERALEDGER_PHASE2B_SOLO_PLUS_REJECT_ACCEPTANCE_ENABLED";
+export const SOLO_PLUS_APPROVE_ACCEPTANCE_FLAG =
+  "DERALEDGER_PHASE2B_SOLO_PLUS_APPROVE_ACCEPTANCE_ENABLED";
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const RUN_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,127}$/;
 const REJECT_RUN_ID_PATTERN = /^phase2b-reject-[0-9]{8}-[a-z0-9]{3,16}$/;
+const APPROVE_RUN_ID_PATTERN = /^phase2b-approve-[0-9]{8}-[a-z0-9]{3,16}$/;
 const BROAD_SCOPE_VALUES = new Set(["all", "any", "*"]);
 const NON_PRODUCTION_VERCEL_ENVIRONMENTS = new Set(["development", "preview"]);
 const STAGING_DEPLOYMENT_TARGET = "staging";
@@ -31,6 +34,7 @@ const PRODUCTION_APP_HOSTS = new Set([
 ]);
 const HISTORICAL_RMI_ACCEPTANCE_DECISION = "request_more_information";
 const REJECT_ACCEPTANCE_DECISION = "reject";
+const APPROVE_ACCEPTANCE_DECISION = "approve";
 
 const SUPABASE_IDENTITY_ENVIRONMENT_NAMES = [
   "NEXT_PUBLIC_SUPABASE_URL",
@@ -57,7 +61,7 @@ type SoloPlusReviewActionEnvironment = Readonly<
 
 export type SoloPlusReviewActionScope = Readonly<{
   caseId: string;
-  decision: typeof HISTORICAL_RMI_ACCEPTANCE_DECISION | typeof REJECT_ACCEPTANCE_DECISION;
+  decision: typeof HISTORICAL_RMI_ACCEPTANCE_DECISION | typeof REJECT_ACCEPTANCE_DECISION | typeof APPROVE_ACCEPTANCE_DECISION;
   runId: string;
 }>;
 
@@ -181,7 +185,21 @@ export function resolveSoloPlusReviewActionScope(
   }
 
   const rejectGateValue = normalizeEnvironmentValue(env[SOLO_PLUS_REJECT_ACCEPTANCE_FLAG]);
-  if (rejectGateValue !== "") {
+  const approveGateValue = normalizeEnvironmentValue(env[SOLO_PLUS_APPROVE_ACCEPTANCE_FLAG]);
+  if (rejectGateValue !== "" && approveGateValue !== "") {
+    return null;
+  }
+
+  if (approveGateValue !== "") {
+    if (
+      approveGateValue !== "true"
+      || decision !== APPROVE_ACCEPTANCE_DECISION
+      || !APPROVE_RUN_ID_PATTERN.test(runId)
+      || !isExplicitDedicatedStagingDeployment(env)
+    ) {
+      return null;
+    }
+  } else if (rejectGateValue !== "") {
     if (
       rejectGateValue !== "true"
       || decision !== REJECT_ACCEPTANCE_DECISION
@@ -193,6 +211,7 @@ export function resolveSoloPlusReviewActionScope(
   } else if (
     decision !== HISTORICAL_RMI_ACCEPTANCE_DECISION
     || REJECT_RUN_ID_PATTERN.test(runId)
+    || APPROVE_RUN_ID_PATTERN.test(runId)
   ) {
     return null;
   }

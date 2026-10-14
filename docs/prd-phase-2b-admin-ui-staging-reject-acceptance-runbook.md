@@ -1,11 +1,13 @@
 # Phase 2B staging unpaid reject acceptance gate
 
-**Status: source package for independent review. No fixture creation, database
-inspection, environment change, deployment, reject execution, default-block
-restoration, cleanup, or production activity is authorized by this document.**
-Each mutation requires its own explicit approval. The completed RMI fixture and
-run ID are excluded. This gate is for exactly one fresh synthetic unpaid case,
-one new `phase2b-reject-<yyyymmdd>-<random-suffix>` run ID, and `reject` only.
+**Status: historical reject acceptance package.** The exact reject action,
+default-block restoration, fixture cleanup, and postcleanup completed. This
+document authorizes no further fixture, environment, deployment, action,
+cleanup, or production activity. The proposed approve package is
+`docs/prd-phase-2b-admin-ui-staging-approve-acceptance-runbook.md`; approve
+fixture planning remains blocked. The historical reject gate used exactly one
+fresh synthetic unpaid case, one `phase2b-reject-<yyyymmdd>-<random-suffix>`
+run ID, and `reject` only. The completed RMI and reject fixtures cannot be reused.
 
 ## Boundary and approvals
 

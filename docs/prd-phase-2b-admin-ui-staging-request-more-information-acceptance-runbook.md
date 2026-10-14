@@ -4,7 +4,8 @@
 the action environment values were removed and staging returned to the
 default-blocked deployment. This document authorizes no new fixture, environment
 change, deployment, review mutation, cleanup, or production activity. The new
-unpaid reject gate has its own separate source package and approvals.
+unpaid reject gate also completed and returned to default-blocked. The proposed
+approve gate has its own source package; no prior fixture may be reused.
 
 ## Fixed boundary
 

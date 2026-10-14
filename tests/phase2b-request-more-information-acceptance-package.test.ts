@@ -70,7 +70,7 @@ assert.match(runbook, /real production Supabase ref/i);
 
 const futureRejectMarker = "## Reject design archive (non-authorizing; not part of this package)";
 const futureRejectStart = acceptancePlan.indexOf(futureRejectMarker);
-assert.ok(futureRejectStart >= 0, "reject guidance must be explicitly future-gated");
+assert.ok(futureRejectStart >= 0, "reject guidance must be explicitly archived");
 const currentAcceptancePlan = acceptancePlan.slice(0, futureRejectStart);
 const futureRejectPlan = acceptancePlan.slice(futureRejectStart);
 assert.doesNotMatch(currentAcceptancePlan, /Reject second/i);
@@ -79,11 +79,10 @@ assert.doesNotMatch(
   currentAcceptancePlan,
   /(?:^|\n)### Reject(?:\s|$)/i,
 );
-assert.match(futureRejectPlan, /does not authorize a reject action/i);
-assert.match(futureRejectPlan, /separate source change/i);
-assert.match(futureRejectPlan, /separate exact environment\s+scope/i);
-assert.match(futureRejectPlan, /separate staging deployment approval/i);
-assert.match(futureRejectPlan, /separate final execution\s+approval/i);
+assert.match(futureRejectPlan, /authorizes no new\s+reject action/i);
+assert.match(futureRejectPlan, /reject gate later completed under its separate source package/i);
+assert.match(futureRejectPlan, /returned to default-blocked/i);
+assert.match(futureRejectPlan, /current status is in the gate\s+verdict below/i);
 assert.match(acceptancePlan, /The RMI gate ended after request-more-information/i);
 assert.doesNotMatch(currentAcceptancePlan, /two actions in this plan/i);
 assert.doesNotMatch(currentAcceptancePlan, /- reject:\s+`rejected`/i);

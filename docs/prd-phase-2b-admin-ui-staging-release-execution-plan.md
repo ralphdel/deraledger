@@ -1,8 +1,9 @@
 # Phase 2B Admin UI staging release execution plan
 
-**Status:** historical staging-only release plan. RMI acceptance completed and
-staging returned to default-blocked. The next proposed reject gate is documented
-in `docs/prd-phase-2b-admin-ui-staging-reject-acceptance-runbook.md`. This plan
+**Status:** historical staging-only release plan. RMI and reject acceptance,
+default-block restoration, and fixture cleanup completed. The next proposed
+approve gate is documented in
+`docs/prd-phase-2b-admin-ui-staging-approve-acceptance-runbook.md`. This plan
 authorizes no database action,
 runtime change, route-flag change, decision execution, activation, collection
 unlock, payment behaviour, or production activity by itself.

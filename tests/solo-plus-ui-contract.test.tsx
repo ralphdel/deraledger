@@ -255,6 +255,20 @@ async function run() {
   assert.equal(rejectReviewFormMarkup.includes("Approve"), false);
   assert.equal(rejectReviewFormMarkup.includes("Reopen"), false);
 
+  const approveReviewFormMarkup = renderToStaticMarkup(
+    <AdminReviewForm
+      allowedDecision="approve"
+      caseId="11111111-1111-4111-8111-111111111111"
+      rowVersion={4}
+      onSuccess={() => undefined}
+    />,
+  );
+  assert.equal(approveReviewFormMarkup.includes("Approve"), true);
+  assert.equal(approveReviewFormMarkup.includes("Request more information"), false);
+  assert.equal(approveReviewFormMarkup.includes("Reject"), false);
+  assert.equal(approveReviewFormMarkup.includes("Reopen"), false);
+  assert.equal(approveReviewFormMarkup.includes("Activation remains a separate internal step"), false);
+
   const disabledReviewFormMarkup = renderToStaticMarkup(
     <AdminReviewForm
       allowedDecision={null}

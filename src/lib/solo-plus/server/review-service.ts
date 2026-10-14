@@ -151,9 +151,12 @@ export async function createSoloPlusReviewerService(
       }
 
       const scopedCase = await repository.findCaseById(input.caseId);
+      const expectedFixtureScope = input.decision === "approve"
+        ? "phase2b_approve_acceptance"
+        : "phase2b_admin_detail_smoke";
       if (
         !scopedCase
-        || scopedCase.auditMetadata.fixture_scope !== "phase2b_admin_detail_smoke"
+        || scopedCase.auditMetadata.fixture_scope !== expectedFixtureScope
         || scopedCase.auditMetadata.fixture_run_id !== reviewActionScope.runId
       ) {
         throw new SoloPlusReviewerServiceError(
@@ -182,6 +185,27 @@ export async function createSoloPlusReviewerService(
           throw new SoloPlusReviewerServiceError(
             "SOLO_PLUS_SERVER_FORBIDDEN",
             "Solo Plus reject acceptance requires a fresh unpaid staging fixture.",
+          );
+        }
+      }
+
+      if (input.decision === "approve") {
+        const isFreshPaidFixture =
+          scopedCase.auditMetadata.synthetic_approve_acceptance === true
+          && scopedCase.caseStatus === "manual_review"
+          && scopedCase.paymentStatus === "paid"
+          && scopedCase.paymentRecordId !== null
+          && scopedCase.refundStatus === "none"
+          && scopedCase.activationIdempotencyKey === null
+          && scopedCase.refundIdempotencyKey === null
+          && scopedCase.approvedAt === null
+          && scopedCase.rejectedAt === null
+          && scopedCase.reopenedAt === null
+          && scopedCase.rejectionReason === null;
+        if (!isFreshPaidFixture || await repository.findLatestReviewDecisionEvent(input.caseId)) {
+          throw new SoloPlusReviewerServiceError(
+            "SOLO_PLUS_SERVER_FORBIDDEN",
+            "Solo Plus approve acceptance requires a fresh eligible synthetic staging fixture.",
           );
         }
       }

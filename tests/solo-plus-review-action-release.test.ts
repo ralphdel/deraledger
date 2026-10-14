@@ -292,6 +292,61 @@ async function run() {
     null,
   );
 
+  const approveEnv = {
+    ...dedicatedStagingProductionEnv,
+    DERALEDGER_PHASE2B_SOLO_PLUS_APPROVE_ACCEPTANCE_ENABLED: "true",
+    DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_DECISION: "approve",
+    DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_RUN_ID: "phase2b-approve-20261014-a1b2",
+  };
+  const approveScope = resolveSoloPlusReviewActionScope(approveEnv);
+  assert.deepEqual(approveScope, {
+    caseId: "11111111-1111-4111-8111-111111111111",
+    decision: "approve",
+    runId: "phase2b-approve-20261014-a1b2",
+  });
+  assert.equal(areSoloPlusReviewActionsEnabled(approveEnv), true);
+  assert.deepEqual(resolveSoloPlusReviewActionScope({ ...approveEnv, VERCEL_ENV: "preview" }), approveScope);
+  for (const blockedDecision of ["request_more_information", "reject", "reopen"]) {
+    assert.equal(isSoloPlusReviewActionWithinScope(approveScope!, {
+      caseId: approveScope!.caseId,
+      decision: blockedDecision,
+    }), false);
+    assert.equal(resolveSoloPlusReviewActionScope({
+      ...approveEnv,
+      DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_DECISION: blockedDecision,
+    }), null);
+  }
+  assert.equal(isSoloPlusReviewActionWithinScope(approveScope!, {
+    caseId: "22222222-2222-4222-8222-222222222222",
+    decision: "approve",
+  }), false);
+  for (const wrongApproveScope of [
+    { DERALEDGER_PHASE2B_SOLO_PLUS_APPROVE_ACCEPTANCE_ENABLED: "" },
+    { DERALEDGER_PHASE2B_SOLO_PLUS_APPROVE_ACCEPTANCE_ENABLED: "false" },
+    { DERALEDGER_PHASE2B_SOLO_PLUS_APPROVE_ACCEPTANCE_ENABLED: "all" },
+    { DERALEDGER_PHASE2B_SOLO_PLUS_REJECT_ACCEPTANCE_ENABLED: "true" },
+    { DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTIONS_ENABLED: "" },
+    { DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_CASE_ID: "*" },
+    { DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_CASE_ID: "11111111-1111-4111-8111-111111111111,22222222-2222-4222-8222-222222222222" },
+    { DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_RUN_ID: "*" },
+    { DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_RUN_ID: "phase2b-rmi-20261001-002" },
+    { DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_RUN_ID: "phase2b-reject-20261013-a1b2" },
+    { DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_RUN_ID: "phase2b-approve-20261014-" },
+    { DERALEDGER_DEPLOYMENT_TARGET: "" },
+    { NEXT_PUBLIC_SUPABASE_URL: "https://another-project.supabase.co" },
+    { NEXT_PUBLIC_SUPABASE_URL: "https://gznwibespgkwknnvbrlv.supabase.co" },
+    { VERCEL_PROJECT_PRODUCTION_URL: "another-staging.vercel.app" },
+    { NEXT_PUBLIC_APP_URL: "https://www.deraledger.com" },
+    { VERCEL_ENV: "" },
+  ]) {
+    assert.equal(resolveSoloPlusReviewActionScope({ ...approveEnv, ...wrongApproveScope }), null);
+  }
+  assert.equal(resolveSoloPlusReviewActionScope({
+    ...dedicatedStagingProductionEnv,
+    DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_DECISION: "approve",
+    DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_RUN_ID: "phase2b-approve-20261014-a1b2",
+  }), null);
+
   console.log("solo-plus-review-action-release.test.ts passed");
 }
 

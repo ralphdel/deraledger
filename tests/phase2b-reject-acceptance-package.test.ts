@@ -13,9 +13,10 @@ const releasePlan = source("docs/prd-phase-2b-admin-ui-staging-release-execution
 const gate = source("src/lib/server/solo-plus-review-action-release.ts");
 const service = source("src/lib/solo-plus/server/review-service.ts");
 const fixtureExecutor = source("scripts/phase2b-admin-detail-fixture-staging.ps1");
+const normalizedRunbook = runbook.replace(/\s+/g, " ").toLowerCase();
 
 for (const required of [
-  "source package for independent review",
+  "historical reject acceptance package",
   "one fresh synthetic unpaid case",
   "phase2b-reject-<yyyymmdd>-<random-suffix>",
   "PASS|FIXTURE|draft_case_eligible",
@@ -35,7 +36,7 @@ for (const required of [
   "default-block",
   "separate cleanup approval",
 ]) {
-  assert.ok(runbook.toLowerCase().includes(required.toLowerCase()), `Missing reject gate contract: ${required}`);
+  assert.ok(normalizedRunbook.includes(required.toLowerCase()), `Missing reject gate contract: ${required}`);
 }
 
 assert.doesNotMatch(runbook, /2c4dde2a-2c9b-47c4-927c-607a0bae951e|phase2b-rmi-20261001-002/i);

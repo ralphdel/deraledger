@@ -51,7 +51,9 @@ class FakeAuthClient {
 class FakeSoloPlusRepository implements SoloPlusCaseRepository {
   readonly cases = new Map<string, SoloPlusCaseRecord>();
   readonly events = new Map<string, SoloPlusCaseEventRecord[]>();
+  readonly requirements = new Map<string, SoloPlusCaseRequirementRecord[]>();
   transitionCallCount = 0;
+  activationCallCount = 0;
 
   seedCase(caseRecord: SoloPlusCaseRecord) {
     this.cases.set(caseRecord.id, JSON.parse(JSON.stringify(caseRecord)) as SoloPlusCaseRecord);
@@ -74,8 +76,8 @@ class FakeSoloPlusRepository implements SoloPlusCaseRepository {
     return null;
   }
 
-  async listRequirements(): Promise<readonly SoloPlusCaseRequirementRecord[]> {
-    return [];
+  async listRequirements(caseId: string): Promise<readonly SoloPlusCaseRequirementRecord[]> {
+    return this.requirements.get(caseId) ?? [];
   }
 
   async listSafeEvents(caseId: string): Promise<readonly SoloPlusCaseEventRecord[]> {
@@ -198,6 +200,7 @@ class FakeSoloPlusRepository implements SoloPlusCaseRepository {
   async activateSoloPlusCase(
     input: SoloPlusCaseActivationAtomicParams,
   ): Promise<SoloPlusCaseActivationAtomicResult> {
+    this.activationCallCount += 1;
     const current = this.cases.get(input.caseId);
     if (!current) {
       return { kind: "not_found" };
@@ -245,7 +248,7 @@ function buildCaseRecord(overrides: Partial<SoloPlusCaseRecord> = {}): SoloPlusC
     reopenedAt: overrides.reopenedAt ?? null,
     reopenedByAdminId: overrides.reopenedByAdminId ?? null,
     idempotencyKey: "review-idem-case",
-    activationIdempotencyKey: null,
+    activationIdempotencyKey: overrides.activationIdempotencyKey ?? null,
     refundIdempotencyKey: overrides.refundIdempotencyKey ?? null,
     rowVersion: overrides.rowVersion ?? 0,
     auditMetadata: overrides.auditMetadata ?? {
@@ -257,9 +260,35 @@ function buildCaseRecord(overrides: Partial<SoloPlusCaseRecord> = {}): SoloPlusC
   };
 }
 
+function buildSatisfiedRequirements(caseId: string): SoloPlusCaseRequirementRecord[] {
+  return ["activity_profile", "bvn", "id_document", "proof_of_address", "selfie_liveness", "settlement_account"].map((requirementCode, index) => ({
+    id: `synthetic-requirement-${index}`,
+    caseId,
+    requirementCode: requirementCode as SoloPlusCaseRequirementRecord["requirementCode"],
+    requirementState: "passed",
+    verificationLogId: null,
+    evidenceSourceType: "manual_submission",
+    evidenceSourceId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+    evidenceReference: null,
+    originalCompletedAt: null,
+    reuseDecisionAt: null,
+    reuseReason: null,
+    policyRuleApplied: null,
+    reviewedByAdminId: "admin-reviewer",
+    reviewNote: "Synthetic requirement.",
+    providerName: null,
+    providerReference: null,
+    failureReason: null,
+    completedAt: "2026-10-14T00:00:00.000Z",
+    metadata: {},
+    createdAt: "2026-10-14T00:00:00.000Z",
+    updatedAt: "2026-10-14T00:00:00.000Z",
+  }));
+}
+
 function createEnv(
   caseId = "11111111-1111-4111-8111-111111111111",
-  decision: "request_more_information" | "reject" = "request_more_information",
+  decision: "request_more_information" | "reject" | "approve" = "request_more_information",
 ) {
   return {
     NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
@@ -624,6 +653,112 @@ async function run() {
     /fresh unpaid staging fixture/i,
   );
   assert.equal(freshRejectRepository.transitionCallCount, 1);
+
+  const approveCaseId = "77777777-7777-4777-8777-777777777777";
+  const approveRunId = "phase2b-approve-20261014-a1b2";
+  const approveEnv = createEnv(approveCaseId, "approve");
+  approveEnv.DERALEDGER_PHASE2B_SOLO_PLUS_APPROVE_ACCEPTANCE_ENABLED = "true";
+  approveEnv.DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_RUN_ID = approveRunId;
+  approveEnv.DERALEDGER_DEPLOYMENT_TARGET = "staging";
+  approveEnv.NEXT_PUBLIC_SUPABASE_URL = "https://fsjljliiyfchkwbjifzw.supabase.co";
+  approveEnv.VERCEL_PROJECT_PRODUCTION_URL = "deraledger-staging.vercel.app";
+  const approveCase = buildCaseRecord({
+    id: approveCaseId,
+    rowVersion: 3,
+    paymentStatus: "paid",
+    paymentRecordId: "88888888-8888-4888-8888-888888888888",
+    auditMetadata: {
+      fixture_scope: "phase2b_approve_acceptance",
+      fixture_run_id: approveRunId,
+      synthetic_approve_acceptance: true,
+    },
+  });
+  const approveRepository = new FakeSoloPlusRepository();
+  approveRepository.seedCase(approveCase);
+  approveRepository.requirements.set(approveCaseId, buildSatisfiedRequirements(approveCaseId));
+  const approveService = await createSoloPlusReviewerService({
+    repository: approveRepository,
+    resolveAdminAuthority: async () => ({ ok: true, userId: "admin-reviewer" }),
+    env: approveEnv,
+    now: () => new Date("2026-10-14T00:00:00.000Z"),
+    generateId: () => "synthetic-approve-event",
+  });
+  const approveInput = {
+    caseId: approveCaseId,
+    expectedRowVersion: 3,
+    requestIdempotencyKey: "synthetic-approve-service-test",
+    decision: "approve" as const,
+    reason: "Synthetic requirements verified.",
+  };
+  for (const blockedDecision of ["request_more_information", "reject", "reopen"] as const) {
+    await assert.rejects(
+      () => approveService.reviewCase({ ...approveInput, decision: blockedDecision }),
+      /outside the approved staging scope/i,
+    );
+  }
+  assert.equal(approveRepository.transitionCallCount, 0);
+
+  for (const unsafeCase of [
+    buildCaseRecord({ ...approveCase, paymentStatus: "pending" }),
+    buildCaseRecord({ ...approveCase, paymentRecordId: null }),
+    buildCaseRecord({ ...approveCase, caseStatus: "approved" }),
+    buildCaseRecord({ ...approveCase, activationIdempotencyKey: "prior-activation" }),
+    buildCaseRecord({ ...approveCase, auditMetadata: { ...approveCase.auditMetadata, fixture_run_id: "phase2b-approve-20261014-wrong" } }),
+    buildCaseRecord({ ...approveCase, auditMetadata: { ...approveCase.auditMetadata, synthetic_approve_acceptance: false } }),
+    buildCaseRecord({ ...approveCase, auditMetadata: { ...approveCase.auditMetadata, fixture_scope: "phase2b_admin_detail_smoke" } }),
+  ]) {
+    const unsafeRepository = new FakeSoloPlusRepository();
+    unsafeRepository.seedCase(unsafeCase);
+    const unsafeService = await createSoloPlusReviewerService({
+      repository: unsafeRepository,
+      resolveAdminAuthority: async () => ({ ok: true, userId: "admin-reviewer" }),
+      env: approveEnv,
+    });
+    await assert.rejects(
+      () => unsafeService.reviewCase(approveInput),
+      /fixture marker does not match|fresh eligible synthetic staging fixture/i,
+    );
+    assert.equal(unsafeRepository.transitionCallCount, 0);
+  }
+
+  const priorDecisionRepository = new FakeSoloPlusRepository();
+  priorDecisionRepository.seedCase(approveCase);
+  priorDecisionRepository.events.set(approveCaseId, [{
+    id: "99999999-9999-4999-8999-999999999999",
+    caseId: approveCaseId,
+    eventType: "case_rejected",
+    previousState: {},
+    newState: {},
+    actorType: "admin",
+    actorId: "admin-reviewer",
+    requestIdempotencyKey: "prior-synthetic-review",
+    reason: "Synthetic prior decision.",
+    policyVersion: "solo-plus-policy-v1",
+    createdAt: "2026-10-13T00:00:00.000Z",
+  }]);
+  const priorDecisionService = await createSoloPlusReviewerService({
+    repository: priorDecisionRepository,
+    resolveAdminAuthority: async () => ({ ok: true, userId: "admin-reviewer" }),
+    env: approveEnv,
+  });
+  await assert.rejects(() => priorDecisionService.reviewCase(approveInput), /fresh eligible synthetic staging fixture/i);
+  assert.equal(priorDecisionRepository.transitionCallCount, 0);
+
+  approveRepository.requirements.set(approveCaseId, buildSatisfiedRequirements(approveCaseId).slice(0, 5));
+  await assert.rejects(() => approveService.reviewCase(approveInput), /not eligible for approval/i);
+  assert.equal(approveRepository.transitionCallCount, 0);
+  approveRepository.requirements.set(approveCaseId, buildSatisfiedRequirements(approveCaseId));
+
+  const approved = await approveService.reviewCase(approveInput);
+  assert.equal(approved.caseRecord.caseStatus, "approved");
+  assert.equal(approved.caseRecord.rowVersion, 4);
+  assert.equal(approved.caseRecord.paymentStatus, "paid");
+  assert.equal(approved.caseRecord.activationIdempotencyKey, null);
+  assert.equal(approved.event?.eventType, "case_approved");
+  assert.equal(approveRepository.transitionCallCount, 1);
+  assert.equal(approveRepository.activationCallCount, 0);
+  await assert.rejects(() => approveService.reviewCase(approveInput), /fresh eligible synthetic staging fixture/i);
+  assert.equal(approveRepository.transitionCallCount, 1);
 
   // The route constructs the service without generateId. Keep the production
   // default covered through the real service/orchestration with an in-memory
