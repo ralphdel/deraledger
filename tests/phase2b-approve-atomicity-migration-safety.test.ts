@@ -118,6 +118,21 @@ function guardBlock(source: string, start: string, end: string): string {
   return source.slice(startAt, endAt);
 }
 
+// Model the two independent SQL checks: literal tokens must match exactly,
+// then only whitespace runs and spacing adjacent to parentheses may differ.
+function policyLiterals(expression: string): string[] {
+  return [...expression.matchAll(/'((?:''|[^'])*)'/g)].map((match) => match[0]);
+}
+
+function canonicalPolicy(expression: string): string {
+  return expression.trim().replace(/\s+/g, " ").replace(/\(\s+/g, "(").replace(/\s+\)/g, ")");
+}
+
+function equivalentPolicy(actual: string, expected: string): boolean {
+  return JSON.stringify(policyLiterals(actual)) === JSON.stringify(policyLiterals(expected))
+    && canonicalPolicy(actual) === canonicalPolicy(expected);
+}
+
 function assertSemanticGuards(source: string): void {
   const policy = guardBlock(source, "-- Compare complete policy expressions", "RAISE EXCEPTION 'Phase 2B approve atomicity blocked: policy role or expression drift'");
   const keys = guardBlock(source, "-- Same-name constraints", "RAISE EXCEPTION 'Phase 2B approve atomicity blocked: key or foreign-key semantic drift'");
@@ -125,9 +140,17 @@ function assertSemanticGuards(source: string): void {
   const index = guardBlock(source, "IF NOT EXISTS (\n    SELECT 1 FROM pg_catalog.pg_index i\n    JOIN pg_catalog.pg_class ix", "RAISE EXCEPTION 'Phase 2B approve atomicity blocked: review intent index semantic drift'");
   const contracts: Record<string, readonly string[]> = {
     policy: [
+      "p.polcmd <> 'r' OR p.polpermissive IS NOT TRUE",
       "p.polroles IS DISTINCT FROM ARRAY[0]::OID[]",
       "pg_catalog.pg_get_expr(p.polqual, p.polrelid, false)",
-      "IS DISTINCT FROM e.using_expression",
+      "FROM pg_catalog.regexp_matches(",
+      "$quoted$('([^']|'')*')$quoted$, 'g'",
+      "AS actual_literal(parts)",
+      "AS expected_literal(parts)",
+      "btrim(pg_catalog.pg_get_expr(p.polqual, p.polrelid, false))",
+      "btrim(e.using_expression)",
+      "'[(][[:space:]]+', '(', 'g'",
+      "'[[:space:]]+[)]', ')', 'g'",
       "p.polwithcheck IS NOT NULL",
       "('solo_plus_cases', 'merchant_read_solo_plus_cases'",
       "('solo_plus_case_requirements', 'merchant_read_solo_plus_case_requirements'",
@@ -137,6 +160,7 @@ function assertSemanticGuards(source: string): void {
       "WHEN to_regclass('public.merchant_team') IS NULL THEN",
       "payment_records.merchant_id) AND (m.user_id = auth.uid())",
       "(SELECT count(*) FROM pg_catalog.pg_policy p",
+      "WHERE p.polrelid = 'public.payment_records'::regclass) <> 1",
     ],
     keys: [
       "c.confrelid IS DISTINCT FROM format('public.%I', e.target_table)::regclass",
@@ -186,15 +210,53 @@ function assertSemanticGuards(source: string): void {
       assert.ok(block.includes(clause), `${name} guard lost exact semantic clause: ${clause}`);
     }
   }
+  for (const clause of [
+    "$quoted$('([^']|'')*')$quoted$, 'g'",
+    "'[(][[:space:]]+', '(', 'g'",
+    "'[[:space:]]+[)]', ')', 'g'",
+  ]) {
+    assert.equal(policy.split(clause).length - 1, 2,
+      `Policy guard must apply ${clause} to both actual and expected expressions`);
+  }
+  assert.match(policy, /ARRAY\(\s*SELECT \(actual_literal\.parts\)\[1\][\s\S]*?pg_get_expr\(p\.polqual, p\.polrelid, false\)[\s\S]*?\) IS DISTINCT FROM ARRAY\(\s*SELECT \(expected_literal\.parts\)\[1\][\s\S]*?e\.using_expression/);
+  assert.match(policy, /btrim\(pg_catalog\.pg_get_expr\(p\.polqual, p\.polrelid, false\)\)[\s\S]*?IS DISTINCT FROM pg_catalog\.regexp_replace\([\s\S]*?btrim\(e\.using_expression\)/);
 }
 
 assertSemanticGuards(preDdl);
+const expectedPolicies = [...guardBlock(preDdl, "-- Compare complete policy expressions", "RAISE EXCEPTION 'Phase 2B approve atomicity blocked: policy role or expression drift'").matchAll(/\$policy\$([\s\S]*?)\$policy\$/g)]
+  .map((match) => match[1]);
+assert.equal(expectedPolicies.length, 4, "Both payment variants and both Solo Plus policies must remain exact");
+for (const expected of expectedPolicies) {
+  const afterOpen = expected.replace("EXISTS (SELECT", "EXISTS ( SELECT");
+  const beforeClose = expected.replace("auth.uid()))", "auth.uid() ))");
+  assert.notEqual(afterOpen, expected);
+  assert.notEqual(beforeClose, expected);
+  assert.ok(equivalentPolicy(afterOpen, expected));
+  assert.ok(equivalentPolicy(beforeClose, expected));
+  assert.equal(equivalentPolicy(expected.replace("auth.role()", "auth.uid()"), expected), false);
+  assert.equal(equivalentPolicy(expected.replace("auth.uid()", "auth.role()"), expected), false);
+  assert.equal(equivalentPolicy(expected.replace("'authenticated'", "'authenticated '"), expected), false,
+    "Whitespace inside a SQL literal must remain significant");
+  assert.equal(equivalentPolicy(expected.replace(" AND ", " OR "), expected), false);
+}
+assert.equal(equivalentPolicy(expectedPolicies[2].replace("solo_plus_cases.merchant_id", "solo_plus_cases.id"), expectedPolicies[2]), false);
+assert.equal(equivalentPolicy(expectedPolicies[3].replace("solo_plus_case_requirements.case_id", "solo_plus_case_requirements.id"), expectedPolicies[3]), false);
+assert.equal(equivalentPolicy(expectedPolicies[1].replace("COALESCE(mt.is_active, false)", "true"), expectedPolicies[1]), false);
+assert.match(expectedPolicies[1], / OR \(EXISTS/);
+assert.equal(equivalentPolicy(expectedPolicies[1].replace(" OR (EXISTS", " AND (EXISTS"), expectedPolicies[1]), false);
+assert.equal(equivalentPolicy("auth.role() = 'a ( b )'", "auth.role() = 'a (b)'"), false,
+  "Parenthesis spacing inside a quoted literal must remain significant");
 for (const [name, original, hostile] of [
   ["policy role", "p.polroles IS DISTINCT FROM ARRAY[0]::OID[]", "p.polroles IS NULL"],
-  ["policy USING", "IS DISTINCT FROM e.using_expression", "IS NOT DISTINCT FROM e.using_expression"],
+  ["policy command", "p.polcmd <> 'r' OR p.polpermissive IS NOT TRUE", "p.polcmd IS NOT NULL"],
+  ["policy USING", "btrim(e.using_expression)", "btrim('TRUE')"],
+  ["policy literal tokens", "AS expected_literal(parts)", "AS expected_literal(other_parts)"],
+  ["policy parenthesis normalization", "'[(][[:space:]]+', '(', 'g'", "'[[:space:]]+', ' ', 'g'"],
   ["policy owner expression", "m.id = solo_plus_cases.merchant_id", "m.id = solo_plus_cases.id"],
   ["policy requirement expression", "c.id = solo_plus_case_requirements.case_id", "c.id = solo_plus_case_requirements.id"],
+  ["policy name", "merchant_read_solo_plus_cases", "merchant_read_other_cases"],
   ["policy WITH CHECK", "p.polwithcheck IS NOT NULL", "p.polwithcheck IS NULL"],
+  ["payment policy count", "WHERE p.polrelid = 'public.payment_records'::regclass) <> 1", "WHERE p.polrelid = 'public.payment_records'::regclass) < 3"],
   ["check expression", "case_status <> 'approved'::text", "case_status <> 'rejected'::text"],
   ["case-status expression", "'manual_review'::text, 'approved'::text, 'rejected'::text", "'manual_review'::text, 'cancelled'::text, 'rejected'::text"],
   ["requirement-code expression", "'settlement_account'::text, 'activity_profile'::text", "'settlement_account'::text, 'unreviewed'::text"],
@@ -211,7 +273,7 @@ for (const [name, original, hostile] of [
 ] as const) {
   assert.ok(preDdl.includes(original), `Missing ${name} hostile probe source`);
   assert.throws(
-    () => assertSemanticGuards(preDdl.replace(original, hostile)),
+    () => assertSemanticGuards(preDdl.replaceAll(original, hostile)),
     `${name} hostile source drift must fail the static contract`,
   );
 }

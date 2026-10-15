@@ -211,8 +211,10 @@ BEGIN
   END IF;
 
   -- Compare complete policy expressions, not fragments. These renderings come
-  -- from the canonical Solo Plus and payment-substrate migrations. Whitespace
-  -- is the only normalization; a different role or expression is unsafe drift.
+  -- from the canonical Solo Plus and payment-substrate migrations. Only
+  -- insignificant whitespace is tolerated; different predicates are drift.
+  -- Compare quoted SQL literals separately before normalizing parenthesis
+  -- spacing, so whitespace within a literal can never be normalized away.
   v_expected_payment_policy := CASE
     WHEN to_regclass('public.merchant_team') IS NULL THEN
       $policy$((auth.role() = 'authenticated'::text) AND ((EXISTS (SELECT 1 FROM merchants m WHERE ((m.id = payment_records.merchant_id) AND (m.user_id = auth.uid()))))))$policy$
@@ -235,8 +237,32 @@ BEGIN
     WHERE p.oid IS NULL
        OR p.polcmd <> 'r' OR p.polpermissive IS NOT TRUE
        OR p.polroles IS DISTINCT FROM ARRAY[0]::OID[]
-       OR regexp_replace(btrim(pg_catalog.pg_get_expr(p.polqual, p.polrelid, false)), '[[:space:]]+', ' ', 'g')
-          IS DISTINCT FROM e.using_expression
+       OR ARRAY(
+            SELECT (actual_literal.parts)[1]
+            FROM pg_catalog.regexp_matches(
+              pg_catalog.pg_get_expr(p.polqual, p.polrelid, false),
+              $quoted$('([^']|'')*')$quoted$, 'g'
+            ) AS actual_literal(parts)
+          ) IS DISTINCT FROM ARRAY(
+            SELECT (expected_literal.parts)[1]
+            FROM pg_catalog.regexp_matches(
+              e.using_expression, $quoted$('([^']|'')*')$quoted$, 'g'
+            ) AS expected_literal(parts)
+          )
+       OR pg_catalog.regexp_replace(
+            pg_catalog.regexp_replace(
+              pg_catalog.regexp_replace(
+                btrim(pg_catalog.pg_get_expr(p.polqual, p.polrelid, false)),
+                '[[:space:]]+', ' ', 'g'
+              ), '[(][[:space:]]+', '(', 'g'
+            ), '[[:space:]]+[)]', ')', 'g'
+          ) IS DISTINCT FROM pg_catalog.regexp_replace(
+            pg_catalog.regexp_replace(
+              pg_catalog.regexp_replace(
+                btrim(e.using_expression), '[[:space:]]+', ' ', 'g'
+              ), '[(][[:space:]]+', '(', 'g'
+            ), '[[:space:]]+[)]', ')', 'g'
+          )
        OR p.polwithcheck IS NOT NULL
   ) OR (SELECT count(*) FROM pg_catalog.pg_policy p
         WHERE p.polrelid = 'public.payment_records'::regclass) <> 1 THEN
