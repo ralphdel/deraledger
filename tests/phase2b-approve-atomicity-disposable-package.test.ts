@@ -3,18 +3,43 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 
 const read = (name: string) => readFileSync(resolve(name), "utf8");
+function assertNoSqlEncodingArtifact(name: string, bytes: Buffer): void {
+  const leadingText = bytes.toString("utf8", 0, Math.min(bytes.length, 32));
+  const hasLeadingArtifact = /^[\t \r\n]*(?:\uFEFF|\u00EF\u00BB\u00BF|\uFFFD)/u.test(leadingText);
+  const hasLeadingNul = bytes.subarray(0, Math.min(bytes.length, 4)).includes(0);
+  assert.ok(!hasLeadingArtifact && !hasLeadingNul,
+    `Leading SQL encoding artifact: ${name}`);
+}
+function readSql(name: string): string {
+  const path = resolve(name);
+  const bytes = readFileSync(path);
+  assertNoSqlEncodingArtifact(path, bytes);
+  return bytes.toString("utf8");
+}
+const cleanSqlProbe = Buffer.from("-- valid SQL\n", "utf8");
+assertNoSqlEncodingArtifact("clean probe", cleanSqlProbe);
+for (const artifact of [
+  Buffer.from([0xef, 0xbb, 0xbf]),
+  Buffer.from([0xff, 0xfe]),
+  Buffer.from([0xfe, 0xff]),
+  Buffer.from("ï»¿", "utf8"),
+  Buffer.from("\uFFFD", "utf8"),
+]) {
+  assert.throws(() => assertNoSqlEncodingArtifact("hostile probe", Buffer.concat([artifact, cleanSqlProbe])),
+    /Leading SQL encoding artifact/);
+}
 const root = "tests/sql/phase2b-approve-atomicity/";
-const bootstrap = read(`${root}local-bootstrap.sql`);
-const install = read(`${root}verify-install.sql`);
-const behavior = read(`${root}verify-behavior.sql`);
-const hostile = read(`${root}hostile-drift.sql`);
-const hostileRollback = read(`${root}verify-hostile-rollback.sql`);
-const raceFixture = read(`${root}race-fixture.sql`);
-const raceA = read(`${root}race-session-a.sql`);
-const raceB = read(`${root}race-session-b.sql`);
+const bootstrap = readSql(`${root}local-bootstrap.sql`);
+const install = readSql(`${root}verify-install.sql`);
+const behavior = readSql(`${root}verify-behavior.sql`);
+const hostile = readSql(`${root}hostile-drift.sql`);
+const hostileRollback = readSql(`${root}verify-hostile-rollback.sql`);
+const raceFixture = readSql(`${root}race-fixture.sql`);
+const raceA = readSql(`${root}race-session-a.sql`);
+const raceB = readSql(`${root}race-session-b.sql`);
 const runbook = read("docs/prd-phase-2b-approve-atomicity-disposable-validation-package.md");
 const preflight = read("scripts/phase2b-approve-atomicity-local-preflight.ps1");
-const migration = read("supabase/migrations/20261014000000_phase2b_approve_atomicity_fail_closed.sql");
+const migration = readSql("supabase/migrations/20261014000000_phase2b_approve_atomicity_fail_closed.sql");
 
 // psql resolves \ir beside the containing file, but \i from the process
 // working directory. The runbook invokes psql from the repository root.
@@ -37,7 +62,7 @@ function assertIncludeChain(entrySource: string): void {
     if (visited.has(filePath)) return;
     visited.add(filePath);
     for (const target of includeTargets(filePath, source)) {
-      visit(target, readFileSync(target, "utf8"));
+      visit(target, readSql(target));
     }
   }
   visit(bootstrapPath, entrySource);
@@ -101,7 +126,7 @@ assert.match(bootstrap, /20260930000000_phase2b_review_action_intent_hardening\.
 assert.doesNotMatch(bootstrap, /\\ir .*005_phase1_fake_seed/);
 assert.match(bootstrap, /PASS\|APPROVE_ATOMICITY\|local_baseline_loaded/);
 assert.match(install, /27710a7819d8413aa8764d8762a6a0ca/);
-assert.match(install, /368f905cc19f574df1617acd5a7d812f/);
+assert.match(install, /59a78faa12cc7abad8d93637b4a60125/);
 assert.match(install, /aclexplode/);
 assert.match(install, /PASS\|APPROVE_ATOMICITY\|installed_functions_and_grants/);
 assert.match(behavior, /BEGIN;[\s\S]*ROLLBACK;[\s\S]*PASS\|APPROVE_ATOMICITY\|fail_closed_behavior_and_rollback/);
@@ -138,6 +163,8 @@ assert.ok(/Runtime rejection does not independently prove/.test(runbook));
 assert.match(runbook, /local bootstrap includes the canonical 009 and 010 migration files with\s+`\\ir`/);
 assert.match(runbook, /staging wrappers use working-directory-relative `\\i`/);
 assert.match(runbook, /Do not rerun\s+bootstrap or clone that database/);
+assert.match(runbook, /011 staging wrapper had a leading\s+UTF-8 BOM removed without changing its SQL or migration target/);
+assert.match(runbook, /teardown must drop the partial baseline before a fresh disposable baseline is\s+created/);
 assert.match(runbook, /PostgreSQL roles are \*\*cluster-wide\*\*/);
 assert.match(runbook, /never\s+creates or repairs `service_role`, `anon`, or `authenticated`/);
 assert.match(runbook, /Database teardown does not remove or own\s+cluster-wide roles/);

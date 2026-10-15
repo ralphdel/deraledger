@@ -29,7 +29,32 @@ const closedHash = hash(functionBody(cutover, "review_solo_plus_case_v1"));
 const atomicHash = hash(functionBody(cutover, "review_solo_plus_case_approve_atomic_v1"));
 assert.equal(baselineHash, "57fa7f166f81f24cb3ec077acc3449eb");
 assert.equal(closedHash, "27710a7819d8413aa8764d8762a6a0ca");
-assert.equal(atomicHash, "368f905cc19f574df1617acd5a7d812f");
+assert.equal(atomicHash, "59a78faa12cc7abad8d93637b4a60125");
+const overloadCase = /<> \(CASE WHEN v_new_oid IS NULL THEN 0 ELSE 1 END\) THEN/;
+const paymentPurposeCase = /v_payment\.payment_purpose IS DISTINCT FROM\s+\(CASE WHEN v_case\.flow_origin = 'upgrade' THEN 'plan_upgrade' ELSE 'plan_subscription' END\)\s+OR/;
+function assertParenthesizedIfCases(sql: string): void {
+  assert.match(sql.slice(0, sql.indexOf("CREATE OR REPLACE FUNCTION public.review_solo_plus_case_v1(")),
+    overloadCase, "Pre-DDL IF must keep the CASE expression parenthesized");
+  assert.match(functionBody(sql, "review_solo_plus_case_approve_atomic_v1"),
+    paymentPurposeCase, "Approve RPC IF must keep the CASE expression parenthesized");
+}
+assertParenthesizedIfCases(cutover);
+for (const malformed of [
+  cutover.replace("<> (CASE WHEN v_new_oid IS NULL THEN 0 ELSE 1 END) THEN",
+    "<> CASE WHEN v_new_oid IS NULL THEN 0 ELSE 1 END THEN"),
+  cutover.replace("(CASE WHEN v_case.flow_origin = 'upgrade' THEN 'plan_upgrade' ELSE 'plan_subscription' END)",
+    "CASE WHEN v_case.flow_origin = 'upgrade' THEN 'plan_upgrade' ELSE 'plan_subscription' END"),
+]) {
+  assert.throws(() => assertParenthesizedIfCases(malformed),
+    "An unparenthesized CASE inside IF must fail the static contract");
+}
+const preDdlDoBody = preDdl.slice(preDdl.indexOf("DO $$") + "DO $$".length, preDdl.lastIndexOf("$$;"));
+assert.match(preDdl, /END IF;\s*END;\s*\$\$;\s*$/);
+assert.equal((preDdlDoBody.match(/^\s*IF\b/gm) ?? []).length,
+  (preDdlDoBody.match(/^\s*END IF;/gm) ?? []).length,
+  "Pre-DDL DO block must balance IF and END IF statements");
+assert.equal((cutover.match(/^DO \$\$$/gm) ?? []).length, 2);
+assert.equal((cutover.match(/^\$\$;$/gm) ?? []).length, 4);
 for (const expectedHash of [baselineHash, closedHash, atomicHash]) {
   assert.ok(preDdl.includes(expectedHash), `Pre-DDL body guard missing ${expectedHash}`);
 }

@@ -35,7 +35,7 @@ BEGIN
          JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
          WHERE n.nspname = 'public'
            AND p.proname = 'review_solo_plus_case_approve_atomic_v1')
-        <> CASE WHEN v_new_oid IS NULL THEN 0 ELSE 1 END THEN
+        <> (CASE WHEN v_new_oid IS NULL THEN 0 ELSE 1 END) THEN
     RAISE EXCEPTION 'Phase 2B approve atomicity blocked: unexpected RPC overload';
   END IF;
 
@@ -67,7 +67,7 @@ BEGIN
   IF v_new_oid IS NOT NULL THEN
     SELECT p.* INTO STRICT v_new FROM pg_catalog.pg_proc p WHERE p.oid = v_new_oid;
     IF md5(replace(replace(v_new.prosrc, E'\r\n', E'\n'), E'\r', E'\n'))
-         <> '368f905cc19f574df1617acd5a7d812f'
+         <> '59a78faa12cc7abad8d93637b4a60125'
        OR v_new.proargnames IS DISTINCT FROM ARRAY[
          'p_case_id', 'p_expected_row_version', 'p_request_idempotency_key',
          'p_decision', 'p_reviewer_admin_id', 'p_reason', 'p_policy_version',
@@ -825,7 +825,7 @@ BEGIN
      OR v_payment.expected_amount IS DISTINCT FROM v_case.expected_amount
      OR v_payment.currency IS DISTINCT FROM v_case.payment_currency
      OR v_payment.payment_purpose IS DISTINCT FROM
-       CASE WHEN v_case.flow_origin = 'upgrade' THEN 'plan_upgrade' ELSE 'plan_subscription' END
+        (CASE WHEN v_case.flow_origin = 'upgrade' THEN 'plan_upgrade' ELSE 'plan_subscription' END)
      OR v_payment.metadata ->> 'fixture_scope' IS DISTINCT FROM 'phase2b_approve_acceptance'
      OR v_payment.metadata ->> 'fixture_run_id' IS DISTINCT FROM p_expected_fixture_run_id
      OR v_payment.metadata ->> 'synthetic_approve_acceptance' IS DISTINCT FROM 'true'
@@ -906,7 +906,7 @@ BEGIN
   LOOP
     v_expected_hash := CASE v_rpc.proname
       WHEN 'review_solo_plus_case_v1' THEN '27710a7819d8413aa8764d8762a6a0ca'
-      WHEN 'review_solo_plus_case_approve_atomic_v1' THEN '368f905cc19f574df1617acd5a7d812f'
+      WHEN 'review_solo_plus_case_approve_atomic_v1' THEN '59a78faa12cc7abad8d93637b4a60125'
       ELSE NULL
     END;
     IF v_expected_hash IS NULL

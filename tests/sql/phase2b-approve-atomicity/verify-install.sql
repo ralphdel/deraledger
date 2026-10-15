@@ -11,7 +11,7 @@ BEGIN
   SELECT * INTO STRICT v_new FROM pg_proc
   WHERE oid = to_regprocedure('public.review_solo_plus_case_approve_atomic_v1(uuid,bigint,text,text,uuid,text,text,text)');
   IF md5(replace(replace(v_old.prosrc, E'\r\n', E'\n'), E'\r', E'\n')) <> '27710a7819d8413aa8764d8762a6a0ca'
-     OR md5(replace(replace(v_new.prosrc, E'\r\n', E'\n'), E'\r', E'\n')) <> '368f905cc19f574df1617acd5a7d812f'
+     OR md5(replace(replace(v_new.prosrc, E'\r\n', E'\n'), E'\r', E'\n')) <> '59a78faa12cc7abad8d93637b4a60125'
      OR v_old.prosecdef OR v_new.prosecdef
      OR COALESCE(array_length(v_old.proconfig, 1), 0) <> 1
      OR COALESCE(array_length(v_new.proconfig, 1), 0) <> 1
