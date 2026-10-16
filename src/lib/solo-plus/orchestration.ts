@@ -1308,21 +1308,31 @@ export function createSoloPlusOrchestration(
         );
       }
 
-      const requirements = await repository.listRequirements(caseId);
-      if (
-        currentCase.paymentStatus !== "paid"
-        || currentCase.paymentRecordId == null
-        || !areAllSoloPlusRequirementsSatisfied(
-          requirements.map((requirement) => ({
-            code: requirement.requirementCode,
-            state: requirement.requirementState,
-          })),
-        )
-      ) {
+      if (currentCase.caseStatus !== "approved" && currentCase.rowVersion !== expectedRowVersion) {
         throw new SoloPlusOrchestrationError(
-          "SOLO_PLUS_CASE_STATE_CONFLICT",
-          "Solo Plus case is not eligible for approval.",
+          "SOLO_PLUS_CASE_VERSION_CONFLICT",
+          "Solo Plus case version conflict.",
         );
+      }
+      // An approved case must reach the RPC for exact-key replay.
+      // The RPC performs the final locked eligibility and version checks.
+      if (currentCase.caseStatus !== "approved") {
+        const requirements = await repository.listRequirements(caseId);
+        if (
+          currentCase.paymentStatus !== "paid"
+          || currentCase.paymentRecordId == null
+          || !areAllSoloPlusRequirementsSatisfied(
+            requirements.map((requirement) => ({
+              code: requirement.requirementCode,
+              state: requirement.requirementState,
+            })),
+          )
+        ) {
+          throw new SoloPlusOrchestrationError(
+            "SOLO_PLUS_CASE_STATE_CONFLICT",
+            "Solo Plus case is not eligible for approval.",
+          );
+        }
       }
 
       const nowIso = now().toISOString();

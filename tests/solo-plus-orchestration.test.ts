@@ -1024,6 +1024,21 @@ async function run() {
   assert.equal(approved.caseRecord.caseStatus, "approved");
   assert.equal(approved.caseRecord.approvedByAdminId, "admin-1");
   assert.equal(approved.caseRecord.refundStatus, "none");
+  // Completed-key replay must reach the atomic writer even if a later read of
+  // child rows differs; the writer owns the locked replay comparison.
+  await reviewRepo.upsertCaseRequirements("approve-case", []);
+  const approvedReplay = await reviewService.approveSoloPlusCase({
+    caseId: "approve-case",
+    expectedRowVersion: 2,
+    expectedFixtureRunId: "phase2b-approve-20261014-test",
+    requestIdempotencyKey: "approve-1",
+    reason: "Evidence reviewed.",
+    accessContext: buildAdminReviewContext(),
+  });
+  assert.equal(approvedReplay.outcome, "idempotent_replay");
+  assert.equal((await reviewRepo.listSafeEvents("approve-case")).filter(
+    (event) => event.eventType === "case_approved",
+  ).length, 1);
 
   reviewRepo.seedCase(
     createHistoricalCase({
@@ -1051,6 +1066,17 @@ async function run() {
         accessContext: buildAdminReviewContext(),
       }),
     "SOLO_PLUS_CASE_STATE_CONFLICT",
+  );
+  await expectCode(
+    () => reviewService.approveSoloPlusCase({
+      caseId: "ineligible-approve-case",
+      expectedRowVersion: 0,
+      expectedFixtureRunId: "phase2b-approve-20261014-test",
+      requestIdempotencyKey: "approve-ineligible-stale",
+      reason: "Stale version must take precedence over eligibility.",
+      accessContext: buildAdminReviewContext(),
+    }),
+    "SOLO_PLUS_CASE_VERSION_CONFLICT",
   );
 
   reviewRepo.seedCase(

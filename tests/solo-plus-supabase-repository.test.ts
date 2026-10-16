@@ -1743,10 +1743,25 @@ async function run() {
     },
     error: null,
   });
-  await assert.rejects(
-    () => repository.transitionCaseStatus(approveInput),
-    /writer protocol is not released/,
-  );
+  const approveUpdated = await repository.transitionCaseStatus(approveInput);
+  assert.equal(approveUpdated.kind, "updated");
+  if (approveUpdated.kind === "updated") {
+    assert.equal(approveUpdated.caseRecord.caseStatus, "approved");
+    assert.equal(approveUpdated.event.eventType, "case_approved");
+  }
+  client.rpcResponses.set(soloPlusSupabaseRpcNames.reviewApproveAtomic, {
+    data: {
+      kind: "idempotent_replay",
+      case: buildCaseRow({ case_status: "approved", row_version: 2 }),
+      event: buildEventRow({ event_type: "case_approved" }),
+    },
+    error: null,
+  });
+  const approveReplay = await repository.transitionCaseStatus(approveInput);
+  assert.equal(approveReplay.kind, "idempotent_replay");
+  if (approveReplay.kind === "idempotent_replay") {
+    assert.equal(approveReplay.event?.eventType, "case_approved");
+  }
 
   client.rpcResponses.set(soloPlusSupabaseRpcNames.reviewCase, {
     data: {

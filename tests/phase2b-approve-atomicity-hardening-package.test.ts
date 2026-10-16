@@ -129,7 +129,7 @@ assert.match(racePlan, /Requirement update overlap/);
 assert.match(racePlan, /current static tests cannot establish those races/i);
 assert.match(requirementRepository, /reviewDecision === "approve" \? REVIEW_APPROVE_ATOMIC_RPC : REVIEW_CASE_RPC/);
 assert.match(requirementRepository, /p_expected_fixture_run_id: input\.expectedFixtureRunId/);
-assert.match(requirementRepository, /reviewDecision === "approve"[\s\S]*result\.kind === "updated"[\s\S]*writer protocol is not released/);
+assert.doesNotMatch(requirementRepository, /writer protocol is not released/);
 assert.match(reviewerService, /expectedFixtureRunId: reviewActionScope\.runId/);
 
 console.log("phase2b-approve-atomicity-hardening-package.test.ts passed (fail-closed; approve blocked)");

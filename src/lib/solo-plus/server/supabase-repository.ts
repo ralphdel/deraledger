@@ -1794,15 +1794,6 @@ export function createSoloPlusSupabaseRepository(
       }
 
       const result = mapTransitionResult(data);
-      if (
-        reviewDecision === "approve"
-        && (result.kind === "updated" || result.kind === "idempotent_replay")
-      ) {
-        throw new SoloPlusSupabaseRepositoryError(
-          "SOLO_PLUS_ATOMIC_PERSISTENCE_UNAVAILABLE",
-          "Solo Plus approve writer protocol is not released.",
-        );
-      }
       return result;
     },
 

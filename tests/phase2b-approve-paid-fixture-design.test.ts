@@ -17,26 +17,27 @@ const orchestration = source("src/lib/solo-plus/orchestration.ts");
 const normalizedDesign = design.replace(/\s+/g, " ");
 
 for (const required of [
-  "no executable fixture or",
+  "No executable fixture is reviewed",
   "Approve fixture planning, creation,",
   "separate approve-only fixture procedure",
-  "Current cutover: fail-closed forward-only RPC/source atomicity package",
-  "case, linked payment, then requirement rows",
-  "payment confirmation and payment recovery",
+  "Current source: fail-closed predecessor plus unverified approve-success migration",
+  "case, linked payment, then requirements in canonical code order",
+  "Payment confirmation and recovery",
   "phase2b-approve-YYYYMMDD-<random>",
   "review_state=under_review",
   "payment_status=paid",
   "payment_status=successful",
   "Exactly the six canonical codes",
-  "row_version=1",
+  "Read the actual positive `row_version` after every fixture write commits",
+  "ON CONFLICT DO UPDATE",
   "fixture_scope=phase2b_approve_acceptance",
   "synthetic_approve_acceptance=true",
   "Provider name/reference/payload",
   "no real customer identity",
-  "case `row_version` and a passing preflight do **not** stabilize child rows",
-  "payment-first confirmation",
+  "case `row_version` and preflight cannot by themselves stabilize child rows",
+  "payment-first writer",
   "NOWAIT",
-  "direct requirements upsert",
+  "direct upserts and deletes",
   "Direct table",
   "disposable local PostgreSQL",
   "cannot prove transactional safety",
@@ -45,6 +46,8 @@ for (const required of [
 ]) {
   assert.ok(normalizedDesign.includes(required), `Missing approve design boundary: ${required}`);
 }
+assert.doesNotMatch(design, /\| Version \|[^\n]*row_version=1/);
+assert.match(design, /pre-action version plus one/);
 assert.match(runbook, /paid-fixture and atomicity design/);
 assert.match(runbook, /planning and creation are blocked/);
 assert.match(runbook, /no transactional guarantee/);

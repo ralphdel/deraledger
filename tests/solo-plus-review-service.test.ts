@@ -764,7 +764,7 @@ async function run() {
     () => staleApproveService.reviewCase({ ...approveInput, expectedRowVersion: 2 }),
     /version conflict|row version|changed since/i,
   );
-  assert.equal(staleApproveRepository.transitionCallCount, 1);
+  assert.equal(staleApproveRepository.transitionCallCount, 0);
   assert.equal(staleApproveRepository.cases.get(approveCaseId)?.caseStatus, "manual_review");
 
   const approved = await approveService.reviewCase(approveInput);
@@ -776,8 +776,16 @@ async function run() {
   assert.equal(approveRepository.transitionCallCount, 1);
   assert.equal(approveRepository.lastTransitionInput?.expectedFixtureRunId, approveRunId);
   assert.equal(approveRepository.activationCallCount, 0);
-  await assert.rejects(() => approveService.reviewCase(approveInput), /fresh eligible synthetic staging fixture/i);
-  assert.equal(approveRepository.transitionCallCount, 1);
+  const approveReplay = await approveService.reviewCase(approveInput);
+  assert.equal(approveReplay.outcome, "idempotent_replay");
+  assert.equal(approveReplay.event?.eventType, "case_approved");
+  assert.equal(approveRepository.transitionCallCount, 2);
+  assert.equal(approveRepository.events.get(approveCaseId)?.length, 1);
+  await assert.rejects(
+    () => approveService.reviewCase({ ...approveInput, requestIdempotencyKey: "conflicting-approve-key" }),
+    /fresh eligible synthetic staging fixture/i,
+  );
+  assert.equal(approveRepository.transitionCallCount, 2);
 
   // The route constructs the service without generateId. Keep the production
   // default covered through the real service/orchestration with an in-memory

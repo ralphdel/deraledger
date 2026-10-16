@@ -190,19 +190,28 @@ export async function createSoloPlusReviewerService(
       }
 
       if (input.decision === "approve") {
-        const isFreshPaidFixture =
+        const latestDecision = await repository.findLatestReviewDecisionEvent(input.caseId);
+        const hasScopedPaidFixture =
           scopedCase.auditMetadata.synthetic_approve_acceptance === true
-          && scopedCase.caseStatus === "manual_review"
           && scopedCase.paymentStatus === "paid"
           && scopedCase.paymentRecordId !== null
           && scopedCase.refundStatus === "none"
           && scopedCase.activationIdempotencyKey === null
           && scopedCase.refundIdempotencyKey === null
-          && scopedCase.approvedAt === null
           && scopedCase.rejectedAt === null
           && scopedCase.reopenedAt === null
           && scopedCase.rejectionReason === null;
-        if (!isFreshPaidFixture || await repository.findLatestReviewDecisionEvent(input.caseId)) {
+        const isFreshPaidFixture = hasScopedPaidFixture
+          && scopedCase.caseStatus === "manual_review"
+          && scopedCase.approvedAt === null
+          && latestDecision === null;
+        const isCompletedApproveReplay = hasScopedPaidFixture
+          && scopedCase.caseStatus === "approved"
+          && scopedCase.approvedAt !== null
+          && scopedCase.approvedByAdminId === authority.userId
+          && latestDecision?.eventType === "case_approved"
+          && latestDecision.requestIdempotencyKey === input.requestIdempotencyKey;
+        if (!isFreshPaidFixture && !isCompletedApproveReplay) {
           throw new SoloPlusReviewerServiceError(
             "SOLO_PLUS_SERVER_FORBIDDEN",
             "Solo Plus approve acceptance requires a fresh eligible synthetic staging fixture.",

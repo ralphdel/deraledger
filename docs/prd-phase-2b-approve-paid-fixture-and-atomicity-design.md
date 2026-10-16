@@ -1,8 +1,9 @@
 # Phase 2B approve paid-fixture and atomicity design
 
-**Status: source-only fixture design. A separate fail-closed atomicity migration
-has been prepared for review, but no executable fixture or successful atomic
-approve path exists. Approve fixture planning, creation,
+**Status: source-only fixture design. A successful atomic approve source
+migration has been prepared but has not passed disposable PostgreSQL
+verification or been applied. No executable fixture is reviewed. Approve
+fixture planning, creation,
 preflight execution, env changes, deployment, action, and cleanup remain blocked.**
 Each later mutation needs its own explicit approval. This design uses no prior
 RMI or reject case, run ID, payment, merchant, or workspace.
@@ -29,7 +30,7 @@ ID, then establish this final boundary:
 | Case | `manual_review`; derived `review_state=under_review` (not a physical column); `action_required=none` |
 | Payment | `payment_status=paid`; `refund_status=none`; non-null `payment_record_id` identifying exactly one linked `payment_records` row owned by this case with `payment_status=successful`; no other linked payment attempt |
 | Requirements | Exactly the six canonical codes, each `passed` with synthetic manual evidence and a completion timestamp; no `waived` or `reused` shortcut |
-| Version | `row_version=1` after a single controlled fixture transition from draft version 0; stop if actual version differs |
+| Version | Read the actual positive `row_version` after every fixture write commits; bind preflight and approve to that exact value. Do not assume version 1. |
 | Marker | `audit_metadata.fixture_scope=phase2b_approve_acceptance`, exact `fixture_run_id`, and `synthetic_approve_acceptance=true` |
 | Review and activation | No earlier review decision, approval, activation key/event, active Solo Plus subscription, collection unlock, or live feature |
 
@@ -56,37 +57,29 @@ unpaid fixture cleanup.
 
 ## Atomicity hardening required before execution planning
 
-The historical seven-argument approve branch locks only `solo_plus_cases`,
-then counts requirements and checks a successful linked payment using ordinary
-reads. Its approve decision is closed by the proposed fail-closed cutover;
-the new approve RPC locks the pointed-to payment and six existing requirement
-rows but always returns a conflict. The requirements
-repository directly upserts child rows without locking or advancing the case
-version. Both Solo Plus payment confirmation and payment recovery lock a
-payment row before the case. Therefore a
-case `row_version` and a passing preflight do **not** stabilize child rows, and
-simply adding case-then-payment blocking locks to review risks deadlock.
+The historical seven-argument approve branch remains fail-closed. The
+separate approve RPC has a prepared success-path source migration, but its
+new statement-level child guards and paid-link validation have not been
+compiled or race-tested in PostgreSQL. Payment confirmation and recovery
+still lock a payment row before the case. The approval RPC therefore keeps
+NOWAIT child locks. A case `row_version` and preflight cannot by themselves
+stabilize child rows before this migration is proven and applied.
 
-**Current cutover: fail-closed forward-only RPC/source atomicity package.** Defer the
-approve-only fixture procedure until that package has independent review and
-disposable-database concurrency evidence. Do not combine the fixture writer
-with the hardening migration: the writer must consume a proven boundary.
+**Current source: fail-closed predecessor plus unverified approve-success
+migration.** Defer the approve-only fixture procedure until the success
+migration has independent review and disposable-database concurrency evidence.
+The fixture writer must consume a proven boundary.
 
-The preferred common lock order for eligibility-changing paths is **case,
-linked payment, then requirement rows in canonical code order**. Payment
-confirmation and recovery currently identify and lock payment first. Their
-replacement paths must identify the case by a non-locking lookup, lock the
-case, lock the identified payment row, and revalidate the case/payment link,
-state, ownership, amount, and idempotency after both locks. Approval already
-locks the case; it must lock the linked payment before the six requirement
-rows and then revalidate all eligibility. A fail-closed `NOWAIT` payment lock
-may be needed during a staged migration/rolling-transaction window to avoid
-deadlock against the old payment-first code. Its precise use and error mapping
-must be tested. A trigger that first locks a child row and then its parent
-would recreate the inverse-order risk. No lock-order change is authorized in
-this design package.
+Approval locks **case, linked payment, then requirements in canonical code
+order**. Payment confirmation and recovery still lock payment first. Their
+child statements reach an AFTER STATEMENT parent-case guard; approval uses
+`NOWAIT` child locks so it can fail closed instead of waiting behind a
+payment-first writer. Disposable two-session tests must prove this interaction
+and its error mapping. No legacy payment lock-order change is part of this
+source package.
 
-A new, forward-only reviewed migration and matching repository changes must:
+The prepared forward-only migration and repository path must satisfy these
+conditions before execution planning:
 
 1. Preserve the seven-argument review RPC for RMI/reject while making its old
    approve branch fail closed. The exact fixture run ID is not among those
@@ -100,20 +93,21 @@ A new, forward-only reviewed migration and matching repository changes must:
    and no prior activation in the same transaction. The lock query must not
    substitute an unlocked aggregate read. Lock-busy and stale boundaries must
    fail closed without an automatic approve retry.
-2. Replace the direct requirements upsert with a transaction that locks the
-   parent case first, rejects terminal/reviewed cases, checks an expected
-   version, writes the rows, and increments the case version once for any
-   eligibility-changing write. Audit and close every other requirement write
-   path, including privileged direct writes and deletes. Locking only the six
-   existing rows in review is insufficient if a writer can change them after
-   approval or insert/delete without the parent protocol.
-3. Audit every linked payment status/link/amount writer, including confirmation
-   and recovery. Such a writer must
-   serialize with review, advance the parent version for eligibility-changing
-   writes, and reject an incompatible change after approval. Reconcile its
-   lock order with the current payment-first confirmation and recovery RPCs.
-   Direct table
-   writes and background workers must not bypass this protocol.
+2. The prepared success migration uses AFTER STATEMENT transition-table
+   triggers to serialize material payment and requirement changes through the
+   parent case and advance its version once per trigger firing when the
+   synthetic case is paid and review-sensitive. No-op changes and unrelated
+   session payments must not advance it. Payment confirmation and recovery
+   retain their own single case increment while the case is pending. This
+   allows a mixed `INSERT ... ON CONFLICT DO UPDATE` to advance twice if both
+   statement trigger events contain material rows; the preflight uses the
+   final observed version. This contract requires disposable-database proof,
+   including direct upserts and
+   deletes; application prechecks are not a substitute.
+3. The prepared case-link guard validates initial payment linkage under lock
+   and rejects paid/review-sensitive relinking. Its compatibility with normal
+   confirmation and recovery requires disposable-database proof. Direct table
+   writes and background workers must not bypass the guarded contract.
 4. Fail approval if the payment or any requirement is missing, ineligible,
    changed, or lock-busy. Preserve one case update and one `case_approved`
    event. Do not call activation or subscription, onboarding, plan, provider,
@@ -133,14 +127,16 @@ transactional safety. Do not apply or execute any SQL under this package.
 After the fixture procedure and atomicity migration each pass independent
 source/security review and disposable-database rehearsal, separately approve
 a staging read-only preflight. It must verify exact staging identity, case/run
-marker, version 1, synthetic merchant/workspace/payment provenance, six
+marker, the freshly read exact version, synthetic merchant/workspace/payment
+provenance, six
 requirements, no other review/payment/activation descendants, and a private
 fingerprint of payment, requirements, plans, subscriptions, and features. Only
 after a fresh passing preflight may exact env values and deployment be
 considered for separate approval. The approve action requires its own approval
 and one fresh expected-version/idempotency boundary; no retry or replay.
 
-Separately approved postflight must prove version 2, one `case_approved` event,
+Separately approved postflight must prove pre-action version plus one, one
+`case_approved` event,
 unchanged synthetic payment and requirement snapshot, no activation, and no
 plan/subscription/onboarding/collection/provider/refund/settlement side effect.
 Then separately approve removing temporary gate env values and restoring the
