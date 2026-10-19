@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { AdminReviewForm } from "../src/components/solo-plus/admin-review-form";
+import { getAllowedReviewDecisionForCaseStatus } from "../src/components/solo-plus/admin-case-detail";
 import { RequirementsChecklist } from "../src/components/solo-plus/requirements-checklist";
 import {
   getSoloPlusDecisionConfirmationCopy,
@@ -268,6 +271,28 @@ async function run() {
   assert.equal(approveReviewFormMarkup.includes("Reject"), false);
   assert.equal(approveReviewFormMarkup.includes("Reopen"), false);
   assert.equal(approveReviewFormMarkup.includes("Activation remains a separate internal step"), false);
+
+  assert.equal(getAllowedReviewDecisionForCaseStatus("manual_review", "approve"), "approve");
+  assert.equal(getAllowedReviewDecisionForCaseStatus("approved", "approve"), null);
+  assert.equal(getAllowedReviewDecisionForCaseStatus("approved", "reject"), null);
+  assert.equal(getAllowedReviewDecisionForCaseStatus("approved", "request_more_information"), null);
+  const approvedReviewFormMarkup = renderToStaticMarkup(
+    <AdminReviewForm
+      allowedDecision={getAllowedReviewDecisionForCaseStatus("approved", "approve")}
+      caseId="11111111-1111-4111-8111-111111111111"
+      rowVersion={5}
+      onSuccess={() => undefined}
+    />,
+  );
+  assert.equal(approvedReviewFormMarkup.includes("Review actions are disabled"), true);
+  assert.equal(approvedReviewFormMarkup.includes("<button"), false);
+  const reviewFormSource = readFileSync(
+    resolve(process.cwd(), "src/components/solo-plus/admin-review-form.tsx"),
+    "utf8",
+  );
+  const disabledDecisionBoundary = reviewFormSource.indexOf("if (allowedDecision == null)");
+  const confirmationDialog = reviewFormSource.indexOf("<Dialog open={confirmOpen}");
+  assert.ok(disabledDecisionBoundary >= 0 && disabledDecisionBoundary < confirmationDialog);
 
   const disabledReviewFormMarkup = renderToStaticMarkup(
     <AdminReviewForm

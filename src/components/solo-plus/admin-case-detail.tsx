@@ -17,6 +17,13 @@ type AdminCaseDetailProps = {
   allowedReviewDecision: SoloPlusStagingAcceptanceDecision | null;
 };
 
+export function getAllowedReviewDecisionForCaseStatus(
+  caseStatus: SoloPlusAdminCaseDetailDto["case"]["caseStatus"],
+  scopedDecision: SoloPlusStagingAcceptanceDecision | null,
+): SoloPlusStagingAcceptanceDecision | null {
+  return caseStatus === "manual_review" ? scopedDecision : null;
+}
+
 function mapDetailError(code: string | null) {
   switch (code) {
     case "UNAUTHORIZED":
@@ -270,7 +277,10 @@ export function AdminCaseDetail({ caseId, allowedReviewDecision }: AdminCaseDeta
             </CardHeader>
             <CardContent>
               <AdminReviewForm
-                allowedDecision={allowedReviewDecision}
+                allowedDecision={getAllowedReviewDecisionForCaseStatus(
+                  detail.case.caseStatus,
+                  allowedReviewDecision,
+                )}
                 caseId={caseId}
                 rowVersion={detail.case.rowVersion}
                 onSuccess={loadDetail}
