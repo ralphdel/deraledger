@@ -74,7 +74,7 @@ assert.doesNotMatch(currentBoundary, /(?:approval|approve) execution (?:is|can b
 
 assert.match(gate, /DERALEDGER_PHASE2B_SOLO_PLUS_APPROVE_ACCEPTANCE_ENABLED/);
 assert.match(gate, /APPROVE_RUN_ID_PATTERN/);
-assert.match(gate, /rejectGateValue !== "" && approveGateValue !== ""/);
+assert.match(gate, /\[rejectGateValue, approveGateValue, reopenGateValue\]\.filter\(Boolean\)\.length > 1/);
 assert.match(service, /phase2b_approve_acceptance/);
 assert.match(service, /synthetic_approve_acceptance === true/);
 assert.match(service, /paymentStatus === "paid"/);

@@ -422,6 +422,11 @@ export function getSoloPlusDecisionConfirmationCopy(decision: string): {
         title: "Reject Solo Plus review?",
         description: "This will mark the current Solo Plus request as not approved.",
       };
+    case "reopen":
+      return {
+        title: "Reopen Solo Plus review?",
+        description: "This returns the rejected case to verification pending. Payment and activation remain unchanged.",
+      };
     default:
       return {
         title: "Send review decision?",

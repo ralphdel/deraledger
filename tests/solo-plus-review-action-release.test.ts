@@ -347,6 +347,50 @@ async function run() {
     DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_RUN_ID: "phase2b-approve-20261014-a1b2",
   }), null);
 
+  const reopenEnv = {
+    ...dedicatedStagingProductionEnv,
+    DERALEDGER_PHASE2B_SOLO_PLUS_REOPEN_ACCEPTANCE_ENABLED: "true",
+    DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_DECISION: "reopen",
+    DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_RUN_ID: "phase2b-reject-20261013-a1b2",
+  };
+  const reopenScope = resolveSoloPlusReviewActionScope(reopenEnv);
+  assert.deepEqual(reopenScope, {
+    caseId: "11111111-1111-4111-8111-111111111111",
+    decision: "reopen",
+    runId: "phase2b-reject-20261013-a1b2",
+  });
+  assert.equal(areSoloPlusReviewActionsEnabled(reopenEnv), true);
+  assert.deepEqual(resolveSoloPlusReviewActionScope({ ...reopenEnv, VERCEL_ENV: "preview" }), reopenScope);
+  for (const blockedDecision of ["request_more_information", "reject", "approve"]) {
+    assert.equal(isSoloPlusReviewActionWithinScope(reopenScope!, {
+      caseId: reopenScope!.caseId,
+      decision: blockedDecision,
+    }), false);
+    assert.equal(resolveSoloPlusReviewActionScope({
+      ...reopenEnv,
+      DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_DECISION: blockedDecision,
+    }), null);
+  }
+  for (const wrongReopenScope of [
+    { DERALEDGER_PHASE2B_SOLO_PLUS_REOPEN_ACCEPTANCE_ENABLED: "" },
+    { DERALEDGER_PHASE2B_SOLO_PLUS_REOPEN_ACCEPTANCE_ENABLED: "false" },
+    { DERALEDGER_PHASE2B_SOLO_PLUS_REOPEN_ACCEPTANCE_ENABLED: "all" },
+    { DERALEDGER_PHASE2B_SOLO_PLUS_REJECT_ACCEPTANCE_ENABLED: "true" },
+    { DERALEDGER_PHASE2B_SOLO_PLUS_APPROVE_ACCEPTANCE_ENABLED: "true" },
+    { DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTIONS_ENABLED: "" },
+    { DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_CASE_ID: "*" },
+    { DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_RUN_ID: "*" },
+    { DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_RUN_ID: "phase2b-approve-20261019-a1b2" },
+    { DERALEDGER_DEPLOYMENT_TARGET: "" },
+    { NEXT_PUBLIC_SUPABASE_URL: "https://another-project.supabase.co" },
+    { VERCEL_PROJECT_PRODUCTION_URL: "another-staging.vercel.app" },
+    { NEXT_PUBLIC_SUPABASE_URL: "https://gznwibespgkwknnvbrlv.supabase.co" },
+    { NEXT_PUBLIC_APP_URL: "https://www.deraledger.com" },
+    { VERCEL_ENV: "" },
+  ]) {
+    assert.equal(resolveSoloPlusReviewActionScope({ ...reopenEnv, ...wrongReopenScope }), null);
+  }
+
   console.log("solo-plus-review-action-release.test.ts passed");
 }
 

@@ -14,6 +14,7 @@ export const SOLO_PLUS_STAGING_ACCEPTANCE_DECISIONS = [
   "request_more_information",
   "reject",
   "approve",
+  "reopen",
 ] as const satisfies readonly SoloPlusReviewerDecision[];
 
 export type SoloPlusStagingAcceptanceDecision =

@@ -276,6 +276,28 @@ async function run() {
   assert.equal(getAllowedReviewDecisionForCaseStatus("approved", "approve"), null);
   assert.equal(getAllowedReviewDecisionForCaseStatus("approved", "reject"), null);
   assert.equal(getAllowedReviewDecisionForCaseStatus("approved", "request_more_information"), null);
+  assert.equal(getAllowedReviewDecisionForCaseStatus("rejected", "reopen"), "reopen");
+  assert.equal(getAllowedReviewDecisionForCaseStatus("verification_pending", "reopen"), null);
+  assert.equal(getAllowedReviewDecisionForCaseStatus("approved", "reopen"), null);
+  assert.equal(getAllowedReviewDecisionForCaseStatus("rejected", "approve"), null);
+  assert.equal(getAllowedReviewDecisionForCaseStatus("rejected", "reject"), null);
+  assert.equal(getAllowedReviewDecisionForCaseStatus("rejected", "request_more_information"), null);
+  const reopenReviewFormMarkup = renderToStaticMarkup(
+    <AdminReviewForm
+      allowedDecision={getAllowedReviewDecisionForCaseStatus("rejected", "reopen")}
+      caseId="11111111-1111-4111-8111-111111111111"
+      rowVersion={2}
+      onSuccess={() => undefined}
+    />,
+  );
+  assert.equal(reopenReviewFormMarkup.includes("Reopen"), true);
+  assert.equal(reopenReviewFormMarkup.includes("Approve"), false);
+  assert.equal(reopenReviewFormMarkup.includes("Reject"), false);
+  assert.equal(reopenReviewFormMarkup.includes("Request more information"), false);
+  const reopenConfirmation = getSoloPlusDecisionConfirmationCopy("reopen");
+  assert.equal(reopenConfirmation.title, "Reopen Solo Plus review?");
+  assert.equal(reopenConfirmation.description.includes("verification pending"), true);
+  assert.equal(reopenConfirmation.description.includes("activation remain unchanged"), true);
   const approvedReviewFormMarkup = renderToStaticMarkup(
     <AdminReviewForm
       allowedDecision={getAllowedReviewDecisionForCaseStatus("approved", "approve")}
@@ -293,6 +315,9 @@ async function run() {
   const disabledDecisionBoundary = reviewFormSource.indexOf("if (allowedDecision == null)");
   const confirmationDialog = reviewFormSource.indexOf("<Dialog open={confirmOpen}");
   assert.ok(disabledDecisionBoundary >= 0 && disabledDecisionBoundary < confirmationDialog);
+  const closeConfirmation = reviewFormSource.indexOf("setConfirmOpen(false);");
+  const refreshDetail = reviewFormSource.indexOf("await onSuccess();");
+  assert.ok(closeConfirmation >= 0 && closeConfirmation < refreshDetail);
 
   const disabledReviewFormMarkup = renderToStaticMarkup(
     <AdminReviewForm

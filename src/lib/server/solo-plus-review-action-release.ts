@@ -14,6 +14,8 @@ export const SOLO_PLUS_REJECT_ACCEPTANCE_FLAG =
   "DERALEDGER_PHASE2B_SOLO_PLUS_REJECT_ACCEPTANCE_ENABLED";
 export const SOLO_PLUS_APPROVE_ACCEPTANCE_FLAG =
   "DERALEDGER_PHASE2B_SOLO_PLUS_APPROVE_ACCEPTANCE_ENABLED";
+export const SOLO_PLUS_REOPEN_ACCEPTANCE_FLAG =
+  "DERALEDGER_PHASE2B_SOLO_PLUS_REOPEN_ACCEPTANCE_ENABLED";
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -35,6 +37,7 @@ const PRODUCTION_APP_HOSTS = new Set([
 const HISTORICAL_RMI_ACCEPTANCE_DECISION = "request_more_information";
 const REJECT_ACCEPTANCE_DECISION = "reject";
 const APPROVE_ACCEPTANCE_DECISION = "approve";
+const REOPEN_ACCEPTANCE_DECISION = "reopen";
 
 const SUPABASE_IDENTITY_ENVIRONMENT_NAMES = [
   "NEXT_PUBLIC_SUPABASE_URL",
@@ -61,7 +64,11 @@ type SoloPlusReviewActionEnvironment = Readonly<
 
 export type SoloPlusReviewActionScope = Readonly<{
   caseId: string;
-  decision: typeof HISTORICAL_RMI_ACCEPTANCE_DECISION | typeof REJECT_ACCEPTANCE_DECISION | typeof APPROVE_ACCEPTANCE_DECISION;
+  decision:
+    | typeof HISTORICAL_RMI_ACCEPTANCE_DECISION
+    | typeof REJECT_ACCEPTANCE_DECISION
+    | typeof APPROVE_ACCEPTANCE_DECISION
+    | typeof REOPEN_ACCEPTANCE_DECISION;
   runId: string;
 }>;
 
@@ -186,7 +193,8 @@ export function resolveSoloPlusReviewActionScope(
 
   const rejectGateValue = normalizeEnvironmentValue(env[SOLO_PLUS_REJECT_ACCEPTANCE_FLAG]);
   const approveGateValue = normalizeEnvironmentValue(env[SOLO_PLUS_APPROVE_ACCEPTANCE_FLAG]);
-  if (rejectGateValue !== "" && approveGateValue !== "") {
+  const reopenGateValue = normalizeEnvironmentValue(env[SOLO_PLUS_REOPEN_ACCEPTANCE_FLAG]);
+  if ([rejectGateValue, approveGateValue, reopenGateValue].filter(Boolean).length > 1) {
     return null;
   }
 
@@ -203,6 +211,15 @@ export function resolveSoloPlusReviewActionScope(
     if (
       rejectGateValue !== "true"
       || decision !== REJECT_ACCEPTANCE_DECISION
+      || !REJECT_RUN_ID_PATTERN.test(runId)
+      || !isExplicitDedicatedStagingDeployment(env)
+    ) {
+      return null;
+    }
+  } else if (reopenGateValue !== "") {
+    if (
+      reopenGateValue !== "true"
+      || decision !== REOPEN_ACCEPTANCE_DECISION
       || !REJECT_RUN_ID_PATTERN.test(runId)
       || !isExplicitDedicatedStagingDeployment(env)
     ) {

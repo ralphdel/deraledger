@@ -21,6 +21,10 @@ export function getAllowedReviewDecisionForCaseStatus(
   caseStatus: SoloPlusAdminCaseDetailDto["case"]["caseStatus"],
   scopedDecision: SoloPlusStagingAcceptanceDecision | null,
 ): SoloPlusStagingAcceptanceDecision | null {
+  if (scopedDecision === "reopen") {
+    return caseStatus === "rejected" ? scopedDecision : null;
+  }
+
   return caseStatus === "manual_review" ? scopedDecision : null;
 }
 

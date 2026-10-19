@@ -290,7 +290,7 @@ function buildSatisfiedRequirements(caseId: string): SoloPlusCaseRequirementReco
 
 function createEnv(
   caseId = "11111111-1111-4111-8111-111111111111",
-  decision: "request_more_information" | "reject" | "approve" = "request_more_information",
+  decision: "request_more_information" | "reject" | "approve" | "reopen" = "request_more_information",
 ) {
   return {
     NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
@@ -655,6 +655,60 @@ async function run() {
     /fresh unpaid staging fixture/i,
   );
   assert.equal(freshRejectRepository.transitionCallCount, 1);
+
+  const rejectedForReopen = freshRejectRepository.cases.get(freshRejectCaseId)!;
+  freshRejectRepository.cases.set(freshRejectCaseId, buildCaseRecord({
+    ...rejectedForReopen,
+    rowVersion: rejectedForReopen.rowVersion + 1,
+    auditMetadata: {
+      ...rejectedForReopen.auditMetadata,
+      fixture_scope: "phase2b_reopen_acceptance",
+      fixture_origin_scope: "phase2b_admin_detail_smoke",
+      synthetic_reopen_acceptance: true,
+    },
+  }));
+
+  const reopenEnv = createEnv(freshRejectCaseId, "reopen");
+  reopenEnv.DERALEDGER_PHASE2B_SOLO_PLUS_REOPEN_ACCEPTANCE_ENABLED = "true";
+  reopenEnv.DERALEDGER_PHASE2B_SOLO_PLUS_REVIEW_ACTION_RUN_ID = freshRejectRunId;
+  reopenEnv.DERALEDGER_DEPLOYMENT_TARGET = "staging";
+  reopenEnv.NEXT_PUBLIC_SUPABASE_URL = "https://fsjljliiyfchkwbjifzw.supabase.co";
+  reopenEnv.VERCEL_PROJECT_PRODUCTION_URL = "deraledger-staging.vercel.app";
+  const reopenService = await createSoloPlusReviewerService({
+    repository: freshRejectRepository,
+    resolveAdminAuthority: async () => ({ ok: true, userId: "admin-reviewer" }),
+    env: reopenEnv,
+    now: () => new Date("2026-10-19T00:00:00.000Z"),
+    generateId: () => "synthetic-reopen-event",
+  });
+  const reopenInput = {
+    caseId: freshRejectCaseId,
+    expectedRowVersion: 3,
+    requestIdempotencyKey: "synthetic-reopen-service-test",
+    decision: "reopen" as const,
+    reason: "Reopen the synthetic case for verification.",
+  };
+  for (const blockedDecision of ["request_more_information", "reject", "approve"] as const) {
+    await assert.rejects(
+      () => reopenService.reviewCase({ ...reopenInput, decision: blockedDecision }),
+      /outside the approved staging scope/i,
+    );
+  }
+  const reopened = await reopenService.reviewCase(reopenInput);
+  assert.equal(reopened.caseRecord.caseStatus, "verification_pending");
+  assert.equal(reopened.caseRecord.rowVersion, 4);
+  assert.equal(reopened.caseRecord.paymentStatus, "pending");
+  assert.equal(reopened.caseRecord.activationIdempotencyKey, null);
+  assert.equal(reopened.event?.eventType, "case_reopened");
+  assert.equal(freshRejectRepository.events.get(freshRejectCaseId)?.length, 2);
+  const reopenReplay = await reopenService.reviewCase(reopenInput);
+  assert.equal(reopenReplay.outcome, "idempotent_replay");
+  assert.equal(freshRejectRepository.events.get(freshRejectCaseId)?.length, 2);
+  await assert.rejects(
+    () => reopenService.reviewCase({ ...reopenInput, requestIdempotencyKey: "conflicting-reopen-key" }),
+    /exact rejected synthetic staging fixture/i,
+  );
+  assert.equal(freshRejectRepository.transitionCallCount, 3);
 
   const approveCaseId = "77777777-7777-4777-8777-777777777777";
   const approveRunId = "phase2b-approve-20261014-a1b2";

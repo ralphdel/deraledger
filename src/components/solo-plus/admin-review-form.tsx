@@ -137,7 +137,9 @@ export function AdminReviewForm({
     ? "Approve"
     : decision === "reject"
       ? "Reject"
-      : "Request more information";
+      : decision === "reopen"
+        ? "Reopen"
+        : "Request more information";
 
   if (allowedDecision == null) {
     return (
@@ -185,7 +187,7 @@ export function AdminReviewForm({
         <Button
           disabled={submitting}
           onClick={() => {
-            if (decision === "reject" || decision === "approve") {
+            if (decision === "reject" || decision === "approve" || decision === "reopen") {
               setConfirmOpen(true);
               return;
             }

@@ -153,7 +153,9 @@ export async function createSoloPlusReviewerService(
       const scopedCase = await repository.findCaseById(input.caseId);
       const expectedFixtureScope = input.decision === "approve"
         ? "phase2b_approve_acceptance"
-        : "phase2b_admin_detail_smoke";
+        : input.decision === "reopen"
+          ? "phase2b_reopen_acceptance"
+          : "phase2b_admin_detail_smoke";
       if (
         !scopedCase
         || scopedCase.auditMetadata.fixture_scope !== expectedFixtureScope
@@ -215,6 +217,48 @@ export async function createSoloPlusReviewerService(
           throw new SoloPlusReviewerServiceError(
             "SOLO_PLUS_SERVER_FORBIDDEN",
             "Solo Plus approve acceptance requires a fresh eligible synthetic staging fixture.",
+          );
+        }
+      }
+
+      if (input.decision === "reopen") {
+        const latestDecision = await repository.findLatestReviewDecisionEvent(input.caseId);
+        const hasScopedRejectedFixture =
+          scopedCase.auditMetadata.synthetic_read_only_admin_smoke === true
+          && scopedCase.auditMetadata.synthetic_reopen_acceptance === true
+          && scopedCase.auditMetadata.fixture_origin_scope === "phase2b_admin_detail_smoke"
+          && scopedCase.paymentStatus === "pending"
+          && scopedCase.refundStatus === "none"
+          && scopedCase.paymentRecordId === null
+          && scopedCase.paymentProvider === null
+          && scopedCase.paymentReference === null
+          && scopedCase.activationIdempotencyKey === null
+          && scopedCase.refundIdempotencyKey === null
+          && scopedCase.approvedAt === null
+          && scopedCase.approvedByAdminId === null;
+        const isRejectedAcceptanceFixture = hasScopedRejectedFixture
+          && scopedCase.caseStatus === "rejected"
+          && scopedCase.rowVersion === input.expectedRowVersion
+          && scopedCase.rejectedAt !== null
+          && scopedCase.rejectedByAdminId !== null
+          && scopedCase.reopenedAt === null
+          && scopedCase.reopenedByAdminId === null
+          && scopedCase.rejectionReason !== null
+          && latestDecision?.eventType === "case_rejected";
+        const isCompletedReopenReplay = hasScopedRejectedFixture
+          && scopedCase.caseStatus === "verification_pending"
+          && scopedCase.rowVersion === input.expectedRowVersion + 1
+          && scopedCase.rejectedAt === null
+          && scopedCase.rejectedByAdminId === null
+          && scopedCase.reopenedAt !== null
+          && scopedCase.reopenedByAdminId === authority.userId
+          && scopedCase.rejectionReason === null
+          && latestDecision?.eventType === "case_reopened"
+          && latestDecision.requestIdempotencyKey === input.requestIdempotencyKey;
+        if (!isRejectedAcceptanceFixture && !isCompletedReopenReplay) {
+          throw new SoloPlusReviewerServiceError(
+            "SOLO_PLUS_SERVER_FORBIDDEN",
+            "Solo Plus reopen acceptance requires the exact rejected synthetic staging fixture.",
           );
         }
       }
