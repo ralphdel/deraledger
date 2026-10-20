@@ -58,7 +58,7 @@ function profile(overrides: Row = {}): Row {
 
 function baseData(overrides: Record<string, Row[]> = {}): Record<string, Row[]> {
   return {
-    merchants: [{ id: "merchant-1", user_id: "user-1", plan: "individual", setup_mode: false, live_features_enabled: true }],
+    merchants: [{ id: "merchant-1", user_id: "user-1", subscription_plan: "individual", setup_mode: false, live_features_enabled: true }],
     workspaces: [{ id: "workspace-1", merchant_id: "merchant-1", plan_type: "solo_lite", setup_mode: false, live_features_enabled: true }],
     merchant_team: [],
     subscriptions: [{ merchant_id: "merchant-1", plan_type: "solo_lite", status: "active", expiry_date: "2027-01-01T00:00:00.000Z" }],
@@ -125,6 +125,75 @@ async function run() {
   );
   assert.equal(ready.status, "ready");
   assert.equal(ready.context.commercialEntitlementState, "active_paid");
+  assert.equal(ready.context.commercialPlan, "solo_lite");
+  assert.ok(imported.calls.includes("merchants.select:id,subscription_plan"));
+  assert.ok(!imported.calls.includes("merchants.select:id,plan"));
+
+  for (const [merchantPlan, expectedPlan] of [
+    ["starter", "starter"],
+    ["individual", "solo_lite"],
+    ["solo_lite", "solo_lite"],
+    ["solo_plus", "solo_plus"],
+    ["corporate", "business"],
+    ["business", "business"],
+  ] as const) {
+    const paid = merchantPlan !== "starter";
+    const normalized = repository(baseData({
+      merchants: [{ id: "merchant-1", user_id: "user-1", subscription_plan: merchantPlan, setup_mode: !paid, live_features_enabled: paid }],
+      workspaces: [{ id: "workspace-1", merchant_id: "merchant-1", plan_type: expectedPlan, setup_mode: !paid, live_features_enabled: paid }],
+      subscriptions: paid
+        ? [{ merchant_id: "merchant-1", plan_type: expectedPlan, status: "active", expiry_date: "2027-01-01T00:00:00.000Z" }]
+        : [],
+      workspace_subscriptions: paid
+        ? [{ merchant_id: "merchant-1", workspace_id: "workspace-1", plan_type: expectedPlan, subscription_status: "active" }]
+        : [],
+    }));
+    const result = await loadTrustedRuntimeCapabilityContext(
+      normalized.repository,
+      { authenticatedUserId: "user-1" },
+      { now: () => new Date("2026-08-20T00:00:00.000Z") },
+    );
+    assert.equal(result.context.commercialPlan, expectedPlan, `${merchantPlan} must normalize through the merchant subscription_plan source`);
+    assert.equal(
+      result.context.commercialEntitlementState,
+      paid ? "active_paid" : "starter_free",
+      `${merchantPlan} must retain the existing entitlement-state contract`,
+    );
+  }
+
+  for (const merchantPlan of [null, "unsupported_paid_plan"] as const) {
+    const unknown = repository(baseData({
+      merchants: [{ id: "merchant-1", user_id: "user-1", subscription_plan: merchantPlan, setup_mode: false, live_features_enabled: true }],
+    }));
+    const result = await loadTrustedRuntimeCapabilityContext(
+      unknown.repository,
+      { authenticatedUserId: "user-1" },
+      { now: () => new Date("2026-08-20T00:00:00.000Z") },
+    );
+    assert.equal(result.context.commercialEntitlementState, "missing");
+    assert.equal(result.context.commercialPlan, null);
+  }
+
+  const tierIsNotCommercialAuthority = repository(baseData({
+    merchants: [{ id: "merchant-1", user_id: "user-1", subscription_plan: "solo_lite", merchant_tier: "corporate", setup_mode: false, live_features_enabled: true }],
+  }));
+  const tierIsNotCommercialAuthorityResult = await loadTrustedRuntimeCapabilityContext(
+    tierIsNotCommercialAuthority.repository,
+    { authenticatedUserId: "user-1" },
+    { now: () => new Date("2026-08-20T00:00:00.000Z") },
+  );
+  assert.equal(tierIsNotCommercialAuthorityResult.context.commercialPlan, "solo_lite");
+
+  const tierCannotFillMissingPlan = repository(baseData({
+    merchants: [{ id: "merchant-1", user_id: "user-1", merchant_tier: "corporate", setup_mode: false, live_features_enabled: true }],
+  }));
+  const tierCannotFillMissingPlanResult = await loadTrustedRuntimeCapabilityContext(
+    tierCannotFillMissingPlan.repository,
+    { authenticatedUserId: "user-1" },
+    { now: () => new Date("2026-08-20T00:00:00.000Z") },
+  );
+  assert.equal(tierCannotFillMissingPlanResult.context.commercialEntitlementState, "missing");
+  assert.equal(tierCannotFillMissingPlanResult.context.commercialPlan, null);
 
   const emptyProfiles = repository(baseData({ merchant_compliance_profiles: [] }));
   const emptyProfileResult = await emptyProfiles.repository.loadComplianceProfiles({ merchantId: "merchant-1" });
@@ -161,7 +230,7 @@ async function run() {
   assert.equal(planConflictResult.context.commercialEntitlementState, "conflicting");
 
   const starter = repository(baseData({
-    merchants: [{ id: "merchant-1", user_id: "user-1", plan: "starter", setup_mode: true, live_features_enabled: false }],
+    merchants: [{ id: "merchant-1", user_id: "user-1", subscription_plan: "starter", setup_mode: true, live_features_enabled: false }],
     workspaces: [{ id: "workspace-1", merchant_id: "merchant-1", plan_type: "starter", setup_mode: true, live_features_enabled: false }],
     subscriptions: [],
     workspace_subscriptions: [],
@@ -205,6 +274,9 @@ async function run() {
   const facade = readFileSync("src/lib/compliance/trusted-runtime-capability-repository.ts", "utf8");
   const core = readFileSync("src/lib/compliance/trusted-runtime-capability-repository-core.ts", "utf8");
   assert.match(facade, /import\s+["']server-only["']/);
+  assert.match(core, /from\("merchants"\)\.select\("id,subscription_plan"\)/);
+  assert.doesNotMatch(core, /from\("merchants"\)\.select\("id,plan"\)/);
+  assert.doesNotMatch(core, /from\("merchants"\)\.select\("[^"\n]*merchant_tier/);
   assert.doesNotMatch(core, /\.insert\(|\.update\(|\.delete\(|\.upsert\(|rpc\(/i);
   assert.doesNotMatch(core, /payment_records|subscription_payments|provider_metadata/i);
 

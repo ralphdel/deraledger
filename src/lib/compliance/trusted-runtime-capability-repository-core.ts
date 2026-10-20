@@ -198,7 +198,7 @@ export function createTrustedRuntimeCapabilityRepository(
 
     async loadCommercialEntitlement({ merchantId, workspaceId }) {
       const [merchantRows, workspaceRows, subscriptions, workspaceSubscriptions] = await Promise.all([
-        runQuery(withLimit(client.from("merchants").select("id,plan").eq("id", merchantId), 2)),
+        runQuery(withLimit(client.from("merchants").select("id,subscription_plan").eq("id", merchantId), 2)),
         runQuery(
           withLimit(
             client
@@ -230,7 +230,7 @@ export function createTrustedRuntimeCapabilityRepository(
         return missing<CommercialEntitlementSnapshot>();
       }
       return found({
-        merchantPlan: text(merchantRows[0].plan),
+        merchantPlan: text(merchantRows[0].subscription_plan),
         workspacePlan: text(workspaceRows[0].plan_type),
         subscriptions: subscriptions.map((row) => ({
           plan: text(row.plan_type),
