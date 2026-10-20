@@ -23,6 +23,7 @@ const supabase = createSupabaseClient(
 function resolvePurpose(kind: string | null): PaymentPurpose | null {
   if (kind === "subscription") return "plan_subscription";
   if (kind === "upgrade") return "plan_upgrade";
+  if (kind === "renewal") return "plan_renewal";
   if (kind === "invoice") return "invoice_payment";
   if (kind === "payment_link") return "payment_link";
   return null;
@@ -37,9 +38,13 @@ export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const kind = searchParams.get("kind");
+    const context = searchParams.get("context");
     const invoiceId = searchParams.get("invoiceId");
     const requestedPlan = searchParams.get("plan");
-    const purpose = resolvePurpose(kind);
+    const resolvedPurpose = resolvePurpose(kind);
+    const purpose = context === "renewal" && resolvedPurpose === "plan_subscription"
+      ? "plan_renewal"
+      : resolvedPurpose;
 
     if (!purpose) {
       return NextResponse.json({ error: "Invalid checkout kind." }, { status: 400 });
@@ -108,7 +113,7 @@ export async function GET(request: Request) {
     const amountToCheck =
       purpose === "invoice_payment" || purpose === "payment_link" || purpose === "crypto_payment"
         ? requestedInvoiceAmount ?? invoiceAmountForCrypto
-        : purpose === "plan_subscription"
+        : purpose === "plan_subscription" || purpose === "plan_renewal"
           ? (normalizedPlan ? getPlanPrice(normalizedPlan) : null)
           : purpose === "plan_upgrade"
             ? (normalizedPlan ? getPlanPrice(normalizedPlan) : null)

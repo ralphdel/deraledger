@@ -8,7 +8,7 @@ import {
   assertPlanAvailable,
   getPlanPriceKobo,
   getStoragePlanCode,
-  normalizePlanCode,
+  parsePaidPlanCode,
 } from "@/lib/plans";
 
 /**
@@ -33,7 +33,16 @@ export async function POST(request: Request) {
 
     const { plan, email, paymentMethod } = await request.json();
 
-    const normalizedPlan = normalizePlanCode(plan);
+    const normalizedPlan = parsePaidPlanCode(plan);
+    if (!normalizedPlan) {
+      return NextResponse.json({ error: "This plan is not a renewable paid plan." }, { status: 400 });
+    }
+    if (normalizedPlan === "solo_plus") {
+      return NextResponse.json(
+        { error: "Solo Plus renewal remains deferred." },
+        { status: 409 },
+      );
+    }
     const availability = await assertPlanAvailable(supabase, normalizedPlan);
     if (!availability.ok) {
       return NextResponse.json({ error: "This plan is not available right now." }, { status: 403 });
@@ -52,12 +61,12 @@ export async function POST(request: Request) {
     }
 
     // Security: Validate the plan is the same as current (renewal = same plan only)
-    const currentPlan = merchant.subscription_plan || "starter";
-    if (currentPlan !== storagePlan && currentPlan !== "expired_" + storagePlan) {
-      // Allow renewing if current plan matches OR if plan matches a lapsed version
-      // We allow the renewal payload plan to proceed for flexible handling
-      // but we log the mismatch for audit
-      console.warn(`Renewal plan mismatch: merchant ${merchant.id} is on ${currentPlan}, renewing as ${storagePlan}`);
+    const currentPlan = parsePaidPlanCode(merchant.subscription_plan);
+    if (currentPlan !== normalizedPlan) {
+      return NextResponse.json(
+        { error: "Renewal plan does not match the merchant's current plan." },
+        { status: 409 },
+      );
     }
 
     const amountKobo = getPlanPriceKobo(normalizedPlan);
@@ -65,7 +74,7 @@ export async function POST(request: Request) {
 
     const resolvedEmail = email || user.email || merchant.email || "billing@deraledger.app";
     const method = (paymentMethod || "card") as PaymentMethod;
-    const route = await resolvePaymentRoute("plan_subscription", method, getPaymentEnvironmentForMerchantEmail(resolvedEmail));
+    const route = await resolvePaymentRoute("plan_renewal", method, getPaymentEnvironmentForMerchantEmail(resolvedEmail));
     const callback = new URL(`${getAppUrl()}/settings/billing/renew-callback`);
     callback.searchParams.set("provider", route.provider);
     const resolvedCallback = callback.toString();
@@ -74,7 +83,7 @@ export async function POST(request: Request) {
       internalReference: reference,
       provider: route.provider,
       paymentMethod: method,
-      paymentPurpose: "plan_subscription",
+      paymentPurpose: "plan_renewal",
       customerEmail: resolvedEmail,
       expectedAmount: amountKobo / 100,
       planName: normalizedPlan,
@@ -92,7 +101,7 @@ export async function POST(request: Request) {
         amount_expected_kobo: amountKobo,
         payment_method_requested: method,
         resolved_provider: route.provider,
-        payment_purpose: "plan_subscription",
+        payment_purpose: "plan_renewal",
       },
     });
 
@@ -113,7 +122,7 @@ export async function POST(request: Request) {
         amount_expected_kobo: amountKobo,
         payment_method_requested: method,
         resolved_provider: route.provider,
-        payment_purpose: "plan_subscription",
+        payment_purpose: "plan_renewal",
       },
       paymentMethod: method,
     }, route.provider === "monnify" ? "monnify" : "paystack");

@@ -4,14 +4,6 @@ import { readFileSync } from "node:fs";
 
 const migrationPath = "supabase/migrations/20261020000000_phase2c_atomic_fiat_plan_renewal.sql";
 const migration = readFileSync(migrationPath, "utf8");
-const renewalService = readFileSync("src/lib/services/fiat-payment-confirmation.service.ts", "utf8");
-const renewInitialize = readFileSync("src/app/api/payment/renew-initialize/route.ts", "utf8");
-const legacyRenewInitialize = readFileSync("src/app/api/payment/renew/route.ts", "utf8");
-const verifyRenew = readFileSync("src/app/api/payment/verify-renew/route.ts", "utf8");
-const paystackWebhook = readFileSync("src/app/api/webhooks/paystack/route.ts", "utf8");
-const monnifyWebhook = readFileSync("src/app/api/webhooks/monnify/route.ts", "utf8");
-const breetWebhook = readFileSync("src/app/api/webhooks/breet/route.ts", "utf8");
-const cryptoCheckout = readFileSync("src/app/api/checkout/crypto-subscription/route.ts", "utf8");
 const selfTest = readFileSync("tests/sql/phase2c-atomic-fiat-plan-renewal/self-test.sql", "utf8");
 const concurrencyFixture = readFileSync("tests/sql/phase2c-atomic-fiat-plan-renewal/concurrency-fixture.sql", "utf8");
 const concurrencyA = readFileSync("tests/sql/phase2c-atomic-fiat-plan-renewal/concurrency-session-a.sql", "utf8");
@@ -111,21 +103,6 @@ assert.match(migration, new RegExp(`GRANT EXECUTE ON FUNCTION public\\.${rpcName
 assert.doesNotMatch(migration, /GRANT\s+(?:INSERT|UPDATE|DELETE|ALL).*ON TABLE/i);
 assert.doesNotMatch(migration.slice(0, rpcStart), /^\s*(?:ALTER TABLE|CREATE TABLE|CREATE TYPE|CREATE INDEX|UPDATE|INSERT INTO|DELETE FROM|TRUNCATE|DROP TABLE)\b/im);
 assert.doesNotMatch(migration, /^\s*(?:TRUNCATE|DROP TABLE)\b/im);
-
-for (const liveSource of [
-  renewalService,
-  renewInitialize,
-  legacyRenewInitialize,
-  verifyRenew,
-  paystackWebhook,
-  monnifyWebhook,
-  breetWebhook,
-  cryptoCheckout,
-]) {
-  assert.doesNotMatch(liveSource, new RegExp(rpcName));
-}
-assert.match(renewInitialize, /paymentPurpose: "plan_subscription"/);
-assert.match(renewalService, /async function confirmSubscriptionRenewal/);
 
 assert.match(selfTest, /Lite renewal did not apply/);
 assert.match(selfTest, /Business renewal did not apply/);

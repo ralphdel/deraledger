@@ -41,6 +41,7 @@ export async function POST(request: Request) {
       feesKobo: normalizeOptionalKobo(payload.fees),
       settlementAmountKobo: normalizeOptionalKobo(payload.settlementAmount),
       rawProviderPayload: payload,
+      currency: stringValue(payload.currency) || "NGN",
     });
 
     const paymentRecord = await findPaymentRecordByReference(supabaseAdmin, reference, verification.provider);

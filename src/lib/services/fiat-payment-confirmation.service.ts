@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   logPlanMigration,
   normalizeCapabilityPlanCode,
+  parsePaidPlanCode,
 } from "@/lib/plans";
 import { calculateSubscriptionExpiry, type PlanType } from "@/lib/subscription";
 import { getAppUrl } from "@/lib/server-utils";
@@ -20,6 +21,7 @@ import {
   classifyAmountMismatch,
   findFullPaymentRecordByReference,
   findPaymentRecordByReference,
+  type PendingPlanPaymentRecord,
   updatePlanPaymentRecord,
 } from "@/lib/services/plan-payment-recovery.service";
 import { confirmSoloPlusPayment } from "@/lib/solo-plus/server/payment-lifecycle";
@@ -56,23 +58,45 @@ export async function processSuccessfulFiatPayment(
   supabase: SupabaseClient,
   payment: SuccessfulFiatPayment
 ) {
-  const soloPlusResult = await confirmLinkedSoloPlusPayment(supabase, payment);
+  const linkedPaymentRecord = await findFullPaymentRecordByReference(
+    supabase,
+    payment.reference,
+    payment.provider,
+  );
+
+  if (
+    linkedPaymentRecord?.payment_purpose === "plan_subscription" &&
+    (
+      linkedPaymentRecord.metadata?.type === "subscription_renewal" ||
+      linkedPaymentRecord.metadata?.payment_purpose === "plan_renewal" ||
+      payment.metadata?.type === "subscription_renewal" ||
+      payment.metadata?.payment_purpose === "plan_renewal"
+    )
+  ) {
+    throw new Error(
+      "Legacy renewal payment is not eligible for automatic processing; canonical plan_renewal purpose is required.",
+    );
+  }
+
+  const soloPlusResult = await confirmLinkedSoloPlusPayment(
+    supabase,
+    payment,
+    linkedPaymentRecord,
+  );
 
   if (soloPlusResult) {
     return soloPlusResult;
   }
 
-  const linkedPaymentRecord = await findFullPaymentRecordByReference(
-    supabase,
-    payment.reference,
-  );
-  const paymentType = linkedPaymentRecord?.payment_purpose === "plan_subscription"
-    ? "subscription"
-    : linkedPaymentRecord?.payment_purpose === "plan_upgrade"
-      ? "subscription_upgrade"
-      : linkedPaymentRecord?.payment_purpose === "plan_renewal"
-        ? "subscription_renewal"
-        : String(payment.metadata?.type || "invoice_payment");
+  const paymentType = linkedPaymentRecord
+    ? linkedPaymentRecord.payment_purpose === "plan_subscription"
+      ? "subscription"
+      : linkedPaymentRecord.payment_purpose === "plan_upgrade"
+        ? "subscription_upgrade"
+        : linkedPaymentRecord.payment_purpose === "plan_renewal"
+          ? "subscription_renewal"
+          : linkedPaymentRecord.payment_purpose
+    : String(payment.metadata?.type || "invoice_payment");
 
   if (
     !linkedPaymentRecord &&
@@ -112,7 +136,10 @@ export async function processSuccessfulFiatPayment(
   }
 
   if (paymentType === "subscription_renewal") {
-    return confirmSubscriptionRenewal(supabase, payment);
+    if (payment.provider === "breet") {
+      return confirmCryptoSubscriptionRenewal(supabase, payment);
+    }
+    return confirmSubscriptionRenewal(supabase, payment, linkedPaymentRecord);
   }
 
   return confirmInvoicePayment(supabase, payment);
@@ -121,13 +148,8 @@ export async function processSuccessfulFiatPayment(
 async function confirmLinkedSoloPlusPayment(
   supabase: SupabaseClient,
   payment: SuccessfulFiatPayment,
+  paymentRecord: PendingPlanPaymentRecord | null,
 ) {
-  const paymentRecord = await findFullPaymentRecordByReference(
-    supabase,
-    payment.reference,
-    payment.provider,
-  );
-
   if (!paymentRecord?.solo_plus_case_id) {
     return null;
   }
@@ -185,15 +207,146 @@ async function confirmLinkedSoloPlusPayment(
 
 async function confirmSubscriptionRenewal(
   supabase: SupabaseClient,
-  payment: SuccessfulFiatPayment
+  payment: SuccessfulFiatPayment,
+  paymentRecord: PendingPlanPaymentRecord | null,
+) {
+  if (!paymentRecord) {
+    throw new Error("Fiat renewal confirmation requires a linked payment record.");
+  }
+  if (payment.provider !== "paystack" && payment.provider !== "monnify") {
+    throw new Error("Fiat renewal confirmation requires Paystack or Monnify.");
+  }
+  if (paymentRecord.solo_plus_case_id) {
+    throw new Error("Solo Plus renewal remains deferred.");
+  }
+
+  const planId = parsePaidPlanCode(paymentRecord.plan_id);
+  const planName = parsePaidPlanCode(paymentRecord.plan_name);
+  if (planId === "solo_plus" || planName === "solo_plus") {
+    throw new Error("Solo Plus renewal remains deferred.");
+  }
+  if (planId !== planName || (planId !== "solo_lite" && planId !== "business")) {
+    throw new Error("Fiat renewal payment plan is unsupported or inconsistent.");
+  }
+  if (!paymentRecord.merchant_id) {
+    throw new Error("Fiat renewal payment is missing its merchant linkage.");
+  }
+
+  const providerReference = payment.providerReference || payment.reference;
+  const currency = payment.currency || paymentRecord.currency || "";
+  const rawProviderPayload = payment.rawProviderPayload || payment.metadata;
+  const { data, error } = await supabase.rpc("confirm_fiat_plan_renewal_v1", {
+    p_payment_record_id: paymentRecord.id,
+    p_provider: payment.provider,
+    p_internal_reference: paymentRecord.internal_reference,
+    p_provider_reference: providerReference,
+    p_amount_kobo: payment.amountKobo,
+    p_currency: currency,
+    p_merchant_id: paymentRecord.merchant_id,
+    p_canonical_plan: planId,
+    p_raw_provider_payload: rawProviderPayload,
+  });
+
+  if (error) {
+    throw new Error(`Atomic fiat renewal confirmation failed: ${error.message}`);
+  }
+
+  const result = data && typeof data === "object"
+    ? data as Record<string, unknown>
+    : null;
+  const kind = stringValue(result?.kind);
+  if (kind === "already_processed") {
+    return {
+      received: true,
+      processed: true,
+      already_processed: true,
+      expiry_date: stringValue(result?.period_end),
+    };
+  }
+  if (kind !== "applied") {
+    throw new Error("Atomic fiat renewal confirmation failed closed.");
+  }
+
+  const merchantId = paymentRecord.merchant_id;
+  const amountPaidNgn = payment.amountKobo / 100;
+  const periodStart = stringValue(result?.period_start);
+  const periodEnd = stringValue(result?.period_end);
+
+  try {
+    const { error: auditError } = await supabase.from("audit_logs").insert({
+      event_type: "subscription_renewed",
+      actor_id: null,
+      actor_role: "system",
+      target_id: merchantId,
+      target_type: "merchant",
+      metadata: {
+        actor_name: `System (${payment.provider} Webhook)`,
+        plan: planId,
+        reference: paymentRecord.internal_reference,
+        amount_ngn: amountPaidNgn,
+      },
+    });
+    if (auditError) {
+      console.error("Failed to record renewal audit after atomic confirmation:", auditError.message);
+    }
+  } catch (sideEffectError) {
+    console.error("Failed to record renewal audit after atomic confirmation:", sideEffectError);
+  }
+
+  await logPlanMigration(supabase, {
+    merchantId,
+    sourceTable: "merchants",
+    sourceRecordId: merchantId,
+    oldPlanCode: paymentRecord.plan_id,
+    context: "fiat_payment_confirmation:renewal",
+  });
+
+  try {
+    const { data: merchant } = await supabase
+      .from("merchants")
+      .select("email, business_name")
+      .eq("id", merchantId)
+      .single();
+    if (merchant?.email) {
+      const { sendSubscriptionRenewalEmail } = await import("@/lib/brevo");
+      await sendSubscriptionRenewalEmail(
+        merchant.email,
+        merchant.business_name,
+        planId,
+        amountPaidNgn,
+        periodStart || "",
+        periodEnd || "",
+        paymentRecord.internal_reference,
+      );
+    }
+  } catch (error) {
+    console.error("Failed to send renewal confirmation email:", error);
+  }
+
+  return {
+    received: true,
+    processed: true,
+    already_processed: false,
+    expiry_date: periodEnd,
+  };
+}
+
+// Crypto renewal adoption is outside Phase 2C-1B-B. Preserve its existing
+// handler while fiat Paystack/Monnify renewals use the atomic database RPC.
+async function confirmCryptoSubscriptionRenewal(
+  supabase: SupabaseClient,
+  payment: SuccessfulFiatPayment,
 ) {
   const { metadata, amountKobo, reference, provider } = payment;
   const merchantId = metadata?.merchant_id as string | undefined;
-  const plan = metadata?.plan as "individual" | "corporate" | "solo_plus" | undefined;
+  const plan = metadata?.plan as PlanType | undefined;
 
   if (!merchantId || !plan) {
-    console.error("Renewal confirmation missing metadata:", metadata);
+    console.error("Crypto renewal confirmation missing metadata:", metadata);
     return { received: true, skipped: true };
+  }
+  if (parsePaidPlanCode(plan) === "solo_plus") {
+    throw new Error("Solo Plus renewal remains deferred.");
   }
 
   const mismatch = classifyAmountMismatch(Number(metadata.amount_expected_kobo || 0), amountKobo);
@@ -242,10 +395,10 @@ async function confirmSubscriptionRenewal(
 
   const expiryDate = calculateSubscriptionExpiry(
     amountPaidNgn,
-    plan as PlanType,
+    plan,
     currentSub
       ? { planType: currentSub.plan_type as PlanType, expiryDate: currentSub.expiry_date }
-      : undefined
+      : undefined,
   );
   const periodStart =
     currentSub && new Date(currentSub.expiry_date) > new Date()
@@ -275,11 +428,11 @@ async function confirmSubscriptionRenewal(
       is_banner_dismissed: false,
       updated_at: new Date().toISOString(),
     },
-    { onConflict: "merchant_id" }
+    { onConflict: "merchant_id" },
   );
 
   if (subUpsertError) {
-    throw new Error(`Failed to upsert renewal subscription: ${subUpsertError.message}`);
+    throw new Error(`Failed to upsert crypto renewal subscription: ${subUpsertError.message}`);
   }
 
   await supabase.from("subscription_payments").insert({
@@ -324,7 +477,7 @@ async function confirmSubscriptionRenewal(
     sourceTable: "merchants",
     sourceRecordId: merchantId,
     oldPlanCode: plan,
-    context: "fiat_payment_confirmation:renewal",
+    context: "crypto_payment_confirmation:renewal",
   });
 
   try {
@@ -342,11 +495,11 @@ async function confirmSubscriptionRenewal(
         amountPaidNgn,
         periodStart,
         expiryDate.toISOString(),
-        reference
+        reference,
       );
     }
   } catch (error) {
-    console.error("Failed to send renewal confirmation email:", error);
+    console.error("Failed to send crypto renewal confirmation email:", error);
   }
 
   return { received: true, processed: true };
