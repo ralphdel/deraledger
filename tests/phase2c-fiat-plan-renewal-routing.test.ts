@@ -102,9 +102,13 @@ function renewalRecord(overrides: Row = {}) {
 }
 
 async function main() {
+  const { parsePaidPlanCode } = await import(new URL("../src/lib/plans.ts", import.meta.url).href);
   const { processSuccessfulFiatPayment } = await import(
     new URL("../src/lib/services/fiat-payment-confirmation.service.ts", import.meta.url).href
   );
+
+  assert.equal(parsePaidPlanCode("individual"), "solo_lite");
+  assert.equal(parsePaidPlanCode("solo_plus"), "solo_plus");
 
   for (const provider of ["paystack", "monnify"] as const) {
     const client = new FakeClient();
@@ -257,6 +261,34 @@ async function main() {
   const paystack = readFileSync("src/app/api/webhooks/paystack/route.ts", "utf8");
   const monnify = readFileSync("src/app/api/webhooks/monnify/route.ts", "utf8");
   const onboardingInitialize = readFileSync("src/app/api/onboarding/initialize-payment/route.ts", "utf8");
+
+  assert.match(
+    renewInitialize,
+    /const trustedSupabase = createSupabaseClient\(\s*process\.env\.NEXT_PUBLIC_SUPABASE_URL!,\s*process\.env\.SUPABASE_SERVICE_ROLE_KEY!,?\s*\)/,
+    "Internal renewal persistence needs the server-only service-role client.",
+  );
+  assert.match(
+    renewInitialize,
+    /const supabase = await createClient\(\);\s*const \{ data: \{ user \} \} = await supabase\.auth\.getUser\(\)/,
+    "Authentication must retain the user-scoped cookie client.",
+  );
+  assert.match(
+    renewInitialize,
+    /await supabase\s*\.from\("merchants"\)\s*\.select\("id, email, business_name, owner_name, subscription_plan"\)\s*\.eq\("user_id", user\.id\)/,
+    "Merchant ownership must be resolved with the user-scoped client.",
+  );
+  assert.deepEqual(
+    [...renewInitialize.matchAll(/createPendingPlanPaymentRecord\(\s*(\w+)\s*,/g)].map((match) => match[1]),
+    ["trustedSupabase"],
+    "The cookie client must never create the internal renewal payment record.",
+  );
+  assert.doesNotMatch(renewInitialize, /supabase\s*\.from\("payment_records"\)/);
+  const ownerCheck = renewInitialize.indexOf("if (merchantError || !merchant)");
+  const planCheck = renewInitialize.indexOf("if (currentPlan !== normalizedPlan)");
+  const paymentWrite = renewInitialize.indexOf("createPendingPlanPaymentRecord(trustedSupabase,");
+  const providerInitialization = renewInitialize.indexOf("PaymentService.initializeTransaction(");
+  assert.ok(ownerCheck >= 0 && ownerCheck < planCheck && planCheck < paymentWrite && paymentWrite < providerInitialization);
+  assert.ok(renewInitialize.indexOf('normalizedPlan === "solo_plus"') < paymentWrite);
 
   assert.match(renewInitialize, /parsePaidPlanCode\(plan\)/);
   assert.match(renewInitialize, /normalizedPlan === "solo_plus"[\s\S]*Solo Plus renewal remains deferred/);

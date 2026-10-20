@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
 import { PaymentService } from "@/lib/payment";
 import { getAppUrl } from "@/lib/server-utils";
@@ -10,6 +11,11 @@ import {
   getStoragePlanCode,
   parsePaidPlanCode,
 } from "@/lib/plans";
+
+const trustedSupabase = createSupabaseClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!,
+);
 
 /**
  * POST /api/payment/renew-initialize
@@ -79,7 +85,7 @@ export async function POST(request: Request) {
     callback.searchParams.set("provider", route.provider);
     const resolvedCallback = callback.toString();
 
-    await createPendingPlanPaymentRecord(supabase, {
+    await createPendingPlanPaymentRecord(trustedSupabase, {
       internalReference: reference,
       provider: route.provider,
       paymentMethod: method,
