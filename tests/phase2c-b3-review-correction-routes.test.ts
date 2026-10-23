@@ -180,6 +180,20 @@ async function run() {
   }
 
   {
+    const session = await requireMerchantOwnerSession({
+      authClient: {
+        auth: { getUser: async () => ({ data: { user: { id: ids.owner } }, error: null }) },
+        from: () => { throw new Error("resolver was injected"); },
+      },
+      preferredMerchantId: ids.merchant,
+      resolveContext: async () => ({
+        status: "resolved", merchantId: ids.merchant, relationship: "super_admin", roleName: "super_admin", permissions: {},
+      }),
+    });
+    assert.deepEqual(session, { ok: false, status: 403, error: "Owner access required" });
+  }
+
+  {
     let preferred: string | null | undefined;
     const session = await requireMerchantOwnerSession({
       authClient: {
@@ -201,12 +215,16 @@ async function run() {
     const handler = createMerchantComplianceReviewRoute({
       requireOwnerSession: async () => ({ ok: true, userId: ids.owner, merchantId: ids.merchant }),
       createService: () => ({
-        getMerchantReview: async (...input: unknown[]) => { captured = input; return null; },
+        getMerchantReviewState: async (...input: unknown[]) => {
+          captured = input;
+          return { status: "NO_REVIEW_ELIGIBLE", eligibility: { canSubmit: false, reason: "PLAN_NOT_ELIGIBLE", plan: null, planLabel: null } };
+        },
       }) as never,
     });
     const response = await handler();
     assert.equal(response.status, 200);
     assert.deepEqual(captured, [ids.owner, ids.merchant]);
+    assert.equal((await json(response)).state !== undefined, true);
   }
 
   {

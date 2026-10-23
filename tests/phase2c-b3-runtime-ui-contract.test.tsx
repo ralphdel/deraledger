@@ -61,8 +61,8 @@ assert.doesNotMatch(adminDetail, />Approve</);
 assert.doesNotMatch(adminDetail, />Reject</);
 assert.doesNotMatch(adminDetail, /Enable Settlement/);
 
-assert.match(merchantStatus, /review\.status === "pending"/);
-assert.match(merchantStatus, /Action required/);
+assert.match(merchantStatus, /state\?\.status === "PENDING"/);
+assert.match(merchantStatus, /Action Required/);
 assert.match(merchantStatus, /Resubmit for review/);
 assert.match(merchantStatus, /requestedFindingCodes\.map/);
 assert.match(merchantStatus, /await load\(false\)/);

@@ -13,12 +13,14 @@ import {
   type ReviewMutationKind,
   type ReviewPlan,
   type ReviewReadModel,
+  type MerchantReviewState,
+  type ReviewSubmissionEligibilityReason,
   isReviewCorrectionReasonCode,
   isUuid,
   validFindingCodesForPlan,
 } from "../review-correction-contract";
 
-const REVIEW_COLUMNS = "id,merchant_id,profile_id,review_type,target_plan_code,review_status,evidence_snapshot,decision_reason_code,policy_version,submitted_at,reviewed_at,row_version";
+const REVIEW_COLUMNS = "id,merchant_id,profile_id,review_type,target_plan_code,review_status,evidence_snapshot,decision_reason_code,policy_version,submitted_at,reviewed_at,idempotency_key,row_version";
 const MERCHANT_COLUMNS = "id,user_id,business_name,trading_name,owner_name,email,phone,subscription_plan,merchant_tier,verification_status,bvn_status,selfie_status,cac_document_url,utility_document_url,cac_status,utility_status,business_street,business_city,business_state,business_country,verification_step_state,business_registry_snapshot_id,relationship_claim";
 const EVENT_COLUMNS = "event_type,reason_code,metadata,created_at";
 
@@ -64,6 +66,7 @@ type ReviewRow = {
   policy_version: string | null;
   submitted_at: string | null;
   reviewed_at: string | null;
+  idempotency_key: string | null;
   row_version: number;
 };
 type EventRow = {
@@ -107,6 +110,7 @@ export type ReviewCorrectionRepository = {
   findReviewEvents(merchantId: string, reviewId: string): Promise<EventRow[]>;
   findMutationReceipt(merchantId: string, idempotencyKey: string): Promise<MutationReceiptRow | null>;
   findRegistrySnapshot(snapshotId: string | null): Promise<RegistryRow | null>;
+  submitInitialReview(args: Record<string, unknown>): Promise<ReviewCorrectionRpcResult>;
   requestCorrection(args: Record<string, unknown>): Promise<ReviewCorrectionRpcResult>;
   resubmitCorrection(args: Record<string, unknown>): Promise<ReviewCorrectionRpcResult>;
 };
@@ -195,6 +199,7 @@ export function createSupabaseReviewCorrectionRepository(
     findReviewEvents: (merchantId, reviewId) => many<EventRow>(client.from("merchant_compliance_events").select(EVENT_COLUMNS).eq("merchant_id", merchantId).eq("source_id", reviewId).in("event_type", ["phase2c_draft_review_submit_v1", "phase2c_draft_review_needs_attention_v1", "phase2c_draft_review_superseded_v1"]).order("created_at", { ascending: true })),
     findMutationReceipt: (merchantId, idempotencyKey) => one<MutationReceiptRow>(client.from("merchant_compliance_events").select("event_type,source_id,actor_id,expected_row_version,metadata").eq("merchant_id", merchantId).eq("idempotency_key", idempotencyKey).maybeSingle()),
     findRegistrySnapshot: (snapshotId) => snapshotId ? one<RegistryRow>(client.from("business_registry_snapshots").select("id,business_type,registered_name,registration_number,registration_status,directors_json").eq("id", snapshotId).maybeSingle()) : Promise.resolve(null),
+    submitInitialReview: (args) => call("submit_draft_plan_review_v1", args),
     requestCorrection: (args) => call("request_draft_plan_review_correction_v1", args),
     resubmitCorrection: (args) => call("resubmit_corrected_draft_plan_review_v1", args),
   };
@@ -380,6 +385,86 @@ export function buildCorrectedDraftEvidenceSnapshot(
   return evidenceSnapshot(diagnostic, evaluatedAt);
 }
 
+const SNAPSHOT_KEYS = new Set([
+  "schemaVersion", "policyId", "policyVersion", "policyStatus", "adapterVersion", "evaluatedAt", "findings",
+]);
+const FINDING_KEYS = new Set(["code", "status", "reasonCode", "sourceType", "sourceId", "sourceVersion"]);
+const EVIDENCE_REASON_CODES = new Set([
+  "evidence_verified", "evidence_failed", "evidence_missing", "evidence_unknown", "evidence_ambiguous",
+  "evidence_needs_review", "evidence_revoked", "evidence_expired", "evidence_time_indeterminate",
+  "positive_evidence_provenance_missing", "unapproved_non_applicability",
+]);
+const EVIDENCE_SOURCE_TYPES = new Set([
+  "merchant", "verification_log", "verification_step", "registry_snapshot", "director_verification",
+  "affiliation", "document", "settlement_account", "provider_mapping", "review", "risk_review", "screening",
+]);
+
+function hasExactKeys(value: Record<string, unknown>, allowed: Set<string>): boolean {
+  const keys = Object.keys(value);
+  return keys.length === allowed.size && keys.every((key) => allowed.has(key));
+}
+
+function isValidDraftSnapshot(snapshot: unknown, plan: ReviewPlan): snapshot is Record<string, unknown> {
+  if (!isRecord(snapshot) || !hasExactKeys(snapshot, SNAPSHOT_KEYS)) return false;
+  if (
+    snapshot.schemaVersion !== "phase2c-review-v1"
+    || snapshot.policyId !== (plan === "solo_lite" ? "solo_lite_evidence" : "business_kyb_evidence")
+    || snapshot.policyVersion !== DRAFT_REVIEW_POLICY_VERSION
+    || snapshot.policyStatus !== "draft"
+    || snapshot.adapterVersion !== "2c-2b-v1"
+    || typeof snapshot.evaluatedAt !== "string"
+    || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(snapshot.evaluatedAt)
+    || !Number.isFinite(Date.parse(snapshot.evaluatedAt))
+    || !Array.isArray(snapshot.findings)
+    || snapshot.findings.length < 1
+    || snapshot.findings.length > 32
+    || JSON.stringify(snapshot).length > 16_384
+  ) return false;
+  const allowedCodes = new Set(validFindingCodesForPlan(plan));
+  const seen = new Set<string>();
+  return snapshot.findings.every((finding) => {
+    if (!isRecord(finding) || !hasExactKeys(finding, FINDING_KEYS)) return false;
+    if (
+      typeof finding.code !== "string" || !allowedCodes.has(finding.code) || seen.has(finding.code)
+      || typeof finding.status !== "string" || !EVIDENCE_STATUSES.has(finding.status)
+      || typeof finding.reasonCode !== "string" || !EVIDENCE_REASON_CODES.has(finding.reasonCode)
+      || !(finding.sourceType === null || typeof finding.sourceType === "string" && EVIDENCE_SOURCE_TYPES.has(finding.sourceType))
+      || !(finding.sourceId === null || isUuid(finding.sourceId))
+      || !(finding.sourceVersion === null || isPositiveSafeInteger(finding.sourceVersion))
+      || finding.status === "verified" && (
+        finding.sourceId === null || finding.sourceVersion === null || finding.sourceType === null
+        || finding.sourceType === "merchant" || finding.reasonCode !== "evidence_verified"
+      )
+    ) return false;
+    seen.add(finding.code);
+    return true;
+  });
+}
+
+function hasSubmissionEvidence(snapshot: Record<string, unknown>): boolean {
+  // Draft Lite/Business policies do not define an approved completion checklist.
+  // Treat only an entirely missing/unknown diagnostic as incomplete; do not turn
+  // this submission gate into an assurance or approval decision.
+  return (snapshot.findings as Record<string, unknown>[]).some(
+    (finding) => finding.status !== "missing" && finding.status !== "unknown",
+  );
+}
+
+function noReviewState(
+  plan: ReviewPlan | null,
+  reason: ReviewSubmissionEligibilityReason,
+): MerchantReviewState {
+  return {
+    status: "NO_REVIEW_ELIGIBLE",
+    eligibility: {
+      canSubmit: reason === "READY",
+      reason,
+      plan,
+      planLabel: plan === "solo_lite" ? "Solo Lite" : plan === "business" ? "Business" : null,
+    },
+  };
+}
+
 function receiptProfileRowVersion(receipt: MutationReceiptRow | null): number | null {
   if (!receipt || !isRecord(receipt.metadata)) return null;
   const version = receipt.metadata.profile_row_version;
@@ -389,10 +474,12 @@ function receiptProfileRowVersion(receipt: MutationReceiptRow | null): number | 
 export function createReviewCorrectionService(dependencies: {
   repository?: ReviewCorrectionRepository;
   now?: () => Date;
+  buildEvidenceSnapshot?: typeof buildCorrectedDraftEvidenceSnapshot;
   environment?: NodeJS.ProcessEnv;
 } = {}) {
   const repository = dependencies.repository ?? createSupabaseReviewCorrectionRepository(dependencies.environment);
   const now = dependencies.now ?? (() => new Date());
+  const buildEvidenceSnapshot = dependencies.buildEvidenceSnapshot ?? buildCorrectedDraftEvidenceSnapshot;
 
   const readModel = async (review: ReviewRow, merchant?: MerchantRow | null) => {
     const resolvedMerchant = merchant ?? await repository.findMerchant(review.merchant_id);
@@ -422,6 +509,110 @@ export function createReviewCorrectionService(dependencies: {
       if (!merchant) throw new ReviewCorrectionServiceError("FORBIDDEN");
       const review = await repository.findCurrentReview(merchant.id);
       return review && isOpenReview(review) && review.merchant_id === merchant.id ? readModel(review, merchant) : null;
+    },
+
+    async getMerchantReviewState(actorId: string, merchantId: string): Promise<MerchantReviewState> {
+      const merchant = await repository.findOwnedMerchant(actorId, merchantId);
+      if (!merchant) throw new ReviewCorrectionServiceError("FORBIDDEN");
+      const plan = canonicalMerchantPlan(merchant.subscription_plan);
+      if (!plan) return noReviewState(null, "PLAN_NOT_ELIGIBLE");
+      const review = await repository.findCurrentReview(merchant.id);
+      if (review && isOpenReview(review) && review.merchant_id === merchant.id) {
+        const model = await readModel(review, merchant);
+        return model.status === "pending"
+          ? { status: "PENDING", review: model }
+          : { status: "NEEDS_ATTENTION", review: model };
+      }
+      const [profile, workspace, registry] = await Promise.all([
+        repository.findProfile(merchant.id),
+        repository.findCanonicalWorkspace(merchant.id),
+        repository.findRegistrySnapshot(merchant.business_registry_snapshot_id),
+      ]);
+      if (!workspace || workspace.merchant_id !== merchant.id || !isUuid(workspace.workspace_id)) {
+        return noReviewState(plan, "WORKSPACE_REQUIRED");
+      }
+      if (
+        !profile || profile.merchant_id !== merchant.id || profile.plan_code !== plan
+        || !isUuid(profile.id) || !isPositiveSafeInteger(profile.row_version)
+      ) return noReviewState(plan, "PROFILE_REQUIRED");
+      const snapshot = buildEvidenceSnapshot(merchant, registry, now().toISOString());
+      return isValidDraftSnapshot(snapshot, plan) && hasSubmissionEvidence(snapshot)
+        ? noReviewState(plan, "READY")
+        : noReviewState(plan, "EVIDENCE_INCOMPLETE");
+    },
+
+    async submitInitialReview(input: {
+      actorId: string;
+      merchantId: string;
+      idempotencyKey: string;
+    }): Promise<{ result: ReviewCorrectionRpcResult; state: MerchantReviewState }> {
+      const merchant = await repository.findOwnedMerchant(input.actorId, input.merchantId);
+      if (!merchant) throw new ReviewCorrectionServiceError("FORBIDDEN");
+      const plan = canonicalMerchantPlan(merchant.subscription_plan);
+      if (!plan) throw new ReviewCorrectionServiceError("INVALID_STATE");
+      const [profile, workspace, registry, receipt] = await Promise.all([
+        repository.findProfile(merchant.id),
+        repository.findCanonicalWorkspace(merchant.id),
+        repository.findRegistrySnapshot(merchant.business_registry_snapshot_id),
+        repository.findMutationReceipt(merchant.id, input.idempotencyKey),
+      ]);
+      if (
+        !profile || !workspace || profile.merchant_id !== merchant.id || profile.plan_code !== plan
+        || workspace.merchant_id !== merchant.id || !isUuid(profile.id) || !isUuid(workspace.workspace_id)
+        || !isPositiveSafeInteger(profile.row_version)
+      ) throw new ReviewCorrectionServiceError("INVALID_STATE");
+
+      let snapshot: Record<string, unknown>;
+      let expectedProfileRowVersion = profile.row_version;
+      if (receipt) {
+        const replayProfileVersion = receiptProfileRowVersion(receipt);
+        if (
+          receipt.event_type !== "phase2c_draft_review_submit_v1"
+          || !isUuid(receipt.source_id)
+          || receipt.actor_id !== input.actorId
+          || receipt.expected_row_version !== null
+          || replayProfileVersion === null
+        ) throw new ReviewCorrectionServiceError("INVALID_STATE");
+        const replayReview = await repository.findReview(receipt.source_id);
+        if (
+          !replayReview || replayReview.merchant_id !== merchant.id || replayReview.profile_id !== profile.id
+          || canonicalPlan(replayReview) !== plan || replayReview.review_status !== "pending"
+          || replayReview.policy_version !== DRAFT_REVIEW_POLICY_VERSION
+          || replayReview.idempotency_key !== input.idempotencyKey
+          || !isValidDraftSnapshot(replayReview.evidence_snapshot, plan)
+        ) throw new ReviewCorrectionServiceError("INVALID_STATE");
+        snapshot = replayReview.evidence_snapshot;
+        expectedProfileRowVersion = replayProfileVersion;
+      } else {
+        const current = await repository.findCurrentReview(merchant.id);
+        if (current && isOpenReview(current)) throw new ReviewCorrectionServiceError("INVALID_STATE");
+        snapshot = buildEvidenceSnapshot(merchant, registry, now().toISOString());
+        if (!isValidDraftSnapshot(snapshot, plan) || !hasSubmissionEvidence(snapshot)) {
+          throw new ReviewCorrectionServiceError("INVALID_EVIDENCE");
+        }
+      }
+
+      const result = parseRpcResult(await repository.submitInitialReview({
+        p_merchant_id: merchant.id,
+        p_workspace_id: workspace.workspace_id,
+        p_expected_profile_row_version: expectedProfileRowVersion,
+        p_actor_id: input.actorId,
+        p_policy_version: DRAFT_REVIEW_POLICY_VERSION,
+        p_evidence_snapshot: snapshot,
+        p_idempotency_key: input.idempotencyKey,
+      }));
+      const successful = result.kind === "applied" || result.kind === "already_processed";
+      if (!successful) return { result, state: noReviewState(plan, "READY") };
+      if (!result.review_id) throw new ReviewCorrectionServiceError("DATA_ACCESS_ERROR");
+      const submitted = await repository.findReview(result.review_id);
+      if (
+        !submitted || submitted.merchant_id !== merchant.id || submitted.profile_id !== profile.id
+        || canonicalPlan(submitted) !== plan || submitted.review_status !== "pending"
+        || submitted.policy_version !== DRAFT_REVIEW_POLICY_VERSION
+        || submitted.idempotency_key !== input.idempotencyKey
+      ) throw new ReviewCorrectionServiceError("DATA_ACCESS_ERROR");
+      const model = await readModel(submitted, merchant);
+      return { result, state: { status: "PENDING", review: model } };
     },
 
     async requestCorrection(input: {

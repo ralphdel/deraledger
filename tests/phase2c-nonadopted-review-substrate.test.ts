@@ -118,7 +118,10 @@ assert.doesNotMatch(submit, /'lite_verified'|'business_verified'|SET\s+review_st
 assert.doesNotMatch(sql, /raw_bvn|raw_nin|provider_payload|document_path|bank_account_number/i);
 
 const runtimeImports = spawnSync("rg", ["-l", "submit_draft_plan_review_v1|freeze_submitted_plan_review_v1", "src"], { encoding: "utf8" });
-assert.equal(runtimeImports.status, 1, "No application runtime source may adopt this substrate");
-assert.equal(runtimeImports.stdout.trim(), "");
+assert.equal(runtimeImports.status, 0, "B4 must adopt the submit RPC through one trusted server boundary");
+assert.deepEqual(runtimeImports.stdout.trim().split(/\r?\n/), [
+  "src\\lib\\compliance\\server\\review-correction-service.ts",
+]);
+assert.doesNotMatch(runtimeImports.stdout, /freeze_submitted_plan_review_v1/);
 
 console.log("PASS Phase 2C-2C-B1 non-adopted review substrate source contract");

@@ -157,7 +157,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
           <div className="flex items-center gap-2">
             <span className="text-sm font-semibold text-neutral-900">SuperAdmin Console</span>
-            <span className="text-[10px] font-semibold bg-[#E9D5FF] text-[#6F2CFF] px-1.5 py-0.5 rounded uppercase tracking-wider">Production</span>
+            <span className="text-[10px] font-semibold bg-[#E9D5FF] text-[#6F2CFF] px-1.5 py-0.5 rounded uppercase tracking-wider">Admin Portal</span>
           </div>
 
           <div className="flex-1" />

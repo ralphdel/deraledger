@@ -14,7 +14,7 @@ export function createMerchantComplianceReviewRoute(dependencies: Dependencies) 
     const session = await dependencies.requireOwnerSession();
     if (!session.ok) return routeFailure(session.status, session.status === 401 ? "UNAUTHORIZED" : "FORBIDDEN");
     try {
-      return noStoreJson({ review: await dependencies.createService().getMerchantReview(session.userId, session.merchantId) });
+      return noStoreJson({ state: await dependencies.createService().getMerchantReviewState(session.userId, session.merchantId) });
     } catch (error) {
       const mapped = mapReviewCorrectionServiceError(error);
       if (mapped) return mapped;

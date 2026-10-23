@@ -38,7 +38,7 @@ export async function requireMerchantOwnerSession(
   const context = await (options.resolveContext ?? resolveMerchantContextForUser)(client, user, {
     preferredMerchantId,
   });
-  if (context.status !== "resolved" || context.relationship === "team_member") {
+  if (context.status !== "resolved" || context.relationship !== "owner") {
     return { ok: false, status: 403, error: "Owner access required" };
   }
   return { ok: true, userId, merchantId: context.merchantId };

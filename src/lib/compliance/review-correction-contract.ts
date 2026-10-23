@@ -66,6 +66,26 @@ export type ReviewReadModel = {
   history: ReviewHistoryItem[];
 };
 
+export type ReviewSubmissionEligibilityReason =
+  | "READY"
+  | "PLAN_NOT_ELIGIBLE"
+  | "WORKSPACE_REQUIRED"
+  | "PROFILE_REQUIRED"
+  | "EVIDENCE_INCOMPLETE";
+
+export type MerchantReviewState =
+  | {
+      status: "NO_REVIEW_ELIGIBLE";
+      eligibility: {
+        canSubmit: boolean;
+        reason: ReviewSubmissionEligibilityReason;
+        plan: ReviewPlan | null;
+        planLabel: "Solo Lite" | "Business" | null;
+      };
+    }
+  | { status: "PENDING"; review: ReviewReadModel }
+  | { status: "NEEDS_ATTENTION"; review: ReviewReadModel };
+
 export type ReviewMutationResponse = {
   ok: boolean;
   code:

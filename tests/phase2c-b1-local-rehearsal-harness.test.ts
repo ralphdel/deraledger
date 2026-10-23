@@ -10,7 +10,7 @@ const behavior = readFileSync("scripts/phase2c-b1-local/02-behavior.sql", "utf8"
 const migration = readFileSync("supabase/migrations/20261021000000_phase2c_nonadopted_review_substrate.sql", "utf8");
 const sha256 = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex").toUpperCase();
 assert.equal(sha256("supabase/migrations/20261021000000_phase2c_nonadopted_review_substrate.sql"), "49FD3E667E464D18512C0EF48CC84D475525FB9E635793BD789C6B6326D1B528");
-assert.equal(sha256("tests/phase2c-nonadopted-review-substrate.test.ts"), "744C8E1E3311B46D649F2F4E9DD835F24370C6368DF8B5D599FD3C3E06644616");
+assert.equal(sha256("tests/phase2c-nonadopted-review-substrate.test.ts"), "4CD41A85B4302F4906EFCED634A5470ADE437DDAFA00A7A815EF5DC9A445696F");
 for (const [path, hash] of [
   ["scripts/phase2c-b1-local/00-bootstrap.sql", "DB8AEE2F39EFF98E21F44CAE26F87EC42FC495C147A77433B72E2FBA8B65D2BF"],
   ["scripts/phase2c-b1-local/01-installed-state-fingerprint.sql", "44EFF3B5622BBE986F853123406D464D7AC05FE0F2A0D4A1C8A3174A6796E4AE"],
@@ -46,7 +46,7 @@ assert.match(runner, /\^deraledger_phase2c_b1_rehearsal_\[a-z0-9_\]\+\$/);
 assert.match(runner, /Read-Host 'Local PostgreSQL password \(used in memory only\)' -AsSecureString/);
 assert.match(runner, /HARNESS_APPROVED_SOURCE_HASH_REJECTED/);
 assert.match(runner, /49FD3E667E464D18512C0EF48CC84D475525FB9E635793BD789C6B6326D1B528/);
-assert.match(runner, /744C8E1E3311B46D649F2F4E9DD835F24370C6368DF8B5D599FD3C3E06644616/);
+assert.match(runner, /4CD41A85B4302F4906EFCED634A5470ADE437DDAFA00A7A815EF5DC9A445696F/);
 assert.match(runner, /SetEnvironmentVariable\('PGPASSWORD',\$PlainPassword,'Process'\)/);
 assert.match(runner, /ZeroFreeBSTR/);
 assert.match(runner, /finally \{/);

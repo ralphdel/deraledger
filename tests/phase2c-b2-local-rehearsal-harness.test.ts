@@ -17,7 +17,7 @@ const b1Contract = readFileSync("tests/phase2c-nonadopted-review-substrate.test.
 const b2Migration = readFileSync("supabase/migrations/20261022000000_phase2c_nonadopted_review_triage_resubmission.sql");
 const hash = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex").toUpperCase();
 assert.equal(hash(b1Migration), "49FD3E667E464D18512C0EF48CC84D475525FB9E635793BD789C6B6326D1B528");
-assert.equal(hash(b1Contract), "744C8E1E3311B46D649F2F4E9DD835F24370C6368DF8B5D599FD3C3E06644616");
+assert.equal(hash(b1Contract), "4CD41A85B4302F4906EFCED634A5470ADE437DDAFA00A7A815EF5DC9A445696F");
 assert.equal(hash(b2Migration), "23F66A123C89CB2E2C6C2F7001FF83840538DEF9CCB0AAFDADC0BB755A12ADF2");
 const b2Pin=runner.match(/\$ExpectedB2MigrationHash = '([A-F0-9]{64})'/)?.[1];
 assert.equal(hash(b2Migration), b2Pin, "The local gate must use the reviewed B2 migration bytes");
@@ -36,7 +36,7 @@ assert.match(runner, /finally \{/);
 assert.match(runner, /DROP DATABASE IF EXISTS \$DatabaseName WITH \(FORCE\)/);
 assert.match(runner, /\$DatabaseName -cnotmatch '\^deraledger_phase2c_b2_rehearsal_/);
 assert.match(runner, /\$ExpectedB1MigrationHash = '49FD3E667E464D18512C0EF48CC84D475525FB9E635793BD789C6B6326D1B528'/);
-assert.match(runner, /\$ExpectedB1ContractHash = '744C8E1E3311B46D649F2F4E9DD835F24370C6368DF8B5D599FD3C3E06644616'/);
+assert.match(runner, /\$ExpectedB1ContractHash = '4CD41A85B4302F4906EFCED634A5470ADE437DDAFA00A7A815EF5DC9A445696F'/);
 assert.match(runner, /\$b2Hash = \(Get-FileHash -Algorithm SHA256 -LiteralPath \$B2Migration\)\.Hash/);
 assert.match(runner, /Invoke-LocalPsql \$DatabaseName '06-b2-apply.txt'/);
 assert.match(runner, /Invoke-LocalPsql \$DatabaseName '07-behavior.txt'/);
