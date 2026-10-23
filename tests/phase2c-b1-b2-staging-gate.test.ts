@@ -53,9 +53,15 @@ assert.doesNotMatch(runner, /SERVICE_ROLE_KEY|SUPABASE_SERVICE_ROLE/i);
 
 assert.match(runner, /Read-Host 'Staging database password' -AsSecureString/);
 assert.match(runner, /\$env:PGPASSWORD = \$PlainPassword/);
+assert.match(runner, /\$env:PGSSLMODE = 'require'/);
+assert.match(runner, /\$env:PGGSSENCMODE = 'disable'/);
+assert.match(runner, /'PGSSLMODE','PGGSSENCMODE'/);
+assert.doesNotMatch(runner, /\$env:PGSSLMODE = '(prefer|allow|disable)'/i);
 assert.match(runner, /finally \{[\s\S]*SetEnvironmentVariable[\s\S]*ZeroFreeBSTR/);
+assert.match(runner, /foreach \(\$name in \$EnvironmentNames\)[\s\S]*SetEnvironmentVariable\(\$name,\$SavedEnvironment\[\$name\],'Process'\)/);
 assert.equal((runner.match(/Read-Host/g) ?? []).length, 1, "one password prompt only");
 assert.doesNotMatch(runner, /-W(?:['"\s,])/);
+assert.doesNotMatch(runner, /Write(?:AllText|Line)\([^)]*\$(?:PlainPassword|SecurePassword)/);
 
 for (const filename of [
   "00-environment.txt","01-source-hashes.txt","02-installed-state.txt","03-preflight.txt",
@@ -85,11 +91,20 @@ assert.match(identity, /session_user[\s\S]*current_setting\('deraledger\.phase2c
 assert.match(identity, /set_config\('deraledger\.phase2c_expected_server_major',[\s\S]*expected_server_major/);
 assert.match(identity, /current_setting\('server_version_num'\)::integer \/ 10000[\s\S]*current_setting\('deraledger\.phase2c_expected_server_major'\)::integer/);
 assert.doesNotMatch(identity, /server_version_num'\)::integer\s*(<|>=)\s*1[56]0000/);
-for (const reason of ["database", "current_user", "session_user", "server_major", "tls", "auth_schema", "auth_users"]) {
+for (const reason of ["database", "current_user", "session_user", "server_major", "auth_schema", "auth_users"]) {
   assert.ok(identity.includes(`PHASE2C_STAGING_TARGET_IDENTITY_REJECTED:${reason}`), `identity must distinguish ${reason}`);
 }
+assert.doesNotMatch(identity, /PHASE2C_STAGING_TARGET_IDENTITY_REJECTED:tls/);
+assert.match(identity, /\\conninfo/);
+assert.match(identity, /CONTROL\|IDENTITY_FACTS\|/);
+assert.match(identity, /client_ssl_required=true/);
+assert.match(identity, /backend_ssl=/);
 assert.match(identity, /pg_stat_ssl/);
 assert.match(identity, /auth\.users/);
+const identityGuard = identity.slice(identity.indexOf("DO $identity$"), identity.indexOf("$identity$;"));
+assert.doesNotMatch(identityGuard, /pg_stat_ssl|backend_ssl/,
+  "backend-visible SSL state must remain informational rather than gate client TLS");
+assert.match(runner, /client_pooler_tls_required/);
 for (const source of [identity, installed, preflight, b1Postflight, b2Postflight, final]) {
   assert.match(source, /BEGIN READ ONLY;/);
   assert.match(source, /COMMIT;/);
@@ -98,6 +113,18 @@ assert.doesNotMatch(identity.slice(identity.indexOf("DO $identity$")), /:'expect
 assert.doesNotMatch(preflight.slice(preflight.indexOf("DO $preflight$")), /:'b[12]_state'/);
 for (const table of ["merchants","workspaces","merchant_canonical_workspaces","merchant_compliance_profiles",
   "merchant_compliance_reviews","merchant_compliance_events"]) assert.ok(preflight.includes(table));
+assert.match(installed, /CONTROL\|CATALOG_FACTS\|/);
+assert.match(installed, /CONTROL\|LEDGER_FACTS\|/);
+assert.match(installed, /shape=' \|\| CASE[\s\S]*'missing'[\s\S]*'compatible'[\s\S]*'incompatible'/);
+assert.ok(installed.indexOf("CONTROL|LEDGER_FACTS|") < installed.indexOf("WITH expected AS"),
+  "ledger shape facts and guard must precede installed-object classification");
+assert.match(preflight, /CONTROL\|PREFLIGHT_FACTS\|/);
+assert.match(preflight, /server_major_compatible=/);
+assert.match(preflight, /PHASE2C_STAGING_SERVER_MAJOR_INCOMPATIBLE/);
+assert.ok(identity.indexOf("CONTROL|IDENTITY_FACTS|") < identity.indexOf("DO $identity$"),
+  "identity facts must be emitted before a bounded identity rejection");
+assert.ok(preflight.indexOf("CONTROL|PREFLIGHT_FACTS|") < preflight.indexOf("DO $preflight$"),
+  "preflight facts must be emitted before a bounded prerequisite rejection");
 for (const contract of ["is_super_admin","review_status","row_version","uq_merchant_compliance_reviews_idempotency",
   "uq_merchant_compliance_events_idempotency","merchant_canonical_workspaces_workspace_owner_fkey",
   "merchant_compliance_profiles_plan_code_check","merchant_compliance_reviews_type_plan_check",
@@ -141,6 +168,8 @@ const b2Post = runner.indexOf("Invoke-StagingPsql '07-b2-postflight.txt'");
 const finalCheck = runner.indexOf("Invoke-StagingPsql '08-final.txt'");
 assert.ok(firstInspect < firstPreflight && firstPreflight < b1Apply && b1Apply < b1Post &&
   b1Post < b2Apply && b2Apply < b2Post && b2Post < finalCheck, "gate ordering must remain fail-closed");
+assert.ok(runner.indexOf("Invoke-StagingPsql '00-environment.txt'") < firstInspect,
+  "identity and connection facts must precede installed-state inspection");
 assert.match(runner, /if \(\$state\.B1 -eq 'ABSENT'\)[\s\S]*else \{[\s\S]*b1_exactly_installed/);
 assert.match(runner, /if \(\$state\.B2 -eq 'ABSENT'\)[\s\S]*else \{[\s\S]*b2_exactly_installed/);
 

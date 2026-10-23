@@ -2,6 +2,97 @@
 
 BEGIN READ ONLY;
 
+SELECT 'CONTROL|CATALOG_FACTS|role_anon=' || (pg_catalog.to_regrole('anon') IS NOT NULL)::text
+  || '|role_authenticated=' || (pg_catalog.to_regrole('authenticated') IS NOT NULL)::text
+  || '|role_service_role=' || (pg_catalog.to_regrole('service_role') IS NOT NULL)::text
+  || '|table_merchants=' || (pg_catalog.to_regclass('public.merchants') IS NOT NULL)::text
+  || '|table_workspaces=' || (pg_catalog.to_regclass('public.workspaces') IS NOT NULL)::text
+  || '|table_canonical_workspaces=' || (pg_catalog.to_regclass('public.merchant_canonical_workspaces') IS NOT NULL)::text
+  || '|table_profiles=' || (pg_catalog.to_regclass('public.merchant_compliance_profiles') IS NOT NULL)::text
+  || '|table_reviews=' || (pg_catalog.to_regclass('public.merchant_compliance_reviews') IS NOT NULL)::text
+  || '|table_events=' || (pg_catalog.to_regclass('public.merchant_compliance_events') IS NOT NULL)::text;
+
+DO $catalog_prerequisites$
+DECLARE
+  v_role text;
+  v_table text;
+BEGIN
+  FOREACH v_role IN ARRAY ARRAY['anon','authenticated','service_role'] LOOP
+    IF pg_catalog.to_regrole(v_role) IS NULL THEN
+      RAISE EXCEPTION 'PHASE2C_STAGING_REQUIRED_ROLE_MISSING:%', v_role;
+    END IF;
+  END LOOP;
+  FOREACH v_table IN ARRAY ARRAY['merchants','workspaces','merchant_canonical_workspaces',
+      'merchant_compliance_profiles','merchant_compliance_reviews','merchant_compliance_events'] LOOP
+    IF pg_catalog.to_regclass('public.' || v_table) IS NULL THEN
+      RAISE EXCEPTION 'PHASE2C_STAGING_REQUIRED_TABLE_MISSING:%', v_table;
+    END IF;
+  END LOOP;
+END;
+$catalog_prerequisites$;
+
+WITH ledger AS (
+  SELECT pg_catalog.to_regclass('supabase_migrations.schema_migrations') AS ledger_oid
+), facts AS (
+  SELECT ledger_oid,
+    EXISTS (
+      SELECT 1 FROM pg_catalog.pg_constraint c
+      WHERE c.conrelid = ledger_oid AND c.contype = 'p'
+        AND c.conkey = ARRAY[(
+          SELECT attnum FROM pg_catalog.pg_attribute
+          WHERE attrelid = ledger_oid AND attname = 'version'
+        )]
+    ) AS version_primary_key,
+    NOT EXISTS (
+      SELECT 1 FROM (VALUES
+        ('version','text'),('statements','ARRAY'),('name','text')
+      ) expected(column_name,data_type)
+      LEFT JOIN information_schema.columns c
+        ON c.table_schema = 'supabase_migrations'
+       AND c.table_name = 'schema_migrations'
+       AND c.column_name = expected.column_name
+      WHERE c.data_type IS DISTINCT FROM expected.data_type
+    ) AS columns_compatible
+  FROM ledger
+)
+SELECT 'CONTROL|LEDGER_FACTS|table_present=' || (ledger_oid IS NOT NULL)::text
+  || '|version_primary_key=' || version_primary_key::text
+  || '|columns_compatible=' || columns_compatible::text
+  || '|shape=' || CASE
+    WHEN ledger_oid IS NULL THEN 'missing'
+    WHEN version_primary_key AND columns_compatible THEN 'compatible'
+    ELSE 'incompatible'
+  END
+FROM facts;
+
+DO $ledger_shape$
+BEGIN
+  IF pg_catalog.to_regclass('supabase_migrations.schema_migrations') IS NULL THEN
+    RAISE EXCEPTION 'PHASE2C_STAGING_MIGRATION_LEDGER_MISSING';
+  END IF;
+  IF NOT EXISTS (
+      SELECT 1 FROM pg_catalog.pg_constraint c
+      WHERE c.conrelid = 'supabase_migrations.schema_migrations'::regclass
+        AND c.contype = 'p' AND c.conkey = ARRAY[(
+          SELECT attnum FROM pg_catalog.pg_attribute
+          WHERE attrelid = c.conrelid AND attname = 'version'
+        )]
+    )
+    OR EXISTS (
+      SELECT 1 FROM (VALUES
+        ('version','text'),('statements','ARRAY'),('name','text')
+      ) expected(column_name,data_type)
+      LEFT JOIN information_schema.columns c
+        ON c.table_schema = 'supabase_migrations'
+       AND c.table_name = 'schema_migrations'
+       AND c.column_name = expected.column_name
+      WHERE c.data_type IS DISTINCT FROM expected.data_type
+    ) THEN
+    RAISE EXCEPTION 'PHASE2C_STAGING_MIGRATION_LEDGER_INCOMPATIBLE';
+  END IF;
+END;
+$ledger_shape$;
+
 WITH expected AS (
   SELECT
     pg_catalog.to_regprocedure('public.submit_draft_plan_review_v1(uuid,uuid,bigint,uuid,text,jsonb,text)') AS b1_rpc,
@@ -155,34 +246,6 @@ WITH expected AS (
 SELECT 'CONTROL|B1_STATE|' || b1_state FROM states
 UNION ALL
 SELECT 'CONTROL|B2_STATE|' || b2_state FROM states;
-
-DO $ledger_shape$
-BEGIN
-  IF pg_catalog.to_regclass('supabase_migrations.schema_migrations') IS NULL THEN
-    RAISE EXCEPTION 'PHASE2C_STAGING_MIGRATION_LEDGER_MISSING';
-  END IF;
-  IF NOT EXISTS (
-      SELECT 1 FROM pg_catalog.pg_constraint c
-      WHERE c.conrelid = 'supabase_migrations.schema_migrations'::regclass
-        AND c.contype = 'p' AND c.conkey = ARRAY[(
-          SELECT attnum FROM pg_catalog.pg_attribute
-          WHERE attrelid = c.conrelid AND attname = 'version'
-        )]
-    )
-    OR EXISTS (
-      SELECT 1 FROM (VALUES
-        ('version','text'),('statements','ARRAY'),('name','text')
-      ) expected(column_name,data_type)
-      LEFT JOIN information_schema.columns c
-        ON c.table_schema = 'supabase_migrations'
-       AND c.table_name = 'schema_migrations'
-       AND c.column_name = expected.column_name
-      WHERE c.data_type IS DISTINCT FROM expected.data_type
-    ) THEN
-    RAISE EXCEPTION 'PHASE2C_STAGING_MIGRATION_LEDGER_INCOMPATIBLE';
-  END IF;
-END;
-$ledger_shape$;
 
 SELECT 'CONTROL|LEDGER|b1=' || (
     SELECT CASE WHEN count(*) = 0 THEN 'ABSENT'

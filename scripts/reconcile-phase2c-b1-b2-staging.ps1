@@ -30,7 +30,8 @@ $Stamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ').ToLowerInvariant()
 $EvidenceRoot = Join-Path $RepoRoot ".local-evidence/phase2c-b1-b2-staging/$Stamp"
 $SummaryPath = Join-Path $EvidenceRoot 'summary.txt'
 $EnvironmentNames = @('PGHOST','PGHOSTADDR','PGPORT','PGDATABASE','PGUSER','PGPASSWORD',
-  'PGPASSFILE','PGSERVICE','PGSERVICEFILE','PGOPTIONS','PGSSLMODE','PGCONNECT_TIMEOUT','PGAPPNAME')
+  'PGPASSFILE','PGSERVICE','PGSERVICEFILE','PGOPTIONS','PGSSLMODE','PGGSSENCMODE',
+  'PGCONNECT_TIMEOUT','PGAPPNAME')
 $SavedEnvironment = @{}
 $EnvironmentCaptured = $false
 $PasswordPointer = [IntPtr]::Zero
@@ -139,7 +140,8 @@ function Assert-InstallableState($State) {
 
 function Invoke-Preflight($State,[switch]$Append) {
   $result = Invoke-StagingPsql '03-preflight.txt' @('-v',"b1_state=$($State.B1)",
-    '-v',"b2_state=$($State.B2)",'-f',(Join-Path $SqlRoot '02-preflight.sql')) -Append:$Append
+    '-v',"b2_state=$($State.B2)",'-v',"expected_server_major=$ExpectedServerMajor",
+    '-f',(Join-Path $SqlRoot '02-preflight.sql')) -Append:$Append
   Assert-PsqlResult $result 'preflight'
   if ((Get-ControlValue $result.Stdout 'PREFLIGHT') -cne 'PASS') { throw 'preflight_marker_invalid' }
 }
@@ -191,7 +193,7 @@ try {
   $b2Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $B2Migration).Hash
   if ($b1Hash -cne $ExpectedB1Hash -or $b2Hash -cne $ExpectedB2Hash) { throw 'frozen_migration_hash_mismatch' }
   [IO.File]::WriteAllText((Join-Path $EvidenceRoot '00-environment.txt'),
-    "branch=$branch`r`nhead=$head`r`nupstream=$upstreamName`r`nupstream_head=$upstream`r`nreviewed_b3_baseline=$ReviewedB3Baseline`r`nproject_ref=$TargetProjectRef`r`nhost=$TargetHost`r`nport=$TargetPort`r`ndatabase=$TargetDatabase`r`nlogin_user=$TargetUser`r`npsql=$psqlVersion`r`n",
+    "branch=$branch`r`nhead=$head`r`nupstream=$upstreamName`r`nupstream_head=$upstream`r`nreviewed_b3_baseline=$ReviewedB3Baseline`r`nproject_ref=$TargetProjectRef`r`nhost=$TargetHost`r`nport=$TargetPort`r`ndatabase=$TargetDatabase`r`nlogin_user=$TargetUser`r`npsql=$psqlVersion`r`nclient_sslmode=require`r`nclient_gssencmode=disable`r`nexpected_server_major=$ExpectedServerMajor`r`n",
     [Text.UTF8Encoding]::new($false))
   [IO.File]::WriteAllText((Join-Path $EvidenceRoot '01-source-hashes.txt'),
     "B1=$b1Hash`r`nB2=$b2Hash`r`n",[Text.UTF8Encoding]::new($false))
@@ -208,17 +210,26 @@ try {
   if ([string]::IsNullOrEmpty($PlainPassword)) { throw 'empty_password_rejected' }
   $env:PGPASSWORD = $PlainPassword
   $env:PGSSLMODE = 'require'
+  $env:PGGSSENCMODE = 'disable'
   $env:PGCONNECT_TIMEOUT = '15'
   $env:PGAPPNAME = 'phase2c_b1_b2_staging_gate'
 
   $identity = Invoke-StagingPsql '00-environment.txt' @('-v',"expected_database=$TargetDatabase",
     '-v',"expected_current_user=$ExpectedCurrentUser",'-v',"expected_server_major=$ExpectedServerMajor",
     '-f',(Join-Path $SqlRoot '00-identity.sql')) -Append
+  if ($identity.ExitCode -ne 0) {
+    $identityFailure = [regex]::Match([string]$identity.Stderr,
+      'PHASE2C_STAGING_TARGET_IDENTITY_REJECTED:(database|current_user|session_user|server_major|auth_schema|auth_users)')
+    if ($identityFailure.Success) { throw $identityFailure.Value }
+  }
   Assert-PsqlResult $identity 'identity'
-  $expectedIdentity = "database=$TargetDatabase|current_user=$ExpectedCurrentUser|session_user=$ExpectedCurrentUser|server_major=$ExpectedServerMajor|ssl=true|supabase_auth=true"
-  if ((Get-ControlValue $identity.Stdout 'IDENTITY') -cne $expectedIdentity) {
+  $identityValue = Get-ControlValue $identity.Stdout 'IDENTITY'
+  $expectedIdentityPrefix = "database=$TargetDatabase|current_user=$ExpectedCurrentUser|session_user=$ExpectedCurrentUser|server_major=$ExpectedServerMajor|client_ssl_required=true|backend_ssl="
+  if ($identityValue -notin @("${expectedIdentityPrefix}true|supabase_auth=true",
+      "${expectedIdentityPrefix}false|supabase_auth=true")) {
     throw 'staging_identity_marker_invalid'
   }
+  Add-Marker 'PASS' 'client_pooler_tls_required'
   Add-Marker 'PASS' 'staging_target_identity'
 
   $state = Get-InstalledState

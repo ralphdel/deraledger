@@ -3,11 +3,33 @@
 BEGIN READ ONLY;
 SELECT pg_catalog.set_config('deraledger.phase2c_b1_state', :'b1_state', true) AS preflight_b1_state \gset
 SELECT pg_catalog.set_config('deraledger.phase2c_b2_state', :'b2_state', true) AS preflight_b2_state \gset
+SELECT pg_catalog.set_config('deraledger.phase2c_expected_server_major', :'expected_server_major', true) AS preflight_server_major \gset
+
+SELECT 'CONTROL|PREFLIGHT_FACTS|b1_state=' || current_setting('deraledger.phase2c_b1_state')
+  || '|b2_state=' || current_setting('deraledger.phase2c_b2_state')
+  || '|server_major=' || current_setting('server_version_num')::integer / 10000
+  || '|server_major_compatible=' || (
+    current_setting('server_version_num')::integer / 10000
+      = current_setting('deraledger.phase2c_expected_server_major')::integer
+  )::text
+  || '|role_anon=' || (pg_catalog.to_regrole('anon') IS NOT NULL)::text
+  || '|role_authenticated=' || (pg_catalog.to_regrole('authenticated') IS NOT NULL)::text
+  || '|role_service_role=' || (pg_catalog.to_regrole('service_role') IS NOT NULL)::text
+  || '|table_merchants=' || (pg_catalog.to_regclass('public.merchants') IS NOT NULL)::text
+  || '|table_workspaces=' || (pg_catalog.to_regclass('public.workspaces') IS NOT NULL)::text
+  || '|table_canonical_workspaces=' || (pg_catalog.to_regclass('public.merchant_canonical_workspaces') IS NOT NULL)::text
+  || '|table_profiles=' || (pg_catalog.to_regclass('public.merchant_compliance_profiles') IS NOT NULL)::text
+  || '|table_reviews=' || (pg_catalog.to_regclass('public.merchant_compliance_reviews') IS NOT NULL)::text
+  || '|table_events=' || (pg_catalog.to_regclass('public.merchant_compliance_events') IS NOT NULL)::text;
 
 DO $preflight$
 DECLARE
   v_role text;
 BEGIN
+  IF current_setting('server_version_num')::integer / 10000
+      IS DISTINCT FROM current_setting('deraledger.phase2c_expected_server_major')::integer THEN
+    RAISE EXCEPTION 'PHASE2C_STAGING_SERVER_MAJOR_INCOMPATIBLE';
+  END IF;
   IF current_setting('deraledger.phase2c_b1_state') NOT IN ('ABSENT','EXACTLY_INSTALLED')
     OR current_setting('deraledger.phase2c_b2_state') NOT IN ('ABSENT','EXACTLY_INSTALLED')
     OR (current_setting('deraledger.phase2c_b1_state') = 'ABSENT'
