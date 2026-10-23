@@ -41,7 +41,26 @@ const baseMerchant = {
   relationship_claim: "owner_affiliated_claim",
 };
 
-function snapshot() {
+type TestSnapshotFinding = {
+  code: string;
+  status: string;
+  reasonCode: string;
+  sourceType?: string;
+  sourceId?: string;
+  sourceVersion?: null;
+};
+
+type TestSnapshot = {
+  schemaVersion: string;
+  policyId: string;
+  policyVersion: string;
+  policyStatus: string;
+  adapterVersion: string;
+  evaluatedAt: string;
+  findings: TestSnapshotFinding[];
+};
+
+function snapshot(): TestSnapshot {
   return {
     schemaVersion: "phase2c-review-v1",
     policyId: "solo_lite_evidence",

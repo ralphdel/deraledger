@@ -188,7 +188,7 @@ async function run() {
       },
       preferredMerchantId: ids.merchant,
       resolveContext: async (_client, _user, options) => {
-        preferred = options.preferredMerchantId;
+        preferred = options?.preferredMerchantId;
         return { status: "resolved", merchantId: ids.merchant, relationship: "owner", roleName: "owner", permissions: {} };
       },
     });
