@@ -27,6 +27,20 @@ for (const value of [
   "336d090a769a15b127e0101ff88bbfadaef77fae",
   "C:\\Program Files\\PostgreSQL\\15\\bin\\psql.exe",
 ]) assert.ok(runner.includes(value), `runner must pin ${value}`);
+assert.match(runner, /\$ReviewedB3Baseline = '336d090a769a15b127e0101ff88bbfadaef77fae'/);
+assert.match(runner, /\$ExpectedUpstream = 'origin\/staging\/phase-2-rebuild-safe-baseline'/);
+assert.doesNotMatch(runner, /\$ExpectedHead\s*=/);
+assert.doesNotMatch(runner, /\$head\s+-cne\s+\$ReviewedB3Baseline/);
+assert.match(runner, /rev-parse --abbrev-ref --symbolic-full-name '@\{upstream\}'/);
+assert.match(runner, /\$upstreamName -cne \$ExpectedUpstream/);
+assert.match(runner, /rev-parse --verify "refs\/remotes\/\$ExpectedUpstream"/);
+assert.match(runner, /\$head -cne \$upstream/);
+assert.match(runner, /cat-file -e "\$ReviewedB3Baseline\^\{commit\}"/);
+assert.match(runner, /merge-base --is-ancestor \$ReviewedB3Baseline \$head/);
+assert.match(runner, /git -C \$RepoRoot status --porcelain=v1 --untracked-files=all/);
+assert.match(runner, /repository_tracked_changes_rejected/);
+assert.match(runner, /repository_untracked_source_rejected/);
+assert.match(runner, /\$_ -cne '\.local-evidence\/' -and -not \$_.StartsWith\('\.local-evidence\/'\)/);
 assert.equal((runner.match(/gznwibespgkwknnvbrlv/g) ?? []).length, 1, "production ref is only a forbidden sentinel");
 assert.match(runner, /\$TargetProjectRef -ceq \$ForbiddenProductionRef/);
 assert.doesNotMatch(runner, /postgresql:\/\//i);

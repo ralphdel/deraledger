@@ -17,7 +17,8 @@ $TargetDatabase = 'postgres'
 $TargetUser = 'postgres.fsjljliiyfchkwbjifzw'
 $ExpectedCurrentUser = 'postgres'
 $ExpectedBranch = 'staging/phase-2-rebuild-safe-baseline'
-$ExpectedHead = '336d090a769a15b127e0101ff88bbfadaef77fae'
+$ReviewedB3Baseline = '336d090a769a15b127e0101ff88bbfadaef77fae'
+$ExpectedUpstream = 'origin/staging/phase-2-rebuild-safe-baseline'
 $ExpectedB1Hash = '49FD3E667E464D18512C0EF48CC84D475525FB9E635793BD789C6B6326D1B528'
 $ExpectedB2Hash = '23F66A123C89CB2E2C6C2F7001FF83840538DEF9CCB0AAFDADC0BB755A12ADF2'
 $RepoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
@@ -157,10 +158,28 @@ try {
   if ($LASTEXITCODE -ne 0 -or $psqlVersion -cnotmatch '^psql \(PostgreSQL\) 15\.') { throw 'psql_15_required' }
   $branch = (& git -C $RepoRoot branch --show-current 2>$null | Out-String).Trim()
   $head = (& git -C $RepoRoot rev-parse HEAD 2>$null | Out-String).Trim()
-  $upstream = (& git -C $RepoRoot rev-parse '@{upstream}' 2>$null | Out-String).Trim()
-  if ($branch -cne $ExpectedBranch -or $head -cne $ExpectedHead -or $upstream -cne $ExpectedHead) {
+  if ($LASTEXITCODE -ne 0 -or $branch -cne $ExpectedBranch -or $head -notmatch '^[0-9a-f]{40}$') {
     throw 'repository_baseline_rejected'
   }
+  $upstreamName = (& git -C $RepoRoot rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>$null | Out-String).Trim()
+  if ($LASTEXITCODE -ne 0 -or $upstreamName -cne $ExpectedUpstream) { throw 'repository_upstream_rejected' }
+  $upstream = (& git -C $RepoRoot rev-parse --verify "refs/remotes/$ExpectedUpstream" 2>$null | Out-String).Trim()
+  if ($LASTEXITCODE -ne 0 -or $upstream -notmatch '^[0-9a-f]{40}$' -or $head -cne $upstream) {
+    throw 'repository_remote_alignment_rejected'
+  }
+  & git -C $RepoRoot cat-file -e "$ReviewedB3Baseline^{commit}" 2>$null
+  if ($LASTEXITCODE -ne 0) { throw 'reviewed_b3_baseline_missing' }
+  & git -C $RepoRoot merge-base --is-ancestor $ReviewedB3Baseline $head 2>$null
+  if ($LASTEXITCODE -ne 0) { throw 'reviewed_b3_baseline_not_ancestor' }
+  $statusLines = @(& git -C $RepoRoot status --porcelain=v1 --untracked-files=all 2>$null)
+  if ($LASTEXITCODE -ne 0) { throw 'repository_status_unavailable' }
+  $trackedChanges = @($statusLines | Where-Object { -not $_.StartsWith('?? ') })
+  if ($trackedChanges.Count -ne 0) { throw 'repository_tracked_changes_rejected' }
+  $unexpectedUntracked = @($statusLines |
+    Where-Object { $_.StartsWith('?? ') } |
+    ForEach-Object { $_.Substring(3).Replace('\','/') } |
+    Where-Object { $_ -cne '.local-evidence/' -and -not $_.StartsWith('.local-evidence/') })
+  if ($unexpectedUntracked.Count -ne 0) { throw 'repository_untracked_source_rejected' }
   foreach ($path in @($B1Migration,$B2Migration,$PSCommandPath,
       (Join-Path $SqlRoot '00-identity.sql'),(Join-Path $SqlRoot '01-installed-state.sql'),
       (Join-Path $SqlRoot '02-preflight.sql'),(Join-Path $SqlRoot '03-b1-postflight.sql'),
@@ -171,7 +190,7 @@ try {
   $b2Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $B2Migration).Hash
   if ($b1Hash -cne $ExpectedB1Hash -or $b2Hash -cne $ExpectedB2Hash) { throw 'frozen_migration_hash_mismatch' }
   [IO.File]::WriteAllText((Join-Path $EvidenceRoot '00-environment.txt'),
-    "branch=$branch`r`nhead=$head`r`nupstream=$upstream`r`nproject_ref=$TargetProjectRef`r`nhost=$TargetHost`r`nport=$TargetPort`r`ndatabase=$TargetDatabase`r`nlogin_user=$TargetUser`r`npsql=$psqlVersion`r`n",
+    "branch=$branch`r`nhead=$head`r`nupstream=$upstreamName`r`nupstream_head=$upstream`r`nreviewed_b3_baseline=$ReviewedB3Baseline`r`nproject_ref=$TargetProjectRef`r`nhost=$TargetHost`r`nport=$TargetPort`r`ndatabase=$TargetDatabase`r`nlogin_user=$TargetUser`r`npsql=$psqlVersion`r`n",
     [Text.UTF8Encoding]::new($false))
   [IO.File]::WriteAllText((Join-Path $EvidenceRoot '01-source-hashes.txt'),
     "B1=$b1Hash`r`nB2=$b2Hash`r`n",[Text.UTF8Encoding]::new($false))
