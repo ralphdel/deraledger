@@ -20,7 +20,27 @@ SELECT 'CONTROL|PREFLIGHT_FACTS|b1_state=' || current_setting('deraledger.phase2
   || '|table_canonical_workspaces=' || (pg_catalog.to_regclass('public.merchant_canonical_workspaces') IS NOT NULL)::text
   || '|table_profiles=' || (pg_catalog.to_regclass('public.merchant_compliance_profiles') IS NOT NULL)::text
   || '|table_reviews=' || (pg_catalog.to_regclass('public.merchant_compliance_reviews') IS NOT NULL)::text
-  || '|table_events=' || (pg_catalog.to_regclass('public.merchant_compliance_events') IS NOT NULL)::text;
+  || '|table_events=' || (pg_catalog.to_regclass('public.merchant_compliance_events') IS NOT NULL)::text
+  || '|service_merchants_update=' || pg_catalog.has_table_privilege(
+    'service_role','public.merchants','UPDATE')::text;
+
+WITH normalized_acl AS (
+  SELECT pg_catalog.pg_get_userbyid(c.relowner) AS owner_name,
+    pg_catalog.format('%s:%s:%s:%s',
+      CASE WHEN acl.grantee = 0 THEN 'PUBLIC' ELSE pg_catalog.pg_get_userbyid(acl.grantee) END,
+      pg_catalog.pg_get_userbyid(acl.grantor), acl.privilege_type, acl.is_grantable::text) AS acl_item
+  FROM pg_catalog.pg_class c
+  CROSS JOIN LATERAL pg_catalog.aclexplode(
+    COALESCE(c.relacl,pg_catalog.acldefault('r',c.relowner))) acl
+  WHERE c.oid = 'public.merchants'::regclass
+), acl_fingerprint AS (
+  SELECT pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
+    'owner=' || pg_catalog.min(owner_name) || ';acl=' ||
+      pg_catalog.string_agg(acl_item,',' ORDER BY acl_item), 'UTF8')), 'hex') AS fingerprint
+  FROM normalized_acl
+)
+SELECT 'CONTROL|MERCHANTS_ACL_BASELINE|fingerprint=' || fingerprint
+FROM acl_fingerprint;
 
 DO $preflight$
 DECLARE
@@ -165,8 +185,7 @@ BEGIN
     OR NOT pg_catalog.has_table_privilege('service_role','public.merchants','SELECT')
     OR NOT pg_catalog.has_table_privilege('service_role','public.merchant_compliance_profiles','SELECT')
     OR NOT pg_catalog.has_table_privilege('service_role','public.merchant_compliance_profiles','UPDATE')
-    OR NOT pg_catalog.has_table_privilege('service_role','public.merchant_canonical_workspaces','SELECT')
-    OR pg_catalog.has_table_privilege('service_role','public.merchants','UPDATE') THEN
+    OR NOT pg_catalog.has_table_privilege('service_role','public.merchant_canonical_workspaces','SELECT') THEN
     RAISE EXCEPTION 'PHASE2C_STAGING_TABLE_SECURITY_INCOMPATIBLE';
   END IF;
   IF (current_setting('deraledger.phase2c_b1_state') = 'ABSENT') IS DISTINCT FROM

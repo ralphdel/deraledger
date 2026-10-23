@@ -103,6 +103,9 @@ function Invoke-StagingPsql([string]$LogName,[string[]]$ExtraArguments,[switch]$
 
 function Assert-PsqlResult($Result,[string]$Phase) {
   if ($null -eq $Result -or $Result -is [array] -or $Result.TimedOut -or $Result.ExitCode -ne 0) {
+    if ($null -ne $Result -and [string]$Result.Stderr -match 'PHASE2C_STAGING_MERCHANTS_ACL_CHANGED') {
+      throw 'merchants_acl_changed'
+    }
     throw "psql_failed:$Phase"
   }
 }
@@ -138,12 +141,25 @@ function Assert-InstallableState($State) {
   if ($b2Ledger -eq 'RECORDED' -and $State.B2 -eq 'ABSENT') { throw 'b2_ledger_object_contradiction' }
 }
 
-function Invoke-Preflight($State,[switch]$Append) {
+function Get-MerchantsAclFingerprint([string]$Output) {
+  $controlValue = Get-ControlValue $Output 'MERCHANTS_ACL_BASELINE'
+  $fingerprintMatch = [regex]::Match($controlValue,'^fingerprint=([0-9a-f]{64})$')
+  if (-not $fingerprintMatch.Success) { throw 'merchants_acl_fingerprint_invalid' }
+  return $fingerprintMatch.Groups[1].Value
+}
+
+function Invoke-Preflight($State,[string]$ExpectedMerchantsAclFingerprint = '',[switch]$Append) {
   $result = Invoke-StagingPsql '03-preflight.txt' @('-v',"b1_state=$($State.B1)",
     '-v',"b2_state=$($State.B2)",'-v',"expected_server_major=$ExpectedServerMajor",
     '-f',(Join-Path $SqlRoot '02-preflight.sql')) -Append:$Append
   Assert-PsqlResult $result 'preflight'
   if ((Get-ControlValue $result.Stdout 'PREFLIGHT') -cne 'PASS') { throw 'preflight_marker_invalid' }
+  $actualFingerprint = Get-MerchantsAclFingerprint $result.Stdout
+  if (-not [string]::IsNullOrEmpty($ExpectedMerchantsAclFingerprint) -and
+      $actualFingerprint -cne $ExpectedMerchantsAclFingerprint) {
+    throw 'merchants_acl_changed'
+  }
+  return $actualFingerprint
 }
 
 try {
@@ -235,7 +251,7 @@ try {
   $state = Get-InstalledState
   Assert-InstallableState $state
   Add-Marker 'PASS' 'migration_ledger_inspected_unmodified'
-  Invoke-Preflight $state
+  $merchantsAclFingerprint = Invoke-Preflight $state
   Add-Marker 'PASS' 'staging_schema_compatibility'
 
   if ($state.B1 -eq 'ABSENT') {
@@ -248,12 +264,14 @@ try {
   } else {
     Add-Marker 'PASS' 'b1_exactly_installed'
   }
-  $b1Postflight = Invoke-StagingPsql '05-b1-postflight.txt' @('-f',(Join-Path $SqlRoot '03-b1-postflight.sql'))
+  $b1Postflight = Invoke-StagingPsql '05-b1-postflight.txt' @(
+    '-v',"expected_merchants_acl_fingerprint=$merchantsAclFingerprint",
+    '-f',(Join-Path $SqlRoot '03-b1-postflight.sql'))
   Assert-PsqlResult $b1Postflight 'b1_postflight'
   if ((Get-ControlValue $b1Postflight.Stdout 'B1_POSTFLIGHT') -cne 'PASS') { throw 'b1_postflight_marker_invalid' }
   Add-Marker 'PASS' 'b1_security_postflight'
 
-  Invoke-Preflight $state -Append
+  [void](Invoke-Preflight $state -ExpectedMerchantsAclFingerprint $merchantsAclFingerprint -Append)
   if ($state.B2 -eq 'ABSENT') {
     $applyB2 = Invoke-StagingPsql '06-b2-apply.txt' @('-f',$B2Migration)
     Assert-PsqlResult $applyB2 'b2_apply'
@@ -264,12 +282,16 @@ try {
   } else {
     Add-Marker 'PASS' 'b2_exactly_installed'
   }
-  $b2Postflight = Invoke-StagingPsql '07-b2-postflight.txt' @('-f',(Join-Path $SqlRoot '04-b2-postflight.sql'))
+  $b2Postflight = Invoke-StagingPsql '07-b2-postflight.txt' @(
+    '-v',"expected_merchants_acl_fingerprint=$merchantsAclFingerprint",
+    '-f',(Join-Path $SqlRoot '04-b2-postflight.sql'))
   Assert-PsqlResult $b2Postflight 'b2_postflight'
   if ((Get-ControlValue $b2Postflight.Stdout 'B2_POSTFLIGHT') -cne 'PASS') { throw 'b2_postflight_marker_invalid' }
   Add-Marker 'PASS' 'b2_security_postflight'
 
-  $final = Invoke-StagingPsql '08-final.txt' @('-f',(Join-Path $SqlRoot '05-final.sql'))
+  $final = Invoke-StagingPsql '08-final.txt' @(
+    '-v',"expected_merchants_acl_fingerprint=$merchantsAclFingerprint",
+    '-f',(Join-Path $SqlRoot '05-final.sql'))
   Assert-PsqlResult $final 'final'
   if ((Get-ControlValue $final.Stdout 'FINAL') -cne 'PASS') { throw 'final_marker_invalid' }
   Add-Marker 'PASS' 'draft_policy_nonadoption'

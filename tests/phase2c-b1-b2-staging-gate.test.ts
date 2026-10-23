@@ -130,6 +130,72 @@ for (const contract of ["is_super_admin","review_status","row_version","uq_merch
   "merchant_compliance_profiles_plan_code_check","merchant_compliance_reviews_type_plan_check",
   "merchant_compliance_reviews_status_check","relrowsecurity","relforcerowsecurity"]) assert.ok(preflight.includes(contract));
 
+const preflightGuard = preflight.slice(preflight.indexOf("DO $preflight$"), preflight.indexOf("$preflight$;"));
+assert.doesNotMatch(preflightGuard,
+  /has_table_privilege\('service_role','public\.merchants','UPDATE'\)/,
+  "the established service-role merchants UPDATE grant is not a B1/B2 incompatibility");
+assert.match(preflight, /service_merchants_update=/,
+  "the pre-existing effective privilege remains informational evidence");
+assert.match(preflight, /CONTROL\|MERCHANTS_ACL_BASELINE\|fingerprint=/);
+assert.match(preflight, /aclexplode\([\s\S]*acldefault\('r',c\.relowner\)/);
+assert.match(preflight, /string_agg\(acl_item,',' ORDER BY acl_item\)/);
+assert.match(preflight, /sha256\(pg_catalog\.convert_to/);
+
+assert.match(runner, /Get-MerchantsAclFingerprint/);
+assert.match(runner, /\^fingerprint=\(\[0-9a-f\]\{64\}\)\$/);
+assert.match(runner, /\$merchantsAclFingerprint = Invoke-Preflight \$state/);
+assert.match(runner, /ExpectedMerchantsAclFingerprint[\s\S]*merchants_acl_changed/);
+assert.match(runner, /PHASE2C_STAGING_MERCHANTS_ACL_CHANGED[\s\S]*throw 'merchants_acl_changed'/);
+assert.equal((runner.match(/expected_merchants_acl_fingerprint=\$merchantsAclFingerprint/g) ?? []).length, 3,
+  "the validated baseline fingerprint must cross each pooled postflight connection explicitly");
+
+for (const [source, control] of [
+  [b1Postflight, "MERCHANTS_ACL_B1_POSTFLIGHT"],
+  [b2Postflight, "MERCHANTS_ACL_B2_POSTFLIGHT"],
+  [final, "MERCHANTS_ACL_FINAL"],
+] as const) {
+  assert.match(source, /:'expected_merchants_acl_fingerprint'/);
+  assert.match(source, /aclexplode\([\s\S]*acldefault\('r',c\.relowner\)/);
+  assert.match(source, /string_agg\(acl_item,',' ORDER BY acl_item\)/);
+  assert.match(source, /PHASE2C_STAGING_MERCHANTS_ACL_CHANGED/);
+  assert.ok(source.includes(`CONTROL|${control}|fingerprint=`));
+  assert.doesNotMatch(source, /has_table_privilege\('service_role','public\.merchants','UPDATE'\)/);
+}
+
+for (const prerequisite of [
+  "has_table_privilege('service_role','public.merchant_compliance_reviews','SELECT')",
+  "has_table_privilege('service_role','public.merchant_compliance_reviews','INSERT')",
+  "has_table_privilege('service_role','public.merchant_compliance_events','SELECT')",
+  "has_table_privilege('service_role','public.merchant_compliance_events','INSERT')",
+  "has_table_privilege('service_role','public.merchants','SELECT')",
+  "has_table_privilege('service_role','public.merchant_compliance_profiles','SELECT')",
+  "has_table_privilege('service_role','public.merchant_compliance_profiles','UPDATE')",
+  "has_table_privilege('service_role','public.merchant_canonical_workspaces','SELECT')",
+]) assert.ok(preflight.includes(prerequisite), `required privilege check retained: ${prerequisite}`);
+assert.match(preflightGuard,
+  /phase2c_b1_state'\) = 'ABSENT'[\s\S]*has_table_privilege\('service_role','public\.merchant_compliance_reviews','UPDATE'\)/,
+  "B1 still changes the review table UPDATE posture from required-before to denied-after");
+for (const browserRole of ["anon", "authenticated"]) {
+  assert.match(preflightGuard, new RegExp(`has_table_privilege\\('${browserRole}','public\\.merchant_compliance_reviews','(?:INSERT|UPDATE)'\\)`));
+  assert.match(preflightGuard, new RegExp(`has_table_privilege\\('${browserRole}','public\\.merchant_compliance_events','INSERT'\\)`));
+}
+assert.match(preflightGuard, /NOT relrowsecurity OR relforcerowsecurity/);
+
+const frozenMigrationSql = `${b1Migration}\n${b2Migration}`;
+assert.doesNotMatch(frozenMigrationSql,
+  /\b(?:GRANT|REVOKE)\s+(?:ALL(?:\s+PRIVILEGES)?|SELECT|INSERT|UPDATE|DELETE|TRUNCATE|REFERENCES|TRIGGER)(?:\s*,\s*\w+)*\s+ON\s+(?:TABLE\s+)?public\.merchants\b/i);
+assert.doesNotMatch(frozenMigrationSql, /\bALTER\s+TABLE\s+public\.merchants\b/i);
+assert.doesNotMatch(frozenMigrationSql, /\bUPDATE\s+public\.merchants\b/i);
+assert.doesNotMatch(frozenMigrationSql, /\bINSERT\s+INTO\s+public\.merchants\b/i);
+assert.doesNotMatch(frozenMigrationSql, /\bDELETE\s+FROM\s+public\.merchants\b/i);
+assert.match(frozenMigrationSql, /FROM public\.merchants[\s\S]*FOR NO KEY UPDATE/,
+  "merchant access is bounded to reads and the established serialization lock");
+const stagingGateSources = [runner, identity, installed, preflight, b1Postflight, b2Postflight, final].join("\n");
+assert.doesNotMatch(stagingGateSources, /\bREVOKE\b[^;\n]*\bON\s+(?:TABLE\s+)?public\.merchants\b/i);
+assert.doesNotMatch(stagingGateSources, /\bGRANT\b[^;\n]*\bON\s+(?:TABLE\s+)?public\.merchants\b/i);
+assert.match(runbook, /predates B1\/B2[\s\S]*least-privilege security debt/i);
+assert.match(runbook, /BLOCKED\|merchants_acl_changed/);
+
 const extractBody = (source: string, tag: string) => {
   const open = `AS $${tag}$`;
   const close = `$${tag}$;`;
