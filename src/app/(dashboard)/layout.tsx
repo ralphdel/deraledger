@@ -62,6 +62,7 @@ const dashboardRoutePermissions: Array<{ path: string; permission: string | stri
   { path: "/settings/settlement-accounts", permission: "manage_settlement_account", featureLabel: "Settlement Accounts" },
   { path: "/settings/catalog", permission: "view_item_catalog", featureLabel: "Item Catalog" },
   { path: "/settings/discount-templates", permission: "view_discount_template", featureLabel: "Discount Templates" },
+  { path: "/settings/compliance-review", permission: "manage_kyc", featureLabel: "Compliance Review" },
   { path: "/team", permission: "manage_team", featureLabel: "Team Management" },
   { path: "/purpbot", permission: "use_purpbot", featureLabel: "DeraBot AI" },
   { path: "/accounting-report", permission: "view_analytics", featureLabel: "Accounting Reports" },

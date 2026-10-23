@@ -1193,6 +1193,20 @@ export default function SettingsPage() {
             </p>
           </div>
         </div>
+
+        {(["individual", "solo_lite", "corporate", "business"] as string[]).includes(effectiveTier) ? (
+          <div className="flex flex-col gap-3 rounded-2xl border border-violet-200 bg-violet-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="font-semibold text-violet-950">Compliance review status</p>
+              <p className="mt-1 text-sm text-violet-800">
+                Check whether your review is pending or needs corrected information.
+              </p>
+            </div>
+            <Button variant="outline" render={<Link href="/settings/compliance-review" />}>
+              View review status
+            </Button>
+          </div>
+        ) : null}
       </div>
 
       {kycError ? (

@@ -5,6 +5,7 @@ import { relative, resolve, sep } from "node:path";
 import {
   isExcludedLegacyAdminApiPath,
   isLegacyAdminApiReleaseEnabled,
+  isPhase2CB3ComplianceAdminApiPath,
   isPhase2BSoloPlusAdminApiPath,
   shouldBlockExcludedLegacyAdminApi,
 } from "../src/lib/server/legacy-admin-api-release";
@@ -33,6 +34,7 @@ function routePath(file: string): string {
 function run() {
   const routePaths = findRouteFiles(ADMIN_API_DIRECTORY).map(routePath).sort();
   const soloPlusPaths = routePaths.filter(isPhase2BSoloPlusAdminApiPath);
+  const complianceB3Paths = routePaths.filter(isPhase2CB3ComplianceAdminApiPath);
   const excludedPaths = routePaths.filter(isExcludedLegacyAdminApiPath);
 
   assert.deepEqual(soloPlusPaths, [
@@ -40,8 +42,13 @@ function run() {
     "/api/admin/solo-plus/cases/[caseId]",
     "/api/admin/solo-plus/review",
   ]);
+  assert.deepEqual(complianceB3Paths, [
+    "/api/admin/compliance/reviews",
+    "/api/admin/compliance/reviews/[reviewId]",
+    "/api/admin/compliance/reviews/[reviewId]/request-correction",
+  ]);
   assert.ok(excludedPaths.length > 0);
-  assert.equal(routePaths.length, soloPlusPaths.length + excludedPaths.length);
+  assert.equal(routePaths.length, soloPlusPaths.length + complianceB3Paths.length + excludedPaths.length);
 
   for (const pathname of excludedPaths) {
     assert.equal(shouldBlockExcludedLegacyAdminApi(pathname, {}), true, pathname);
@@ -70,6 +77,29 @@ function run() {
   assert.equal(shouldBlockExcludedLegacyAdminApi("/api/admin/solo-plus", {}), true);
   assert.equal(shouldBlockExcludedLegacyAdminApi("/api/admin/solo-plus/cases/case-id/extra", {}), true);
   assert.equal(shouldBlockExcludedLegacyAdminApi("/api/merchant/profile", {}), false);
+
+  const phase2cB3Paths = [
+    "/api/admin/compliance/reviews",
+    "/api/admin/compliance/reviews/11111111-1111-4111-8111-111111111111",
+    "/api/admin/compliance/reviews/11111111-1111-4111-8111-111111111111/request-correction",
+  ];
+  for (const pathname of phase2cB3Paths) {
+    assert.equal(isPhase2CB3ComplianceAdminApiPath(pathname), true, pathname);
+    assert.equal(shouldBlockExcludedLegacyAdminApi(pathname, {}), false, pathname);
+  }
+  for (const pathname of [
+    "/api/admin/compliance",
+    "/api/admin/compliance/reviews/export",
+    "/api/admin/compliance/reviews/not-a-uuid",
+    "/api/admin/compliance/reviews/11111111-1111-4111-8111-111111111111?scope=all",
+    "/api/admin/compliance/reviews/%2e%2e",
+    "/api/admin/compliance/reviews/id/request-correction/extra",
+    "/api/admin/compliance/reviews/id/approve",
+    "/api/admin/compliance/reviews/id/reject",
+  ]) {
+    assert.equal(isPhase2CB3ComplianceAdminApiPath(pathname), false, pathname);
+    assert.equal(shouldBlockExcludedLegacyAdminApi(pathname, {}), true, pathname);
+  }
   assert.equal(isLegacyAdminApiReleaseEnabled({}), false);
   assert.equal(
     isLegacyAdminApiReleaseEnabled({

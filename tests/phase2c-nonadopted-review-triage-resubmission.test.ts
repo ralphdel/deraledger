@@ -139,6 +139,10 @@ assert.match(sql, /merchant idempotency prerequisite incompatible/);
 assert.match(sql, /trigger or table security prerequisite incompatible/);
 
 const runtime = spawnSync("rg", ["-l", "request_draft_plan_review_correction_v1|resubmit_corrected_draft_plan_review_v1", "src"], { encoding: "utf8" });
-assert.equal(runtime.status, 1, "B2 must have no runtime caller");
-assert.equal(runtime.stdout.trim(), "");
-console.log("PASS Phase 2C-2C-B2 non-adopted triage and resubmission source contract");
+assert.equal(runtime.status, 0, "B3 must adopt B2 through one trusted server boundary");
+assert.deepEqual(
+  runtime.stdout.trim().split(/\r?\n/).map((file) => file.replaceAll("\\", "/")),
+  ["src/lib/compliance/server/review-correction-service.ts"],
+);
+assert.match(readFileSync("src/lib/compliance/server/review-correction-service.ts", "utf8"), /^import "server-only";/);
+console.log("PASS Phase 2C-2C-B2 substrate contract with B3 trusted runtime boundary");
