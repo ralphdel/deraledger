@@ -8,7 +8,7 @@ Run it from the repository root on the reviewed branch and commit:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\reconcile-phase2c-b1-b2-staging.ps1 -Confirmation 'APPLY PHASE2C B1 B2 TO STAGING'
 ```
 
-The runner fixes the target to the staging Supabase pooler, port `5432`, database `postgres`, and pooler username containing project ref `fsjljliiyfchkwbjifzw`. It requires PostgreSQL 15 `psql`, TLS, SQL `current_user=postgres`, the Supabase `auth.users` catalog, the reviewed branch, a clean tracked worktree/index, local HEAD parity with `origin/staging/phase-2-rebuild-safe-baseline`, and proof that reviewed B3 baseline `336d090a769a15b127e0101ff88bbfadaef77fae` is an ancestor of local HEAD. Existing untracked `.local-evidence/` is allowed; any other untracked path blocks execution.
+The runner fixes the target to the staging Supabase pooler, port `5432`, database `postgres`, and pooler username containing project ref `fsjljliiyfchkwbjifzw`. It requires the reviewed PostgreSQL 15 `psql` client, TLS, staging PostgreSQL server major `17`, SQL `current_user=postgres`, the Supabase `auth.users` catalog, the reviewed branch, a clean tracked worktree/index, local HEAD parity with `origin/staging/phase-2-rebuild-safe-baseline`, and proof that reviewed B3 baseline `336d090a769a15b127e0101ff88bbfadaef77fae` is an ancestor of local HEAD. Existing untracked `.local-evidence/` is allowed; any other untracked path blocks execution.
 
 The operator enters the staging database password once. The password exists only in process memory and the child `psql` environment for this run. The runner restores the prior libpq process environment and clears its BSTR in `finally`. It never writes the password or a connection URI to evidence.
 

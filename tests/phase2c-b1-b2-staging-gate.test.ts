@@ -27,6 +27,10 @@ for (const value of [
   "336d090a769a15b127e0101ff88bbfadaef77fae",
   "C:\\Program Files\\PostgreSQL\\15\\bin\\psql.exe",
 ]) assert.ok(runner.includes(value), `runner must pin ${value}`);
+assert.match(runner, /\$ExpectedServerMajor = '17'/);
+assert.match(runner, /"expected_server_major=\$ExpectedServerMajor"/);
+assert.match(runner, /\$psqlVersion -cnotmatch [\s\S]*PostgreSQL[\s\S]*15/);
+assert.match(runner, /server_major=\$ExpectedServerMajor/);
 assert.match(runner, /\$ReviewedB3Baseline = '336d090a769a15b127e0101ff88bbfadaef77fae'/);
 assert.match(runner, /\$ExpectedUpstream = 'origin\/staging\/phase-2-rebuild-safe-baseline'/);
 assert.doesNotMatch(runner, /\$ExpectedHead\s*=/);
@@ -78,7 +82,12 @@ assert.match(identity, /set_config\('deraledger\.phase2c_expected_database',[\s\
 assert.match(identity, /current_database\(\)[\s\S]*current_setting\('deraledger\.phase2c_expected_database'\)/);
 assert.match(identity, /current_user[\s\S]*current_setting\('deraledger\.phase2c_expected_current_user'\)/);
 assert.match(identity, /session_user[\s\S]*current_setting\('deraledger\.phase2c_expected_current_user'\)/);
-assert.match(identity, /server_version_num/);
+assert.match(identity, /set_config\('deraledger\.phase2c_expected_server_major',[\s\S]*expected_server_major/);
+assert.match(identity, /current_setting\('server_version_num'\)::integer \/ 10000[\s\S]*current_setting\('deraledger\.phase2c_expected_server_major'\)::integer/);
+assert.doesNotMatch(identity, /server_version_num'\)::integer\s*(<|>=)\s*1[56]0000/);
+for (const reason of ["database", "current_user", "session_user", "server_major", "tls", "auth_schema", "auth_users"]) {
+  assert.ok(identity.includes(`PHASE2C_STAGING_TARGET_IDENTITY_REJECTED:${reason}`), `identity must distinguish ${reason}`);
+}
 assert.match(identity, /pg_stat_ssl/);
 assert.match(identity, /auth\.users/);
 for (const source of [identity, installed, preflight, b1Postflight, b2Postflight, final]) {

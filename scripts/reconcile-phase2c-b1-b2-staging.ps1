@@ -16,6 +16,7 @@ $TargetPort = '5432'
 $TargetDatabase = 'postgres'
 $TargetUser = 'postgres.fsjljliiyfchkwbjifzw'
 $ExpectedCurrentUser = 'postgres'
+$ExpectedServerMajor = '17'
 $ExpectedBranch = 'staging/phase-2-rebuild-safe-baseline'
 $ReviewedB3Baseline = '336d090a769a15b127e0101ff88bbfadaef77fae'
 $ExpectedUpstream = 'origin/staging/phase-2-rebuild-safe-baseline'
@@ -211,9 +212,11 @@ try {
   $env:PGAPPNAME = 'phase2c_b1_b2_staging_gate'
 
   $identity = Invoke-StagingPsql '00-environment.txt' @('-v',"expected_database=$TargetDatabase",
-    '-v',"expected_current_user=$ExpectedCurrentUser",'-f',(Join-Path $SqlRoot '00-identity.sql')) -Append
+    '-v',"expected_current_user=$ExpectedCurrentUser",'-v',"expected_server_major=$ExpectedServerMajor",
+    '-f',(Join-Path $SqlRoot '00-identity.sql')) -Append
   Assert-PsqlResult $identity 'identity'
-  if ((Get-ControlValue $identity.Stdout 'IDENTITY') -cnotmatch '^database=postgres\|current_user=postgres\|server_major=15\|ssl=true\|supabase_auth=true$') {
+  $expectedIdentity = "database=$TargetDatabase|current_user=$ExpectedCurrentUser|session_user=$ExpectedCurrentUser|server_major=$ExpectedServerMajor|ssl=true|supabase_auth=true"
+  if ((Get-ControlValue $identity.Stdout 'IDENTITY') -cne $expectedIdentity) {
     throw 'staging_identity_marker_invalid'
   }
   Add-Marker 'PASS' 'staging_target_identity'
