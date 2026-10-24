@@ -1,5 +1,7 @@
 import type { SupabaseClient, User } from "@supabase/supabase-js";
 
+import { reconcileCanonicalWorkspaceForMerchant } from "@/lib/server/canonical-workspace-reconciliation";
+
 type QueryError = {
   code?: string;
   message?: string;
@@ -21,7 +23,8 @@ export type StarterProvisioningStage =
   | "workspace_lookup"
   | "workspace_insert"
   | "workspace_update"
-  | "merchant_workspace_link";
+  | "merchant_workspace_link"
+  | "canonical_workspace_reconciliation";
 
 export type SafeSupabaseError = {
   code: string | null;
@@ -91,6 +94,7 @@ export interface StarterWorkspaceRepository {
     is_active: true;
   }): Promise<void>;
   ensureWorkspace(input: StarterWorkspaceInput & { merchantId: string }): Promise<string>;
+  reconcileCanonicalWorkspace(input: { merchantId: string; reconciledBy: string }): Promise<void>;
 }
 
 export class StarterProvisioningError extends Error {
@@ -102,7 +106,8 @@ export class StarterProvisioningError extends Error {
       | "NOT_STARTER_USER"
       | "STARTER_METADATA_MISSING"
       | "MERCHANT_PROVISION_FAILED"
-      | "WORKSPACE_PROVISION_FAILED",
+      | "WORKSPACE_PROVISION_FAILED"
+      | "CANONICAL_WORKSPACE_PROVISION_FAILED",
     public readonly stage: StarterProvisioningStage,
     message: string,
     error?: QueryError,
@@ -315,6 +320,19 @@ export async function ensureStarterWorkspace(
     merchantId: merchant.id,
   });
 
+  try {
+    await repository.reconcileCanonicalWorkspace({
+      merchantId: merchant.id,
+      reconciledBy: input.userId,
+    });
+  } catch {
+    throw new StarterProvisioningError(
+      "CANONICAL_WORKSPACE_PROVISION_FAILED",
+      "canonical_workspace_reconciliation",
+      "Starter workspace canonical reconciliation failed safely.",
+    );
+  }
+
   return { merchantId: merchant.id, workspaceId, merchantCreated, warnings };
 }
 
@@ -515,6 +533,9 @@ export function createSupabaseStarterWorkspaceRepository(
       }
 
       return workspace.id;
+    },
+    async reconcileCanonicalWorkspace(input) {
+      await reconcileCanonicalWorkspaceForMerchant(adminClient, input);
     },
   };
 }

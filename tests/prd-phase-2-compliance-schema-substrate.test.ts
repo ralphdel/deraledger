@@ -112,7 +112,7 @@ const appliedMigrations = [
   "supabase/migrations/20260818_00_core_merchant_schema_compatibility.sql",
   "supabase/migrations/20260818_01_core_merchant_app_contract_compatibility.sql",
   "supabase/migrations/20260818_02_paid_flow_subscription_payments_compatibility.sql",
-  "supabase/migrations/20260818_03_paid_upgrade_atomic_confirmation.sql",
+  "supabase/migrations/20260818030000_paid_upgrade_atomic_confirmation.sql",
   "supabase/migrations/20260819_00_merchant_business_address_compatibility.sql",
   "supabase/migrations/20260819_01_merchant_settings_profile_compatibility.sql",
 ] as const;

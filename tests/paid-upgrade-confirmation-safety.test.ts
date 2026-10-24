@@ -1,14 +1,12 @@
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
 
-import {
-  confirmPaidUpgradeAtomically,
-  PaidUpgradeConfirmationError,
-  validatePaidUpgradeIntent,
-  validatePaidUpgradeProviderObservation,
-  type PaidUpgradeProviderObservation,
-} from "../src/lib/services/paid-upgrade-confirmation.service";
+import type { PaidUpgradeProviderObservation } from "../src/lib/services/paid-upgrade-confirmation.service";
 import type { PendingPlanPaymentRecord } from "../src/lib/services/plan-payment-recovery.service";
 import { parsePaidPlanCode } from "../src/lib/plans";
+
+let PaidUpgradeConfirmationError: typeof import("../src/lib/services/paid-upgrade-confirmation.service").PaidUpgradeConfirmationError;
+type PaidUpgradeConfirmationErrorInstance = import("../src/lib/services/paid-upgrade-confirmation.service").PaidUpgradeConfirmationError;
 
 const record: PendingPlanPaymentRecord = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -54,7 +52,7 @@ const observation: PaidUpgradeProviderObservation = {
   rawProviderPayload: { status: "success" },
 };
 
-function expectCode(fn: () => unknown, code: PaidUpgradeConfirmationError["code"]) {
+function expectCode(fn: () => unknown, code: PaidUpgradeConfirmationErrorInstance["code"]) {
   assert.throws(
     fn,
     (error: unknown) => error instanceof PaidUpgradeConfirmationError && error.code === code,
@@ -74,15 +72,38 @@ class FakeClient {
   rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
   rpcError: { message: string } | null = null;
   rpcData: Record<string, unknown> = { kind: "applied" };
+  canonicalRpcData: Array<Record<string, unknown>> = [{
+    result_code: "canonical_workspace_link_created",
+    merchant_id: record.merchant_id,
+    workspace_id: "44444444-4444-4444-8444-444444444444",
+    link_version: 1,
+  }];
   constructor(readonly row: PendingPlanPaymentRecord | null = record) {}
   from() { return new FakeQuery(this.row); }
   async rpc(name: string, args: Record<string, unknown>) {
     this.rpcCalls.push({ name, args });
+    if (name === "reconcile_canonical_merchant_workspace_link_v1") {
+      return { data: this.canonicalRpcData, error: null };
+    }
     return { data: this.rpcData, error: this.rpcError };
   }
 }
 
 async function run() {
+  const require = createRequire(import.meta.url);
+  const serverOnlyId = require.resolve("server-only");
+  require.cache[serverOnlyId] = {
+    exports: {}, filename: serverOnlyId, id: serverOnlyId, loaded: true, path: serverOnlyId,
+    children: [], paths: [], isPreloading: false, parent: null, require,
+  } as NodeModule;
+  const service = await import("../src/lib/services/paid-upgrade-confirmation.service");
+  const {
+    confirmPaidUpgradeAtomically,
+    validatePaidUpgradeIntent,
+    validatePaidUpgradeProviderObservation,
+  } = service;
+  PaidUpgradeConfirmationError = service.PaidUpgradeConfirmationError;
+
   assert.equal(parsePaidPlanCode("starter"), null);
   assert.equal(parsePaidPlanCode("unknown-plan"), null);
   assert.equal(parsePaidPlanCode("solo_lite"), "solo_lite");
@@ -113,7 +134,7 @@ async function run() {
     "PAYMENT_RECORD_IDENTITY_MISMATCH",
   );
 
-  const mismatches: Array<[Partial<PaidUpgradeProviderObservation>, PaidUpgradeConfirmationError["code"]]> = [
+  const mismatches: Array<[Partial<PaidUpgradeProviderObservation>, PaidUpgradeConfirmationErrorInstance["code"]]> = [
     [{ amountKobo: 499_999 }, "AMOUNT_MISMATCH"],
     [{ provider: "monnify" }, "PROVIDER_MISMATCH"],
     [{ reference: "wrong-ref" }, "REFERENCE_MISMATCH"],
@@ -154,18 +175,44 @@ async function run() {
   const client = new FakeClient();
   const applied = await confirmPaidUpgradeAtomically(client as never, observation);
   assert.equal(applied.applied, true);
-  assert.equal(client.rpcCalls.length, 1);
+  assert.equal(client.rpcCalls.length, 2);
   assert.equal(client.rpcCalls[0].name, "confirm_paid_upgrade_v1");
   assert.equal(client.rpcCalls[0].args.p_payment_record_id, record.id);
   assert.equal("p_merchant_id" in client.rpcCalls[0].args, false);
   assert.equal("p_plan" in client.rpcCalls[0].args, false);
   assert.equal("p_expected_amount" in client.rpcCalls[0].args, false);
+  assert.equal(client.rpcCalls[1].name, "reconcile_canonical_merchant_workspace_link_v1");
+  assert.equal(client.rpcCalls[1].args.p_merchant_id, record.merchant_id);
+  assert.equal(client.rpcCalls[1].args.p_reconciled_by, record.user_id);
+  assert.equal("p_workspace_id" in client.rpcCalls[1].args, false);
 
   const replayClient = new FakeClient(processedRecord);
   replayClient.rpcData = { kind: "idempotent_replay" };
+  replayClient.canonicalRpcData = [{
+    result_code: "canonical_workspace_link_replay",
+    merchant_id: record.merchant_id,
+    workspace_id: "44444444-4444-4444-8444-444444444444",
+    link_version: 1,
+  }];
   const replay = await confirmPaidUpgradeAtomically(replayClient as never, observation);
   assert.equal(replay.alreadyProcessed, true);
-  assert.equal(replayClient.rpcCalls.length, 1);
+  assert.equal(replayClient.rpcCalls.length, 2);
+
+  const ambiguousWorkspaceClient = new FakeClient();
+  ambiguousWorkspaceClient.canonicalRpcData = [{
+    result_code: "canonical_workspace_link_ambiguous",
+    merchant_id: record.merchant_id,
+    workspace_id: null,
+    link_version: null,
+  }];
+  await assert.rejects(
+    confirmPaidUpgradeAtomically(ambiguousWorkspaceClient as never, observation),
+    (error: unknown) =>
+      error instanceof PaidUpgradeConfirmationError
+      && error.code === "CANONICAL_WORKSPACE_RECOVERY_REQUIRED"
+      && !/ambiguous|database|supabase/i.test(error.message),
+  );
+  assert.equal(ambiguousWorkspaceClient.rpcCalls.length, 2);
 
   const initializedIntent = validatePaidUpgradeIntent({
     ...record,

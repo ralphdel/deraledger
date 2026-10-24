@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 
-const migrationPath = "supabase/migrations/20260818_03_paid_upgrade_atomic_confirmation.sql";
+const migrationPath = "supabase/migrations/20260818030000_paid_upgrade_atomic_confirmation.sql";
 const preflightPath = "supabase/staging/preflight/021_paid_upgrade_atomic_confirmation_snapshot.sql";
 const postflightPath = "supabase/staging/postflight/021_paid_upgrade_atomic_confirmation_verify.sql";
 
@@ -50,6 +50,9 @@ async function run() {
   const postflight = readFileSync(postflightPath, "utf8");
   const confirmation = readFileSync("src/lib/services/fiat-payment-confirmation.service.ts", "utf8");
   const binding = readFileSync("src/lib/services/paid-upgrade-confirmation.service.ts", "utf8");
+  const atomicRpcStart = binding.indexOf('supabase.rpc("confirm_paid_upgrade_v1"');
+  const atomicRpcEnd = binding.indexOf("});", atomicRpcStart) + 3;
+  const atomicRpcBinding = binding.slice(atomicRpcStart, atomicRpcEnd);
 
   assertBalancedRpcStructure(migration);
   assert.throws(
@@ -124,9 +127,9 @@ async function run() {
   );
   assert.match(upgradeConfirmation, /confirmPaidUpgradeAtomically/);
   assert.doesNotMatch(upgradeConfirmation, /\.from\("merchants"\)|\.from\("subscriptions"\)|\.from\("subscription_payments"\)/);
-  assert.match(binding, /p_payment_record_id: intent\.paymentRecordId/);
-  assert.doesNotMatch(binding, /p_merchant_id:|p_plan:|p_expected_amount:/);
-  assert.match(confirmation, /linkedPaymentRecord\?\.payment_purpose === "plan_upgrade"/);
+  assert.match(atomicRpcBinding, /p_payment_record_id: intent\.paymentRecordId/);
+  assert.doesNotMatch(atomicRpcBinding, /p_merchant_id:|p_plan:|p_expected_amount:/);
+  assert.match(confirmation, /linkedPaymentRecord(?:\?)?\.payment_purpose === "plan_upgrade"/);
 
   const upgradeRoute = readFileSync("src/app/api/payment/upgrade/route.ts", "utf8");
   const initializationCall = upgradeRoute.slice(

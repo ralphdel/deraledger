@@ -1,16 +1,12 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 
-import {
-  createSupabaseStarterWorkspaceRepository,
-  getStarterProvisioningLogPayload,
-  provisionStarterSignup,
-  repairAuthenticatedStarterWorkspace,
-  StarterProvisioningError,
-  type StarterAuthAdmin,
-  type StarterAuthUser,
-  type StarterMerchantRecord,
-  type StarterWorkspaceRepository,
+import type {
+  StarterAuthAdmin,
+  StarterAuthUser,
+  StarterMerchantRecord,
+  StarterWorkspaceRepository,
 } from "../src/lib/services/starter-workspace.service";
 import {
   isRecoverableStarterUser,
@@ -40,6 +36,8 @@ class MemoryStarterRepository implements StarterWorkspaceRepository {
   workspaceInsertCount = 0;
   workspaceEnsureCount = 0;
   creatorMembershipEnsureCount = 0;
+  canonicalReconciliationCount = 0;
+  canonicalReconciliationFails = false;
   lastInsert: Record<string, unknown> | null = null;
   lastWorkspaceInput: (Parameters<StarterWorkspaceRepository["ensureWorkspace"]>[0]) | null = null;
 
@@ -81,9 +79,15 @@ class MemoryStarterRepository implements StarterWorkspaceRepository {
     this.workspaces.set(input.merchantId, workspaceId);
     return workspaceId;
   }
+
+  async reconcileCanonicalWorkspace() {
+    this.canonicalReconciliationCount += 1;
+    if (this.canonicalReconciliationFails) throw new Error("raw reconciliation failure");
+  }
 }
 
 class ProductionSchemaSupabaseClient {
+  rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
   tables = new Map<string, Row[]>([
     ["merchants", []],
     ["workspaces", []],
@@ -123,6 +127,22 @@ class ProductionSchemaSupabaseClient {
 
   from(table: string) {
     return new ProductionSchemaQuery(this, table);
+  }
+
+  async rpc(name: string, args: Record<string, unknown>) {
+    this.rpcCalls.push({ name, args });
+    const merchantId = String(args.p_merchant_id);
+    return {
+      data: [{
+        result_code: this.rpcCalls.length === 1
+          ? "canonical_workspace_link_created"
+          : "canonical_workspace_link_replay",
+        merchant_id: merchantId,
+        workspace_id: merchantId,
+        link_version: 1,
+      }],
+      error: null,
+    };
   }
 }
 
@@ -276,6 +296,20 @@ function createAuthAdmin(options: { existing?: boolean } = {}) {
 }
 
 async function run() {
+  const require = createRequire(import.meta.url);
+  const serverOnlyId = require.resolve("server-only");
+  require.cache[serverOnlyId] = {
+    exports: {}, filename: serverOnlyId, id: serverOnlyId, loaded: true, path: serverOnlyId,
+    children: [], paths: [], isPreloading: false, parent: null, require,
+  } as NodeModule;
+  const {
+    createSupabaseStarterWorkspaceRepository,
+    getStarterProvisioningLogPayload,
+    provisionStarterSignup,
+    repairAuthenticatedStarterWorkspace,
+    StarterProvisioningError,
+  } = await import("../src/lib/services/starter-workspace.service");
+
   {
     const repository = new MemoryStarterRepository();
     const { authAdmin, calls } = createAuthAdmin();
@@ -292,6 +326,7 @@ async function run() {
     assert.equal(calls.createUser, 1, "New Starter signup must create one Auth user.");
     assert.equal(repository.insertCount, 1, "New Starter signup must create one merchant.");
     assert.equal(repository.workspaceEnsureCount, 1, "New Starter signup must ensure its workspace row.");
+    assert.equal(repository.canonicalReconciliationCount, 1, "New Starter signup must reconcile its canonical workspace.");
     assert.equal(repository.creatorMembershipEnsureCount, 1, "New Starter signup should use the production admin role for creator membership.");
     assert.equal(result.merchantId, starterUser.id);
     assert.equal(result.merchantCreated, true);
@@ -324,6 +359,9 @@ async function run() {
     assert.equal(merchants.length, 1, "Production-schema repair must create one merchant.");
     assert.equal(workspaces.length, 1, "Production-schema repair must create one workspace.");
     assert.equal(team.length, 1, "Production-schema repair must upsert one admin creator membership.");
+    assert.equal(productionClient.rpcCalls.length, 2, "Starter repair retries must reconcile through the canonical RPC.");
+    assert.equal(productionClient.rpcCalls[0]?.name, "reconcile_canonical_merchant_workspace_link_v1");
+    assert.equal("p_workspace_id" in productionClient.rpcCalls[0]!.args, false);
     assert.equal(team[0].role_id, "admin-role-id");
     assert.equal(merchants[0].workspace_id, workspaces[0].id);
     assert.equal(workspaces[0].onboarding_status, "active");
@@ -338,6 +376,7 @@ async function run() {
     assert.equal(result.merchantCreated, true, "A logged-in Starter identity with no merchant must be repaired.");
     assert.equal(repository.insertCount, 1);
     assert.equal(repository.workspaceEnsureCount, 1);
+    assert.equal(repository.canonicalReconciliationCount, 1);
   }
 
   {
@@ -350,7 +389,24 @@ async function run() {
     assert.equal(repository.merchants.length, 1);
     assert.equal(repository.workspaceEnsureCount, 2, "Repeated provisioning may safely re-ensure the same workspace.");
     assert.equal(repository.workspaceInsertCount, 1, "Repeated provisioning must not duplicate the workspace.");
+    assert.equal(repository.canonicalReconciliationCount, 2, "Repeated provisioning must safely re-run canonical reconciliation.");
     assert.equal(repository.creatorMembershipEnsureCount, 2, "Creator membership upsert should remain idempotent.");
+  }
+
+  {
+    const repository = new MemoryStarterRepository();
+    repository.canonicalReconciliationFails = true;
+    await assert.rejects(
+      () => repairAuthenticatedStarterWorkspace(repository, starterUser),
+      (error: unknown) => {
+        assert.ok(error instanceof StarterProvisioningError);
+        assert.equal(error.code, "CANONICAL_WORKSPACE_PROVISION_FAILED");
+        assert.equal(error.stage, "canonical_workspace_reconciliation");
+        assert.doesNotMatch(error.message, /raw reconciliation failure/);
+        return true;
+      },
+    );
+    assert.equal(repository.workspaceInsertCount, 1, "A reconciliation failure must not create a second workspace.");
   }
 
   {

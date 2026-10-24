@@ -318,12 +318,22 @@ export async function enterPaidSetupMode(
     planType: string;
     relationshipClaim?: RelationshipClaim | null;
     paymentReference?: string | null;
+    reconcileCanonicalWorkspace: () => Promise<void>;
   }
 ) {
   const plan = getStoragePlanCode(params.planType) as PlanType;
   const setupFields = plan === "starter"
     ? { onboarding_status: "active", setup_mode: false, live_features_enabled: false }
     : { onboarding_status: "setup_mode", setup_mode: true, live_features_enabled: false };
+
+  const workspaceId = await ensureWorkspaceForMerchant(adminClient, params.merchantId);
+  if (!workspaceId) {
+    throw new Error("Failed to ensure the paid workspace.");
+  }
+
+  // The frozen reconciliation RPC independently requires exactly one
+  // merchant-owned workspace; no workspace identifier is accepted here.
+  await params.reconcileCanonicalWorkspace();
 
   const { error: merchantUpdateError } = await adminClient
     .from("merchants")
@@ -335,11 +345,6 @@ export async function enterPaidSetupMode(
     .eq("id", params.merchantId);
   if (merchantUpdateError) {
     throw new Error(`Failed to enter paid setup mode: ${merchantUpdateError.message}`);
-  }
-
-  const workspaceId = await ensureWorkspaceForMerchant(adminClient, params.merchantId);
-  if (!workspaceId) {
-    throw new Error("Failed to ensure the paid workspace.");
   }
 
   const { error: workspaceUpdateError } = await adminClient
@@ -450,11 +455,15 @@ export async function ensureWorkspaceForMerchant(adminClient: SupabaseClient, me
   const plan = getStoragePlanCode(merchant.subscription_plan || merchant.merchant_tier || "starter");
   const displayName = merchant.trading_name || merchant.business_name || "DeraLedger Workspace";
 
-  const { data: existing } = await adminClient
+  const { data: existing, error: existingWorkspaceError } = await adminClient
     .from("workspaces")
     .select("id")
     .eq("merchant_id", merchantId)
     .maybeSingle();
+
+  if (existingWorkspaceError) {
+    throw new Error("Failed to resolve a unique merchant workspace.");
+  }
 
   if (existing?.id) {
     await adminClient

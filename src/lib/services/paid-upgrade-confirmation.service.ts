@@ -9,6 +9,7 @@ import {
   findFullPaymentRecordByReference,
   type PendingPlanPaymentRecord,
 } from "@/lib/services/plan-payment-recovery.service";
+import { reconcileCanonicalWorkspaceForMerchant } from "@/lib/server/canonical-workspace-reconciliation";
 
 type UpgradeProvider = "paystack" | "monnify" | "breet";
 type UpgradePlan = Exclude<CanonicalPlanCode, "starter" | "solo_plus">;
@@ -59,7 +60,8 @@ export type PaidUpgradeConfirmationCode =
   | "MERCHANT_MISMATCH"
   | "PLAN_MISMATCH"
   | "PURPOSE_MISMATCH"
-  | "ATOMIC_ACTIVATION_FAILED";
+  | "ATOMIC_ACTIVATION_FAILED"
+  | "CANONICAL_WORKSPACE_RECOVERY_REQUIRED";
 
 export class PaidUpgradeConfirmationError extends Error {
   constructor(
@@ -345,6 +347,21 @@ export async function confirmPaidUpgradeAtomically(
     throw new PaidUpgradeConfirmationError(
       "ATOMIC_ACTIVATION_FAILED",
       `Paid upgrade activation was rejected: ${textValue(result?.reason) || "state conflict"}.`,
+    );
+  }
+
+  try {
+    await reconcileCanonicalWorkspaceForMerchant(supabase, {
+      merchantId: intent.merchantId,
+      reconciledBy: intent.userId,
+    });
+  } catch {
+    // The paid-upgrade RPC has already made its transaction authoritative.
+    // Surface a bounded recovery state without attempting a second workspace,
+    // another payment, or direct canonical-link writes.
+    throw new PaidUpgradeConfirmationError(
+      "CANONICAL_WORKSPACE_RECOVERY_REQUIRED",
+      "Paid upgrade completed, but canonical workspace recovery is required.",
     );
   }
 

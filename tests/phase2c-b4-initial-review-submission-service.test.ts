@@ -194,6 +194,26 @@ async function run() {
     assert.equal(fake.submitArgs(), null);
   }
 
+  {
+    const missingWorkspace = makeRepository({ workspace: null });
+    const service = createReviewCorrectionService({ repository: missingWorkspace.repo });
+    const state = await service.getMerchantReviewState(ids.owner, ids.merchant);
+    assert.equal(state.status, "NO_REVIEW_ELIGIBLE");
+    if (state.status === "NO_REVIEW_ELIGIBLE") {
+      assert.equal(state.eligibility.reason, "WORKSPACE_REQUIRED");
+    }
+  }
+
+  {
+    const canonicalWorkspacePresent = makeRepository();
+    const service = createReviewCorrectionService({ repository: canonicalWorkspacePresent.repo });
+    const state = await service.getMerchantReviewState(ids.owner, ids.merchant);
+    assert.equal(state.status, "NO_REVIEW_ELIGIBLE");
+    if (state.status === "NO_REVIEW_ELIGIBLE") {
+      assert.notEqual(state.eligibility.reason, "WORKSPACE_REQUIRED");
+    }
+  }
+
   for (const options of [{ profile: null }, { profile: { merchant_id: ids.workspace } }, { profile: { plan_code: "business" } }, { workspace: null }, { workspace: { merchant_id: ids.workspace } }] as Options[]) {
     const fake = makeRepository(options);
     const service = createReviewCorrectionService({ repository: fake.repo });

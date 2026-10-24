@@ -6,6 +6,7 @@ import {
 } from "@/lib/plans";
 import { calculateSubscriptionExpiry, type PlanType } from "@/lib/subscription";
 import { getAppUrl } from "@/lib/server-utils";
+import { reconcileCanonicalWorkspaceForMerchant } from "@/lib/server/canonical-workspace-reconciliation";
 import {
   enterPaidSetupMode,
   recordVerificationDisclosure,
@@ -731,6 +732,10 @@ async function confirmInitialSubscription(
     planType: activePlan,
     relationshipClaim: relationshipClaim || null,
     paymentReference: reference,
+    reconcileCanonicalWorkspace: () => reconcileCanonicalWorkspaceForMerchant(supabase, {
+      merchantId,
+      reconciledBy: userId,
+    }).then(() => undefined),
   });
 
   if (disclosureAccepted) {
