@@ -139,6 +139,12 @@ async function run() {
   for (const [rawPlan, expectedPlan] of [["individual", "solo_lite"], ["solo_lite", "solo_lite"], ["corporate", "business"], ["business", "business"]] as const) {
     const fake = makeRepository({ plan: rawPlan });
     const service = createReviewCorrectionService({ repository: fake.repo, now: () => new Date("2026-10-23T12:00:00.000Z") });
+    const ready = await service.getMerchantReviewState(ids.owner, ids.merchant);
+    assert.equal(ready.status, "NO_REVIEW_ELIGIBLE");
+    if (ready.status === "NO_REVIEW_ELIGIBLE") {
+      assert.equal(ready.eligibility.reason, "READY");
+      assert.equal(ready.eligibility.canSubmit, true);
+    }
     const outcome = await service.submitInitialReview({ actorId: ids.owner, merchantId: ids.merchant, idempotencyKey: fake.key });
     assert.equal(outcome.result.kind, "applied");
     assert.equal(outcome.state.status, "PENDING");
@@ -201,6 +207,17 @@ async function run() {
     assert.equal(state.status, "NO_REVIEW_ELIGIBLE");
     if (state.status === "NO_REVIEW_ELIGIBLE") {
       assert.equal(state.eligibility.reason, "WORKSPACE_REQUIRED");
+    }
+  }
+
+  {
+    const missingProfile = makeRepository({ profile: null });
+    const service = createReviewCorrectionService({ repository: missingProfile.repo });
+    const state = await service.getMerchantReviewState(ids.owner, ids.merchant);
+    assert.equal(state.status, "NO_REVIEW_ELIGIBLE");
+    if (state.status === "NO_REVIEW_ELIGIBLE") {
+      assert.equal(state.eligibility.reason, "PROFILE_REQUIRED");
+      assert.equal(state.eligibility.canSubmit, false);
     }
   }
 

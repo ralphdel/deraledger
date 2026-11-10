@@ -7,6 +7,7 @@ import {
 import { calculateSubscriptionExpiry, type PlanType } from "@/lib/subscription";
 import { getAppUrl } from "@/lib/server-utils";
 import { reconcileCanonicalWorkspaceForMerchant } from "@/lib/server/canonical-workspace-reconciliation";
+import { ensureDraftComplianceProfileForEligibleMerchant } from "@/lib/server/draft-compliance-profile-provisioning";
 import {
   enterPaidSetupMode,
   recordVerificationDisclosure,
@@ -36,6 +37,33 @@ import {
 } from "@/lib/services/paid-upgrade-confirmation.service";
 
 type FiatProvider = "paystack" | "monnify" | "breet";
+
+class ComplianceProfileRecoveryRequiredError extends Error {
+  constructor() {
+    super("COMPLIANCE_PROFILE_RECOVERY_REQUIRED");
+    this.name = "ComplianceProfileRecoveryRequiredError";
+  }
+}
+
+async function ensurePaidDraftComplianceProfile(
+  supabase: SupabaseClient,
+  merchantId: string,
+  plan: string,
+) {
+  const normalizedPlan = plan.trim().toLowerCase();
+  const canonicalPlan = parsePaidPlanCode(plan);
+  if (normalizedPlan === "starter" || canonicalPlan === "solo_plus") {
+    return null;
+  }
+  if (canonicalPlan !== "solo_lite" && canonicalPlan !== "business") {
+    throw new ComplianceProfileRecoveryRequiredError();
+  }
+  try {
+    return await ensureDraftComplianceProfileForEligibleMerchant(supabase, { merchantId });
+  } catch {
+    throw new ComplianceProfileRecoveryRequiredError();
+  }
+}
 
 function stringValue(value: unknown) {
   return typeof value === "string" && value.trim() ? value : null;
@@ -110,7 +138,12 @@ export async function processSuccessfulFiatPayment(
     try {
       return await confirmInitialSubscription(supabase, payment);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Paid workspace provisioning failed.";
+      const profileRecoveryRequired = error instanceof ComplianceProfileRecoveryRequiredError;
+      const failureReason = profileRecoveryRequired
+        ? "COMPLIANCE_PROFILE_RECOVERY_REQUIRED"
+        : error instanceof Error
+          ? error.message
+          : "Paid workspace provisioning failed.";
       await updatePlanPaymentRecord(supabase, payment.reference, {
         provider_reference: payment.providerReference || payment.reference,
         amount_paid: payment.amountKobo / 100,
@@ -118,15 +151,19 @@ export async function processSuccessfulFiatPayment(
         processing_status: "manual_review",
         account_setup_status: "manual_review",
         password_setup_required: true,
-        failure_reason: message,
+        failure_reason: failureReason,
         raw_provider_payload: payment.rawProviderPayload || payment.metadata,
         paid_at: new Date().toISOString(),
       }, payment.provider);
       return {
         received: true,
         needs_review: true,
-        status: "provisioning_failed",
-        error: "Payment was received, but workspace setup needs manual review before activation.",
+        status: profileRecoveryRequired
+          ? "compliance_profile_recovery_required"
+          : "provisioning_failed",
+        error: profileRecoveryRequired
+          ? "Payment was received and commercial setup completed, but compliance profile recovery is required. Do not pay again."
+          : "Payment was received, but workspace setup needs manual review before activation.",
         already_processed: false,
       };
     }
@@ -597,6 +634,7 @@ async function confirmInitialSubscription(
   }
 
   if (session.status === "payment_confirmed" && session.merchant_id) {
+    await ensurePaidDraftComplianceProfile(supabase, session.merchant_id, plan);
     const existingRecord = await findPaymentRecordByReference(supabase, reference, provider);
     if (existingRecord) {
       await updatePlanPaymentRecord(supabase, reference, {
@@ -831,6 +869,8 @@ async function confirmInitialSubscription(
   if (sessionConfirmError) {
     throw new Error(`Failed to confirm onboarding session: ${sessionConfirmError.message}`);
   }
+
+  await ensurePaidDraftComplianceProfile(supabase, merchantId, activePlan);
 
   const { error: authMetadataError } = await supabase.auth.admin.updateUserById(userId, {
     user_metadata: {

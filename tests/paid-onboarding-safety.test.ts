@@ -78,6 +78,16 @@ async function run() {
   assert.equal(correct.amountKobo, 500_000);
   assert.equal(correct.storagePlan, "individual");
 
+  const business = validatePaidOnboardingSessionBinding({
+    session: { ...validSession, plan: "corporate" },
+    email: validSession.email,
+    plan: "business",
+    amountKobo: 2_000_000,
+    mode: "confirm",
+  });
+  assert.equal(business.plan, "business");
+  assert.equal(business.storagePlan, "business");
+
   const fiatRoute = readFileSync("src/app/api/onboarding/initialize-payment/route.ts", "utf8");
   const cryptoRoute = readFileSync("src/app/api/checkout/crypto-subscription/route.ts", "utf8");
   const checkoutPage = readFileSync("src/app/checkout/subscription/page.tsx", "utf8");
@@ -103,6 +113,25 @@ async function run() {
     "Amount mismatch must enter manual review before provisioning.",
   );
   assert.match(confirmation, /processing_status: "manual_review"[\s\S]+account_setup_status: "manual_review"/);
+  assert.match(confirmation, /COMPLIANCE_PROFILE_RECOVERY_REQUIRED/);
+  assert.match(confirmation, /Do not pay again/);
+  assert.match(confirmation, /normalizedPlan === "starter" \|\| canonicalPlan === "solo_plus"/);
+  assert.match(confirmation, /canonicalPlan !== "solo_lite" && canonicalPlan !== "business"/);
+  assert.ok(
+    initialConfirmation.indexOf('status: "payment_confirmed"') <
+      initialConfirmation.indexOf("ensurePaidDraftComplianceProfile(supabase, merchantId, activePlan)"),
+    "Paid onboarding must persist replay authority before draft-profile provisioning.",
+  );
+  assert.ok(
+    initialConfirmation.indexOf("ensurePaidDraftComplianceProfile(supabase, merchantId, activePlan)") <
+      initialConfirmation.indexOf("updateUserById"),
+    "Draft-profile provisioning must occur before paid setup is represented as fully finalized.",
+  );
+  assert.match(
+    initialConfirmation,
+    /session\.status === "payment_confirmed"[\s\S]+ensurePaidDraftComplianceProfile\(supabase, session\.merchant_id, plan\)/,
+    "A response-loss replay must retry only idempotent draft-profile provisioning.",
+  );
 
   console.log("paid-onboarding-safety tests passed");
 }

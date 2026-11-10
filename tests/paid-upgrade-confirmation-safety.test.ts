@@ -78,12 +78,22 @@ class FakeClient {
     workspace_id: "44444444-4444-4444-8444-444444444444",
     link_version: 1,
   }];
+  profileRpcData: Record<string, unknown> = {
+    kind: "draft_profile_created",
+    merchant_id: record.merchant_id,
+    profile_id: "55555555-5555-4555-8555-555555555555",
+    plan_code: "solo_lite",
+    row_version: 1,
+  };
   constructor(readonly row: PendingPlanPaymentRecord | null = record) {}
   from() { return new FakeQuery(this.row); }
   async rpc(name: string, args: Record<string, unknown>) {
     this.rpcCalls.push({ name, args });
     if (name === "reconcile_canonical_merchant_workspace_link_v1") {
       return { data: this.canonicalRpcData, error: null };
+    }
+    if (name === "ensure_draft_compliance_profile_v1") {
+      return { data: this.profileRpcData, error: null };
     }
     return { data: this.rpcData, error: this.rpcError };
   }
@@ -175,7 +185,7 @@ async function run() {
   const client = new FakeClient();
   const applied = await confirmPaidUpgradeAtomically(client as never, observation);
   assert.equal(applied.applied, true);
-  assert.equal(client.rpcCalls.length, 2);
+  assert.equal(client.rpcCalls.length, 3);
   assert.equal(client.rpcCalls[0].name, "confirm_paid_upgrade_v1");
   assert.equal(client.rpcCalls[0].args.p_payment_record_id, record.id);
   assert.equal("p_merchant_id" in client.rpcCalls[0].args, false);
@@ -185,6 +195,8 @@ async function run() {
   assert.equal(client.rpcCalls[1].args.p_merchant_id, record.merchant_id);
   assert.equal(client.rpcCalls[1].args.p_reconciled_by, record.user_id);
   assert.equal("p_workspace_id" in client.rpcCalls[1].args, false);
+  assert.equal(client.rpcCalls[2].name, "ensure_draft_compliance_profile_v1");
+  assert.deepEqual(client.rpcCalls[2].args, { p_merchant_id: record.merchant_id });
 
   const replayClient = new FakeClient(processedRecord);
   replayClient.rpcData = { kind: "idempotent_replay" };
@@ -194,9 +206,46 @@ async function run() {
     workspace_id: "44444444-4444-4444-8444-444444444444",
     link_version: 1,
   }];
+  replayClient.profileRpcData = {
+    kind: "draft_profile_existing_exact",
+    merchant_id: record.merchant_id,
+    profile_id: "55555555-5555-4555-8555-555555555555",
+    plan_code: "solo_lite",
+    row_version: 1,
+  };
   const replay = await confirmPaidUpgradeAtomically(replayClient as never, observation);
   assert.equal(replay.alreadyProcessed, true);
-  assert.equal(replayClient.rpcCalls.length, 2);
+  assert.equal(replayClient.rpcCalls.length, 3);
+
+  const businessRecord = {
+    ...record,
+    expected_amount: 20000,
+    plan_id: "corporate",
+    plan_name: "business",
+  };
+  const businessObservation = {
+    ...observation,
+    amountKobo: 2_000_000,
+    metadata: {
+      ...observation.metadata,
+      new_plan: "business",
+      amount_expected_kobo: 2_000_000,
+    },
+  };
+  const businessClient = new FakeClient(businessRecord);
+  businessClient.profileRpcData = {
+    kind: "draft_profile_created",
+    merchant_id: record.merchant_id,
+    profile_id: "55555555-5555-4555-8555-555555555555",
+    plan_code: "business",
+    row_version: 1,
+  };
+  const businessApplied = await confirmPaidUpgradeAtomically(
+    businessClient as never,
+    businessObservation,
+  );
+  assert.equal(businessApplied.intent.plan, "business");
+  assert.equal(businessClient.rpcCalls[2]?.name, "ensure_draft_compliance_profile_v1");
 
   const ambiguousWorkspaceClient = new FakeClient();
   ambiguousWorkspaceClient.canonicalRpcData = [{
@@ -213,6 +262,22 @@ async function run() {
       && !/ambiguous|database|supabase/i.test(error.message),
   );
   assert.equal(ambiguousWorkspaceClient.rpcCalls.length, 2);
+
+  const profileFailureClient = new FakeClient();
+  profileFailureClient.profileRpcData = {
+    kind: "draft_profile_existing_conflict",
+    merchant_id: record.merchant_id,
+    profile_id: "55555555-5555-4555-8555-555555555555",
+    plan_code: "solo_lite",
+  };
+  await assert.rejects(
+    confirmPaidUpgradeAtomically(profileFailureClient as never, observation),
+    (error: unknown) =>
+      error instanceof PaidUpgradeConfirmationError
+      && error.code === "COMPLIANCE_PROFILE_RECOVERY_REQUIRED"
+      && !/database|supabase|conflict/i.test(error.message),
+  );
+  assert.equal(profileFailureClient.rpcCalls.length, 3);
 
   const initializedIntent = validatePaidUpgradeIntent({
     ...record,

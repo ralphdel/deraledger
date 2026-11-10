@@ -10,6 +10,7 @@ import {
   type PendingPlanPaymentRecord,
 } from "@/lib/services/plan-payment-recovery.service";
 import { reconcileCanonicalWorkspaceForMerchant } from "@/lib/server/canonical-workspace-reconciliation";
+import { ensureDraftComplianceProfileForEligibleMerchant } from "@/lib/server/draft-compliance-profile-provisioning";
 
 type UpgradeProvider = "paystack" | "monnify" | "breet";
 type UpgradePlan = Exclude<CanonicalPlanCode, "starter" | "solo_plus">;
@@ -61,7 +62,8 @@ export type PaidUpgradeConfirmationCode =
   | "PLAN_MISMATCH"
   | "PURPOSE_MISMATCH"
   | "ATOMIC_ACTIVATION_FAILED"
-  | "CANONICAL_WORKSPACE_RECOVERY_REQUIRED";
+  | "CANONICAL_WORKSPACE_RECOVERY_REQUIRED"
+  | "COMPLIANCE_PROFILE_RECOVERY_REQUIRED";
 
 export class PaidUpgradeConfirmationError extends Error {
   constructor(
@@ -362,6 +364,20 @@ export async function confirmPaidUpgradeAtomically(
     throw new PaidUpgradeConfirmationError(
       "CANONICAL_WORKSPACE_RECOVERY_REQUIRED",
       "Paid upgrade completed, but canonical workspace recovery is required.",
+    );
+  }
+
+  try {
+    await ensureDraftComplianceProfileForEligibleMerchant(supabase, {
+      merchantId: intent.merchantId,
+    });
+  } catch {
+    // Commercial activation and canonical workspace reconciliation are
+    // already authoritative. Preserve them and surface a bounded recovery
+    // requirement without retrying payment or claiming rollback.
+    throw new PaidUpgradeConfirmationError(
+      "COMPLIANCE_PROFILE_RECOVERY_REQUIRED",
+      "Paid upgrade completed, but draft compliance profile recovery is required.",
     );
   }
 
