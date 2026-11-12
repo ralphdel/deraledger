@@ -21,6 +21,7 @@ $ExpectedCurrentUser = 'postgres'
 $ExpectedServerMajor = '17'
 $ExpectedBranch = 'staging/phase-2-rebuild-safe-baseline'
 $ReviewedB4PBaseline = 'c55c4e392f6d3d676e8545f2a180968f41d009cb'
+$ReviewedRunnerCommit = 'ef9ad01b98058ca713e7269fabe5d96c7bcd4aa3'
 $ExpectedStash = '81369efc059e7fe7e0e96f5b36533738c9f7c31f'
 $ExpectedM031Hash = '12CDC46047AF9F39A02C9D4AF330256BCD8C48654101F49C5C9940D69BC036CF'
 $ExpectedPreflightHash = '8DE0950018C308C7A8DF2D064D599E27A25408D47D0D072A9AF6ABDE939E370D'
@@ -175,10 +176,74 @@ function Assert-B4pStagingGitState {
   $trackedRunnerPaths = @($State.TrackedPaths | Sort-Object -Unique)
   $expectedRunnerPaths = @($ReviewedRunnerPaths | Sort-Object -Unique)
   if (($trackedRunnerPaths -join "`n") -cne ($expectedRunnerPaths -join "`n")) { throw 'reviewed_runner_paths_not_tracked' }
-  if ($State.ParentCount -ne 1 -or $State.DirectParent -cne $ReviewedB4PBaseline) { throw 'reviewed_runner_commit_history_invalid' }
-  $expectedChanges = @($ReviewedRunnerPaths | Sort-Object | ForEach-Object { "A`t$_" })
-  $actualChanges = @($State.CommitChanges | Sort-Object)
-  if (($actualChanges -join "`n") -cne ($expectedChanges -join "`n")) { throw 'reviewed_runner_commit_content_invalid' }
+  $expectedReviewedChanges = @($ReviewedRunnerPaths | Sort-Object | ForEach-Object { "A`t$_" })
+  if ($State.ReviewedParentCount -ne 1 -or $State.ReviewedDirectParent -cne $ReviewedB4PBaseline -or
+    ((@($State.ReviewedCommitChanges | Sort-Object) -join "`n") -cne ($expectedReviewedChanges -join "`n"))) {
+    throw 'reviewed_runner_commit_history_invalid'
+  }
+  if ($State.ParentCount -ne 1 -or $State.DirectParent -cne $ReviewedRunnerCommit) { throw 'corrective_runner_commit_history_invalid' }
+  $actualChanges = @($State.CommitChanges)
+  $expectedCorrectiveChanges = @($ReviewedRunnerPaths | Sort-Object | ForEach-Object { "M`t$_" })
+  if ($actualChanges.Count -ne $expectedCorrectiveChanges.Count) { throw 'corrective_runner_commit_content_invalid' }
+  $normalizedActualChanges = @()
+  foreach ($change in $actualChanges) {
+    $parts = @($change -split "`t", 2)
+    if ($parts.Count -ne 2 -or $parts[0] -cne 'M' -or $parts[1] -cnotin $ReviewedRunnerPaths) {
+      throw 'corrective_runner_commit_content_invalid'
+    }
+    $normalizedActualChanges += "$($parts[0])`t$($parts[1])"
+  }
+  if ((@($normalizedActualChanges | Sort-Object) -join "`n") -cne ($expectedCorrectiveChanges -join "`n")) { throw 'corrective_runner_commit_content_invalid' }
+}
+
+function Get-B4pStagingGitState {
+  $branch = (& git -C $RepoRoot branch --show-current 2>$null | Out-String).Trim()
+  if ($LASTEXITCODE -ne 0) { throw 'repository_branch_state_unavailable' }
+  $head = (& git -C $RepoRoot rev-parse HEAD 2>$null | Out-String).Trim()
+  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($head)) { throw 'repository_head_state_unavailable' }
+  $remoteHead = (& git -C $RepoRoot rev-parse origin/$ExpectedBranch 2>$null | Out-String).Trim()
+  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($remoteHead)) { throw 'repository_remote_head_state_unavailable' }
+  $stash = (& git -C $RepoRoot rev-parse 'stash@{0}' 2>$null | Out-String).Trim()
+  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($stash)) { throw 'repository_stash_state_unavailable' }
+  [void](& git -C $RepoRoot cat-file -e "$head^{commit}" 2>$null)
+  $headIsCommit = $LASTEXITCODE -eq 0
+  $parentLine = (& git -C $RepoRoot rev-list --parents -n 1 $head 2>$null | Out-String).Trim()
+  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($parentLine)) { throw 'repository_parent_state_unavailable' }
+  $parentTokens = @($parentLine -split '\s+' | Where-Object { $_ })
+  $parents = @(
+    if ($parentTokens.Count -gt 1) { $parentTokens | Select-Object -Skip 1 }
+  )
+  [void](& git -C $RepoRoot merge-base --is-ancestor $ReviewedB4PBaseline $head 2>$null)
+  $baselineIsAncestor = $LASTEXITCODE -eq 0
+  $statusLines = @(& git -C $RepoRoot status --porcelain=v1 --untracked-files=all 2>$null)
+  if ($LASTEXITCODE -ne 0) { throw 'repository_status_unavailable' }
+  $stagedPaths = @(& git -C $RepoRoot diff --cached --name-only 2>$null)
+  if ($LASTEXITCODE -ne 0) { throw 'repository_staged_state_unavailable' }
+  $trackedRunnerPaths = @()
+  foreach ($path in $ReviewedRunnerPaths) {
+    [void](& git -C $RepoRoot ls-files --error-unmatch -- $path 2>$null)
+    if ($LASTEXITCODE -eq 0) { $trackedRunnerPaths += $path }
+  }
+  $unexpectedUntracked = @($statusLines | Where-Object { $_.StartsWith('?? ') } | ForEach-Object { $_.Substring(3).Replace('\','/') } | Where-Object {
+    $_ -cne '.local-evidence/' -and -not $_.StartsWith('.local-evidence/') -and $_ -cne '.playwright-mcp/' -and -not $_.StartsWith('.playwright-mcp/')
+  })
+  $commitChanges = @(& git -C $RepoRoot diff-tree --no-commit-id --name-status -r --no-renames $head 2>$null)
+  if ($LASTEXITCODE -ne 0) { throw 'repository_commit_diff_unavailable' }
+  $reviewedParentLine = (& git -C $RepoRoot rev-list --parents -n 1 $ReviewedRunnerCommit 2>$null | Out-String).Trim()
+  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($reviewedParentLine)) { throw 'reviewed_runner_parent_state_unavailable' }
+  $reviewedParentTokens = @($reviewedParentLine -split '\s+' | Where-Object { $_ })
+  $reviewedParents = @(
+    if ($reviewedParentTokens.Count -gt 1) { $reviewedParentTokens | Select-Object -Skip 1 }
+  )
+  $reviewedCommitChanges = @(& git -C $RepoRoot diff-tree --no-commit-id --name-status -r --no-renames $ReviewedRunnerCommit 2>$null)
+  if ($LASTEXITCODE -ne 0) { throw 'reviewed_runner_commit_diff_unavailable' }
+  return [pscustomobject]@{
+    Branch = $branch; BaselineIsAncestor = $baselineIsAncestor; HeadIsCommit = $headIsCommit; HeadIsBaseline = $head -ceq $ReviewedB4PBaseline
+    LocalHead = $head; RemoteHead = $remoteHead; Stash = $stash; ParentCount = @($parents).Count; DirectParent = if (@($parents).Count -eq 1) { $parents[0] } else { '' }
+    StagedPaths = @($stagedPaths); TrackedChanges = @($statusLines | Where-Object { -not $_.StartsWith('?? ') })
+    UnexpectedUntracked = @($unexpectedUntracked); TrackedPaths = @($trackedRunnerPaths); CommitChanges = @($commitChanges)
+    ReviewedParentCount = @($reviewedParents).Count; ReviewedDirectParent = if (@($reviewedParents).Count -eq 1) { $reviewedParents[0] } else { '' }; ReviewedCommitChanges = @($reviewedCommitChanges)
+  }
 }
 
 try {
@@ -194,38 +259,9 @@ try {
   if ((Get-FileHash -Algorithm SHA256 -LiteralPath $M031Sql).Hash -cne $ExpectedM031Hash) { throw 'm031_hash_mismatch' }
   if ((Get-FileHash -Algorithm SHA256 -LiteralPath $PreflightSql).Hash -cne $ExpectedPreflightHash) { throw 'preflight_hash_mismatch' }
   if ((Get-FileHash -Algorithm SHA256 -LiteralPath $IdentitySql).Hash -cne $ExpectedIdentityHash) { throw 'identity_probe_hash_mismatch' }
-  $branch = (& git -C $RepoRoot branch --show-current 2>$null | Out-String).Trim()
-  $head = (& git -C $RepoRoot rev-parse HEAD 2>$null | Out-String).Trim()
-  $remoteHead = (& git -C $RepoRoot rev-parse origin/$ExpectedBranch 2>$null | Out-String).Trim()
-  $stash = (& git -C $RepoRoot rev-parse 'stash@{0}' 2>$null | Out-String).Trim()
-  & git -C $RepoRoot cat-file -e "$head^{commit}" 2>$null
-  $headIsCommit = $LASTEXITCODE -eq 0
-  $parentLine = (& git -C $RepoRoot rev-list --parents -n 1 $head 2>$null | Out-String).Trim()
-  if ($LASTEXITCODE -ne 0) { throw 'repository_parent_state_unavailable' }
-  $parentTokens = @($parentLine -split '\s+' | Where-Object { $_ })
-  $parents = if ($parentTokens.Count -gt 1) { @($parentTokens | Select-Object -Skip 1) } else { @() }
-  & git -C $RepoRoot merge-base --is-ancestor $ReviewedB4PBaseline $head 2>$null
-  $baselineIsAncestor = $LASTEXITCODE -eq 0
-  $statusLines = @(& git -C $RepoRoot status --porcelain=v1 --untracked-files=all 2>$null)
-  if ($LASTEXITCODE -ne 0) { throw 'repository_status_unavailable' }
-  $stagedPaths = @(& git -C $RepoRoot diff --cached --name-only 2>$null)
-  if ($LASTEXITCODE -ne 0) { throw 'repository_staged_state_unavailable' }
-  $trackedRunnerPaths = @()
-  foreach ($path in $ReviewedRunnerPaths) {
-    & git -C $RepoRoot ls-files --error-unmatch -- $path 2>$null
-    if ($LASTEXITCODE -eq 0) { $trackedRunnerPaths += $path }
-  }
-  $unexpectedUntracked = @($statusLines | Where-Object { $_.StartsWith('?? ') } | ForEach-Object { $_.Substring(3).Replace('\','/') } | Where-Object {
-    $_ -cne '.local-evidence/' -and -not $_.StartsWith('.local-evidence/') -and $_ -cne '.playwright-mcp/' -and -not $_.StartsWith('.playwright-mcp/')
-  })
-  $commitChanges = @(& git -C $RepoRoot diff-tree --no-commit-id --name-status -r --no-renames $head 2>$null)
-  if ($LASTEXITCODE -ne 0) { throw 'repository_commit_diff_unavailable' }
-  Assert-B4pStagingGitState -State ([pscustomobject]@{
-    Branch = $branch; BaselineIsAncestor = $baselineIsAncestor; HeadIsCommit = $headIsCommit; HeadIsBaseline = $head -ceq $ReviewedB4PBaseline
-    LocalHead = $head; RemoteHead = $remoteHead; Stash = $stash; ParentCount = $parents.Count; DirectParent = if ($parents.Count -eq 1) { $parents[0] } else { '' }
-    StagedPaths = $stagedPaths; TrackedChanges = @($statusLines | Where-Object { -not $_.StartsWith('?? ') })
-    UnexpectedUntracked = $unexpectedUntracked; TrackedPaths = $trackedRunnerPaths; CommitChanges = $commitChanges
-  })
+  $gitState = Get-B4pStagingGitState
+  Assert-B4pStagingGitState -State $gitState
+  $head = $gitState.LocalHead
   [IO.File]::WriteAllText((Join-Path $EvidenceRoot '00-source.txt'), "head=$head`r`nm031_sha256=$ExpectedM031Hash`r`npreflight_sha256=$ExpectedPreflightHash`r`nidentity_sha256=$ExpectedIdentityHash`r`nproject_ref=$ExpectedProjectRef`r`n", [Text.UTF8Encoding]::new($false))
   Add-Marker 'PASS' 'source_integrity'
 
